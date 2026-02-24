@@ -93,6 +93,7 @@ pub const Pipeline = struct {
         std.log.info("Pipeline thread started for {d} repo(s)", .{self.config.watched_repos.len});
 
         self.initGraphite();
+        self.processBacklogFiles();
 
         while (self.running.load(.acquire)) {
             self.tick() catch |err| {
@@ -154,6 +155,101 @@ pub const Pipeline = struct {
 
         self.graphite_available = true;
         std.log.info("Graphite stacking enabled", .{});
+    }
+
+    fn processBacklogFiles(self: *Pipeline) void {
+        for (self.config.watched_repos) |repo| {
+            const backlog_path = std.fmt.allocPrint(self.allocator, "{s}/BACKLOG.md", .{repo.path}) catch continue;
+            defer self.allocator.free(backlog_path);
+
+            const content = std.fs.cwd().readFileAlloc(self.allocator, backlog_path, 128 * 1024) catch continue;
+            defer self.allocator.free(content);
+            if (std.mem.trim(u8, content, &[_]u8{ ' ', '\t', '\n', '\r' }).len == 0) continue;
+
+            std.log.info("Found BACKLOG.md in {s}, importing tasks...", .{repo.path});
+
+            var prompt_buf = std.ArrayList(u8).init(self.allocator);
+            defer prompt_buf.deinit();
+            prompt_buf.writer().print(
+                \\You are importing a backlog of engineering tasks into a pipeline.
+                \\
+                \\For each item in the backlog below, create a task using EXACTLY this format:
+                \\
+                \\TASK_START
+                \\TITLE: <short imperative title, max 80 chars>
+                \\DESCRIPTION: <2-4 sentences: what to change and why>
+                \\TASK_END
+                \\
+                \\Rules:
+                \\- One TASK_START/TASK_END block per item
+                \\- Keep titles concise and imperative ("Fix X", "Add Y", "Refactor Z")
+                \\- Skip any item that says "Already Merged"
+                \\- Output ONLY the task blocks, no other text
+                \\
+                \\Backlog:
+                \\{s}
+            , .{content}) catch continue;
+
+            const result = self.spawnAgent(.manager, prompt_buf.items, repo.path, null) catch |err| {
+                std.log.err("Backlog import agent failed: {}", .{err});
+                continue;
+            };
+            defer self.allocator.free(result.output);
+            defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+            // Parse and create tasks (same logic as seedRepo)
+            var created: u32 = 0;
+            var remaining = result.output;
+            while (std.mem.indexOf(u8, remaining, "TASK_START")) |start_pos| {
+                remaining = remaining[start_pos + "TASK_START".len ..];
+                const end_pos = std.mem.indexOf(u8, remaining, "TASK_END") orelse break;
+                const block = std.mem.trim(u8, remaining[0..end_pos], &[_]u8{ ' ', '\t', '\n', '\r' });
+                remaining = remaining[end_pos + "TASK_END".len ..];
+
+                var title: []const u8 = "";
+                var desc_start: usize = 0;
+                var lines = std.mem.splitScalar(u8, block, '\n');
+                while (lines.next()) |line| {
+                    const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
+                    if (std.mem.startsWith(u8, trimmed, "TITLE:")) {
+                        title = std.mem.trim(u8, trimmed["TITLE:".len..], &[_]u8{ ' ', '\t' });
+                    } else if (std.mem.startsWith(u8, trimmed, "DESCRIPTION:")) {
+                        desc_start = @intFromPtr(trimmed.ptr) - @intFromPtr(block.ptr) + "DESCRIPTION:".len;
+                        break;
+                    }
+                }
+                if (title.len == 0) continue;
+                const description = if (desc_start < block.len)
+                    std.mem.trim(u8, block[desc_start..block.len], &[_]u8{ ' ', '\t', '\n', '\r' })
+                else
+                    title;
+
+                _ = self.db.createPipelineTask(title, description, repo.path, "backlog", self.config.pipeline_admin_chat) catch continue;
+                created += 1;
+            }
+
+            // Also create a final task to delete BACKLOG.md once all work is merged
+            _ = self.db.createPipelineTask(
+                "Remove BACKLOG.md — all tasks imported into pipeline",
+                "BACKLOG.md has served its purpose: all tasks have been loaded into the pipeline. Delete it: git rm BACKLOG.md && git add -A && git commit -m \"chore: remove BACKLOG.md — all tasks implemented\"",
+                repo.path,
+                "backlog",
+                self.config.pipeline_admin_chat,
+            ) catch {};
+            created += 1;
+
+            // Rename BACKLOG.md to BACKLOG.md.imported so we don't re-load on next restart
+            const done_path = std.fmt.allocPrint(self.allocator, "{s}/BACKLOG.md.imported", .{repo.path}) catch continue;
+            defer self.allocator.free(done_path);
+            std.fs.renameAbsolute(backlog_path, done_path) catch {};
+
+            std.log.info("Imported {d} tasks from BACKLOG.md in {s}", .{ created, repo.path });
+            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(
+                self.allocator,
+                "Imported {d} tasks from BACKLOG.md",
+                .{created},
+            ) catch return);
+        }
     }
 
     fn tick(self: *Pipeline) !void {
