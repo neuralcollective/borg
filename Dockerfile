@@ -1,35 +1,34 @@
-FROM debian:bookworm-slim AS build
+# ── Build stage ──
+FROM alpine:3.21 AS build
 
-# Install Zig, git, and build deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl xz-utils git ca-certificates libc-dev && \
-    curl -fsSL https://ziglang.org/download/0.14.1/zig-linux-x86_64-0.14.1.tar.xz | \
+RUN apk add --no-cache curl xz git
+
+# Zig
+RUN curl -fsSL https://ziglang.org/download/0.14.1/zig-linux-x86_64-0.14.1.tar.xz | \
     tar -xJ -C /opt && \
-    ln -s /opt/zig-linux-x86_64-0.14.1/zig /usr/local/bin/zig && \
-    rm -rf /var/lib/apt/lists/*
+    ln -s /opt/zig-linux-x86_64-0.14.1/zig /usr/local/bin/zig
 
-# Build dashboard
+# Dashboard
+RUN curl -fsSL https://bun.sh/install | sh
 COPY dashboard/package.json dashboard/bun.lock* /app/dashboard/
-RUN curl -fsSL https://bun.sh/install | bash && \
-    cd /app/dashboard && /root/.bun/bin/bun install --frozen-lockfile 2>/dev/null || /root/.bun/bin/bun install
+RUN cd /app/dashboard && ~/.bun/bin/bun install
 COPY dashboard/ /app/dashboard/
-RUN cd /app/dashboard && /root/.bun/bin/bun run build
+RUN cd /app/dashboard && ~/.bun/bin/bun run build
 
-# Build borg binary
+# Borg binary (static musl target)
 COPY . /app
-RUN cd /app && zig build -Doptimize=ReleaseSafe
+RUN cd /app && zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl
 
-# --- Runtime ---
-FROM debian:bookworm-slim
+# ── Runtime ──
+FROM alpine:3.21
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates docker.io && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Claude Code CLI (needed for chat subprocess agents)
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
+RUN apk add --no-cache git ca-certificates nodejs npm && \
     npm install -g @anthropic-ai/claude-code@latest && \
-    rm -rf /var/lib/apt/lists/*
+    npm cache clean --force && \
+    rm -rf /root/.npm /tmp/*
+
+# Docker CLI only (not the daemon)
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 
 COPY --from=build /app/zig-out/bin/borg /usr/local/bin/borg
 COPY --from=build /app/dashboard/dist /opt/borg/dashboard/dist
