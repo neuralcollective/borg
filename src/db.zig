@@ -546,6 +546,17 @@ pub const Db = struct {
         return rows.items[0].getInt(0) orelse 0;
     }
 
+    pub fn getQueuedIntegrationCount(self: *Db) !i64 {
+        var rows = try self.sqlite_db.query(
+            self.allocator,
+            "SELECT COUNT(*) FROM integration_queue WHERE status = 'queued'",
+            .{},
+        );
+        defer rows.deinit();
+        if (rows.items.len == 0) return 0;
+        return rows.items[0].getInt(0) orelse 0;
+    }
+
     // --- Integration Queue ---
 
     pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8, repo_path: []const u8) !void {
