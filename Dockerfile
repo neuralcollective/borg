@@ -22,10 +22,11 @@ RUN cd /app && zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl
 # ── Runtime ──
 FROM alpine:3.21
 
-RUN apk add --no-cache git ca-certificates nodejs npm && \
-    npm install -g @anthropic-ai/claude-code@latest && \
-    npm cache clean --force && \
-    rm -rf /root/.npm /tmp/*
+RUN apk add --no-cache git ca-certificates bash curl unzip && \
+    curl -fsSL https://bun.sh/install | bash && \
+    ln -s /root/.bun/bin/bun /usr/local/bin/bun && \
+    bun install -g @anthropic-ai/claude-code@latest && \
+    rm -rf /tmp/*
 
 # Docker CLI only (not the daemon)
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker

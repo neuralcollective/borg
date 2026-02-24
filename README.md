@@ -29,7 +29,7 @@ Discord Gateway ───┘        |
 - Zig 0.14.1+
 - Docker (pipeline only; chat works without Docker)
 - Telegram bot token ([@BotFather](https://t.me/BotFather))
-- Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
+- Claude Code CLI (`bun install -g @anthropic-ai/claude-code`)
 - OAuth credentials (`~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN`)
 
 ## Quick start

@@ -1,14 +1,14 @@
 #!/bin/bash
 set -e
 
-# Cap Node heap to prevent OOM kills
+# Cap heap to prevent OOM kills (Claude Code runs on bun/node)
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=384}"
 
 # Read all stdin into a temp file
 cat > /tmp/input.json
 
-# Parse input JSON (single node call for efficiency)
-eval "$(node -e "
+# Parse input JSON
+eval "$(bun -e "
 const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8'));
 const esc = s => s.replace(/'/g, \"'\\\\''\");
 console.log('PROMPT=\'' + esc(d.prompt||'') + '\'');
