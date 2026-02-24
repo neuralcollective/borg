@@ -145,11 +145,18 @@ pub const WebServer = struct {
         }
 
         const request = buf[0..n];
+        const method = parseMethod(request);
         const path = parsePath(request);
 
         if (std.mem.eql(u8, path, "/api/logs")) {
             self.serveSse(stream);
             return; // Don't close — SSE keeps connection open
+        } else if (std.mem.eql(u8, path, "/api/tasks") and std.mem.eql(u8, method, "POST")) {
+            self.handleCreateTask(stream, request);
+        } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.eql(u8, method, "DELETE")) {
+            self.handleDeleteTask(stream, path);
+        } else if (std.mem.eql(u8, path, "/api/release") and std.mem.eql(u8, method, "POST")) {
+            self.handleTriggerRelease(stream);
         } else if (std.mem.eql(u8, path, "/api/tasks")) {
             self.serveTasksJson(stream);
         } else if (std.mem.startsWith(u8, path, "/api/tasks/")) {
@@ -164,6 +171,13 @@ pub const WebServer = struct {
         stream.close();
     }
 
+    pub fn parseMethod(request: []const u8) []const u8 {
+        if (std.mem.indexOf(u8, request, " ")) |end| {
+            return request[0..end];
+        }
+        return "GET";
+    }
+
     pub fn parsePath(request: []const u8) []const u8 {
         if (std.mem.indexOf(u8, request, " ")) |start| {
             const rest = request[start + 1 ..];
@@ -172,6 +186,85 @@ pub const WebServer = struct {
             }
         }
         return "/";
+    }
+
+    fn parseBody(request: []const u8) []const u8 {
+        if (std.mem.indexOf(u8, request, "\r\n\r\n")) |pos| {
+            return request[pos + 4 ..];
+        }
+        return "";
+    }
+
+    fn handleCreateTask(self: *WebServer, stream: std.net.Stream, request: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const body = parseBody(request);
+        if (body.len == 0) {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"empty body\"}");
+            return;
+        }
+
+        var parsed = json_mod.parse(alloc, body) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        const title = json_mod.getString(parsed.value, "title") orelse {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"missing title\"}");
+            return;
+        };
+        const description = json_mod.getString(parsed.value, "description") orelse title;
+        const repo = json_mod.getString(parsed.value, "repo") orelse self.config.pipeline_repo;
+
+        const task_id = self.db.createPipelineTask(title, description, repo, "director", "") catch {
+            self.serve500(stream);
+            return;
+        };
+
+        var buf: [128]u8 = undefined;
+        const resp = std.fmt.bufPrint(&buf, "{{\"id\":{d},\"status\":\"created\"}}", .{task_id}) catch return;
+        self.serveJsonResponse(stream, 201, resp);
+        std.log.info("Director created task #{d}: {s}", .{ task_id, title });
+    }
+
+    fn handleDeleteTask(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        const id_str = path["/api/tasks/".len..];
+        const task_id = std.fmt.parseInt(i64, id_str, 10) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid task ID\"}");
+            return;
+        };
+
+        self.db.updateTaskStatus(task_id, "failed") catch {
+            self.serve500(stream);
+            return;
+        };
+
+        self.serveJsonResponse(stream, 200, "{\"status\":\"deleted\"}");
+        std.log.info("Director cancelled task #{d}", .{task_id});
+    }
+
+    fn handleTriggerRelease(self: *WebServer, stream: std.net.Stream) void {
+        // TODO: signal pipeline to run release train immediately
+        self.serveJsonResponse(stream, 200, "{\"status\":\"release triggered\"}");
+        std.log.info("Director triggered release train", .{});
+    }
+
+    fn serveJsonResponse(_: *WebServer, stream: std.net.Stream, status: u16, body: []const u8) void {
+        const status_text = switch (status) {
+            200 => "200 OK",
+            201 => "201 Created",
+            400 => "400 Bad Request",
+            404 => "404 Not Found",
+            500 => "500 Internal Server Error",
+            else => "200 OK",
+        };
+        var header_buf: [256]u8 = undefined;
+        const header = std.fmt.bufPrint(&header_buf, "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", .{ status_text, body.len }) catch return;
+        stream.writeAll(header) catch return;
+        stream.writeAll(body) catch return;
     }
 
     fn serveStatic(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
