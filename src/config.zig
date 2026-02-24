@@ -265,3 +265,214 @@ test "findEnvValue skips comments and blank lines" {
     defer if (v) |val| alloc.free(val);
     try std.testing.expectEqualStrings("value", v.?);
 }
+
+// ── getEnv Tests ───────────────────────────────────────────────────────
+
+// AC1: Basic KEY=VALUE parsing via getEnv
+test "getEnv basic KEY=VALUE parsing returns correct value" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "MY_KEY=my_value", "MY_KEY");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("my_value", result.?);
+}
+
+test "getEnv returns null for nonexistent key" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "MY_KEY=my_value", "_BORG_TEST_MISSING_KEY_42");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result == null);
+}
+
+test "getEnv returned slice is allocator-owned and freeable" {
+    const alloc = std.testing.allocator;
+    // std.testing.allocator detects leaks; if we can free without error, ownership is correct
+    const result = getEnv(alloc, "OWNED=test_value", "OWNED");
+    try std.testing.expect(result != null);
+    alloc.free(result.?);
+}
+
+// AC2: Skipping # comment lines
+test "getEnv skips comment lines" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\# this is a comment
+        \\VISIBLE=found
+        \\# SECRET=hidden
+    ;
+
+    const v1 = getEnv(alloc, env, "VISIBLE");
+    defer if (v1) |v| alloc.free(v);
+    try std.testing.expect(v1 != null);
+    try std.testing.expectEqualStrings("found", v1.?);
+
+    // Key that only appears inside a comment must not be parseable
+    const v2 = getEnv(alloc, env, "SECRET");
+    defer if (v2) |v| alloc.free(v);
+    try std.testing.expect(v2 == null);
+}
+
+test "getEnv does not parse commented-out key-value pairs" {
+    const alloc = std.testing.allocator;
+    const env = "# SECRET=hidden";
+
+    const result = getEnv(alloc, env, "SECRET");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result == null);
+}
+
+// AC3: Skipping blank lines
+test "getEnv skips blank and whitespace-only lines" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\FIRST=one
+        \\
+        \\
+        \\SECOND=two
+    ;
+
+    const v1 = getEnv(alloc, env, "FIRST");
+    defer if (v1) |v| alloc.free(v);
+    try std.testing.expect(v1 != null);
+    try std.testing.expectEqualStrings("one", v1.?);
+
+    const v2 = getEnv(alloc, env, "SECOND");
+    defer if (v2) |v| alloc.free(v);
+    try std.testing.expect(v2 != null);
+    try std.testing.expectEqualStrings("two", v2.?);
+}
+
+// AC4: Values containing = characters
+test "getEnv handles values containing equals signs" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "TOKEN=abc=def=ghi", "TOKEN");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("abc=def=ghi", result.?);
+}
+
+// AC5: Process environment fallback
+test "getEnv falls back to process environment when key absent from env_content" {
+    const alloc = std.testing.allocator;
+    // PATH is virtually always set in process environment
+    const result = getEnv(alloc, "", "PATH");
+    defer if (result) |v| alloc.free(v);
+
+    // Verify it returns the same value as std.posix.getenv
+    const expected = std.posix.getenv("PATH");
+    if (expected) |exp| {
+        try std.testing.expect(result != null);
+        try std.testing.expectEqualStrings(exp, result.?);
+    }
+}
+
+test "getEnv env_content value takes precedence over process environment" {
+    const alloc = std.testing.allocator;
+    // PATH exists in process env; override it via env_content
+    const result = getEnv(alloc, "PATH=/custom/override/path", "PATH");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("/custom/override/path", result.?);
+}
+
+// ── Edge Case Tests ────────────────────────────────────────────────────
+
+// Edge case 1: Value with leading/trailing =
+test "getEnv handles value with leading and trailing equals" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "KEY==value=", "KEY");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("=value=", result.?);
+}
+
+// Edge case 2: Key with empty value
+test "getEnv returns empty string for key with empty value" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "EMPTY_VAL=", "EMPTY_VAL");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("", result.?);
+}
+
+// Edge case 3: Whitespace around key and =
+test "getEnv trims whitespace around key and value" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "  MY_KEY  =  my_value  ", "MY_KEY");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("my_value", result.?);
+}
+
+// Edge case 4: Quoted values containing =
+test "getEnv strips quotes and preserves equals in quoted value" {
+    const alloc = std.testing.allocator;
+    const result = getEnv(alloc, "QUOTED=\"abc=def\"", "QUOTED");
+    defer if (result) |v| alloc.free(v);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("abc=def", result.?);
+}
+
+// Edge case 5: Process env fallback returns allocator-owned memory
+test "getEnv process env fallback returns freeable allocator-owned memory" {
+    const alloc = std.testing.allocator;
+    // PATH is virtually always set; fetch via fallback (empty env_content)
+    const result = getEnv(alloc, "", "PATH");
+    if (result) |v| {
+        // If this doesn't panic/leak, std.testing.allocator confirms ownership
+        alloc.free(v);
+    }
+}
+
+// Edge case 6: Multiple entries with independent lookup
+test "getEnv handles multiple entries with independent lookups" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\HOST=localhost
+        \\PORT=8080
+        \\DB_NAME=mydb
+    ;
+
+    const v1 = getEnv(alloc, env, "HOST");
+    defer if (v1) |v| alloc.free(v);
+    try std.testing.expect(v1 != null);
+    try std.testing.expectEqualStrings("localhost", v1.?);
+
+    const v2 = getEnv(alloc, env, "PORT");
+    defer if (v2) |v| alloc.free(v);
+    try std.testing.expect(v2 != null);
+    try std.testing.expectEqualStrings("8080", v2.?);
+
+    const v3 = getEnv(alloc, env, "DB_NAME");
+    defer if (v3) |v| alloc.free(v);
+    try std.testing.expect(v3 != null);
+    try std.testing.expectEqualStrings("mydb", v3.?);
+}
+
+// Combined: comments, blanks, and valid entries
+test "getEnv parses correctly with mixed comments blanks and entries" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\# Database settings
+        \\DB_HOST=localhost
+        \\
+        \\# DB_PASSWORD=secret
+        \\DB_PORT=5432
+        \\
+    ;
+
+    const v1 = getEnv(alloc, env, "DB_HOST");
+    defer if (v1) |v| alloc.free(v);
+    try std.testing.expect(v1 != null);
+    try std.testing.expectEqualStrings("localhost", v1.?);
+
+    const v2 = getEnv(alloc, env, "DB_PORT");
+    defer if (v2) |v| alloc.free(v);
+    try std.testing.expect(v2 != null);
+    try std.testing.expectEqualStrings("5432", v2.?);
+
+    // DB_PASSWORD only appears in a comment
+    const v3 = getEnv(alloc, env, "DB_PASSWORD");
+    defer if (v3) |v| alloc.free(v);
+    try std.testing.expect(v3 == null);
+}
