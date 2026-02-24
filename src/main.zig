@@ -125,7 +125,6 @@ pub fn main() !void {
             const pending = db.getMessagesSince(cycle_alloc, chat_jid, since) catch continue;
             if (pending.len == 0) continue;
 
-            // Refresh OAuth token before each agent run (handles rotation)
             config.refreshOAuthToken();
 
             const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
@@ -321,11 +320,16 @@ fn runAgent(
 
     std.log.info("Agent done (exit={d}, {d} bytes)", .{ run_result.exit_code, run_result.stdout.len });
 
-    // Parse NDJSON output from Claude Code
+    return try parseNdjson(allocator, run_result.stdout);
+}
+
+/// Parse NDJSON stream output from Claude Code CLI.
+/// Extracts the final result text and session_id for resumption.
+fn parseNdjson(allocator: std.mem.Allocator, data: []const u8) !AgentResult {
     var output_text = std.ArrayList(u8).init(allocator);
     var new_session_id: ?[]const u8 = null;
 
-    var lines = std.mem.splitScalar(u8, run_result.stdout, '\n');
+    var lines = std.mem.splitScalar(u8, data, '\n');
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         var parsed = json_mod.parse(allocator, line) catch continue;
@@ -398,30 +402,92 @@ fn formatTimestamp(allocator: std.mem.Allocator, unix_ts: i64) ![]const u8 {
     });
 }
 
+// ── Tests ──────────────────────────────────────────────────────────────
+
 test "containsTrigger" {
     try std.testing.expect(containsTrigger("Hey @Borg do something", "Borg"));
     try std.testing.expect(containsTrigger("@borg help", "Borg"));
     try std.testing.expect(!containsTrigger("Hello there", "Borg"));
     try std.testing.expect(!containsTrigger("@Bo", "Borg"));
+    try std.testing.expect(containsTrigger("text @MiniShulgin more", "MiniShulgin"));
+    try std.testing.expect(!containsTrigger("@", "Borg"));
+    try std.testing.expect(!containsTrigger("", "Borg"));
 }
 
 test "formatTimestamp" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
+    // 2024-02-26 00:00:00 UTC
     const ts = try formatTimestamp(arena.allocator(), 1708905600);
-    try std.testing.expect(ts.len > 0);
-    try std.testing.expect(ts[4] == '-');
-    try std.testing.expect(ts[10] == 'T');
+    try std.testing.expectEqualStrings("2024-02-26T00:00:00Z", ts);
 }
 
 test "sanitizeFolder" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const r1 = try sanitizeFolder(a, "My Test Group");
-    try std.testing.expectEqualStrings("my-test-group", r1);
-    const r2 = try sanitizeFolder(a, "hello");
-    try std.testing.expectEqualStrings("hello", r2);
-    const r3 = try sanitizeFolder(a, "---");
-    try std.testing.expectEqualStrings("chat", r3);
+
+    try std.testing.expectEqualStrings("my-test-group", try sanitizeFolder(a, "My Test Group"));
+    try std.testing.expectEqualStrings("hello", try sanitizeFolder(a, "hello"));
+    try std.testing.expectEqualStrings("chat", try sanitizeFolder(a, "---"));
+    try std.testing.expectEqualStrings("chat", try sanitizeFolder(a, "   "));
+    try std.testing.expectEqualStrings("abc-123", try sanitizeFolder(a, "ABC 123!@#"));
+    try std.testing.expectEqualStrings("a-b", try sanitizeFolder(a, "a---b"));
+}
+
+test "parseNdjson extracts result and session_id" {
+    const alloc = std.testing.allocator;
+    const data =
+        \\{"type":"system","subtype":"init","session_id":"sess-abc"}
+        \\{"type":"assistant","message":{"content":"thinking"}}
+        \\{"type":"result","subtype":"success","session_id":"sess-abc","result":"Hello!"}
+    ;
+    const result = try parseNdjson(alloc, data);
+    defer alloc.free(result.output);
+    defer if (result.new_session_id) |sid| alloc.free(sid);
+
+    try std.testing.expectEqualStrings("Hello!", result.output);
+    try std.testing.expectEqualStrings("sess-abc", result.new_session_id.?);
+}
+
+test "parseNdjson handles empty and invalid lines" {
+    const alloc = std.testing.allocator;
+    const data = "\n\nnot json at all\n{\"type\":\"result\",\"result\":\"ok\"}\n";
+    const result = try parseNdjson(alloc, data);
+    defer alloc.free(result.output);
+    defer if (result.new_session_id) |sid| alloc.free(sid);
+
+    try std.testing.expectEqualStrings("ok", result.output);
+    try std.testing.expect(result.new_session_id == null);
+}
+
+test "parseNdjson last result wins" {
+    const alloc = std.testing.allocator;
+    const data =
+        \\{"type":"result","result":"first"}
+        \\{"type":"result","result":"second","session_id":"s2"}
+    ;
+    const result = try parseNdjson(alloc, data);
+    defer alloc.free(result.output);
+    defer if (result.new_session_id) |sid| alloc.free(sid);
+
+    try std.testing.expectEqualStrings("second", result.output);
+    try std.testing.expectEqualStrings("s2", result.new_session_id.?);
+}
+
+test "formatPrompt includes assistant identity and message context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const msgs = [_]db_mod.Message{
+        .{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "Alice", .content = "Hi bot", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false },
+        .{ .id = "2", .chat_jid = "tg:1", .sender = "bot", .sender_name = "Borg", .content = "Hello!", .timestamp = "2024-01-01T00:00:01Z", .is_from_me = true },
+    };
+
+    const prompt = try formatPrompt(a, &msgs, "Borg");
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "You are Borg") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Alice: Hi bot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Borg (you): Hello!") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Be concise") != null);
 }
