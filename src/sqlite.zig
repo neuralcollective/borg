@@ -3,6 +3,18 @@ const c = @cImport({
     @cInclude("sqlite3.h");
 });
 
+/// Check if a type can coerce to []const u8 (slices, pointers to u8 arrays, string literals)
+fn isStringType(comptime T: type) bool {
+    if (T == []const u8 or T == [:0]const u8 or T == []u8 or T == [:0]u8) return true;
+    return switch (@typeInfo(T)) {
+        .pointer => |info| switch (@typeInfo(info.child)) {
+            .array => |arr| arr.child == u8,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 pub const SqliteError = error{
     OpenFailed,
     PrepareFailed,
@@ -85,15 +97,17 @@ pub const Database = struct {
         inline for (params, 0..) |param, i| {
             const idx: c_int = @intCast(i + 1);
             const T = @TypeOf(param);
-            if (T == []const u8 or T == [:0]const u8) {
-                rc = c.sqlite3_bind_text(stmt.?, idx, param.ptr, @intCast(param.len), c.SQLITE_TRANSIENT);
+            if (comptime isStringType(T)) {
+                const str: []const u8 = param;
+                rc = c.sqlite3_bind_text(stmt.?, idx, str.ptr, @intCast(str.len), c.SQLITE_TRANSIENT);
             } else if (@typeInfo(T) == .int or @typeInfo(T) == .comptime_int) {
                 rc = c.sqlite3_bind_int64(stmt.?, idx, @intCast(param));
             } else if (@typeInfo(T) == .optional) {
                 if (param) |val| {
                     const Inner = @TypeOf(val);
-                    if (Inner == []const u8 or Inner == [:0]const u8) {
-                        rc = c.sqlite3_bind_text(stmt.?, idx, val.ptr, @intCast(val.len), c.SQLITE_TRANSIENT);
+                    if (comptime isStringType(Inner)) {
+                        const str: []const u8 = val;
+                        rc = c.sqlite3_bind_text(stmt.?, idx, str.ptr, @intCast(str.len), c.SQLITE_TRANSIENT);
                     } else {
                         rc = c.sqlite3_bind_int64(stmt.?, idx, @intCast(val));
                     }
@@ -142,15 +156,17 @@ pub const Database = struct {
         inline for (params, 0..) |param, i| {
             const idx: c_int = @intCast(i + 1);
             const T = @TypeOf(param);
-            if (T == []const u8 or T == [:0]const u8) {
-                rc = c.sqlite3_bind_text(stmt.?, idx, param.ptr, @intCast(param.len), c.SQLITE_TRANSIENT);
+            if (comptime isStringType(T)) {
+                const str: []const u8 = param;
+                rc = c.sqlite3_bind_text(stmt.?, idx, str.ptr, @intCast(str.len), c.SQLITE_TRANSIENT);
             } else if (@typeInfo(T) == .int or @typeInfo(T) == .comptime_int) {
                 rc = c.sqlite3_bind_int64(stmt.?, idx, @intCast(param));
             } else if (@typeInfo(T) == .optional) {
                 if (param) |val| {
                     const Inner = @TypeOf(val);
-                    if (Inner == []const u8 or Inner == [:0]const u8) {
-                        rc = c.sqlite3_bind_text(stmt.?, idx, val.ptr, @intCast(val.len), c.SQLITE_TRANSIENT);
+                    if (comptime isStringType(Inner)) {
+                        const str: []const u8 = val;
+                        rc = c.sqlite3_bind_text(stmt.?, idx, str.ptr, @intCast(str.len), c.SQLITE_TRANSIENT);
                     } else {
                         rc = c.sqlite3_bind_int64(stmt.?, idx, @intCast(val));
                     }
