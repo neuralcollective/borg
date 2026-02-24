@@ -7,11 +7,23 @@ export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=384}"
 # Read all stdin into a temp file
 cat > /tmp/input.json
 
-# Parse input JSON
-PROMPT=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8')); process.stdout.write(d.prompt||'')")
-MODEL=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8')); process.stdout.write(d.model||'claude-opus-4-6')")
-SESSION_ID=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8')); process.stdout.write(d.sessionId||'')")
-ASSISTANT_NAME=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8')); process.stdout.write(d.assistantName||'Borg')")
+# Parse input JSON (single node call for efficiency)
+eval "$(node -e "
+const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8'));
+const esc = s => s.replace(/'/g, \"'\\\\''\");
+console.log('PROMPT=\'' + esc(d.prompt||'') + '\'');
+console.log('MODEL=\'' + esc(d.model||'claude-opus-4-6') + '\'');
+console.log('SESSION_ID=\'' + esc(d.sessionId||'') + '\'');
+console.log('ASSISTANT_NAME=\'' + esc(d.assistantName||'Borg') + '\'');
+console.log('SYSTEM_PROMPT=\'' + esc(d.systemPrompt||'') + '\'');
+console.log('ALLOWED_TOOLS=\'' + esc(d.allowedTools||'') + '\'');
+console.log('WORKDIR=\'' + esc(d.workdir||'') + '\'');
+")"
+
+# Change to workdir if specified
+if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+    cd "$WORKDIR"
+fi
 
 # Build claude args
 CLAUDE_ARGS=(
@@ -25,11 +37,27 @@ if [ -n "$SESSION_ID" ]; then
     CLAUDE_ARGS+=(--resume "$SESSION_ID")
 fi
 
-# Allow all tools
-CLAUDE_ARGS+=(
-    --allowedTools 'Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,NotebookEdit,EnterPlanMode,ExitPlanMode,TaskCreate,TaskGet,TaskUpdate,TaskList'
-    --permission-mode bypassPermissions
-)
+# Use specified allowed tools, or default to full set
+if [ -n "$ALLOWED_TOOLS" ]; then
+    CLAUDE_ARGS+=(--allowedTools "$ALLOWED_TOOLS")
+else
+    CLAUDE_ARGS+=(
+        --allowedTools 'Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task,TaskOutput,TaskStop,NotebookEdit,EnterPlanMode,ExitPlanMode,TaskCreate,TaskGet,TaskUpdate,TaskList'
+    )
+fi
+
+CLAUDE_ARGS+=(--permission-mode bypassPermissions)
+
+# Prepend system prompt to user prompt if provided
+if [ -n "$SYSTEM_PROMPT" ]; then
+    FULL_PROMPT="$SYSTEM_PROMPT
+
+---
+
+$PROMPT"
+else
+    FULL_PROMPT="$PROMPT"
+fi
 
 # Run Claude Code
-echo "$PROMPT" | claude "${CLAUDE_ARGS[@]}" 2>/dev/null || true
+echo "$FULL_PROMPT" | claude "${CLAUDE_ARGS[@]}" 2>/dev/null || true
