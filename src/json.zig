@@ -490,3 +490,31 @@ test "getBool distinguishes false from null" {
     const result_missing = getBool(parsed.value, "no_such_key");
     try std.testing.expect(result_missing == null);
 }
+
+test "accessor functions return null for non-object input" {
+    const non_obj = Value{ .string = "hello" };
+
+    try std.testing.expect(getString(non_obj, "key") == null);
+    try std.testing.expect(getInt(non_obj, "key") == null);
+    try std.testing.expect(getBool(non_obj, "key") == null);
+    try std.testing.expect(getObject(non_obj, "key") == null);
+    try std.testing.expect(getArray(non_obj, "key") == null);
+
+    // Confirm guard is not tag-specific: also test with an integer Value
+    const non_obj_int = Value{ .integer = 99 };
+    try std.testing.expect(getString(non_obj_int, "key") == null);
+    try std.testing.expect(getInt(non_obj_int, "key") == null);
+    try std.testing.expect(getBool(non_obj_int, "key") == null);
+    try std.testing.expect(getObject(non_obj_int, "key") == null);
+    try std.testing.expect(getArray(non_obj_int, "key") == null);
+}
+
+test "getInt handles float-to-int coercion" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc, "{\"x\":3.0}");
+    defer parsed.deinit();
+
+    const result = getInt(parsed.value, "x");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(i64, 3), result.?);
+}
