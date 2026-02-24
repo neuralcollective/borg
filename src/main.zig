@@ -424,10 +424,15 @@ const GroupManager = struct {
 fn reexecSelf() void {
     // Read the binary path from /proc/self/exe
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = std.fs.readLinkAbsolute("/proc/self/exe", &exe_buf) catch {
+    var exe_path = std.fs.readLinkAbsolute("/proc/self/exe", &exe_buf) catch {
         std.log.err("Self-update: failed to read /proc/self/exe", .{});
         return;
     };
+
+    // Linux appends " (deleted)" when the running binary was overwritten
+    if (std.mem.endsWith(u8, exe_path, " (deleted)")) {
+        exe_path = exe_path[0 .. exe_path.len - " (deleted)".len];
+    }
 
     // Null-terminate for execve
     const exe_z = std.posix.toPosixPath(exe_path) catch {
