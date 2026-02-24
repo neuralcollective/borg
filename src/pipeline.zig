@@ -463,7 +463,7 @@ pub const Pipeline = struct {
 
     fn checkReleaseTrain(self: *Pipeline) !void {
         const now = std.time.timestamp();
-        const interval: i64 = @intCast(@as(u64, self.config.release_interval_hours) * 3600);
+        const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
         if (now - self.last_release_ts < interval) return;
 
         // Check if there's anything queued

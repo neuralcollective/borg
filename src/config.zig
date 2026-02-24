@@ -16,7 +16,7 @@ pub const Config = struct {
     pipeline_test_cmd: []const u8,
     pipeline_lint_cmd: []const u8,
     pipeline_admin_chat: []const u8,
-    release_interval_hours: u32,
+    release_interval_mins: u32,
     // Agent lifecycle
     collection_window_ms: i64,
     cooldown_ms: i64,
@@ -37,8 +37,8 @@ pub const Config = struct {
         const oauth = readOAuthToken(allocator, creds_path) orelse
             getEnv(allocator, env_content, "CLAUDE_CODE_OAUTH_TOKEN") orelse "";
 
-        const release_hours_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_HOURS") orelse "3";
-        const release_hours = std.fmt.parseInt(u32, release_hours_str, 10) catch 3;
+        const release_mins_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_MINS") orelse "180";
+        const release_mins = std.fmt.parseInt(u32, release_mins_str, 10) catch 180;
 
         const collection_ms_str = getEnv(allocator, env_content, "COLLECTION_WINDOW_MS") orelse "3000";
         const cooldown_ms_str = getEnv(allocator, env_content, "COOLDOWN_MS") orelse "5000";
@@ -61,7 +61,7 @@ pub const Config = struct {
             .pipeline_test_cmd = getEnv(allocator, env_content, "PIPELINE_TEST_CMD") orelse "zig build test",
             .pipeline_lint_cmd = getEnv(allocator, env_content, "PIPELINE_LINT_CMD") orelse "",
             .pipeline_admin_chat = getEnv(allocator, env_content, "PIPELINE_ADMIN_CHAT") orelse "",
-            .release_interval_hours = release_hours,
+            .release_interval_mins = release_mins,
             .collection_window_ms = std.fmt.parseInt(i64, collection_ms_str, 10) catch 3000,
             .cooldown_ms = std.fmt.parseInt(i64, cooldown_ms_str, 10) catch 5000,
             .agent_timeout_s = std.fmt.parseInt(i64, timeout_s_str, 10) catch 600,
