@@ -69,7 +69,7 @@ pub const Docker = struct {
         try w.writeAll("}}");
 
         var name_buf: [256]u8 = undefined;
-        const path = try std.fmt.bufPrint(&name_buf, "/v1.43/containers/create?name={s}", .{config.name});
+        const path = try std.fmt.bufPrint(&name_buf, "/v1.46/containers/create?name={s}", .{config.name});
 
         var resp = try http.unixRequest(self.allocator, self.socket_path, .POST, path, body.items);
         defer resp.deinit();
@@ -91,21 +91,21 @@ pub const Docker = struct {
 
     pub fn startContainer(self: *Docker, container_id: []const u8) !void {
         var path_buf: [256]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buf, "/v1.43/containers/{s}/start", .{container_id});
+        const path = try std.fmt.bufPrint(&path_buf, "/v1.46/containers/{s}/start", .{container_id});
         var resp = try http.unixRequest(self.allocator, self.socket_path, .POST, path, null);
         defer resp.deinit();
     }
 
     pub fn stopContainer(self: *Docker, container_id: []const u8) !void {
         var path_buf: [256]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buf, "/v1.43/containers/{s}/stop?t=5", .{container_id});
+        const path = try std.fmt.bufPrint(&path_buf, "/v1.46/containers/{s}/stop?t=5", .{container_id});
         var resp = try http.unixRequest(self.allocator, self.socket_path, .POST, path, null);
         defer resp.deinit();
     }
 
     pub fn removeContainer(self: *Docker, container_id: []const u8) !void {
         var path_buf: [256]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buf, "/v1.43/containers/{s}?force=true", .{container_id});
+        const path = try std.fmt.bufPrint(&path_buf, "/v1.46/containers/{s}?force=true", .{container_id});
         var resp = try http.unixRequest(self.allocator, self.socket_path, .DELETE, path, null);
         defer resp.deinit();
     }
@@ -197,7 +197,7 @@ pub const Docker = struct {
 
     pub fn imageExists(self: *Docker, image_name: []const u8) !bool {
         var path_buf: [512]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buf, "/v1.43/images/{s}/json", .{image_name});
+        const path = try std.fmt.bufPrint(&path_buf, "/v1.46/images/{s}/json", .{image_name});
         var resp = try http.unixRequest(self.allocator, self.socket_path, .GET, path, null);
         defer resp.deinit();
         return resp.status == .ok;
@@ -213,14 +213,14 @@ pub const Docker = struct {
     }
 
     pub fn isAvailable(self: *Docker) bool {
-        var resp = http.unixRequest(self.allocator, self.socket_path, .GET, "/v1.43/_ping", null) catch return false;
+        var resp = http.unixRequest(self.allocator, self.socket_path, .GET, "/v1.46/_ping", null) catch return false;
         defer resp.deinit();
         return resp.status == .ok;
     }
 
     pub fn cleanupOrphans(self: *Docker) !void {
         var path_buf: [256]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buf, "/v1.43/containers/json?all=true&filters={{\"label\":[\"borg.managed=true\"]}}", .{});
+        const path = try std.fmt.bufPrint(&path_buf, "/v1.46/containers/json?all=true&filters={{\"label\":[\"borg.managed=true\"]}}", .{});
         var resp = try http.unixRequest(self.allocator, self.socket_path, .GET, path, null);
         defer resp.deinit();
 
