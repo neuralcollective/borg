@@ -122,31 +122,14 @@ pub const Pipeline = struct {
             return;
         }
 
-        // Per-repo phase dispatch: one task per (repo, phase) combination.
-        // Tasks from different repos in the same phase run concurrently.
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        var dispatched = std.StringHashMap(void).init(arena.allocator());
-
         for (tasks) |task| {
             if (self.active_agents.load(.acquire) >= MAX_PARALLEL_AGENTS) break;
-
-            // Normalize status to phase key
-            const phase: []const u8 = if (std.mem.eql(u8, task.status, "retry")) "impl" else task.status;
-
-            // Build dispatch key: "repo_path:phase"
-            const key = std.fmt.allocPrint(arena.allocator(), "{s}:{s}", .{ task.repo_path, phase }) catch continue;
-
-            if (dispatched.contains(key)) continue;
 
             // Skip if already in-flight
             {
                 self.inflight_mu.lock();
                 defer self.inflight_mu.unlock();
-                if (self.inflight_tasks.contains(task.id)) {
-                    dispatched.put(key, {}) catch {};
-                    continue;
-                }
+                if (self.inflight_tasks.contains(task.id)) continue;
                 self.inflight_tasks.put(task.id, {}) catch continue;
             }
 
@@ -160,8 +143,6 @@ pub const Pipeline = struct {
                 _ = self.inflight_tasks.remove(task.id);
                 continue;
             };
-
-            dispatched.put(key, {}) catch {};
         }
     }
 
