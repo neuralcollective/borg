@@ -186,6 +186,49 @@ Scan the QR code on first start. Auth state persists in `WHATSAPP_AUTH_DIR`.
 | `RELEASE_INTERVAL_MINS` | `180` | Minutes between release trains |
 | `CONTINUOUS_MODE` | `false` | Run release train after every completed task |
 
+## Deployment
+
+### Docker Compose (recommended for portability)
+
+```bash
+# Edit .env with your config, then:
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Rebuild after code changes
+docker compose up -d --build
+```
+
+Mount your repos into the container via `docker-compose.yml` volumes:
+
+```yaml
+volumes:
+  - /path/to/your/repo:/repos/my-project
+```
+
+Then set `PIPELINE_REPO=/repos/my-project` in `.env`.
+
+### systemd (Linux, no Docker overhead)
+
+```bash
+# Edit borg.service paths if needed, then:
+sudo ln -sf $(pwd)/borg.service /etc/systemd/system/borg.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now borg
+
+# Check status / follow logs
+systemctl status borg
+journalctl -u borg -f
+```
+
+### Bare metal
+
+```bash
+zig build && ./zig-out/bin/borg
+```
+
 ## Database migrations
 
 Schema upgrades are handled automatically via versioned migrations. Fresh installs get the full schema; existing databases run only new ALTER TABLE migrations. The migration version is tracked in the `state` table.

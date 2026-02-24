@@ -1,0 +1,24 @@
+services:
+  borg:
+    build: .
+    container_name: borg
+    restart: always
+    ports:
+      - "3131:3131"
+    volumes:
+      # Persist SQLite DB and data across restarts
+      - borg-data:/data
+      # Docker socket so borg can spawn pipeline containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Claude credentials (auto-rotated OAuth token)
+      - ${HOME}/.claude:/home/borg/.claude:ro
+      # Mount repos for pipeline (add your repos here)
+      # - /path/to/your/repo:/repos/my-project
+    env_file:
+      - .env
+    environment:
+      - HOME=/home/borg
+      - DATA_DIR=/data
+
+volumes:
+  borg-data:
