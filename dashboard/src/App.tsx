@@ -10,7 +10,7 @@ import { ChatPanel } from "@/components/chat-panel";
 
 export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(true);
   const { logs, connected } = useLogs();
 
   return (
