@@ -52,7 +52,8 @@ pub const Telegram = struct {
         }
     }
 
-    pub fn getUpdates(self: *Telegram) ![]TgMessage {
+    /// Poll for new messages. Returned TgMessages are allocated with `alloc`.
+    pub fn getUpdates(self: *Telegram, alloc: std.mem.Allocator) ![]TgMessage {
         var url_buf: [512]u8 = undefined;
         var params_buf: [256]u8 = undefined;
         const params = try std.fmt.bufPrint(&params_buf, "getUpdates?timeout=30&offset={d}&allowed_updates=[\"message\"]", .{self.last_update_id + 1});
@@ -67,7 +68,7 @@ pub const Telegram = struct {
         defer parsed.deinit();
 
         const result_array = json.getArray(parsed.value, "result") orelse return &.{};
-        var messages = std.ArrayList(TgMessage).init(self.allocator);
+        var messages = std.ArrayList(TgMessage).init(alloc);
 
         for (result_array) |update| {
             const update_id = json.getInt(update, "update_id") orelse continue;
@@ -77,17 +78,6 @@ pub const Telegram = struct {
 
             const msg_obj = json.getObject(update, "message") orelse continue;
             const text = json.getString(msg_obj, "text") orelse continue;
-
-            // Skip commands but handle built-in ones
-            if (text.len > 0 and text[0] == '/') {
-                if (std.mem.startsWith(u8, text, "/chatid")) {
-                    self.handleChatId(msg_obj) catch {};
-                } else if (std.mem.startsWith(u8, text, "/ping")) {
-                    self.handlePing(msg_obj) catch {};
-                }
-                continue;
-            }
-
             const chat_obj = json.getObject(msg_obj, "chat") orelse continue;
             const from_obj = json.getObject(msg_obj, "from") orelse continue;
 
@@ -96,7 +86,6 @@ pub const Telegram = struct {
             const msg_id_int = json.getInt(msg_obj, "message_id") orelse continue;
             const date = json.getInt(msg_obj, "date") orelse 0;
 
-            // Format IDs as strings
             var chat_id_buf: [32]u8 = undefined;
             const chat_id_str = try std.fmt.bufPrint(&chat_id_buf, "{d}", .{chat_id_int});
             var sender_id_buf: [32]u8 = undefined;
@@ -119,7 +108,7 @@ pub const Telegram = struct {
                             const offset: usize = @intCast(json.getInt(entity, "offset") orelse continue);
                             const length: usize = @intCast(json.getInt(entity, "length") orelse continue);
                             if (offset + length <= text.len and length > 1) {
-                                const mention = text[offset + 1 .. offset + length]; // skip @
+                                const mention = text[offset + 1 .. offset + length];
                                 if (std.ascii.eqlIgnoreCase(mention, self.bot_username)) {
                                     mentions_bot = true;
                                 }
@@ -140,17 +129,17 @@ pub const Telegram = struct {
             }
 
             try messages.append(TgMessage{
-                .message_id = try self.allocator.dupe(u8, msg_id_str),
-                .chat_id = try self.allocator.dupe(u8, chat_id_str),
-                .chat_type = try self.allocator.dupe(u8, chat_type),
-                .chat_title = try self.allocator.dupe(u8, chat_title),
-                .sender_id = try self.allocator.dupe(u8, sender_id_str),
-                .sender_name = try self.allocator.dupe(u8, sender_name),
-                .text = try self.allocator.dupe(u8, text),
+                .message_id = try alloc.dupe(u8, msg_id_str),
+                .chat_id = try alloc.dupe(u8, chat_id_str),
+                .chat_type = try alloc.dupe(u8, chat_type),
+                .chat_title = try alloc.dupe(u8, chat_title),
+                .sender_id = try alloc.dupe(u8, sender_id_str),
+                .sender_name = try alloc.dupe(u8, sender_name),
+                .text = try alloc.dupe(u8, text),
                 .date = date,
                 .mentions_bot = mentions_bot,
-                .reply_to_text = if (reply_to_text) |t| try self.allocator.dupe(u8, t) else null,
-                .reply_to_author = if (reply_to_author) |a| try self.allocator.dupe(u8, a) else null,
+                .reply_to_text = if (reply_to_text) |t| try alloc.dupe(u8, t) else null,
+                .reply_to_author = if (reply_to_author) |a| try alloc.dupe(u8, a) else null,
             });
         }
 
@@ -158,7 +147,6 @@ pub const Telegram = struct {
     }
 
     pub fn sendMessage(self: *Telegram, chat_id: []const u8, text: []const u8, reply_to: ?[]const u8) !void {
-        // Split long messages (Telegram limit is 4096)
         const max_len = 4000;
         var offset: usize = 0;
         while (offset < text.len) {
@@ -189,7 +177,6 @@ pub const Telegram = struct {
         defer resp.deinit();
 
         if (resp.status != .ok) {
-            // Retry without Markdown if parse fails
             body.clearRetainingCapacity();
             try body.writer().print("{{\"chat_id\":{s},\"text\":\"{s}\"", .{ chat_id, escaped });
             if (reply_to) |rid| {
@@ -208,33 +195,5 @@ pub const Telegram = struct {
         const body = try std.fmt.bufPrint(&body_buf, "{{\"chat_id\":{s},\"action\":\"typing\"}}", .{chat_id});
         var resp = try http.postJson(self.allocator, url, body);
         defer resp.deinit();
-    }
-
-    fn handleChatId(self: *Telegram, msg_obj: json.Value) !void {
-        const chat_obj = json.getObject(msg_obj, "chat") orelse return;
-        const chat_id_int = json.getInt(chat_obj, "id") orelse return;
-        const chat_type = json.getString(chat_obj, "type") orelse "unknown";
-
-        const chat_title = json.getString(chat_obj, "title") orelse blk: {
-            if (json.getObject(msg_obj, "from")) |from| {
-                break :blk json.getString(from, "first_name") orelse "Unknown";
-            }
-            break :blk "Unknown";
-        };
-
-        var reply_buf: [512]u8 = undefined;
-        const reply = try std.fmt.bufPrint(&reply_buf, "Chat ID: `tg:{d}`\nName: {s}\nType: {s}", .{ chat_id_int, chat_title, chat_type });
-
-        var chat_id_buf: [32]u8 = undefined;
-        const chat_id_str = try std.fmt.bufPrint(&chat_id_buf, "{d}", .{chat_id_int});
-        try self.sendMessage(chat_id_str, reply, null);
-    }
-
-    fn handlePing(self: *Telegram, msg_obj: json.Value) !void {
-        const chat_obj = json.getObject(msg_obj, "chat") orelse return;
-        const chat_id_int = json.getInt(chat_obj, "id") orelse return;
-        var chat_id_buf: [32]u8 = undefined;
-        const chat_id_str = try std.fmt.bufPrint(&chat_id_buf, "{d}", .{chat_id_int});
-        try self.sendMessage(chat_id_str, "Borg is online.", null);
     }
 };

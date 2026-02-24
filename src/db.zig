@@ -146,7 +146,7 @@ pub const Db = struct {
     pub fn getMessagesSince(self: *Db, allocator: std.mem.Allocator, chat_jid: []const u8, since: []const u8) ![]Message {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me FROM messages WHERE chat_jid = ?1 AND timestamp > ?2 AND is_bot_message = 0 ORDER BY timestamp ASC",
+            "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me FROM messages WHERE chat_jid = ?1 AND timestamp > ?2 ORDER BY timestamp ASC LIMIT 50",
             .{ chat_jid, since },
         );
         defer rows.deinit();
