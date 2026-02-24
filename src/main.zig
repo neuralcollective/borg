@@ -12,8 +12,44 @@ const agent_mod = @import("agent.zig");
 const pipeline_mod = @import("pipeline.zig");
 const wa_mod = @import("whatsapp.zig");
 const WhatsApp = wa_mod.WhatsApp;
+const web_mod = @import("web.zig");
+const WebServer = web_mod.WebServer;
 
 const POLL_INTERVAL_MS = 500;
+
+// ── Custom Logger (feeds web dashboard) ─────────────────────────────────
+
+var web_server_global: ?*WebServer = null;
+
+pub const std_options: std.Options = .{
+    .logFn = borgLogFn,
+};
+
+fn borgLogFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    _ = scope;
+    const level_str = switch (level) {
+        .err => "err",
+        .warn => "warn",
+        .info => "info",
+        .debug => "debug",
+    };
+
+    // Print to stderr (default behavior)
+    const stderr = std.io.getStdErr().writer();
+    stderr.print(level_str ++ ": " ++ format ++ "\n", args) catch {};
+
+    // Forward to web dashboard if available
+    if (web_server_global) |ws| {
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, format, args) catch return;
+        ws.pushLog(level_str, msg);
+    }
+}
 
 // ── Signal Handler ──────────────────────────────────────────────────────
 
@@ -442,6 +478,18 @@ pub fn main() !void {
         pipeline = pipeline_mod.Pipeline.init(allocator, &pipeline_db.?, &docker, &tg, &config);
         pipeline_thread = try std.Thread.spawn(.{}, pipeline_mod.Pipeline.run, .{&pipeline.?});
         std.log.info("Pipeline thread started for: {s}", .{config.pipeline_repo});
+    }
+
+    // Start web dashboard
+    var web_db = try Db.init(allocator, "store/borg.db");
+    var web = WebServer.init(allocator, &web_db, &config, config.web_port);
+    web_server_global = &web;
+    const web_thread = try std.Thread.spawn(.{}, WebServer.run, .{&web});
+    defer {
+        web.stop();
+        web_thread.join();
+        web_server_global = null;
+        web_db.deinit();
     }
 
     // Load registered groups
@@ -1144,6 +1192,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .agent_timeout_s = 600,
         .max_concurrent_agents = 4,
         .rate_limit_per_minute = 5,
+        .web_port = 3131,
         .whatsapp_enabled = false,
         .whatsapp_auth_dir = "",
         .allocator = allocator,
