@@ -186,6 +186,10 @@ pub const ExecResult = struct {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
+test {
+    _ = @import("pipe_deadlock_test.zig");
+}
+
 test "exec builds correct argv with -C flag" {
     // Verify the Git struct initializes correctly
     const git = Git.init(std.testing.allocator, "/tmp/test-repo");
