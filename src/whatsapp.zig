@@ -28,7 +28,9 @@ pub const WhatsApp = struct {
     connected: bool,
     self_jid: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator) WhatsApp {
+    assistant_name: []const u8,
+
+    pub fn init(allocator: std.mem.Allocator, assistant_name: []const u8) WhatsApp {
         return .{
             .allocator = allocator,
             .child = null,
@@ -36,12 +38,13 @@ pub const WhatsApp = struct {
             .pending_events = std.ArrayList(WaEvent).init(allocator),
             .connected = false,
             .self_jid = "",
+            .assistant_name = assistant_name,
         };
     }
 
     pub fn start(self: *WhatsApp) !void {
         var child = std.process.Child.init(
-            &.{ "node", "whatsapp/bridge.js" },
+            &.{ "node", "whatsapp/bridge.js", self.assistant_name },
             self.allocator,
         );
         child.stdin_behavior = .Pipe;
@@ -196,7 +199,7 @@ pub const WhatsApp = struct {
 // ── Tests ──────────────────────────────────────────────────────────────
 
 test "WhatsApp init/deinit" {
-    var wa = WhatsApp.init(std.testing.allocator);
+    var wa = WhatsApp.init(std.testing.allocator, "Borg");
     defer wa.deinit();
     try std.testing.expect(!wa.connected);
     try std.testing.expect(wa.child == null);

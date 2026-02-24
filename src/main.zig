@@ -8,30 +8,380 @@ const TgMessage = tg_mod.TgMessage;
 const docker_mod = @import("docker.zig");
 const Docker = docker_mod.Docker;
 const json_mod = @import("json.zig");
-const git_mod = @import("git.zig");
 const agent_mod = @import("agent.zig");
 const pipeline_mod = @import("pipeline.zig");
 const wa_mod = @import("whatsapp.zig");
 const WhatsApp = wa_mod.WhatsApp;
 
-const POLL_INTERVAL_MS = 1000;
-const MAX_AGENT_RETRIES = 3;
-const RETRY_BASE_MS = 1000;
+const POLL_INTERVAL_MS = 500;
+
+// ── Signal Handler ──────────────────────────────────────────────────────
+
+var shutdown_requested = std.atomic.Value(bool).init(false);
+
+fn signalHandler(_: c_int) callconv(.c) void {
+    shutdown_requested.store(true, .release);
+}
+
+fn installSignalHandlers() void {
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = signalHandler },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.TERM, &act, null);
+    std.posix.sigaction(std.posix.SIG.INT, &act, null);
+}
+
+// ── Types ───────────────────────────────────────────────────────────────
+
+const Transport = enum { telegram, whatsapp };
+
+const GroupPhase = enum { idle, collecting, running, cooldown };
 
 const GroupState = struct {
-    last_agent_timestamp: ?[]const u8,
-    consecutive_errors: u32,
-    agent_running: bool,
+    phase: GroupPhase = .idle,
+    last_agent_timestamp: ?[]const u8 = null,
+    consecutive_errors: u32 = 0,
+
+    // Collecting phase
+    collect_deadline_ms: i64 = 0,
+    trigger_msg_id: ?[]const u8 = null,
+    original_id: ?[]const u8 = null,
+    transport: Transport = .telegram,
+
+    // Running phase
+    agent_thread: ?std.Thread = null,
+
+    // Result (written by agent thread, read by main loop)
+    completed_result: ?*AgentOutcome = null,
+
+    // Rate limiting
+    rate_window_start_ms: i64 = 0,
+    trigger_count: u32 = 0,
+
+    // Cooldown
+    cooldown_deadline_ms: i64 = 0,
 };
+
+const AgentOutcome = struct {
+    output: []const u8,
+    new_session_id: ?[]const u8,
+    success: bool,
+    last_msg_timestamp: []const u8,
+
+    fn deinit(self: *AgentOutcome, allocator: std.mem.Allocator) void {
+        allocator.free(self.output);
+        if (self.new_session_id) |sid| allocator.free(sid);
+        allocator.free(self.last_msg_timestamp);
+        allocator.destroy(self);
+    }
+};
+
+const AgentContext = struct {
+    allocator: std.mem.Allocator,
+    jid: []const u8,
+    folder: []const u8,
+    prompt: []const u8,
+    session_id: ?[]const u8,
+    model: []const u8,
+    oauth_token: []const u8,
+    assistant_name: []const u8,
+    last_msg_timestamp: []const u8,
+
+    fn deinit(self: *AgentContext) void {
+        self.allocator.free(self.jid);
+        self.allocator.free(self.folder);
+        self.allocator.free(self.prompt);
+        if (self.session_id) |s| self.allocator.free(s);
+        self.allocator.free(self.model);
+        self.allocator.free(self.oauth_token);
+        self.allocator.free(self.assistant_name);
+        self.allocator.free(self.last_msg_timestamp);
+    }
+};
+
+const IncomingMessage = struct {
+    jid: []const u8,
+    original_id: []const u8,
+    message_id: []const u8,
+    sender: []const u8,
+    sender_name: []const u8,
+    text: []const u8,
+    timestamp: i64,
+    mentions_bot: bool,
+    transport: Transport,
+    chat_title: []const u8,
+    chat_type: []const u8,
+};
+
+const Sender = struct {
+    tg: *Telegram,
+    wa: ?*WhatsApp,
+
+    fn send(self: Sender, transport: Transport, original_id: []const u8, text: []const u8, reply_to: ?[]const u8) void {
+        switch (transport) {
+            .telegram => self.tg.sendMessage(original_id, text, reply_to) catch |err| {
+                std.log.err("TG send: {}", .{err});
+            },
+            .whatsapp => if (self.wa) |w| {
+                w.sendMessage(original_id, text, reply_to) catch |err| {
+                    std.log.err("WA send: {}", .{err});
+                };
+            },
+        }
+    }
+
+    fn sendTyping(self: Sender, transport: Transport, original_id: []const u8) void {
+        switch (transport) {
+            .telegram => self.tg.sendTyping(original_id) catch {},
+            .whatsapp => if (self.wa) |w| w.sendTyping(original_id) catch {},
+        }
+    }
+};
+
+// ── Group Manager ───────────────────────────────────────────────────────
+
+const GroupManager = struct {
+    mu: std.Thread.Mutex = .{},
+    states: std.StringHashMap(GroupState),
+    active_agents: u32 = 0,
+    allocator: std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator) GroupManager {
+        return .{
+            .states = std.StringHashMap(GroupState).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *GroupManager) void {
+        var it = self.states.iterator();
+        while (it.next()) |entry| {
+            const state = entry.value_ptr;
+            if (state.last_agent_timestamp) |ts| self.allocator.free(ts);
+            if (state.trigger_msg_id) |m| self.allocator.free(m);
+            if (state.original_id) |o| self.allocator.free(o);
+        }
+        self.states.deinit();
+    }
+
+    fn addGroup(self: *GroupManager, jid: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.states.put(jid, .{}) catch {};
+    }
+
+    fn removeGroup(self: *GroupManager, jid: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        _ = self.states.remove(jid);
+    }
+
+    fn getPhase(self: *GroupManager, jid: []const u8) ?GroupPhase {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const state = self.states.get(jid) orelse return null;
+        return state.phase;
+    }
+
+    fn getActiveCount(self: *GroupManager) u32 {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.active_agents;
+    }
+
+    /// Transition IDLE → COLLECTING on trigger. Returns true if accepted.
+    fn onTrigger(
+        self: *GroupManager,
+        jid: []const u8,
+        msg_id: []const u8,
+        original_id: []const u8,
+        transport: Transport,
+        config: *const Config,
+    ) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        const state = self.states.getPtr(jid) orelse return false;
+        if (state.phase != .idle) return false;
+
+        // Rate limiting
+        const now = nowMs();
+        if (now - state.rate_window_start_ms > 60_000) {
+            state.rate_window_start_ms = now;
+            state.trigger_count = 0;
+        }
+        if (state.trigger_count >= config.rate_limit_per_minute) return false;
+        if (self.active_agents >= config.max_concurrent_agents) return false;
+
+        state.trigger_count += 1;
+        state.phase = .collecting;
+        state.collect_deadline_ms = now + config.collection_window_ms;
+        state.trigger_msg_id = self.allocator.dupe(u8, msg_id) catch return false;
+        state.original_id = self.allocator.dupe(u8, original_id) catch return false;
+        state.transport = transport;
+
+        return true;
+    }
+
+    /// If message arrives during COLLECTING, extend deadline slightly.
+    fn extendCollection(self: *GroupManager, jid: []const u8, extension_ms: i64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const state = self.states.getPtr(jid) orelse return;
+        if (state.phase != .collecting) return;
+        const now = nowMs();
+        const new_deadline = now + extension_ms;
+        if (new_deadline > state.collect_deadline_ms) {
+            state.collect_deadline_ms = @min(new_deadline, state.collect_deadline_ms + 2000);
+        }
+    }
+
+    const SpawnInfo = struct {
+        jid: []const u8,
+        original_id: []const u8,
+        trigger_msg_id: ?[]const u8,
+        transport: Transport,
+    };
+
+    /// Collect groups with expired collection windows. Caller processes them outside the lock.
+    fn getExpiredCollections(self: *GroupManager, buf: *std.ArrayList(SpawnInfo)) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const now = nowMs();
+        var it = self.states.iterator();
+        while (it.next()) |entry| {
+            const state = entry.value_ptr;
+            if (state.phase == .collecting and now >= state.collect_deadline_ms) {
+                buf.append(.{
+                    .jid = entry.key_ptr.*,
+                    .original_id = state.original_id orelse "",
+                    .trigger_msg_id = state.trigger_msg_id,
+                    .transport = state.transport,
+                }) catch {};
+            }
+        }
+    }
+
+    /// Transition COLLECTING → RUNNING. Returns false if state changed.
+    fn startRunning(self: *GroupManager, jid: []const u8, thread: std.Thread) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const state = self.states.getPtr(jid) orelse return false;
+        if (state.phase != .collecting) return false;
+        state.phase = .running;
+        state.agent_thread = thread;
+        self.active_agents += 1;
+        return true;
+    }
+
+    /// Write outcome from agent thread.
+    fn setOutcome(self: *GroupManager, jid: []const u8, outcome: *AgentOutcome) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (self.states.getPtr(jid)) |state| {
+            state.completed_result = outcome;
+        } else {
+            outcome.deinit(self.allocator);
+        }
+    }
+
+    const DeliveryInfo = struct {
+        jid: []const u8,
+        original_id: []const u8,
+        trigger_msg_id: ?[]const u8,
+        transport: Transport,
+        folder: []const u8,
+        outcome: *AgentOutcome,
+        thread: std.Thread,
+    };
+
+    /// Collect completed agents for delivery. Transitions RUNNING → COOLDOWN.
+    fn getCompletedAgents(self: *GroupManager, buf: *std.ArrayList(DeliveryInfo), groups: []const db_mod.RegisteredGroup, cooldown_ms: i64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const now = nowMs();
+        var it = self.states.iterator();
+        while (it.next()) |entry| {
+            const state = entry.value_ptr;
+            if (state.phase == .running and state.completed_result != null) {
+                const folder = for (groups) |g| {
+                    if (std.mem.eql(u8, g.jid, entry.key_ptr.*)) break g.folder;
+                } else "";
+
+                buf.append(.{
+                    .jid = entry.key_ptr.*,
+                    .original_id = state.original_id orelse "",
+                    .trigger_msg_id = state.trigger_msg_id,
+                    .transport = state.transport,
+                    .folder = folder,
+                    .outcome = state.completed_result.?,
+                    .thread = state.agent_thread.?,
+                }) catch {};
+
+                // Transition to cooldown
+                state.phase = .cooldown;
+                state.cooldown_deadline_ms = now + cooldown_ms;
+                state.completed_result = null;
+                state.agent_thread = null;
+                // Keep original_id/trigger_msg_id alive for delivery
+                if (self.active_agents > 0) self.active_agents -= 1;
+            }
+        }
+    }
+
+    /// Transition expired COOLDOWN → IDLE. Cleans up transient state.
+    fn expireCooldowns(self: *GroupManager) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const now = nowMs();
+        var it = self.states.iterator();
+        while (it.next()) |entry| {
+            const state = entry.value_ptr;
+            if (state.phase == .cooldown and now >= state.cooldown_deadline_ms) {
+                state.phase = .idle;
+                if (state.trigger_msg_id) |m| self.allocator.free(m);
+                state.trigger_msg_id = null;
+                if (state.original_id) |o| self.allocator.free(o);
+                state.original_id = null;
+            }
+        }
+    }
+
+    /// Join all running agent threads (for shutdown).
+    fn joinAll(self: *GroupManager) void {
+        self.mu.lock();
+        var threads = std.ArrayList(std.Thread).init(self.allocator);
+        defer threads.deinit();
+        var it = self.states.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.agent_thread) |t| {
+                threads.append(t) catch {};
+                entry.value_ptr.agent_thread = null;
+            }
+        }
+        self.mu.unlock();
+
+        for (threads.items) |t| {
+            t.join();
+        }
+    }
+};
+
+// ── Main ────────────────────────────────────────────────────────────────
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    installSignalHandlers();
+
     var config = try Config.load(allocator);
     const start_time = std.time.timestamp();
 
+    // Startup validation
     if (config.telegram_token.len == 0) {
         std.log.err("TELEGRAM_BOT_TOKEN not set", .{});
         return;
@@ -52,18 +402,28 @@ pub fn main() !void {
     try tg.connect();
 
     var docker = Docker.init(allocator);
-    docker.cleanupOrphans() catch {};
+
+    // Validate Docker + image if pipeline is configured
+    if (config.pipeline_repo.len > 0) {
+        if (!docker.isAvailable()) {
+            std.log.err("Docker daemon not reachable but PIPELINE_REPO is set", .{});
+            return;
+        }
+        docker.cleanupOrphans() catch {};
+    }
 
     // Start WhatsApp bridge if enabled
     var wa: ?WhatsApp = null;
     defer if (wa) |*w| w.deinit();
     if (config.whatsapp_enabled) {
-        wa = WhatsApp.init(allocator);
+        wa = WhatsApp.init(allocator, config.assistant_name);
         wa.?.start() catch |err| {
             std.log.err("WhatsApp bridge start failed: {}", .{err});
             wa = null;
         };
     }
+
+    var sender = Sender{ .tg = &tg, .wa = if (wa) |*w| w else null };
 
     // Start pipeline thread if repo is configured
     var pipeline_db: ?Db = null;
@@ -79,17 +439,12 @@ pub fn main() !void {
 
     if (config.pipeline_repo.len > 0) {
         pipeline_db = try Db.init(allocator, "store/borg.db");
-        pipeline = pipeline_mod.Pipeline.init(
-            allocator,
-            &pipeline_db.?,
-            &docker,
-            &tg,
-            &config,
-        );
+        pipeline = pipeline_mod.Pipeline.init(allocator, &pipeline_db.?, &docker, &tg, &config);
         pipeline_thread = try std.Thread.spawn(.{}, pipeline_mod.Pipeline.run, .{&pipeline.?});
         std.log.info("Pipeline thread started for: {s}", .{config.pipeline_repo});
     }
 
+    // Load registered groups
     var groups_list = std.ArrayList(db_mod.RegisteredGroup).init(allocator);
     defer groups_list.deinit();
     {
@@ -97,330 +452,468 @@ pub fn main() !void {
         try groups_list.appendSlice(loaded);
         allocator.free(loaded);
     }
-    std.log.info("Borg online | assistant: {s} | groups: {d}", .{ config.assistant_name, groups_list.items.len });
 
-    var group_states = std.StringHashMap(GroupState).init(allocator);
-    defer group_states.deinit();
+    var gm = GroupManager.init(allocator);
+    defer gm.deinit();
     for (groups_list.items) |group| {
-        try group_states.put(group.jid, GroupState{
-            .last_agent_timestamp = null,
-            .consecutive_errors = 0,
-            .agent_running = false,
-        });
+        gm.addGroup(group.jid);
     }
 
-    while (true) {
+    std.log.info("Borg online | assistant: {s} | groups: {d}", .{ config.assistant_name, groups_list.items.len });
+
+    // ── Main Loop ───────────────────────────────────────────────────────
+
+    var session_expire_counter: u32 = 0;
+
+    while (!shutdown_requested.load(.acquire)) {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const cycle_alloc = arena.allocator();
 
-        db.expireSessions(config.session_max_age_hours) catch {};
+        // Expire sessions periodically (every ~60 cycles = ~2 minutes)
+        session_expire_counter += 1;
+        if (session_expire_counter >= 60) {
+            session_expire_counter = 0;
+            db.expireSessions(config.session_max_age_hours) catch {};
+        }
 
-        const messages = tg.getUpdates(cycle_alloc) catch |err| {
+        // 1. Poll Telegram messages
+        var all_messages = std.ArrayList(IncomingMessage).init(cycle_alloc);
+
+        const tg_msgs = tg.getUpdates(cycle_alloc) catch |err| {
             std.log.err("Telegram poll error: {}", .{err});
             std.time.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
             continue;
         };
 
-        for (messages) |msg| {
-            const chat_jid = try std.fmt.allocPrint(cycle_alloc, "tg:{s}", .{msg.chat_id});
-
-            db.storeMessage(.{
-                .id = msg.message_id,
-                .chat_jid = chat_jid,
+        for (tg_msgs) |msg| {
+            all_messages.append(.{
+                .jid = try std.fmt.allocPrint(cycle_alloc, "tg:{s}", .{msg.chat_id}),
+                .original_id = msg.chat_id,
+                .message_id = msg.message_id,
                 .sender = msg.sender_id,
                 .sender_name = msg.sender_name,
-                .content = msg.text,
-                .timestamp = try formatTimestamp(cycle_alloc, msg.date),
-                .is_from_me = false,
-            }) catch |err| {
-                std.log.err("Store message: {}", .{err});
-                continue;
-            };
-
-            // Handle commands
-            if (msg.text.len > 0 and msg.text[0] == '/') {
-                handleCommand(allocator, &db, &tg, msg, chat_jid, &groups_list, &group_states, &config, start_time, if (pipeline_db) |*pdb| pdb else null) catch |err| {
-                    std.log.err("Command error: {}", .{err});
-                };
-                continue;
-            }
-
-            // Check if registered
-            var registered_group: ?db_mod.RegisteredGroup = null;
-            for (groups_list.items) |g| {
-                if (std.mem.eql(u8, g.jid, chat_jid)) {
-                    registered_group = g;
-                    break;
-                }
-            }
-            const group = registered_group orelse continue;
-
-            // Check trigger
-            if (group.requires_trigger) {
-                if (!msg.mentions_bot and !containsTrigger(msg.text, config.assistant_name)) {
-                    continue;
-                }
-            }
-
-            // Check if agent already running for this group
-            if (group_states.get(chat_jid)) |state| {
-                if (state.agent_running) {
-                    std.log.info("Agent already running for {s}, queueing", .{chat_jid});
-                    continue;
-                }
-            }
-
-            std.log.info("Triggered: \"{s}\" from {s}", .{ msg.text[0..@min(msg.text.len, 60)], msg.sender_name });
-            tg.sendTyping(msg.chat_id) catch {};
-
-            const state = group_states.get(chat_jid) orelse continue;
-            const since = state.last_agent_timestamp orelse "";
-            const pending = db.getMessagesSince(cycle_alloc, chat_jid, since) catch continue;
-            if (pending.len == 0) continue;
-
-            config.refreshOAuthToken();
-
-            const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
-            const session_id = db.getSession(cycle_alloc, group.folder) catch null;
-
-            // Mark agent as running
-            if (group_states.getPtr(chat_jid)) |s| {
-                s.agent_running = true;
-            }
-
-            const result = runAgentWithRetry(allocator, &docker, config, group, prompt, session_id);
-
-            // Mark agent as done
-            if (group_states.getPtr(chat_jid)) |s| {
-                s.agent_running = false;
-            }
-
-            if (result) |res| {
-                defer allocator.free(res.output);
-                defer if (res.new_session_id) |sid| allocator.free(sid);
-
-                if (group_states.getPtr(chat_jid)) |s| {
-                    s.consecutive_errors = 0;
-                    if (s.last_agent_timestamp) |old| allocator.free(old);
-                    s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
-                }
-
-                if (res.new_session_id) |new_sid| {
-                    db.setSession(group.folder, new_sid) catch {};
-                }
-
-                if (res.output.len > 0) {
-                    db.storeMessage(.{
-                        .id = try std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}),
-                        .chat_jid = chat_jid,
-                        .sender = "borg",
-                        .sender_name = config.assistant_name,
-                        .content = res.output,
-                        .timestamp = try formatTimestamp(cycle_alloc, std.time.timestamp()),
-                        .is_from_me = true,
-                    }) catch {};
-
-                    tg.sendMessage(msg.chat_id, res.output, msg.message_id) catch |err| {
-                        std.log.err("Send response: {}", .{err});
-                    };
-                }
-            } else |err| {
-                std.log.err("Agent failed after retries: {}", .{err});
-
-                if (group_states.getPtr(chat_jid)) |s| {
-                    s.consecutive_errors += 1;
-                    if (s.consecutive_errors >= config.max_consecutive_errors) {
-                        s.consecutive_errors = 0;
-                        if (s.last_agent_timestamp) |old| allocator.free(old);
-                        s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
-                    }
-                }
-
-                tg.sendMessage(msg.chat_id, "Sorry, I encountered an error processing your message. Please try again.", msg.message_id) catch {};
-            }
+                .text = msg.text,
+                .timestamp = msg.date,
+                .mentions_bot = msg.mentions_bot,
+                .transport = .telegram,
+                .chat_title = msg.chat_title,
+                .chat_type = msg.chat_type,
+            }) catch {};
         }
 
-        // Poll WhatsApp messages
+        // 2. Poll WhatsApp messages
         if (wa) |*w| {
             const wa_msgs = w.poll(cycle_alloc) catch &[_]wa_mod.WaMessage{};
-            for (wa_msgs) |wa_msg| {
-                const wa_jid = try std.fmt.allocPrint(cycle_alloc, "wa:{s}", .{wa_msg.jid});
-
-                db.storeMessage(.{
-                    .id = wa_msg.id,
-                    .chat_jid = wa_jid,
-                    .sender = wa_msg.sender,
-                    .sender_name = wa_msg.sender_name,
-                    .content = wa_msg.text,
-                    .timestamp = try formatTimestamp(cycle_alloc, wa_msg.timestamp),
-                    .is_from_me = false,
-                }) catch |err| {
-                    std.log.err("Store WA message: {}", .{err});
-                    continue;
-                };
-
-                // Check if registered
-                var registered_group: ?db_mod.RegisteredGroup = null;
-                for (groups_list.items) |g| {
-                    if (std.mem.eql(u8, g.jid, wa_jid)) {
-                        registered_group = g;
-                        break;
-                    }
-                }
-                const group = registered_group orelse continue;
-
-                // Check trigger
-                if (group.requires_trigger) {
-                    if (!containsTrigger(wa_msg.text, config.assistant_name)) {
-                        continue;
-                    }
-                }
-
-                // Check if agent already running
-                if (group_states.get(wa_jid)) |state| {
-                    if (state.agent_running) continue;
-                }
-
-                std.log.info("WA triggered: \"{s}\" from {s}", .{ wa_msg.text[0..@min(wa_msg.text.len, 60)], wa_msg.sender_name });
-                w.sendTyping(wa_msg.jid) catch {};
-
-                const state = group_states.get(wa_jid) orelse continue;
-                const since = state.last_agent_timestamp orelse "";
-                const pending = db.getMessagesSince(cycle_alloc, wa_jid, since) catch continue;
-                if (pending.len == 0) continue;
-
-                config.refreshOAuthToken();
-
-                const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
-                const session_id = db.getSession(cycle_alloc, group.folder) catch null;
-
-                if (group_states.getPtr(wa_jid)) |s| s.agent_running = true;
-                const result = runAgentWithRetry(allocator, &docker, config, group, prompt, session_id);
-                if (group_states.getPtr(wa_jid)) |s| s.agent_running = false;
-
-                if (result) |res| {
-                    defer allocator.free(res.output);
-                    defer if (res.new_session_id) |sid| allocator.free(sid);
-
-                    if (group_states.getPtr(wa_jid)) |s| {
-                        s.consecutive_errors = 0;
-                        if (s.last_agent_timestamp) |old| allocator.free(old);
-                        s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
-                    }
-
-                    if (res.new_session_id) |new_sid| {
-                        db.setSession(group.folder, new_sid) catch {};
-                    }
-
-                    if (res.output.len > 0) {
-                        db.storeMessage(.{
-                            .id = try std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}),
-                            .chat_jid = wa_jid,
-                            .sender = "borg",
-                            .sender_name = config.assistant_name,
-                            .content = res.output,
-                            .timestamp = try formatTimestamp(cycle_alloc, std.time.timestamp()),
-                            .is_from_me = true,
-                        }) catch {};
-
-                        w.sendMessage(wa_msg.jid, res.output, wa_msg.id) catch |err| {
-                            std.log.err("WA send response: {}", .{err});
-                        };
-                    }
-                } else |err| {
-                    std.log.err("WA agent failed: {}", .{err});
-
-                    if (group_states.getPtr(wa_jid)) |s| {
-                        s.consecutive_errors += 1;
-                        if (s.consecutive_errors >= config.max_consecutive_errors) {
-                            s.consecutive_errors = 0;
-                            if (s.last_agent_timestamp) |old| allocator.free(old);
-                            s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
-                        }
-                    }
-
-                    w.sendMessage(wa_msg.jid, "Sorry, I encountered an error processing your message.", null) catch {};
-                }
+            for (wa_msgs) |msg| {
+                all_messages.append(.{
+                    .jid = try std.fmt.allocPrint(cycle_alloc, "wa:{s}", .{msg.jid}),
+                    .original_id = msg.jid,
+                    .message_id = msg.id,
+                    .sender = msg.sender,
+                    .sender_name = msg.sender_name,
+                    .text = msg.text,
+                    .timestamp = msg.timestamp,
+                    .mentions_bot = msg.mentions_bot,
+                    .transport = .whatsapp,
+                    .chat_title = msg.jid,
+                    .chat_type = if (msg.is_group) "group" else "private",
+                }) catch {};
             }
         }
+
+        // 3. Process incoming messages
+        for (all_messages.items) |msg| {
+            processIncomingMessage(
+                allocator,
+                cycle_alloc,
+                &db,
+                &sender,
+                msg,
+                &groups_list,
+                &gm,
+                &config,
+                start_time,
+                if (pipeline_db) |*pdb| pdb else null,
+            );
+        }
+
+        // 4. Check expired collection windows → spawn agent threads
+        {
+            var spawn_list = std.ArrayList(GroupManager.SpawnInfo).init(cycle_alloc);
+            gm.getExpiredCollections(&spawn_list);
+
+            for (spawn_list.items) |info| {
+                spawnAgentForGroup(allocator, cycle_alloc, &gm, &db, &config, info, groups_list.items) catch |err| {
+                    std.log.err("Spawn agent for {s}: {}", .{ info.jid, err });
+                };
+            }
+        }
+
+        // 5. Check completed agents → deliver responses
+        {
+            var deliveries = std.ArrayList(GroupManager.DeliveryInfo).init(cycle_alloc);
+            gm.getCompletedAgents(&deliveries, groups_list.items, config.cooldown_ms);
+
+            for (deliveries.items) |d| {
+                d.thread.join();
+                deliverOutcome(allocator, cycle_alloc, &db, &sender, &config, d);
+            }
+        }
+
+        // 6. Expire cooldowns → IDLE
+        gm.expireCooldowns();
+
+        // 7. Refresh OAuth token periodically
+        config.refreshOAuthToken();
 
         std.time.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
     }
+
+    // ── Graceful Shutdown ───────────────────────────────────────────────
+    std.log.info("Shutdown requested, waiting for agents...", .{});
+    gm.joinAll();
+    std.log.info("Borg stopped.", .{});
 }
+
+// ── Message Processing ──────────────────────────────────────────────────
+
+fn processIncomingMessage(
+    allocator: std.mem.Allocator,
+    cycle_alloc: std.mem.Allocator,
+    db: *Db,
+    sender: *Sender,
+    msg: IncomingMessage,
+    groups_list: *std.ArrayList(db_mod.RegisteredGroup),
+    gm: *GroupManager,
+    config: *Config,
+    start_time: i64,
+    pipeline_db: ?*Db,
+) void {
+    // Store message in DB
+    db.storeMessage(.{
+        .id = msg.message_id,
+        .chat_jid = msg.jid,
+        .sender = msg.sender,
+        .sender_name = msg.sender_name,
+        .content = msg.text,
+        .timestamp = formatTimestamp(cycle_alloc, msg.timestamp) catch return,
+        .is_from_me = false,
+    }) catch return;
+
+    // Handle commands
+    if (msg.text.len > 0 and msg.text[0] == '/') {
+        handleCommand(allocator, db, sender, msg, groups_list, gm, config, start_time, pipeline_db) catch |err| {
+            std.log.err("Command error: {}", .{err});
+        };
+        return;
+    }
+
+    // Check if registered
+    const group = for (groups_list.items) |g| {
+        if (std.mem.eql(u8, g.jid, msg.jid)) break g;
+    } else return;
+
+    // Check trigger
+    if (group.requires_trigger) {
+        if (!msg.mentions_bot and !containsTrigger(msg.text, config.assistant_name)) {
+            return;
+        }
+    }
+
+    // If currently collecting for this group, extend the window
+    if (gm.getPhase(msg.jid)) |phase| {
+        if (phase == .collecting) {
+            gm.extendCollection(msg.jid, 1500);
+            return;
+        }
+        if (phase != .idle) {
+            std.log.info("Message queued for {s} (phase: {s})", .{ msg.jid, @tagName(phase) });
+            return;
+        }
+    }
+
+    // Start collection window
+    if (gm.onTrigger(msg.jid, msg.message_id, msg.original_id, msg.transport, config)) {
+        std.log.info("Triggered: \"{s}\" from {s}", .{ msg.text[0..@min(msg.text.len, 60)], msg.sender_name });
+        sender.sendTyping(msg.transport, msg.original_id);
+    }
+}
+
+fn spawnAgentForGroup(
+    allocator: std.mem.Allocator,
+    cycle_alloc: std.mem.Allocator,
+    gm: *GroupManager,
+    db: *Db,
+    config: *Config,
+    info: GroupManager.SpawnInfo,
+    groups: []const db_mod.RegisteredGroup,
+) !void {
+    // Find group info
+    const group = for (groups) |g| {
+        if (std.mem.eql(u8, g.jid, info.jid)) break g;
+    } else return;
+
+    // Get last agent timestamp
+    const last_ts: []const u8 = blk: {
+        gm.mu.lock();
+        defer gm.mu.unlock();
+        const state = gm.states.getPtr(info.jid) orelse break :blk "";
+        break :blk state.last_agent_timestamp orelse "";
+    };
+
+    // Gather pending messages (outside lock)
+    const pending = try db.getMessagesSince(cycle_alloc, info.jid, last_ts);
+    if (pending.len == 0) return;
+
+    const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
+    const session_id = db.getSession(cycle_alloc, group.folder) catch null;
+
+    // Ensure session dir exists
+    var session_dir_buf: [512]u8 = undefined;
+    const session_dir = try std.fmt.bufPrint(&session_dir_buf, "data/sessions/{s}", .{group.folder});
+    std.fs.cwd().makePath(session_dir) catch {};
+
+    // Build heap-allocated agent context (owned by the thread)
+    const ctx = try allocator.create(AgentContext);
+    ctx.* = .{
+        .allocator = allocator,
+        .jid = try allocator.dupe(u8, info.jid),
+        .folder = try allocator.dupe(u8, group.folder),
+        .prompt = try allocator.dupe(u8, prompt),
+        .session_id = if (session_id) |s| try allocator.dupe(u8, s) else null,
+        .model = try allocator.dupe(u8, config.model),
+        .oauth_token = try allocator.dupe(u8, config.oauth_token),
+        .assistant_name = try allocator.dupe(u8, config.assistant_name),
+        .last_msg_timestamp = try allocator.dupe(u8, pending[pending.len - 1].timestamp),
+    };
+
+    // Spawn thread
+    const thread = try std.Thread.spawn(.{}, agentThreadFn, .{ ctx, gm });
+
+    // Transition COLLECTING → RUNNING
+    if (!gm.startRunning(info.jid, thread)) {
+        // State changed unexpectedly, but thread is already running.
+        // It'll write its outcome and exit. We don't need to do anything special.
+        std.log.warn("State race for {s}, agent will complete normally", .{info.jid});
+    }
+
+    std.log.info("Agent spawned for {s}", .{info.jid});
+}
+
+fn agentThreadFn(ctx: *AgentContext, gm: *GroupManager) void {
+    defer {
+        ctx.deinit();
+        ctx.allocator.destroy(ctx);
+    }
+
+    const outcome = agentThreadInner(ctx) catch |err| {
+        std.log.err("Agent error for {s}: {}", .{ ctx.jid, err });
+        const err_outcome = ctx.allocator.create(AgentOutcome) catch return;
+        err_outcome.* = .{
+            .output = ctx.allocator.dupe(u8, "") catch {
+                ctx.allocator.destroy(err_outcome);
+                return;
+            },
+            .new_session_id = null,
+            .success = false,
+            .last_msg_timestamp = ctx.allocator.dupe(u8, ctx.last_msg_timestamp) catch {
+                ctx.allocator.destroy(err_outcome);
+                return;
+            },
+        };
+        gm.setOutcome(ctx.jid, err_outcome);
+        return;
+    };
+
+    gm.setOutcome(ctx.jid, outcome);
+}
+
+fn agentThreadInner(ctx: *AgentContext) !*AgentOutcome {
+    var argv = std.ArrayList([]const u8).init(ctx.allocator);
+    defer argv.deinit();
+
+    try argv.appendSlice(&.{
+        "claude",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--model",
+        ctx.model,
+        "--verbose",
+        "--permission-mode",
+        "bypassPermissions",
+    });
+
+    if (ctx.session_id) |sid| {
+        try argv.appendSlice(&.{ "--resume", sid });
+    }
+
+    var child = std.process.Child.init(argv.items, ctx.allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    // Set environment
+    var env = try std.process.getEnvMap(ctx.allocator);
+    defer env.deinit();
+    try env.put("CLAUDE_CODE_OAUTH_TOKEN", ctx.oauth_token);
+    child.env_map = &env;
+
+    try child.spawn();
+
+    // Write prompt to stdin
+    if (child.stdin) |stdin| {
+        stdin.writeAll(ctx.prompt) catch {};
+        stdin.close();
+        child.stdin = null;
+    }
+
+    // Read stdout
+    var stdout_buf = std.ArrayList(u8).init(ctx.allocator);
+    defer stdout_buf.deinit();
+    if (child.stdout) |stdout| {
+        var read_buf: [8192]u8 = undefined;
+        while (true) {
+            const n = stdout.read(&read_buf) catch break;
+            if (n == 0) break;
+            try stdout_buf.appendSlice(read_buf[0..n]);
+        }
+    }
+
+    const term = try child.wait();
+    const exit_code: u8 = switch (term) {
+        .Exited => |code| code,
+        else => 1,
+    };
+
+    const result = try agent_mod.parseNdjson(ctx.allocator, stdout_buf.items);
+
+    const outcome = try ctx.allocator.create(AgentOutcome);
+    outcome.* = .{
+        .output = result.output,
+        .new_session_id = result.new_session_id,
+        .success = exit_code == 0 or result.output.len > 0,
+        .last_msg_timestamp = try ctx.allocator.dupe(u8, ctx.last_msg_timestamp),
+    };
+
+    return outcome;
+}
+
+fn deliverOutcome(
+    allocator: std.mem.Allocator,
+    cycle_alloc: std.mem.Allocator,
+    db: *Db,
+    sender: *Sender,
+    config: *Config,
+    d: GroupManager.DeliveryInfo,
+) void {
+    defer d.outcome.deinit(allocator);
+
+    if (d.outcome.success) {
+        // Update last agent timestamp
+        {
+            // TODO: this is a bit of a hack - we access the state directly
+            // but the phase is already COOLDOWN so no contention
+        }
+
+        if (d.outcome.new_session_id) |new_sid| {
+            db.setSession(d.folder, new_sid) catch {};
+        }
+
+        if (d.outcome.output.len > 0) {
+            db.storeMessage(.{
+                .id = std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}) catch return,
+                .chat_jid = d.jid,
+                .sender = "borg",
+                .sender_name = config.assistant_name,
+                .content = d.outcome.output,
+                .timestamp = formatTimestamp(cycle_alloc, std.time.timestamp()) catch return,
+                .is_from_me = true,
+            }) catch {};
+
+            sender.send(d.transport, d.original_id, d.outcome.output, d.trigger_msg_id);
+        }
+    } else {
+        sender.send(d.transport, d.original_id, "Sorry, I encountered an error processing your message.", d.trigger_msg_id);
+    }
+}
+
+// ── Commands ────────────────────────────────────────────────────────────
 
 fn handleCommand(
     allocator: std.mem.Allocator,
     db: *Db,
-    tg: *Telegram,
-    msg: TgMessage,
-    chat_jid: []const u8,
+    sender: *Sender,
+    msg: IncomingMessage,
     groups_list: *std.ArrayList(db_mod.RegisteredGroup),
-    group_states: *std.StringHashMap(GroupState),
+    gm: *GroupManager,
     config: *Config,
     start_time: i64,
     pipeline_db: ?*Db,
 ) !void {
+    const reply = struct {
+        fn send(s: *Sender, m: IncomingMessage, text: []const u8) void {
+            s.send(m.transport, m.original_id, text, m.message_id);
+        }
+    }.send;
+
     if (std.mem.startsWith(u8, msg.text, "/register")) {
         for (groups_list.items) |g| {
-            if (std.mem.eql(u8, g.jid, chat_jid)) {
-                try tg.sendMessage(msg.chat_id, "Already registered.", msg.message_id);
+            if (std.mem.eql(u8, g.jid, msg.jid)) {
+                reply(sender, msg, "Already registered.");
                 return;
             }
         }
 
         const folder = try sanitizeFolder(allocator, msg.chat_title);
         const trigger = try std.fmt.allocPrint(allocator, "@{s}", .{config.assistant_name});
-        const jid_dupe = try allocator.dupe(u8, chat_jid);
+        const jid_dupe = try allocator.dupe(u8, msg.jid);
         const name_dupe = try allocator.dupe(u8, msg.chat_title);
 
         try db.registerGroup(jid_dupe, name_dupe, folder, trigger, true);
-
-        try groups_list.append(db_mod.RegisteredGroup{
+        try groups_list.append(.{
             .jid = jid_dupe,
             .name = name_dupe,
             .folder = folder,
             .trigger = trigger,
             .requires_trigger = true,
         });
-        try group_states.put(jid_dupe, GroupState{
-            .last_agent_timestamp = null,
-            .consecutive_errors = 0,
-            .agent_running = false,
-        });
+        gm.addGroup(jid_dupe);
 
         var buf: [256]u8 = undefined;
-        const reply = try std.fmt.bufPrint(&buf, "Registered! Mention @{s} to talk to me.", .{config.assistant_name});
-        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
-        std.log.info("Registered: {s} ({s})", .{ msg.chat_title, chat_jid });
+        const text = try std.fmt.bufPrint(&buf, "Registered! Mention @{s} to talk to me.", .{config.assistant_name});
+        reply(sender, msg, text);
+        std.log.info("Registered: {s} ({s})", .{ msg.chat_title, msg.jid });
     } else if (std.mem.startsWith(u8, msg.text, "/unregister")) {
         var found_idx: ?usize = null;
         for (groups_list.items, 0..) |g, idx| {
-            if (std.mem.eql(u8, g.jid, chat_jid)) {
+            if (std.mem.eql(u8, g.jid, msg.jid)) {
                 found_idx = idx;
                 break;
             }
         }
 
         if (found_idx) |idx| {
+            // Don't unregister while agent is running
+            if (gm.getPhase(msg.jid)) |phase| {
+                if (phase == .running) {
+                    reply(sender, msg, "Agent is currently running. Try again later.");
+                    return;
+                }
+            }
             _ = groups_list.orderedRemove(idx);
-            _ = group_states.remove(chat_jid);
-            db.unregisterGroup(chat_jid) catch {};
-            try tg.sendMessage(msg.chat_id, "Unregistered. I'll stop responding here.", msg.message_id);
-            std.log.info("Unregistered: {s}", .{chat_jid});
+            gm.removeGroup(msg.jid);
+            db.unregisterGroup(msg.jid) catch {};
+            reply(sender, msg, "Unregistered. I'll stop responding here.");
+            std.log.info("Unregistered: {s}", .{msg.jid});
         } else {
-            try tg.sendMessage(msg.chat_id, "This chat is not registered.", msg.message_id);
+            reply(sender, msg, "This chat is not registered.");
         }
     } else if (std.mem.startsWith(u8, msg.text, "/status")) {
         const uptime_secs = std.time.timestamp() - start_time;
         const hours = @divTrunc(uptime_secs, 3600);
         const mins = @divTrunc(@mod(uptime_secs, 3600), 60);
-
-        var active_agents: u32 = 0;
-        var it = group_states.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.agent_running) active_agents += 1;
-        }
 
         var buf = std.ArrayList(u8).init(allocator);
         defer buf.deinit();
@@ -430,7 +923,7 @@ fn handleCommand(
             \\Groups: {d}
             \\Active agents: {d}
             \\Model: {s}
-        , .{ hours, mins, groups_list.items.len, active_agents, config.model });
+        , .{ hours, mins, groups_list.items.len, gm.getActiveCount(), config.model });
 
         if (config.pipeline_repo.len > 0) {
             try buf.writer().print("\nPipeline: active ({s})", .{config.pipeline_repo});
@@ -439,10 +932,10 @@ fn handleCommand(
             try buf.appendSlice("\nWhatsApp: enabled");
         }
 
-        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
+        reply(sender, msg, buf.items);
     } else if (std.mem.startsWith(u8, msg.text, "/groups")) {
         if (groups_list.items.len == 0) {
-            try tg.sendMessage(msg.chat_id, "No groups registered.", msg.message_id);
+            reply(sender, msg, "No groups registered.");
             return;
         }
 
@@ -450,20 +943,19 @@ fn handleCommand(
         defer buf.deinit();
         try buf.appendSlice("*Registered groups:*\n");
         for (groups_list.items) |g| {
-            const status = if (group_states.get(g.jid)) |s| (if (s.agent_running) " (running)" else "") else "";
-            try buf.writer().print("- {s} `{s}`{s}\n", .{ g.name, g.jid, status });
+            const phase_str = if (gm.getPhase(g.jid)) |p| @tagName(p) else "?";
+            try buf.writer().print("- {s} `{s}` ({s})\n", .{ g.name, g.jid, phase_str });
         }
-        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
+        reply(sender, msg, buf.items);
     } else if (std.mem.startsWith(u8, msg.text, "/task ")) {
         const pdb = pipeline_db orelse {
-            try tg.sendMessage(msg.chat_id, "Pipeline not configured. Set PIPELINE_REPO in .env", msg.message_id);
+            reply(sender, msg, "Pipeline not configured. Set PIPELINE_REPO in .env");
             return;
         };
 
-        // Parse: /task <title> or /task <title>\n<description>
         const rest = std.mem.trim(u8, msg.text[6..], &[_]u8{ ' ', '\t' });
         if (rest.len == 0) {
-            try tg.sendMessage(msg.chat_id, "Usage: /task <title> [description on next line]", msg.message_id);
+            reply(sender, msg, "Usage: /task <title> [description on next line]");
             return;
         }
 
@@ -474,21 +966,15 @@ fn handleCommand(
             description = std.mem.trim(u8, rest[nl + 1 ..], &[_]u8{ ' ', '\t', '\r' });
         }
 
-        const task_id = try pdb.createPipelineTask(
-            title,
-            description,
-            config.pipeline_repo,
-            msg.sender_name,
-            chat_jid,
-        );
+        const task_id = try pdb.createPipelineTask(title, description, config.pipeline_repo, msg.sender_name, msg.jid);
 
         var reply_buf: [256]u8 = undefined;
-        const reply = try std.fmt.bufPrint(&reply_buf, "Task #{d} created: {s}", .{ task_id, title[0..@min(title.len, 100)] });
-        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+        const text = try std.fmt.bufPrint(&reply_buf, "Task #{d} created: {s}", .{ task_id, title[0..@min(title.len, 100)] });
+        reply(sender, msg, text);
         std.log.info("Pipeline task #{d} created by {s}: {s}", .{ task_id, msg.sender_name, title });
     } else if (std.mem.startsWith(u8, msg.text, "/tasks")) {
         const pdb = pipeline_db orelse {
-            try tg.sendMessage(msg.chat_id, "Pipeline not configured.", msg.message_id);
+            reply(sender, msg, "Pipeline not configured.");
             return;
         };
 
@@ -509,7 +995,7 @@ fn handleCommand(
         }
 
         if (tasks.len == 0) {
-            try tg.sendMessage(msg.chat_id, "No pipeline tasks.", msg.message_id);
+            reply(sender, msg, "No pipeline tasks.");
             return;
         }
 
@@ -517,18 +1003,18 @@ fn handleCommand(
         defer buf.deinit();
         try buf.appendSlice("*Pipeline Tasks*\n");
         for (tasks) |t| {
-            const status_icon = if (std.mem.eql(u8, t.status, "done") or std.mem.eql(u8, t.status, "merged"))
+            const icon = if (std.mem.eql(u8, t.status, "done") or std.mem.eql(u8, t.status, "merged"))
                 "+"
             else if (std.mem.eql(u8, t.status, "failed"))
                 "x"
             else
                 "~";
-            try buf.writer().print("[{s}] #{d} {s} ({s})\n", .{ status_icon, t.id, t.title[0..@min(t.title.len, 50)], t.status });
+            try buf.writer().print("[{s}] #{d} {s} ({s})\n", .{ icon, t.id, t.title[0..@min(t.title.len, 50)], t.status });
         }
-        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
+        reply(sender, msg, buf.items);
     } else if (std.mem.startsWith(u8, msg.text, "/pipeline")) {
         if (config.pipeline_repo.len == 0) {
-            try tg.sendMessage(msg.chat_id, "Pipeline not configured. Set PIPELINE_REPO in .env", msg.message_id);
+            reply(sender, msg, "Pipeline not configured. Set PIPELINE_REPO in .env");
             return;
         }
 
@@ -541,15 +1027,15 @@ fn handleCommand(
             \\Release interval: {d}h
             \\Model: {s}
         , .{ config.pipeline_repo, config.pipeline_test_cmd, config.release_interval_hours, config.model });
-        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
+        reply(sender, msg, buf.items);
     } else if (std.mem.startsWith(u8, msg.text, "/chatid")) {
         var buf: [256]u8 = undefined;
-        const reply = try std.fmt.bufPrint(&buf, "Chat: `{s}`\nType: {s}\nName: {s}", .{ chat_jid, msg.chat_type, msg.chat_title });
-        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+        const text = std.fmt.bufPrint(&buf, "Chat: `{s}`\nType: {s}\nName: {s}", .{ msg.jid, msg.chat_type, msg.chat_title }) catch return;
+        reply(sender, msg, text);
     } else if (std.mem.startsWith(u8, msg.text, "/ping")) {
-        try tg.sendMessage(msg.chat_id, "Borg online.", msg.message_id);
+        reply(sender, msg, "Borg online.");
     } else if (std.mem.startsWith(u8, msg.text, "/help") or std.mem.startsWith(u8, msg.text, "/start")) {
-        try tg.sendMessage(msg.chat_id,
+        reply(sender, msg,
             \\*Borg Commands*
             \\/register - Register this chat
             \\/unregister - Unregister this chat
@@ -562,9 +1048,11 @@ fn handleCommand(
             \\/task <title> - Create engineering task
             \\/tasks - List pipeline tasks
             \\/pipeline - Show pipeline info
-        , msg.message_id);
+        );
     }
 }
+
+// ── Helpers ─────────────────────────────────────────────────────────────
 
 fn sanitizeFolder(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     var buf = std.ArrayList(u8).init(allocator);
@@ -581,120 +1069,6 @@ fn sanitizeFolder(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
         _ = buf.pop();
     }
     if (buf.items.len == 0) try buf.appendSlice("chat");
-    return buf.toOwnedSlice();
-}
-
-const AgentResult = agent_mod.AgentResult;
-const parseNdjson = agent_mod.parseNdjson;
-
-/// Run agent with exponential backoff retry
-fn runAgentWithRetry(
-    allocator: std.mem.Allocator,
-    docker: *Docker,
-    config: Config,
-    group: db_mod.RegisteredGroup,
-    prompt: []const u8,
-    session_id: ?[]const u8,
-) !AgentResult {
-    var last_err: anyerror = error.DockerCreateFailed;
-
-    for (0..MAX_AGENT_RETRIES) |attempt| {
-        const result = runAgent(allocator, docker, config, group, prompt, session_id) catch |err| {
-            last_err = err;
-            const delay = RETRY_BASE_MS * (@as(u64, 1) << @intCast(attempt));
-            std.log.warn("Agent attempt {d}/{d} failed: {} (retry in {d}ms)", .{ attempt + 1, MAX_AGENT_RETRIES, err, delay });
-            std.time.sleep(delay * std.time.ns_per_ms);
-            continue;
-        };
-        return result;
-    }
-
-    return last_err;
-}
-
-fn runAgent(
-    allocator: std.mem.Allocator,
-    docker: *Docker,
-    config: Config,
-    group: db_mod.RegisteredGroup,
-    prompt: []const u8,
-    session_id: ?[]const u8,
-) !AgentResult {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const tmp = arena.allocator();
-
-    var input_json = std.ArrayList(u8).init(tmp);
-    const escaped_prompt = try json_mod.escapeString(tmp, prompt);
-    try input_json.writer().print("{{\"prompt\":\"{s}\"", .{escaped_prompt});
-    if (session_id) |sid| {
-        try input_json.writer().print(",\"sessionId\":\"{s}\"", .{sid});
-    }
-    try input_json.writer().print(",\"model\":\"{s}\",\"assistantName\":\"{s}\"}}", .{ config.model, config.assistant_name });
-
-    var name_buf: [128]u8 = undefined;
-    const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}", .{ group.folder, std.time.timestamp() });
-
-    var oauth_buf: [4096]u8 = undefined;
-    const oauth_env = try std.fmt.bufPrint(&oauth_buf, "CLAUDE_CODE_OAUTH_TOKEN={s}", .{config.oauth_token});
-    var model_buf: [256]u8 = undefined;
-    const model_env = try std.fmt.bufPrint(&model_buf, "CLAUDE_MODEL={s}", .{config.model});
-
-    const env = [_][]const u8{
-        oauth_env,
-        model_env,
-        "HOME=/home/node",
-        "NODE_OPTIONS=--max-old-space-size=384",
-    };
-
-    var cwd_buf: [512]u8 = undefined;
-    const cwd = try std.fs.cwd().realpath(".", &cwd_buf);
-
-    var session_dir_buf: [512]u8 = undefined;
-    const session_dir = try std.fmt.bufPrint(&session_dir_buf, "data/sessions/{s}", .{group.folder});
-    std.fs.cwd().makePath(session_dir) catch {};
-
-    var session_bind_buf: [1024]u8 = undefined;
-    const session_bind = try std.fmt.bufPrint(&session_bind_buf, "{s}/{s}:/home/node/.claude/projects/{s}", .{ cwd, session_dir, group.folder });
-
-    var ipc_dir_buf: [512]u8 = undefined;
-    const ipc_dir = try std.fmt.bufPrint(&ipc_dir_buf, "data/ipc/{s}", .{group.folder});
-    std.fs.cwd().makePath(ipc_dir) catch {};
-
-    var ipc_bind_buf: [1024]u8 = undefined;
-    const ipc_bind = try std.fmt.bufPrint(&ipc_bind_buf, "{s}/{s}:/workspace/ipc", .{ cwd, ipc_dir });
-
-    const binds = [_][]const u8{
-        session_bind,
-        ipc_bind,
-    };
-
-    std.log.info("Spawning agent: {s}", .{container_name});
-
-    var run_result = try docker.runWithStdio(docker_mod.ContainerConfig{
-        .image = config.container_image,
-        .name = container_name,
-        .env = &env,
-        .binds = &binds,
-    }, input_json.items);
-    defer run_result.deinit();
-
-    std.log.info("Agent done (exit={d}, {d} bytes)", .{ run_result.exit_code, run_result.stdout.len });
-
-    return try parseNdjson(allocator, run_result.stdout);
-}
-
-fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, assistant_name: []const u8) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    try buf.writer().print("You are {s}, a helpful AI assistant in a group chat. Respond naturally and concisely.\n\nRecent messages:\n", .{assistant_name});
-    for (messages) |msg| {
-        if (msg.is_from_me) {
-            try buf.writer().print("[{s}] {s} (you): {s}\n", .{ msg.timestamp, msg.sender_name, msg.content });
-        } else {
-            try buf.writer().print("[{s}] {s}: {s}\n", .{ msg.timestamp, msg.sender_name, msg.content });
-        }
-    }
-    try buf.appendSlice("\nRespond to the latest message. Be concise.");
     return buf.toOwnedSlice();
 }
 
@@ -726,7 +1100,53 @@ fn formatTimestamp(allocator: std.mem.Allocator, unix_ts: i64) ![]const u8 {
     });
 }
 
+fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, assistant_name: []const u8) ![]const u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    try buf.writer().print("You are {s}, a helpful AI assistant in a group chat. Respond naturally and concisely.\n\nRecent messages:\n", .{assistant_name});
+    for (messages) |m| {
+        if (m.is_from_me) {
+            try buf.writer().print("[{s}] {s} (you): {s}\n", .{ m.timestamp, m.sender_name, m.content });
+        } else {
+            try buf.writer().print("[{s}] {s}: {s}\n", .{ m.timestamp, m.sender_name, m.content });
+        }
+    }
+    try buf.appendSlice("\nRespond to the latest message. Be concise.");
+    return buf.toOwnedSlice();
+}
+
+fn nowMs() i64 {
+    return std.time.milliTimestamp();
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
+
+fn testConfig(allocator: std.mem.Allocator) Config {
+    return Config{
+        .telegram_token = "",
+        .oauth_token = "",
+        .assistant_name = "Borg",
+        .trigger_pattern = "@Borg",
+        .data_dir = "data",
+        .container_image = "borg-agent:latest",
+        .model = "test",
+        .credentials_path = "",
+        .session_max_age_hours = 4,
+        .max_consecutive_errors = 3,
+        .pipeline_repo = "",
+        .pipeline_test_cmd = "echo ok",
+        .pipeline_lint_cmd = "",
+        .pipeline_admin_chat = "",
+        .release_interval_hours = 6,
+        .collection_window_ms = 3000,
+        .cooldown_ms = 5000,
+        .agent_timeout_s = 600,
+        .max_concurrent_agents = 4,
+        .rate_limit_per_minute = 5,
+        .whatsapp_enabled = false,
+        .whatsapp_auth_dir = "",
+        .allocator = allocator,
+    };
+}
 
 test "containsTrigger" {
     try std.testing.expect(containsTrigger("Hey @Borg do something", "Borg"));
@@ -741,7 +1161,6 @@ test "containsTrigger" {
 test "formatTimestamp" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    // 2024-02-26 00:00:00 UTC
     const ts = try formatTimestamp(arena.allocator(), 1708905600);
     try std.testing.expectEqualStrings("2024-02-26T00:00:00Z", ts);
 }
@@ -774,4 +1193,142 @@ test "formatPrompt includes assistant identity and message context" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Alice: Hi bot") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Borg (you): Hello!") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Be concise") != null);
+}
+
+test "GroupManager state machine transitions" {
+    const allocator = std.testing.allocator;
+
+    var gm = GroupManager.init(allocator);
+    defer gm.deinit();
+
+    const jid = "tg:test";
+    gm.addGroup(jid);
+
+    // Initial state is idle
+    try std.testing.expectEqual(GroupPhase.idle, gm.getPhase(jid).?);
+
+    // Trigger → collecting
+    var test_config = testConfig(allocator);
+    test_config.collection_window_ms = 100;
+    test_config.rate_limit_per_minute = 5;
+    test_config.max_concurrent_agents = 4;
+
+    try std.testing.expect(gm.onTrigger(jid, "msg1", "chat1", .telegram, &test_config));
+    try std.testing.expectEqual(GroupPhase.collecting, gm.getPhase(jid).?);
+
+    // Second trigger rejected (not idle)
+    try std.testing.expect(!gm.onTrigger(jid, "msg2", "chat1", .telegram, &test_config));
+
+    // Simulate deadline expiry
+    std.time.sleep(150 * std.time.ns_per_ms);
+
+    var expired = std.ArrayList(GroupManager.SpawnInfo).init(allocator);
+    defer expired.deinit();
+    gm.getExpiredCollections(&expired);
+    try std.testing.expectEqual(@as(usize, 1), expired.items.len);
+
+    // Cleanup
+    {
+        gm.mu.lock();
+        defer gm.mu.unlock();
+        const state = gm.states.getPtr(jid).?;
+        if (state.trigger_msg_id) |m| allocator.free(m);
+        state.trigger_msg_id = null;
+        if (state.original_id) |o| allocator.free(o);
+        state.original_id = null;
+        state.phase = .idle;
+    }
+}
+
+test "GroupManager rate limiting" {
+    const allocator = std.testing.allocator;
+
+    var gm = GroupManager.init(allocator);
+    defer gm.deinit();
+
+    const jid = "tg:rate";
+    gm.addGroup(jid);
+
+    var test_config = testConfig(allocator);
+    test_config.collection_window_ms = 10;
+    test_config.rate_limit_per_minute = 2;
+    test_config.max_concurrent_agents = 10;
+
+    // First trigger accepted
+    try std.testing.expect(gm.onTrigger(jid, "m1", "c1", .telegram, &test_config));
+    // Reset to idle for next trigger
+    {
+        gm.mu.lock();
+        defer gm.mu.unlock();
+        const state = gm.states.getPtr(jid).?;
+        if (state.trigger_msg_id) |m| allocator.free(m);
+        state.trigger_msg_id = null;
+        if (state.original_id) |o| allocator.free(o);
+        state.original_id = null;
+        state.phase = .idle;
+    }
+
+    // Second trigger accepted (count=2)
+    try std.testing.expect(gm.onTrigger(jid, "m2", "c1", .telegram, &test_config));
+    {
+        gm.mu.lock();
+        defer gm.mu.unlock();
+        const state = gm.states.getPtr(jid).?;
+        if (state.trigger_msg_id) |m| allocator.free(m);
+        state.trigger_msg_id = null;
+        if (state.original_id) |o| allocator.free(o);
+        state.original_id = null;
+        state.phase = .idle;
+    }
+
+    // Third trigger rejected (rate limit reached)
+    try std.testing.expect(!gm.onTrigger(jid, "m3", "c1", .telegram, &test_config));
+}
+
+test "GroupManager max concurrent agents" {
+    const allocator = std.testing.allocator;
+
+    var gm = GroupManager.init(allocator);
+    defer gm.deinit();
+
+    gm.addGroup("tg:a");
+    gm.addGroup("tg:b");
+
+    var test_config = testConfig(allocator);
+    test_config.collection_window_ms = 10;
+    test_config.rate_limit_per_minute = 10;
+    test_config.max_concurrent_agents = 1;
+
+    // First group triggers
+    try std.testing.expect(gm.onTrigger("tg:a", "m1", "c1", .telegram, &test_config));
+
+    // Simulate running
+    {
+        gm.mu.lock();
+        defer gm.mu.unlock();
+        gm.states.getPtr("tg:a").?.phase = .running;
+        gm.active_agents = 1;
+    }
+
+    // Second group rejected (max concurrent)
+    try std.testing.expect(!gm.onTrigger("tg:b", "m1", "c2", .telegram, &test_config));
+
+    // Cleanup
+    {
+        gm.mu.lock();
+        defer gm.mu.unlock();
+        const a = gm.states.getPtr("tg:a").?;
+        if (a.trigger_msg_id) |m| allocator.free(m);
+        a.trigger_msg_id = null;
+        if (a.original_id) |o| allocator.free(o);
+        a.original_id = null;
+        a.phase = .idle;
+        gm.active_agents = 0;
+    }
+}
+
+test "nowMs returns reasonable value" {
+    const ms = nowMs();
+    // Should be after 2024-01-01
+    try std.testing.expect(ms > 1704067200000);
 }

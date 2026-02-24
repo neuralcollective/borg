@@ -17,6 +17,12 @@ pub const Config = struct {
     pipeline_lint_cmd: []const u8,
     pipeline_admin_chat: []const u8,
     release_interval_hours: u32,
+    // Agent lifecycle
+    collection_window_ms: i64,
+    cooldown_ms: i64,
+    agent_timeout_s: i64,
+    max_concurrent_agents: u32,
+    rate_limit_per_minute: u32,
     // WhatsApp config
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
@@ -34,6 +40,12 @@ pub const Config = struct {
         const release_hours_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_HOURS") orelse "6";
         const release_hours = std.fmt.parseInt(u32, release_hours_str, 10) catch 6;
 
+        const collection_ms_str = getEnv(allocator, env_content, "COLLECTION_WINDOW_MS") orelse "3000";
+        const cooldown_ms_str = getEnv(allocator, env_content, "COOLDOWN_MS") orelse "5000";
+        const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "600";
+        const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
+        const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
+
         return Config{
             .telegram_token = getEnv(allocator, env_content, "TELEGRAM_BOT_TOKEN") orelse "",
             .oauth_token = oauth,
@@ -50,6 +62,11 @@ pub const Config = struct {
             .pipeline_lint_cmd = getEnv(allocator, env_content, "PIPELINE_LINT_CMD") orelse "",
             .pipeline_admin_chat = getEnv(allocator, env_content, "PIPELINE_ADMIN_CHAT") orelse "",
             .release_interval_hours = release_hours,
+            .collection_window_ms = std.fmt.parseInt(i64, collection_ms_str, 10) catch 3000,
+            .cooldown_ms = std.fmt.parseInt(i64, cooldown_ms_str, 10) catch 5000,
+            .agent_timeout_s = std.fmt.parseInt(i64, timeout_s_str, 10) catch 600,
+            .max_concurrent_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
+            .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .allocator = allocator,

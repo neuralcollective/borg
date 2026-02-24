@@ -22,6 +22,7 @@ import pino from 'pino';
 import { createInterface } from 'readline';
 
 const AUTH_DIR = process.env.WA_AUTH_DIR || 'whatsapp/auth';
+const ASSISTANT_NAME = (process.argv[2] || process.env.ASSISTANT_NAME || 'Borg').toLowerCase();
 const logger = pino({ level: 'silent' });
 
 function emit(obj) {
@@ -92,6 +93,12 @@ async function connect() {
       const sender = isGroup ? (msg.key.participant || '') : jid;
       const senderName = msg.pushName || sender.split('@')[0];
 
+      const mentionedJids = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+      const selfJid = sock.user?.id || '';
+      const mentionsByJid = mentionedJids.some(
+        (jid) => selfJid && jid.split('@')[0] === selfJid.split('@')[0]
+      );
+      const mentionsByName = text.toLowerCase().includes('@' + ASSISTANT_NAME);
       emit({
         event: 'message',
         jid,
@@ -101,7 +108,7 @@ async function connect() {
         text,
         timestamp: msg.messageTimestamp || Math.floor(Date.now() / 1000),
         is_group: isGroup,
-        mentions_bot: false,
+        mentions_bot: mentionsByJid || mentionsByName,
       });
     }
   });
