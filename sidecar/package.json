@@ -1,0 +1,11 @@
+{
+  "name": "borg-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "discord.js": "^14",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "pino": "^9.6.0"
+  }
+}

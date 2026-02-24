@@ -16,6 +16,12 @@ const LogEntry = struct {
 
 const LOG_RING_SIZE = 500;
 
+pub const WebChatMessage = struct {
+    sender_name: []const u8,
+    text: []const u8,
+    timestamp: i64,
+};
+
 pub const WebServer = struct {
     allocator: std.mem.Allocator,
     db: *Db,
@@ -29,9 +35,17 @@ pub const WebServer = struct {
     log_count: usize,
     log_mu: std.Thread.Mutex,
 
-    // SSE clients
+    // SSE clients (logs)
     sse_clients: std.ArrayList(std.net.Stream),
     sse_mu: std.Thread.Mutex,
+
+    // Chat message queue (web UI → main loop)
+    chat_queue: std.ArrayList(WebChatMessage),
+    chat_mu: std.Thread.Mutex,
+
+    // Chat SSE clients (main loop → web UI)
+    chat_sse_clients: std.ArrayList(std.net.Stream),
+    chat_sse_mu: std.Thread.Mutex,
 
     start_time: i64,
 
@@ -48,6 +62,10 @@ pub const WebServer = struct {
             .log_mu = .{},
             .sse_clients = std.ArrayList(std.net.Stream).init(allocator),
             .sse_mu = .{},
+            .chat_queue = std.ArrayList(WebChatMessage).init(allocator),
+            .chat_mu = .{},
+            .chat_sse_clients = std.ArrayList(std.net.Stream).init(allocator),
+            .chat_sse_mu = .{},
             .start_time = std.time.timestamp(),
         };
     }
@@ -72,6 +90,37 @@ pub const WebServer = struct {
         if (self.log_count < LOG_RING_SIZE) self.log_count += 1;
 
         self.broadcastSse(level, message);
+    }
+
+    /// Drain all pending chat messages (called by main loop)
+    pub fn drainChatMessages(self: *WebServer) []WebChatMessage {
+        self.chat_mu.lock();
+        defer self.chat_mu.unlock();
+        return self.chat_queue.toOwnedSlice() catch &[_]WebChatMessage{};
+    }
+
+    /// Broadcast a chat response to all connected chat SSE clients
+    pub fn broadcastChatEvent(self: *WebServer, text: []const u8) void {
+        self.chat_sse_mu.lock();
+        defer self.chat_sse_mu.unlock();
+
+        var esc_buf: [8192]u8 = undefined;
+        const escaped = jsonEscape(&esc_buf, text[0..@min(text.len, 4000)]);
+
+        var buf: [8192]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "data: {{\"role\":\"assistant\",\"text\":\"{s}\",\"ts\":{d}}}\n\n", .{
+            escaped,
+            std.time.timestamp(),
+        }) catch return;
+
+        var i: usize = 0;
+        while (i < self.chat_sse_clients.items.len) {
+            self.chat_sse_clients.items[i].writeAll(line) catch {
+                _ = self.chat_sse_clients.swapRemove(i);
+                continue;
+            };
+            i += 1;
+        }
     }
 
     fn broadcastSse(self: *WebServer, level: []const u8, message: []const u8) void {
@@ -151,6 +200,15 @@ pub const WebServer = struct {
         if (std.mem.eql(u8, path, "/api/logs")) {
             self.serveSse(stream);
             return; // Don't close — SSE keeps connection open
+        } else if (std.mem.eql(u8, path, "/api/chat/events")) {
+            self.serveChatSse(stream);
+            return; // Don't close — SSE keeps connection open
+        } else if (std.mem.eql(u8, path, "/api/chat/messages")) {
+            self.serveChatMessages(stream);
+        } else if (std.mem.eql(u8, path, "/api/chat") and std.mem.eql(u8, method, "POST")) {
+            self.handleChatPost(stream, request);
+        } else if (std.mem.eql(u8, path, "/api/chat") and std.mem.eql(u8, method, "OPTIONS")) {
+            self.serveCorsPreflightChat(stream);
         } else if (std.mem.eql(u8, path, "/api/tasks") and std.mem.eql(u8, method, "POST")) {
             self.handleCreateTask(stream, request);
         } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.eql(u8, method, "DELETE")) {
@@ -250,6 +308,120 @@ pub const WebServer = struct {
         // TODO: signal pipeline to run release train immediately
         self.serveJsonResponse(stream, 200, "{\"status\":\"release triggered\"}");
         std.log.info("Director triggered release train", .{});
+    }
+
+    fn handleChatPost(self: *WebServer, stream: std.net.Stream, request: []const u8) void {
+        const body = parseBody(request);
+        if (body.len == 0) {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"empty body\"}");
+            return;
+        }
+
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        var parsed = json_mod.parse(alloc, body) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        const text = json_mod.getString(parsed.value, "text") orelse {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"missing text\"}");
+            return;
+        };
+        const sender_name = json_mod.getString(parsed.value, "sender") orelse "web-user";
+
+        const msg = WebChatMessage{
+            .sender_name = self.allocator.dupe(u8, sender_name) catch return,
+            .text = self.allocator.dupe(u8, text) catch return,
+            .timestamp = std.time.timestamp(),
+        };
+
+        self.chat_mu.lock();
+        self.chat_queue.append(msg) catch {
+            self.chat_mu.unlock();
+            self.allocator.free(msg.sender_name);
+            self.allocator.free(msg.text);
+            self.serve500(stream);
+            return;
+        };
+        self.chat_mu.unlock();
+
+        // Echo back to all chat SSE clients
+        {
+            self.chat_sse_mu.lock();
+            defer self.chat_sse_mu.unlock();
+
+            var esc_buf: [8192]u8 = undefined;
+            const escaped = jsonEscape(&esc_buf, text[0..@min(text.len, 4000)]);
+            var esc_name: [128]u8 = undefined;
+            const name_esc = jsonEscape(&esc_name, sender_name);
+
+            var buf: [8192]u8 = undefined;
+            const line = std.fmt.bufPrint(&buf, "data: {{\"role\":\"user\",\"sender\":\"{s}\",\"text\":\"{s}\",\"ts\":{d}}}\n\n", .{
+                name_esc,
+                escaped,
+                std.time.timestamp(),
+            }) catch return;
+
+            var i: usize = 0;
+            while (i < self.chat_sse_clients.items.len) {
+                self.chat_sse_clients.items[i].writeAll(line) catch {
+                    _ = self.chat_sse_clients.swapRemove(i);
+                    continue;
+                };
+                i += 1;
+            }
+        }
+
+        self.serveJsonResponse(stream, 200, "{\"status\":\"sent\"}");
+    }
+
+    fn serveChatMessages(self: *WebServer, stream: std.net.Stream) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const messages = self.db.getMessagesSince(alloc, "web:dashboard", "") catch {
+            self.serve500(stream);
+            return;
+        };
+
+        var buf = std.ArrayList(u8).init(alloc);
+        const w = buf.writer();
+        w.writeAll("[") catch return;
+
+        for (messages, 0..) |m, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            var esc_text: [8192]u8 = undefined;
+            var esc_sender: [256]u8 = undefined;
+            const text_e = jsonEscape(&esc_text, m.content);
+            const sender_e = jsonEscape(&esc_sender, m.sender_name);
+            w.print("{{\"role\":\"{s}\",\"sender\":\"{s}\",\"text\":\"{s}\",\"ts\":\"{s}\"}}", .{
+                if (m.is_from_me) "assistant" else "user",
+                sender_e,
+                text_e,
+                m.timestamp,
+            }) catch return;
+        }
+
+        w.writeAll("]") catch return;
+        self.sendJson(stream, buf.items);
+    }
+
+    fn serveChatSse(self: *WebServer, stream: std.net.Stream) void {
+        const header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+        stream.writeAll(header) catch return;
+
+        self.chat_sse_mu.lock();
+        self.chat_sse_clients.append(stream) catch {};
+        self.chat_sse_mu.unlock();
+    }
+
+    fn serveCorsPreflightChat(_: *WebServer, stream: std.net.Stream) void {
+        stream.writeAll("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n") catch return;
     }
 
     fn serveJsonResponse(_: *WebServer, stream: std.net.Stream, status: u16, body: []const u8) void {

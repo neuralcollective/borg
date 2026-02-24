@@ -1,4 +1,5 @@
 import { useStatus } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 function formatUptime(seconds: number) {
   const h = Math.floor(seconds / 3600);
@@ -7,7 +8,15 @@ function formatUptime(seconds: number) {
   return `${m}m`;
 }
 
-export function Header({ connected }: { connected: boolean }) {
+export function Header({
+  connected,
+  onToggleChat,
+  chatOpen,
+}: {
+  connected: boolean;
+  onToggleChat?: () => void;
+  chatOpen?: boolean;
+}) {
   const { data: status } = useStatus();
 
   return (
@@ -49,7 +58,21 @@ export function Header({ connected }: { connected: boolean }) {
         )}
       </div>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-3">
+        {onToggleChat && (
+          <button
+            onClick={onToggleChat}
+            className={cn(
+              "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
+              chatOpen
+                ? "bg-white/[0.1] text-zinc-200"
+                : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05]"
+            )}
+          >
+            Chat
+          </button>
+        )}
+
         <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-red-500"}`} />
         <span className="text-[11px] text-zinc-500">{connected ? "Connected" : "Disconnected"}</span>
       </div>
