@@ -288,13 +288,21 @@ pub const WebServer = struct {
         const now = std.time.timestamp();
         const uptime = now - self.start_time;
 
-        var buf: [1024]u8 = undefined;
-        const body = std.fmt.bufPrint(&buf, "{{\"uptime_s\":{d},\"model\":\"{s}\",\"pipeline_repo\":\"{s}\",\"release_interval_mins\":{d},\"test_cmd\":\"{s}\"}}", .{
+        const stats = self.db.getPipelineStats() catch db_mod.Db.PipelineStats{ .active = 0, .merged = 0, .failed = 0, .total = 0 };
+
+        var buf: [2048]u8 = undefined;
+        const body = std.fmt.bufPrint(&buf, "{{\"uptime_s\":{d},\"model\":\"{s}\",\"pipeline_repo\":\"{s}\",\"release_interval_mins\":{d},\"test_cmd\":\"{s}\",\"continuous_mode\":{s},\"assistant_name\":\"{s}\",\"active_tasks\":{d},\"merged_tasks\":{d},\"failed_tasks\":{d},\"total_tasks\":{d}}}", .{
             uptime,
             self.config.model,
             self.config.pipeline_repo,
             self.config.release_interval_mins,
             self.config.pipeline_test_cmd,
+            if (self.config.continuous_mode) "true" else "false",
+            self.config.assistant_name,
+            stats.active,
+            stats.merged,
+            stats.failed,
+            stats.total,
         }) catch return;
 
         self.sendJson(stream, body);
@@ -361,144 +369,236 @@ const DASHBOARD_HTML =
     \\<!DOCTYPE html>
     \\<html><head><meta charset="utf-8"><title>Borg Dashboard</title>
     \\<style>
-    \\* { margin: 0; padding: 0; box-sizing: border-box; }
-    \\body { background: #0a0a0f; color: #c8c8d0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; }
-    \\header { background: #12121a; border-bottom: 1px solid #2a2a3a; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
-    \\header h1 { font-size: 16px; color: #7aa2f7; font-weight: 600; }
-    \\header .status { color: #9ece6a; font-size: 12px; }
-    \\.container { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; height: calc(100vh - 48px); gap: 1px; background: #1a1a2a; }
-    \\.panel { background: #0a0a0f; display: flex; flex-direction: column; overflow: hidden; }
-    \\.panel-header { background: #12121a; padding: 8px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #565680; border-bottom: 1px solid #1a1a2a; flex-shrink: 0; display: flex; justify-content: space-between; }
-    \\.panel-body { flex: 1; overflow-y: auto; padding: 8px 14px; }
-    \\.log-line { padding: 2px 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
-    \\.log-info { color: #7aa2f7; }
-    \\.log-warn { color: #e0af68; }
-    \\.log-err { color: #f7768e; }
-    \\.task-row { padding: 6px 0; border-bottom: 1px solid #1a1a2a; display: flex; gap: 10px; align-items: center; }
-    \\.task-id { color: #565680; width: 30px; }
-    \\.task-title { flex: 1; color: #c8c8d0; }
-    \\.badge { padding: 2px 8px; border-radius: 3px; font-size: 10px; text-transform: uppercase; }
-    \\.badge-backlog { background: #1a1a3a; color: #565680; }
-    \\.badge-spec, .badge-qa { background: #1a2a3a; color: #7aa2f7; }
-    \\.badge-impl, .badge-retry { background: #2a2a1a; color: #e0af68; }
-    \\.badge-done { background: #1a2a1a; color: #9ece6a; }
-    \\.badge-merged { background: #0a2a0a; color: #73daca; }
-    \\.badge-rebase { background: #2a1a2a; color: #bb9af7; }
-    \\.badge-failed { background: #2a1a1a; color: #f7768e; }
-    \\.queue-row { padding: 6px 0; border-bottom: 1px solid #1a1a2a; }
-    \\.stat { padding: 8px 0; display: flex; justify-content: space-between; border-bottom: 1px solid #1a1a2a; }
-    \\.stat-label { color: #565680; }
-    \\.stat-value { color: #c8c8d0; }
-    \\.countdown { color: #e0af68; }
-    \\::-webkit-scrollbar { width: 6px; }
-    \\::-webkit-scrollbar-track { background: #0a0a0f; }
-    \\::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+    \\*{margin:0;padding:0;box-sizing:border-box}
+    \\body{background:#0a0a0f;color:#c8c8d0;font-family:'JetBrains Mono','Fira Code',monospace;font-size:13px}
+    \\header{background:#12121a;border-bottom:1px solid #2a2a3a;padding:10px 20px;display:flex;align-items:center;gap:16px}
+    \\header h1{font-size:15px;color:#7aa2f7;font-weight:700;letter-spacing:1px}
+    \\.hdr-sep{width:1px;height:20px;background:#2a2a3a}
+    \\.hdr-item{font-size:11px;color:#565680}
+    \\.hdr-item span{color:#c8c8d0}
+    \\.hdr-mode{font-size:10px;padding:2px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:1px;font-weight:600}
+    \\.hdr-mode-cont{background:#1a2a1a;color:#9ece6a}
+    \\.hdr-mode-interval{background:#2a2a1a;color:#e0af68}
+    \\.hdr-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+    \\.hdr-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+    \\.dot-ok{background:#9ece6a}
+    \\.dot-err{background:#f7768e}
+    \\.dot-warn{background:#e0af68}
+    \\.stats-bar{background:#12121a;border-bottom:1px solid #1a1a2a;padding:8px 20px;display:flex;gap:24px}
+    \\.stat-pill{display:flex;align-items:center;gap:6px;font-size:11px}
+    \\.stat-num{font-size:16px;font-weight:700}
+    \\.stat-num-active{color:#7aa2f7}
+    \\.stat-num-merged{color:#9ece6a}
+    \\.stat-num-failed{color:#f7768e}
+    \\.stat-num-total{color:#565680}
+    \\.stat-lbl{color:#565680;text-transform:uppercase;letter-spacing:0.5px;font-size:10px}
+    \\.main{display:grid;grid-template-columns:1fr 1fr;height:calc(100vh - 84px);gap:1px;background:#1a1a2a}
+    \\.panel{background:#0a0a0f;display:flex;flex-direction:column;overflow:hidden}
+    \\.panel-full{grid-column:1/-1}
+    \\.ph{background:#12121a;padding:7px 14px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#565680;border-bottom:1px solid #1a1a2a;flex-shrink:0;display:flex;justify-content:space-between;align-items:center}
+    \\.ph-filters{display:flex;gap:4px}
+    \\.ph-filter{background:none;border:1px solid #2a2a3a;color:#565680;padding:1px 6px;border-radius:2px;font-size:9px;cursor:pointer;font-family:inherit}
+    \\.ph-filter:hover,.ph-filter.active{border-color:#7aa2f7;color:#7aa2f7}
+    \\.pb{flex:1;overflow-y:auto;padding:6px 14px}
+    \\.log-line{padding:1px 0;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5}
+    \\.log-ts{color:#3a3a5a}
+    \\.log-info .log-lvl{color:#7aa2f7}
+    \\.log-warn .log-lvl{color:#e0af68}
+    \\.log-err .log-lvl{color:#f7768e}
+    \\.log-debug .log-lvl{color:#565680}
+    \\.task-row{padding:5px 0;border-bottom:1px solid #1a1a2a;display:flex;gap:8px;align-items:center}
+    \\.task-row:last-child{border-bottom:none}
+    \\.task-active{background:#0d0d18;border-left:2px solid #7aa2f7;padding-left:10px;margin:2px -14px;padding-right:14px}
+    \\.task-id{color:#3a3a5a;width:28px;font-size:11px}
+    \\.task-title{flex:1;color:#c8c8d0;font-size:12px}
+    \\.task-attempt{color:#3a3a5a;font-size:10px}
+    \\.badge{padding:1px 6px;border-radius:2px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
+    \\.badge-backlog{background:#1a1a2a;color:#565680}
+    \\.badge-spec{background:#1a1a3a;color:#7aa2f7}
+    \\.badge-qa{background:#1a2a3a;color:#7dcfff}
+    \\.badge-impl{background:#2a2a1a;color:#e0af68}
+    \\.badge-retry{background:#2a1a1a;color:#f7768e}
+    \\.badge-done{background:#1a2a1a;color:#9ece6a}
+    \\.badge-merged{background:#0a2a0a;color:#73daca}
+    \\.badge-rebase{background:#2a1a2a;color:#bb9af7}
+    \\.badge-failed{background:#2a1a1a;color:#f7768e}
+    \\.badge-queued{background:#1a1a3a;color:#7aa2f7}
+    \\.badge-merging{background:#2a2a1a;color:#e0af68}
+    \\.badge-excluded{background:#2a1a1a;color:#f7768e}
+    \\.phase-bar{display:flex;gap:2px;margin:8px 0}
+    \\.phase-step{flex:1;height:3px;background:#1a1a2a;border-radius:1px}
+    \\.phase-step.done{background:#565680}
+    \\.phase-step.current{background:#7aa2f7;box-shadow:0 0 6px rgba(122,162,247,0.4)}
+    \\.queue-row{padding:5px 0;border-bottom:1px solid #1a1a2a;display:flex;gap:8px;align-items:center;font-size:12px}
+    \\.queue-branch{color:#c8c8d0;flex:1}
+    \\.queue-meta{color:#3a3a5a;font-size:10px}
+    \\.empty{color:#3a3a5a;padding:20px 0;text-align:center;font-size:11px}
+    \\.cfg-row{padding:6px 0;display:flex;justify-content:space-between;border-bottom:1px solid #1a1a2a;font-size:12px}
+    \\.cfg-k{color:#565680}
+    \\.cfg-v{color:#c8c8d0}
+    \\::-webkit-scrollbar{width:5px}
+    \\::-webkit-scrollbar-track{background:#0a0a0f}
+    \\::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:2px}
     \\</style></head><body>
     \\<header>
     \\  <h1>BORG</h1>
-    \\  <span class="status" id="conn-status">connecting...</span>
+    \\  <div class="hdr-sep"></div>
+    \\  <span class="hdr-mode" id="mode-badge">...</span>
+    \\  <div class="hdr-sep"></div>
+    \\  <span class="hdr-item">uptime <span id="uptime">--</span></span>
+    \\  <div class="hdr-sep"></div>
+    \\  <span class="hdr-item">model <span id="model">--</span></span>
+    \\  <div class="hdr-right">
+    \\    <span class="hdr-dot" id="conn-dot"></span>
+    \\    <span class="hdr-item" id="conn-status" style="font-size:10px">connecting</span>
+    \\  </div>
     \\</header>
-    \\<div class="container">
-    \\  <div class="panel">
-    \\    <div class="panel-header"><span>Live Logs</span><span id="log-count">0</span></div>
-    \\    <div class="panel-body" id="logs"></div>
+    \\<div class="stats-bar">
+    \\  <div class="stat-pill"><span class="stat-num stat-num-active" id="s-active">-</span><span class="stat-lbl">active</span></div>
+    \\  <div class="stat-pill"><span class="stat-num stat-num-merged" id="s-merged">-</span><span class="stat-lbl">merged</span></div>
+    \\  <div class="stat-pill"><span class="stat-num stat-num-failed" id="s-failed">-</span><span class="stat-lbl">failed</span></div>
+    \\  <div class="stat-pill"><span class="stat-num stat-num-total" id="s-total">-</span><span class="stat-lbl">total</span></div>
+    \\</div>
+    \\<div class="main">
+    \\  <div class="panel" style="grid-row:1/3">
+    \\    <div class="ph"><span>Live Logs</span>
+    \\      <div class="ph-filters">
+    \\        <button class="ph-filter active" data-lvl="all">all</button>
+    \\        <button class="ph-filter" data-lvl="info">info</button>
+    \\        <button class="ph-filter" data-lvl="warn">warn</button>
+    \\        <button class="ph-filter" data-lvl="err">err</button>
+    \\      </div>
+    \\    </div>
+    \\    <div class="pb" id="logs"></div>
     \\  </div>
     \\  <div class="panel">
-    \\    <div class="panel-header"><span>Pipeline Tasks</span><span id="task-count">0</span></div>
-    \\    <div class="panel-body" id="tasks"></div>
+    \\    <div class="ph"><span>Pipeline Tasks</span><span id="task-count">0</span></div>
+    \\    <div class="pb" id="tasks"></div>
     \\  </div>
     \\  <div class="panel">
-    \\    <div class="panel-header"><span>Integration Queue</span><span id="queue-count">0</span></div>
-    \\    <div class="panel-body" id="queue"></div>
-    \\  </div>
-    \\  <div class="panel">
-    \\    <div class="panel-header"><span>System Status</span></div>
-    \\    <div class="panel-body" id="status"></div>
+    \\    <div class="ph"><span>Integration Queue</span><span id="queue-count">0</span></div>
+    \\    <div class="pb" id="queue"></div>
     \\  </div>
     \\</div>
     \\<script>
-    \\const $ = id => document.getElementById(id);
-    \\let logCount = 0;
+    \\const $=id=>document.getElementById(id);
+    \\let logFilter='all';
+    \\let startTs=Date.now();
     \\
-    \\// SSE for live logs
-    \\const es = new EventSource('/api/logs');
-    \\es.onopen = () => { $('conn-status').textContent = 'connected'; $('conn-status').style.color = '#9ece6a'; };
-    \\es.onerror = () => { $('conn-status').textContent = 'disconnected'; $('conn-status').style.color = '#f7768e'; };
-    \\es.onmessage = e => {
-    \\  try {
-    \\    const d = JSON.parse(e.data);
-    \\    const el = document.createElement('div');
-    \\    const cls = d.level === 'err' ? 'log-err' : d.level === 'warn' ? 'log-warn' : 'log-info';
-    \\    el.className = 'log-line ' + cls;
-    \\    const ts = new Date(d.ts * 1000).toLocaleTimeString();
-    \\    el.textContent = ts + ' [' + d.level + '] ' + d.message;
-    \\    const logs = $('logs');
+    \\document.querySelectorAll('.ph-filter').forEach(b=>{
+    \\  b.onclick=()=>{
+    \\    document.querySelectorAll('.ph-filter').forEach(x=>x.classList.remove('active'));
+    \\    b.classList.add('active');
+    \\    logFilter=b.dataset.lvl;
+    \\    document.querySelectorAll('.log-line').forEach(l=>{
+    \\      l.style.display=(logFilter==='all'||l.dataset.lvl===logFilter)?'':'none';
+    \\    });
+    \\  };
+    \\});
+    \\
+    \\const es=new EventSource('/api/logs');
+    \\es.onopen=()=>{$('conn-dot').className='hdr-dot dot-ok';$('conn-status').textContent='live'};
+    \\es.onerror=()=>{$('conn-dot').className='hdr-dot dot-err';$('conn-status').textContent='disconnected'};
+    \\es.onmessage=e=>{
+    \\  try{
+    \\    const d=JSON.parse(e.data);
+    \\    const el=document.createElement('div');
+    \\    el.className='log-line log-'+d.level;
+    \\    el.dataset.lvl=d.level;
+    \\    const ts=new Date(d.ts*1000).toLocaleTimeString('en-GB',{hour12:false});
+    \\    el.innerHTML='<span class="log-ts">'+ts+'</span> <span class="log-lvl">['+d.level+']</span> '+escHtml(d.message);
+    \\    if(logFilter!=='all'&&d.level!==logFilter)el.style.display='none';
+    \\    const logs=$('logs');
     \\    logs.appendChild(el);
-    \\    logCount++;
-    \\    $('log-count').textContent = logCount;
-    \\    if (logs.children.length > 500) logs.removeChild(logs.firstChild);
-    \\    logs.scrollTop = logs.scrollHeight;
-    \\  } catch(_) {}
+    \\    if(logs.children.length>500)logs.removeChild(logs.firstChild);
+    \\    logs.scrollTop=logs.scrollHeight;
+    \\  }catch(_){}
     \\};
     \\
-    \\function badge(status) {
-    \\  return '<span class="badge badge-' + status + '">' + status + '</span>';
+    \\function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+    \\function badge(s){return '<span class="badge badge-'+s+'">'+s+'</span>'}
+    \\
+    \\const PHASES=['backlog','spec','qa','impl','done','merged'];
+    \\function phaseBar(status){
+    \\  const idx=PHASES.indexOf(status);
+    \\  return '<div class="phase-bar">'+PHASES.map((p,i)=>{
+    \\    const cls=i<idx?'done':i===idx?'current':'';
+    \\    return '<div class="phase-step '+cls+'" title="'+p+'"></div>';
+    \\  }).join('')+'</div>';
     \\}
     \\
-    \\async function refreshTasks() {
-    \\  try {
-    \\    const r = await fetch('/api/tasks');
-    \\    const tasks = await r.json();
-    \\    $('task-count').textContent = tasks.length;
-    \\    $('tasks').innerHTML = tasks.map(t =>
-    \\      '<div class="task-row">' +
-    \\        '<span class="task-id">#' + t.id + '</span>' +
-    \\        badge(t.status) +
-    \\        '<span class="task-title">' + t.title + '</span>' +
-    \\        (t.branch ? '<span style="color:#565680;font-size:11px">' + t.branch + '</span>' : '') +
-    \\      '</div>'
-    \\    ).join('');
-    \\  } catch(_) {}
-    \\}
-    \\
-    \\async function refreshQueue() {
-    \\  try {
-    \\    const r = await fetch('/api/queue');
-    \\    const queue = await r.json();
-    \\    $('queue-count').textContent = queue.length;
-    \\    if (queue.length === 0) {
-    \\      $('queue').innerHTML = '<div style="color:#565680;padding:20px">No branches in queue</div>';
-    \\      return;
+    \\async function refreshTasks(){
+    \\  try{
+    \\    const r=await fetch('/api/tasks');
+    \\    const tasks=await r.json();
+    \\    const active=tasks.filter(t=>['backlog','spec','qa','impl','retry','rebase'].includes(t.status));
+    \\    const done=tasks.filter(t=>!['backlog','spec','qa','impl','retry','rebase'].includes(t.status));
+    \\    $('task-count').textContent=tasks.length;
+    \\    let html='';
+    \\    if(active.length>0){
+    \\      active.forEach(t=>{
+    \\        const isWorking=['spec','qa','impl','retry','rebase'].includes(t.status);
+    \\        const effectiveStatus=t.status==='retry'?'impl':t.status==='rebase'?'impl':t.status;
+    \\        html+='<div class="task-row'+(isWorking?' task-active':'')+'">';
+    \\        html+='<span class="task-id">#'+t.id+'</span>';
+    \\        html+=badge(t.status);
+    \\        html+='<span class="task-title">'+escHtml(t.title)+'</span>';
+    \\        if(t.attempt>0)html+='<span class="task-attempt">'+t.attempt+'/'+t.max_attempts+'</span>';
+    \\        html+='</div>';
+    \\        if(isWorking)html+=phaseBar(effectiveStatus);
+    \\      });
     \\    }
-    \\    $('queue').innerHTML = queue.map(q =>
-    \\      '<div class="queue-row">' +
-    \\        badge(q.status) +
-    \\        ' <span style="color:#c8c8d0">' + q.branch + '</span>' +
-    \\        ' <span style="color:#565680;font-size:11px">task #' + q.task_id + ' &middot; ' + q.queued_at + '</span>' +
-    \\      '</div>'
+    \\    if(done.length>0){
+    \\      done.slice(0,20).forEach(t=>{
+    \\        html+='<div class="task-row">';
+    \\        html+='<span class="task-id">#'+t.id+'</span>';
+    \\        html+=badge(t.status);
+    \\        html+='<span class="task-title">'+escHtml(t.title)+'</span>';
+    \\        html+='</div>';
+    \\      });
+    \\    }
+    \\    if(tasks.length===0)html='<div class="empty">No pipeline tasks yet</div>';
+    \\    $('tasks').innerHTML=html;
+    \\  }catch(_){}
+    \\}
+    \\
+    \\async function refreshQueue(){
+    \\  try{
+    \\    const r=await fetch('/api/queue');
+    \\    const q=await r.json();
+    \\    $('queue-count').textContent=q.length;
+    \\    if(q.length===0){$('queue').innerHTML='<div class="empty">Queue empty</div>';return}
+    \\    $('queue').innerHTML=q.map(e=>
+    \\      '<div class="queue-row">'+badge(e.status)+
+    \\      '<span class="queue-branch">'+escHtml(e.branch)+'</span>'+
+    \\      '<span class="queue-meta">#'+e.task_id+'</span></div>'
     \\    ).join('');
-    \\  } catch(_) {}
+    \\  }catch(_){}
     \\}
     \\
-    \\async function refreshStatus() {
-    \\  try {
-    \\    const r = await fetch('/api/status');
-    \\    const s = await r.json();
-    \\    const h = Math.floor(s.uptime_s / 3600);
-    \\    const m = Math.floor((s.uptime_s % 3600) / 60);
-    \\    $('status').innerHTML =
-    \\      '<div class="stat"><span class="stat-label">Uptime</span><span class="stat-value">' + h + 'h ' + m + 'm</span></div>' +
-    \\      '<div class="stat"><span class="stat-label">Model</span><span class="stat-value">' + s.model + '</span></div>' +
-    \\      '<div class="stat"><span class="stat-label">Pipeline Repo</span><span class="stat-value">' + s.pipeline_repo + '</span></div>' +
-    \\      '<div class="stat"><span class="stat-label">Release Interval</span><span class="stat-value">' + s.release_interval_mins + ' min</span></div>' +
-    \\      '<div class="stat"><span class="stat-label">Test Command</span><span class="stat-value">' + s.test_cmd + '</span></div>';
-    \\  } catch(_) {}
+    \\async function refreshStatus(){
+    \\  try{
+    \\    const r=await fetch('/api/status');
+    \\    const s=await r.json();
+    \\    const h=Math.floor(s.uptime_s/3600);
+    \\    const m=Math.floor((s.uptime_s%3600)/60);
+    \\    const sec=s.uptime_s%60;
+    \\    $('uptime').textContent=h+'h '+m+'m '+sec+'s';
+    \\    $('model').textContent=s.model;
+    \\    const mb=$('mode-badge');
+    \\    if(s.continuous_mode){mb.textContent='continuous';mb.className='hdr-mode hdr-mode-cont'}
+    \\    else{mb.textContent='every '+s.release_interval_mins+'m';mb.className='hdr-mode hdr-mode-interval'}
+    \\    $('s-active').textContent=s.active_tasks;
+    \\    $('s-merged').textContent=s.merged_tasks;
+    \\    $('s-failed').textContent=s.failed_tasks;
+    \\    $('s-total').textContent=s.total_tasks;
+    \\  }catch(_){}
     \\}
     \\
-    \\refreshTasks(); refreshQueue(); refreshStatus();
-    \\setInterval(refreshTasks, 5000);
-    \\setInterval(refreshQueue, 5000);
-    \\setInterval(refreshStatus, 10000);
+    \\refreshTasks();refreshQueue();refreshStatus();
+    \\setInterval(refreshTasks,3000);
+    \\setInterval(refreshQueue,3000);
+    \\setInterval(refreshStatus,3000);
     \\</script></body></html>
 ;
 
