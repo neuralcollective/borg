@@ -1,74 +1,91 @@
-TASK_START
-TITLE: Fix WhatsApp stdout blocking the main event loop
-DESCRIPTION: In whatsapp.zig:77-82, the `poll()` method calls `stdout.read()` on a blocking pipe fd. When the WhatsApp bridge has no data to send, this blocks indefinitely, freezing the entire main event loop (Telegram polling, agent dispatch, cooldown expiry). The pipe should be set to O_NONBLOCK after spawning the child process, or the read should be moved to a dedicated thread that feeds parsed events to the main loop via a thread-safe queue.
-TASK_END
+# Spec: Add tests for `json.zig` `escapeString` with special and control characters
 
-TASK_START
-TITLE: Fix subprocess stdout/stderr sequential read deadlock
-DESCRIPTION: In git.zig:27-40 and pipeline.zig:768-781, stdout is read to completion before stderr is read. If a child process fills the OS pipe buffer (~64KB on Linux) writing to stderr while also writing to stdout, the child blocks on stderr write, and the parent blocks on stdout read, causing a deadlock. Both streams must be drained concurrently, either by using separate threads per stream, poll/epoll, or by collecting both via the Zig child.collectOutput() pattern.
-TASK_END
+## Task Summary
 
-TASK_START
-TITLE: Fix OAuth token memory leak in refreshOAuthToken
-DESCRIPTION: In config.zig:106-110, `refreshOAuthToken` overwrites `self.oauth_token` with a newly allocated string without freeing the previous value. This function is called every main loop iteration (every 500ms in main.zig:647), causing continuous memory growth. The old token must be freed before assigning the new one, with care to avoid freeing the initial token that may have come from a non-owned slice.
-TASK_END
+Add comprehensive test coverage for the `escapeString` function in `src/json.zig`. Two tests already exist (lines 109-123) covering a combined special-character string (`"`, `\`, `\n`, `\t`) and two control characters (`0x01`, `0x1f`), but they miss `\r`, empty string input, normal ASCII passthrough, multi-byte UTF-8 passthrough, the null byte (`0x00`), and isolated per-character validation. New tests must fill these gaps so every code path in the function's `switch` statement and the `ch < 0x20` branch is individually verified.
 
-TASK_START
-TITLE: Fix use-after-free on pipeline shutdown with active agents
-DESCRIPTION: In pipeline.zig:156, spawned `processTaskThread` thread handles are discarded (detached). During shutdown, `Pipeline.run()` waits at most 30s for agents then returns. The main function then destroys `pipeline_db` and the allocator, but detached agent threads may still be running and accessing `self.db` and `self.allocator`. Store thread handles and join them all during shutdown, or use a shared atomic flag that agents check before each db operation.
-TASK_END
+## Files to Modify
 
-TASK_START
-TITLE: Fix Docker container name collision for concurrent agents
-DESCRIPTION: In pipeline.zig:1121-1123, container names are generated using `std.time.timestamp()` which has second granularity. If two pipeline agents are spawned within the same second, they get identical container names and Docker rejects the second container creation. Add a monotonic atomic counter or random suffix to ensure unique container names across concurrent spawns.
-TASK_END
+- `src/json.zig` — Add new `test` blocks after the existing tests (after line 134).
 
-TASK_START
-TITLE: Fix formatTimestamp panic on negative or zero timestamps
-DESCRIPTION: In main.zig:1200, `@intCast(unix_ts)` casts i64 to u64 for EpochSeconds.secs. If a message has a negative or zero timestamp (e.g., timestamp 0 from WhatsApp defaults, or malformed Telegram data), this triggers a runtime panic from the safety-checked integer cast. Clamp the timestamp to a valid positive range (minimum 0) before casting, or use `@max(unix_ts, 0)` to prevent the panic.
-TASK_END
+## Files to Create
 
-TASK_START
-TITLE: Fix data race on web_server_global pointer
-DESCRIPTION: In main.zig:25, `web_server_global` is a plain `?*WebServer` read from the log function (called from any thread via std.log) and written from the main thread. This is a data race under the Zig/C memory model. Replace it with `std.atomic.Value(?*WebServer)` and use atomic load/store with appropriate memory ordering to ensure correct visibility across threads.
-TASK_END
+None.
 
-TASK_START
-TITLE: Fix memory leak of session_id in /tasks command handler
-DESCRIPTION: In main.zig:1089-1103, the `/tasks` command handler frees individual fields of each PipelineTask struct (title, description, repo_path, branch, status, last_error, created_by, notify_chat, created_at) but omits `t.session_id`. Since `rowToPipelineTask` allocates `session_id` via `allocator.dupe`, this leaks memory on every `/tasks` invocation. Add `allocator.free(t.session_id)` to the cleanup block.
-TASK_END
+## Function/Type Signatures for New or Changed Code
 
-TASK_START
-TITLE: Fix JSON injection via unescaped JID in WhatsApp sendMessage
-DESCRIPTION: In whatsapp.zig:161, the `jid` parameter is interpolated directly into a JSON string without escaping. A JID containing `"` or `\` would produce malformed JSON sent to the bridge process stdin, potentially causing message send failures or protocol desync. Apply `json_mod.escapeString` to the JID before interpolation, consistent with the escaping already done for the text field.
-TASK_END
+No new functions or types are introduced. All additions are Zig `test` blocks inside `src/json.zig` that call the existing public function:
 
-TASK_START
-TITLE: Fix Telegram entity offset/length panic on negative values
-DESCRIPTION: In telegram.zig:108-109, `@intCast` converts i64 offset/length values from the Telegram API to usize. A malformed or adversarial API response with negative offset or length values will cause a runtime panic crashing the entire process. Replace `@intCast` with `std.math.cast(usize, ...)` which returns null on out-of-range values, and skip the entity on failure via `orelse continue`.
-TASK_END
+```zig
+pub fn escapeString(allocator: std.mem.Allocator, input: []const u8) ![]const u8
+```
 
-TASK_START
-TITLE: Fix web server single-read HTTP request parsing
-DESCRIPTION: In web.zig:137-141, `handleConnection` performs a single `stream.read()` to get the HTTP request. TCP may deliver the request across multiple segments, causing partial reads where only part of the request line is received. The path parsing then operates on incomplete data, leading to incorrect routing or dropped requests under load. Read in a loop until `\r\n` (end of request line) is found, with a timeout and max-size limit to prevent slow-loris attacks.
-TASK_END
+Each test block follows this pattern:
 
-TASK_START
-TITLE: Add size limit to subprocess stdout/stderr buffers
-DESCRIPTION: In git.zig, agent.zig, docker.zig, and pipeline.zig, subprocess stdout/stderr is read into unbounded ArrayLists with no size cap. A misbehaving subprocess could write gigabytes of output, causing OOM and crashing the entire orchestrator. Add a configurable maximum buffer size (e.g., 50MB for agent output, 10MB for git/test output) and stop reading once exceeded, truncating the output.
-TASK_END
+```zig
+test "<descriptive name>" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, <input>);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings(<expected>, result);
+}
+```
 
-TASK_START
-TITLE: Fix isBindSafe Docker mount check to resolve symlinks
-DESCRIPTION: In docker.zig:253-279, `isBindSafe` checks the string representation of the host path against a blocklist of sensitive directories. A symlink (e.g., `/tmp/innocent` pointing to `/home/user/.ssh`) bypasses all checks because only the literal string is examined. Use `std.fs.realpathAlloc` to resolve the actual filesystem path before checking against the blocklist, preventing symlink-based mount escapes in pipeline agent containers.
-TASK_END
+### Test blocks to add
 
-TASK_START
-TITLE: Fix SSE client list resource leak for idle connections
-DESCRIPTION: In web.zig:261, SSE clients are added to `sse_clients` and only removed when a write fails during `broadcastSse`. During quiet periods with no log events, disconnected clients accumulate as stale entries holding open file descriptors. Add a periodic keepalive mechanism (e.g., send SSE comment `: keepalive\n\n` every 30 seconds) that also serves to detect and prune dead connections via write failure.
-TASK_END
+1. **`test "escapeString returns empty output for empty input"`**
+   - Input: `""`
+   - Expected output: `""`
 
-TASK_START
-TITLE: Fix deadlock risk from nested mutex acquisition in pushLog
-DESCRIPTION: In web.zig:55-75, `pushLog` acquires `log_mu` then calls `broadcastSse` which acquires `sse_mu`, establishing an implicit lock ordering (log_mu then sse_mu). While no current code path reverses this order, it is fragile and undocumented. Refactor to release `log_mu` before calling `broadcastSse` by copying the level and message into local buffers first, eliminating the nested lock acquisition entirely.
-TASK_END
+2. **`test "escapeString escapes carriage return"`**
+   - Input: `"\r"`
+   - Expected output: `"\\r"`
+
+3. **`test "escapeString passes through normal ASCII unchanged"`**
+   - Input: `"Hello, world! 0123 ABC abc ~"` (printable ASCII including space, digits, letters, punctuation, tilde)
+   - Expected output: identical to input
+
+4. **`test "escapeString passes through multi-byte UTF-8 unchanged"`**
+   - Input: `"café 日本語 🚀"` (2-byte, 3-byte, and 4-byte UTF-8 sequences)
+   - Expected output: identical to input
+
+5. **`test "escapeString escapes null byte"`**
+   - Input: `&[_]u8{0x00}`
+   - Expected output: `"\\u0000"`
+
+6. **`test "escapeString escapes all control characters below 0x20"`**
+   - Input: a byte array containing every value from `0x00` to `0x1f` (32 bytes)
+   - Expected output: the 5 explicitly-handled characters produce their named escapes (`\t` for 0x09, `\n` for 0x0a, `\r` for 0x0d); the remaining 27 produce `\uXXXX` hex escapes
+   - Verify total output length equals `5 * 2 + 27 * 6 = 172` characters (the 5 named escapes are 2 chars each like `\n`; the 27 hex escapes are 6 chars each like `\u0000`)
+   - Note: `"` is 0x22 and `\` is 0x5c, both above 0x20, so they are NOT in this range
+
+7. **`test "escapeString escapes each special character in isolation"`**
+   - Sub-checks for `"`, `\`, `\n`, `\t`, `\r` each as a single-character input
+   - Verifies each produces its two-character escape: `\"`, `\\`, `\n`, `\t`, `\r`
+
+8. **`test "escapeString handles mixed content with all escape types"`**
+   - Input: a string combining normal ASCII, a special character, a control character, and multi-byte UTF-8, e.g. `"hi\x01\t" ++ "é"`
+   - Expected output: `"hi\\u0001\\té"` — verifying that escaping and passthrough work correctly when interleaved
+
+## Acceptance Criteria
+
+1. **AC1**: `escapeString(alloc, "")` returns a zero-length slice (empty string).
+2. **AC2**: `escapeString(alloc, "\r")` returns `"\\r"` (two bytes: backslash, letter r).
+3. **AC3**: `escapeString(alloc, <printable ASCII string>)` returns a slice byte-equal to the input.
+4. **AC4**: `escapeString(alloc, <multi-byte UTF-8 string>)` returns a slice byte-equal to the input — no UTF-8 bytes are mangled or escaped.
+5. **AC5**: `escapeString(alloc, &[_]u8{0x00})` returns `"\\u0000"` (6 bytes).
+6. **AC6**: For every byte value `0x00..0x1f`, `escapeString` produces the correct escape: named escapes for `\t` (0x09), `\n` (0x0a), `\r` (0x0d), and `\uXXXX` hex escapes for all others. `"` (0x22) and `\` (0x5c) are not in this range.
+7. **AC7**: Each of the five special characters (`"`, `\`, `\n`, `\t`, `\r`) in isolation produces exactly its two-character escape sequence.
+8. **AC8**: A mixed input containing normal text, special characters, control characters, and UTF-8 produces the expected combined output with correct escaping and passthrough.
+9. **AC9**: All new tests pass when run via `zig build test`.
+10. **AC10**: All pre-existing tests in `src/json.zig` continue to pass (no regressions).
+
+## Edge Cases to Handle
+
+1. **Empty string**: Input `""` must return an allocated empty slice (length 0), not null or an error.
+2. **Null byte (0x00)**: Must be escaped as `\u0000`, not silently dropped or treated as a string terminator (Zig slices are length-delimited, not null-terminated).
+3. **Byte 0x1f (Unit Separator)**: The highest control character must still be escaped via the `ch < 0x20` path, confirming the boundary condition is `< 0x20` not `<= 0x1f` (equivalent, but worth verifying).
+4. **Byte 0x20 (space)**: Must NOT be escaped — it is the first printable ASCII character and should pass through unchanged. This validates the boundary of the `ch < 0x20` check.
+5. **Multi-byte UTF-8 bytes (0x80-0xFF)**: Individual bytes in multi-byte UTF-8 sequences are above 0x7F and must pass through the `else` branch unchanged. The function operates byte-by-byte, so it must not corrupt multi-byte sequences.
+6. **Allocator failure**: The function signature returns `![]const u8` (error union). Tests use `std.testing.allocator` which detects leaks. Each test must `defer alloc.free(result)` to avoid leak detection failures.
+7. **Adjacent special characters**: Input like `"\"\\"` (quote then backslash) must produce `"\\\"\\\\"` — verify that escape sequences from adjacent characters don't interfere with each other.
