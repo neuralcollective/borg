@@ -49,10 +49,11 @@ pub const QueueEntry = struct {
     repo_path: []const u8,
     status: []const u8,
     queued_at: []const u8,
+    pr_number: i64,
 };
 
 // Must match the number of entries in runMigrations()
-const SCHEMA_VERSION = "2";
+const SCHEMA_VERSION = "3";
 
 pub const Db = struct {
     sqlite_db: sqlite.Database,
@@ -203,6 +204,7 @@ pub const Db = struct {
         const migrations = [_][*:0]const u8{
             "ALTER TABLE pipeline_tasks ADD COLUMN session_id TEXT DEFAULT ''",
             "ALTER TABLE integration_queue ADD COLUMN repo_path TEXT DEFAULT ''",
+            "ALTER TABLE integration_queue ADD COLUMN pr_number INTEGER DEFAULT 0",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -560,7 +562,7 @@ pub const Db = struct {
     pub fn getQueuedBranches(self: *Db, allocator: std.mem.Allocator) ![]QueueEntry {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, task_id, branch, COALESCE(repo_path, ''), status, queued_at FROM integration_queue WHERE status = 'queued' ORDER BY queued_at ASC",
+            "SELECT id, task_id, branch, COALESCE(repo_path, ''), status, queued_at, COALESCE(pr_number, 0) FROM integration_queue WHERE status = 'queued' ORDER BY queued_at ASC",
             .{},
         );
         defer rows.deinit();
@@ -574,6 +576,7 @@ pub const Db = struct {
                 .repo_path = try allocator.dupe(u8, row.get(3) orelse ""),
                 .status = try allocator.dupe(u8, row.get(4) orelse "queued"),
                 .queued_at = try allocator.dupe(u8, row.get(5) orelse ""),
+                .pr_number = row.getInt(6) orelse 0,
             });
         }
         return entries.toOwnedSlice();
@@ -582,7 +585,7 @@ pub const Db = struct {
     pub fn getQueuedBranchesForRepo(self: *Db, allocator: std.mem.Allocator, repo_path: []const u8) ![]QueueEntry {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, task_id, branch, COALESCE(repo_path, ''), status, queued_at FROM integration_queue WHERE status = 'queued' AND repo_path = ?1 ORDER BY queued_at ASC",
+            "SELECT id, task_id, branch, COALESCE(repo_path, ''), status, queued_at, COALESCE(pr_number, 0) FROM integration_queue WHERE status = 'queued' AND repo_path = ?1 ORDER BY queued_at ASC",
             .{repo_path},
         );
         defer rows.deinit();
@@ -596,9 +599,17 @@ pub const Db = struct {
                 .repo_path = try allocator.dupe(u8, row.get(3) orelse ""),
                 .status = try allocator.dupe(u8, row.get(4) orelse "queued"),
                 .queued_at = try allocator.dupe(u8, row.get(5) orelse ""),
+                .pr_number = row.getInt(6) orelse 0,
             });
         }
         return entries.toOwnedSlice();
+    }
+
+    pub fn updateQueuePrNumber(self: *Db, entry_id: i64, pr_number: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE integration_queue SET pr_number = ?1 WHERE id = ?2",
+            .{ pr_number, entry_id },
+        );
     }
 
     pub fn resetStuckQueueEntries(self: *Db) !void {

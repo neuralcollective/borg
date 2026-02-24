@@ -1359,6 +1359,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .whatsapp_auth_dir = "",
         .discord_enabled = false,
         .discord_token = "",
+        .graphite_enabled = false,
         .allocator = allocator,
     };
 }
