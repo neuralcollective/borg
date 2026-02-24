@@ -359,12 +359,16 @@ pub const Pipeline = struct {
         const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
 
+        // Delete old branch if it exists (from a previous recycled attempt)
+        var del_branch = try git.exec(&.{ "branch", "-D", branch });
+        defer del_branch.deinit();
+
         var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
         defer wt.deinit();
         if (!wt.success()) {
-            std.log.err("git worktree add failed: {s}", .{wt.stderr});
-            try self.db.updateTaskStatus(task.id, "failed");
+            std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
             try self.db.updateTaskError(task.id, wt.stderr);
+            // Stay in backlog, will retry next tick
             return;
         }
 
@@ -588,9 +592,9 @@ pub const Pipeline = struct {
                 });
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
-                try self.db.updateTaskStatus(task.id, "failed");
-                std.log.warn("Task #{d} failed after {d} attempts", .{ task.id, task.attempt + 1 });
-                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} FAILED after {d} attempts.", .{ task.id, task.attempt + 1 }));
+                std.log.warn("Task #{d} exhausted {d} attempts, recycling to backlog", .{ task.id, task.max_attempts });
+                try self.recycleTask(task);
+                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} exhausted {d} attempts — recycling to backlog.", .{ task.id, task.max_attempts }));
             } else {
                 const combined = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ test_result.stdout, test_result.stderr });
                 defer self.allocator.free(combined);
@@ -711,9 +715,9 @@ pub const Pipeline = struct {
                 });
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
-                try self.db.updateTaskStatus(task.id, "failed");
-                std.log.warn("Task #{d} failed rebase after {d} attempts", .{ task.id, task.attempt + 1 });
-                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} FAILED rebase after {d} attempts.", .{ task.id, task.attempt + 1 }) catch return);
+                std.log.warn("Task #{d} exhausted {d} rebase attempts, recycling to backlog", .{ task.id, task.max_attempts });
+                try self.recycleTask(task);
+                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} exhausted {d} rebase attempts — recycling to backlog.", .{ task.id, task.max_attempts }) catch return);
             } else {
                 const combined = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ test_result.stdout, test_result.stderr });
                 defer self.allocator.free(combined);
@@ -853,8 +857,9 @@ pub const Pipeline = struct {
                 try excluded.append(entry.branch);
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
                     if (task.attempt + 1 >= task.max_attempts) {
-                        try self.db.updateTaskStatus(entry.task_id, "failed");
-                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed after {d} attempts (merge conflicts).", .{ task.id, task.title, task.max_attempts }) catch continue);
+                        std.log.warn("Task #{d} exhausted merge attempts, recycling to backlog", .{task.id});
+                        self.recycleTask(task) catch {};
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" exhausted merge attempts — recycling to backlog.", .{ task.id, task.title }) catch continue);
                     } else {
                         try self.db.updateTaskStatus(entry.task_id, "rebase");
                         self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" has merge conflicts — rebasing (attempt {d}/{d}).", .{ task.id, task.title, task.attempt + 1, task.max_attempts }) catch continue);
@@ -884,8 +889,9 @@ pub const Pipeline = struct {
                 try excluded.append(entry.branch);
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
                     if (task.attempt + 1 >= task.max_attempts) {
-                        try self.db.updateTaskStatus(entry.task_id, "failed");
-                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed after {d} attempts (integration tests).", .{ task.id, task.title, task.max_attempts }) catch continue);
+                        std.log.warn("Task #{d} exhausted integration test attempts, recycling to backlog", .{task.id});
+                        self.recycleTask(task) catch {};
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" exhausted integration test attempts — recycling to backlog.", .{ task.id, task.title }) catch continue);
                     } else {
                         try self.db.updateTaskStatus(entry.task_id, "rebase");
                         self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed integration tests — rebasing (attempt {d}/{d}).", .{ task.id, task.title, task.attempt + 1, task.max_attempts }) catch continue);
@@ -1169,11 +1175,16 @@ pub const Pipeline = struct {
     // --- Helpers ---
 
     fn failTask(self: *Pipeline, task: db_mod.PipelineTask, reason: []const u8, detail: []const u8) !void {
-        std.log.err("Task #{d} failed: {s}: {s}", .{ task.id, reason, detail[0..@min(detail.len, 200)] });
-        try self.db.updateTaskStatus(task.id, "failed");
-        try self.db.updateTaskError(task.id, detail[0..@min(detail.len, 4000)]);
-        // Keep worktree for debugging - don't clean up on failure
-        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s}", .{ task.id, reason }));
+        std.log.warn("Task #{d} failed ({s}), recycling to backlog: {s}", .{ task.id, reason, detail[0..@min(detail.len, 200)] });
+        try self.recycleTask(task);
+        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s} — recycling to backlog", .{ task.id, reason }));
+    }
+
+    fn recycleTask(self: *Pipeline, task: db_mod.PipelineTask) !void {
+        try self.db.resetTaskAttempt(task.id);
+        try self.db.updateTaskStatus(task.id, "backlog");
+        // Clean up old worktree so it gets a fresh one
+        self.cleanupWorktree(task);
     }
 
     fn notify(self: *Pipeline, chat_id: []const u8, message: []const u8) void {

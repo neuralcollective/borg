@@ -461,6 +461,13 @@ pub const Db = struct {
         );
     }
 
+    pub fn resetTaskAttempt(self: *Db, task_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET attempt = 0, branch = '', session_id = '', updated_at = datetime('now') WHERE id = ?1",
+            .{task_id},
+        );
+    }
+
     pub fn getAllPipelineTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
