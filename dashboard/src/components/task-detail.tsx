@@ -3,7 +3,7 @@ import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { repoName } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 interface TaskDetailProps {
   taskId: number;
@@ -80,7 +80,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
 
       {/* Agent outputs */}
       {task.outputs && task.outputs.length > 0 ? (
-        <OutputTabs outputs={task.outputs} />
+        <OutputSelector outputs={task.outputs} />
       ) : (
         <div className="flex flex-1 items-center justify-center text-xs text-zinc-700">
           No agent outputs yet
@@ -90,45 +90,70 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   );
 }
 
-function OutputTabs({ outputs }: { outputs: { id: number; phase: string; output: string; exit_code: number }[] }) {
-  const [activeTab, setActiveTab] = useState(outputs[0].phase + "-" + outputs[0].id);
+interface OutputEntry {
+  id: number;
+  phase: string;
+  output: string;
+  exit_code: number;
+}
+
+function OutputSelector({ outputs }: { outputs: OutputEntry[] }) {
+  // Label each output: unique phases get plain name, repeated phases get "Phase Attempt #N"
+  const labeled = useMemo(() => {
+    const phaseCounts: Record<string, number> = {};
+    const phaseIndices: Record<string, number> = {};
+    for (const o of outputs) {
+      phaseCounts[o.phase] = (phaseCounts[o.phase] || 0) + 1;
+    }
+    return outputs.map((o) => {
+      phaseIndices[o.phase] = (phaseIndices[o.phase] || 0) + 1;
+      const idx = phaseIndices[o.phase];
+      const total = phaseCounts[o.phase];
+      const label = total > 1
+        ? `${o.phase} attempt #${idx}`
+        : o.phase;
+      return { ...o, label, isLatest: idx === total };
+    });
+  }, [outputs]);
+
+  // Default to last output (most recent)
+  const [selectedKey, setSelectedKey] = useState(
+    labeled[labeled.length - 1].phase + "-" + labeled[labeled.length - 1].id
+  );
+
+  const selected = labeled.find((o) => o.phase + "-" + o.id === selectedKey) ?? labeled[labeled.length - 1];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 border-b border-white/[0.06]">
-        {outputs.map((o) => {
-          const key = o.phase + "-" + o.id;
-          return (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={cn(
-                "border-b-2 px-4 py-2 text-[11px] font-medium uppercase tracking-wide transition-colors",
-                activeTab === key
-                  ? "border-blue-400 text-blue-400"
-                  : "border-transparent text-zinc-600 hover:text-zinc-400"
-              )}
-            >
-              {o.phase}
-              {o.exit_code === 0 ? (
-                <span className="ml-1.5 text-emerald-500">ok</span>
-              ) : (
-                <span className="ml-1.5 text-red-400">x{o.exit_code}</span>
-              )}
-            </button>
-          );
-        })}
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] px-4 py-2">
+        <select
+          value={selectedKey}
+          onChange={(e) => setSelectedKey(e.target.value)}
+          className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
+        >
+          {labeled.map((o) => {
+            const key = o.phase + "-" + o.id;
+            const status = o.exit_code === 0 ? " \u2713" : ` x${o.exit_code}`;
+            return (
+              <option key={key} value={key}>
+                {o.label}{status}{o.isLatest ? " (latest)" : ""}
+              </option>
+            );
+          })}
+        </select>
+        <span className={cn(
+          "rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset",
+          selected.exit_code === 0
+            ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20"
+            : "bg-red-500/10 text-red-400 ring-red-500/20"
+        )}>
+          {selected.exit_code === 0 ? "passed" : `exit ${selected.exit_code}`}
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto overscroll-contain">
-        {outputs.map((o) => {
-          const key = o.phase + "-" + o.id;
-          if (activeTab !== key) return null;
-          return (
-            <pre key={key} className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400">
-              {o.output}
-            </pre>
-          );
-        })}
+        <pre className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400">
+          {selected.output}
+        </pre>
       </div>
     </div>
   );
