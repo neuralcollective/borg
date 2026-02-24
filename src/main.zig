@@ -13,6 +13,8 @@ const agent_mod = @import("agent.zig");
 const pipeline_mod = @import("pipeline.zig");
 const wa_mod = @import("whatsapp.zig");
 const WhatsApp = wa_mod.WhatsApp;
+const discord_mod = @import("discord.zig");
+const Discord = discord_mod.Discord;
 const web_mod = @import("web.zig");
 const WebServer = web_mod.WebServer;
 
@@ -74,7 +76,7 @@ fn installSignalHandlers() void {
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-const Transport = enum { telegram, whatsapp };
+const Transport = enum { telegram, whatsapp, discord };
 
 const GroupPhase = enum { idle, collecting, running, cooldown };
 
@@ -157,6 +159,7 @@ const IncomingMessage = struct {
 const Sender = struct {
     tg: *Telegram,
     wa: ?*WhatsApp,
+    discord: ?*Discord,
 
     fn send(self: Sender, transport: Transport, original_id: []const u8, text: []const u8, reply_to: ?[]const u8) void {
         switch (transport) {
@@ -168,6 +171,11 @@ const Sender = struct {
                     std.log.err("WA send: {}", .{err});
                 };
             },
+            .discord => if (self.discord) |d| {
+                d.sendMessage(original_id, text, reply_to) catch |err| {
+                    std.log.err("Discord send: {}", .{err});
+                };
+            },
         }
     }
 
@@ -175,6 +183,7 @@ const Sender = struct {
         switch (transport) {
             .telegram => self.tg.sendTyping(original_id) catch {},
             .whatsapp => if (self.wa) |w| w.sendTyping(original_id) catch {},
+            .discord => if (self.discord) |d| d.sendTyping(original_id) catch {},
         }
     }
 };
@@ -490,7 +499,18 @@ pub fn main() !void {
         };
     }
 
-    var sender = Sender{ .tg = &tg, .wa = if (wa) |*w| w else null };
+    // Start Discord bridge if enabled
+    var discord: ?Discord = null;
+    defer if (discord) |*d| d.deinit();
+    if (config.discord_enabled) {
+        discord = Discord.init(allocator, config.discord_token, config.assistant_name);
+        discord.?.start() catch |err| {
+            std.log.err("Discord bridge start failed: {}", .{err});
+            discord = null;
+        };
+    }
+
+    var sender = Sender{ .tg = &tg, .wa = if (wa) |*w| w else null, .discord = if (discord) |*d| d else null };
 
     // Start pipeline thread if repo is configured
     var pipeline_db: ?Db = null;
@@ -597,6 +617,26 @@ pub fn main() !void {
                     .transport = .whatsapp,
                     .chat_title = msg.jid,
                     .chat_type = if (msg.is_group) "group" else "private",
+                }) catch {};
+            }
+        }
+
+        // 2b. Poll Discord messages
+        if (discord) |*d| {
+            const dc_msgs = d.poll(cycle_alloc) catch &[_]discord_mod.DiscordMessage{};
+            for (dc_msgs) |msg| {
+                all_messages.append(.{
+                    .jid = try std.fmt.allocPrint(cycle_alloc, "discord:{s}", .{msg.channel_id}),
+                    .original_id = msg.channel_id,
+                    .message_id = msg.message_id,
+                    .sender = msg.sender_id,
+                    .sender_name = msg.sender_name,
+                    .text = msg.text,
+                    .timestamp = msg.timestamp,
+                    .mentions_bot = msg.mentions_bot,
+                    .transport = .discord,
+                    .chat_title = msg.channel_id,
+                    .chat_type = if (msg.is_dm) "private" else "channel",
                 }) catch {};
             }
         }
@@ -1259,6 +1299,8 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .watched_repos = &.{},
         .whatsapp_enabled = false,
         .whatsapp_auth_dir = "",
+        .discord_enabled = false,
+        .discord_token = "",
         .allocator = allocator,
     };
 }

@@ -9,6 +9,7 @@ logs/
 .env
 whatsapp/auth/
 whatsapp/node_modules/
+discord/node_modules/
 dashboard/node_modules/
 dashboard/dist/
 .worktrees/
