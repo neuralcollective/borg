@@ -149,6 +149,8 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
+        self.db.storeTaskOutput(0, "seed", result.output, 0) catch {};
+
         // Parse TASK_START/TASK_END blocks from output
         var created: u32 = 0;
         var remaining = result.output;
@@ -288,6 +290,8 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
+        self.db.storeTaskOutput(task.id, "spec", result.output, 0) catch {};
+
         // Commit spec.md in worktree
         var add = try wt_git.addAll();
         defer add.deinit();
@@ -331,6 +335,8 @@ pub const Pipeline = struct {
         };
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        self.db.storeTaskOutput(task.id, "qa", result.output, 0) catch {};
 
         var add = try wt_git.addAll();
         defer add.deinit();
@@ -395,6 +401,8 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
+        self.db.storeTaskOutput(task.id, "impl", result.output, 0) catch {};
+
         // Commit implementation in worktree
         var add = try wt_git.addAll();
         defer add.deinit();
@@ -408,6 +416,18 @@ pub const Pipeline = struct {
         };
         defer self.allocator.free(test_result.stdout);
         defer self.allocator.free(test_result.stderr);
+
+        {
+            const test_combined = std.fmt.allocPrint(self.allocator, "EXIT {d}\n--- stdout ---\n{s}\n--- stderr ---\n{s}", .{
+                test_result.exit_code,
+                test_result.stdout[0..@min(test_result.stdout.len, 8000)],
+                test_result.stderr[0..@min(test_result.stderr.len, 8000)],
+            }) catch null;
+            if (test_combined) |tc| {
+                defer self.allocator.free(tc);
+                self.db.storeTaskOutput(task.id, "test", tc, @intCast(test_result.exit_code)) catch {};
+            }
+        }
 
         if (test_result.exit_code == 0) {
             try self.db.updateTaskStatus(task.id, "done");
@@ -509,6 +529,8 @@ pub const Pipeline = struct {
             };
             defer self.allocator.free(result.output);
             defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+            self.db.storeTaskOutput(task.id, "rebase", result.output, 0) catch {};
         }
 
         // Run tests on the rebased branch

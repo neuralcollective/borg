@@ -153,6 +153,8 @@ pub const WebServer = struct {
             return; // Don't close — SSE keeps connection open
         } else if (std.mem.eql(u8, path, "/api/tasks")) {
             self.serveTasksJson(stream);
+        } else if (std.mem.startsWith(u8, path, "/api/tasks/")) {
+            self.serveTaskDetailJson(stream, path);
         } else if (std.mem.eql(u8, path, "/api/queue")) {
             self.serveQueueJson(stream);
         } else if (std.mem.eql(u8, path, "/api/status")) {
@@ -255,6 +257,70 @@ pub const WebServer = struct {
         self.sendJson(stream, buf.items);
     }
 
+    fn serveTaskDetailJson(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        const id_str = path["/api/tasks/".len..];
+        const task_id = std.fmt.parseInt(i64, id_str, 10) catch {
+            self.serve404(stream);
+            return;
+        };
+
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const task = self.db.getPipelineTask(alloc, task_id) catch {
+            self.serve500(stream);
+            return;
+        } orelse {
+            self.serve404(stream);
+            return;
+        };
+
+        const outputs = self.db.getTaskOutputs(alloc, task_id) catch {
+            self.serve500(stream);
+            return;
+        };
+
+        var buf = std.ArrayList(u8).init(alloc);
+        const w = buf.writer();
+
+        var esc_title: [512]u8 = undefined;
+        var esc_desc: [2048]u8 = undefined;
+        var esc_err: [4096]u8 = undefined;
+        const title = jsonEscape(&esc_title, task.title);
+        const desc = jsonEscape(&esc_desc, task.description);
+        const last_err = jsonEscape(&esc_err, task.last_error);
+
+        w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"last_error\":\"{s}\",\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"outputs\":[", .{
+            task.id,
+            title,
+            desc,
+            task.status,
+            task.branch,
+            task.attempt,
+            task.max_attempts,
+            last_err,
+            task.created_by,
+            task.created_at,
+        }) catch return;
+
+        for (outputs, 0..) |o, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            // Use dynamic allocation for large outputs
+            const esc_out = jsonEscapeAlloc(alloc, o.output) catch continue;
+            w.print("{{\"id\":{d},\"phase\":\"{s}\",\"output\":\"{s}\",\"exit_code\":{d},\"created_at\":\"{s}\"}}", .{
+                o.id,
+                o.phase,
+                esc_out,
+                o.exit_code,
+                o.created_at,
+            }) catch return;
+        }
+
+        w.writeAll("]}") catch return;
+        self.sendJson(stream, buf.items);
+    }
+
     fn serveQueueJson(self: *WebServer, stream: std.net.Stream) void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
@@ -324,6 +390,31 @@ pub const WebServer = struct {
     }
 };
 
+fn jsonEscapeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    // Truncate very large outputs for JSON response
+    const max_len = 16000;
+    const src = if (input.len > max_len) input[0..max_len] else input;
+    var out = std.ArrayList(u8).init(allocator);
+    for (src) |c| {
+        switch (c) {
+            '"' => try out.appendSlice("\\\""),
+            '\\' => try out.appendSlice("\\\\"),
+            '\n' => try out.appendSlice("\\n"),
+            '\r' => try out.appendSlice("\\r"),
+            '\t' => try out.appendSlice("\\t"),
+            else => {
+                if (c >= 0x20) {
+                    try out.append(c);
+                }
+            },
+        }
+    }
+    if (input.len > max_len) {
+        try out.appendSlice("\\n... (truncated)");
+    }
+    return out.toOwnedSlice();
+}
+
 fn jsonEscape(buf: []u8, input: []const u8) []const u8 {
     var pos: usize = 0;
     for (input) |c| {
@@ -381,20 +472,15 @@ const DASHBOARD_HTML =
     \\.hdr-mode-interval{background:#2a2a1a;color:#e0af68}
     \\.hdr-right{margin-left:auto;display:flex;align-items:center;gap:12px}
     \\.hdr-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
-    \\.dot-ok{background:#9ece6a}
-    \\.dot-err{background:#f7768e}
-    \\.dot-warn{background:#e0af68}
+    \\.dot-ok{background:#9ece6a}.dot-err{background:#f7768e}
     \\.stats-bar{background:#12121a;border-bottom:1px solid #1a1a2a;padding:8px 20px;display:flex;gap:24px}
     \\.stat-pill{display:flex;align-items:center;gap:6px;font-size:11px}
     \\.stat-num{font-size:16px;font-weight:700}
-    \\.stat-num-active{color:#7aa2f7}
-    \\.stat-num-merged{color:#9ece6a}
-    \\.stat-num-failed{color:#f7768e}
-    \\.stat-num-total{color:#565680}
+    \\.stat-num-active{color:#7aa2f7}.stat-num-merged{color:#9ece6a}
+    \\.stat-num-failed{color:#f7768e}.stat-num-total{color:#565680}
     \\.stat-lbl{color:#565680;text-transform:uppercase;letter-spacing:0.5px;font-size:10px}
     \\.main{display:grid;grid-template-columns:1fr 1fr;height:calc(100vh - 84px);gap:1px;background:#1a1a2a}
     \\.panel{background:#0a0a0f;display:flex;flex-direction:column;overflow:hidden}
-    \\.panel-full{grid-column:1/-1}
     \\.ph{background:#12121a;padding:7px 14px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#565680;border-bottom:1px solid #1a1a2a;flex-shrink:0;display:flex;justify-content:space-between;align-items:center}
     \\.ph-filters{display:flex;gap:4px}
     \\.ph-filter{background:none;border:1px solid #2a2a3a;color:#565680;padding:1px 6px;border-radius:2px;font-size:9px;cursor:pointer;font-family:inherit}
@@ -405,12 +491,12 @@ const DASHBOARD_HTML =
     \\.log-info .log-lvl{color:#7aa2f7}
     \\.log-warn .log-lvl{color:#e0af68}
     \\.log-err .log-lvl{color:#f7768e}
-    \\.log-debug .log-lvl{color:#565680}
-    \\.task-row{padding:5px 0;border-bottom:1px solid #1a1a2a;display:flex;gap:8px;align-items:center}
-    \\.task-row:last-child{border-bottom:none}
-    \\.task-active{background:#0d0d18;border-left:2px solid #7aa2f7;padding-left:10px;margin:2px -14px;padding-right:14px}
-    \\.task-id{color:#3a3a5a;width:28px;font-size:11px}
-    \\.task-title{flex:1;color:#c8c8d0;font-size:12px}
+    \\.task-row{padding:8px 12px;border-bottom:1px solid #1a1a2a;cursor:pointer;display:flex;gap:8px;align-items:center;transition:background 0.1s}
+    \\.task-row:hover{background:#12121a}
+    \\.task-row.selected{background:#0d1020;border-left:2px solid #7aa2f7}
+    \\.task-row.active-task{border-left:2px solid #7aa2f7;background:#0d0d18}
+    \\.task-id{color:#3a3a5a;min-width:28px;font-size:11px}
+    \\.task-title{flex:1;color:#c8c8d0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     \\.task-attempt{color:#3a3a5a;font-size:10px}
     \\.badge{padding:1px 6px;border-radius:2px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
     \\.badge-backlog{background:#1a1a2a;color:#565680}
@@ -425,17 +511,36 @@ const DASHBOARD_HTML =
     \\.badge-queued{background:#1a1a3a;color:#7aa2f7}
     \\.badge-merging{background:#2a2a1a;color:#e0af68}
     \\.badge-excluded{background:#2a1a1a;color:#f7768e}
-    \\.phase-bar{display:flex;gap:2px;margin:8px 0}
-    \\.phase-step{flex:1;height:3px;background:#1a1a2a;border-radius:1px}
-    \\.phase-step.done{background:#565680}
-    \\.phase-step.current{background:#7aa2f7;box-shadow:0 0 6px rgba(122,162,247,0.4)}
+    \\.phase-track{display:flex;gap:0;margin:6px 0 2px;align-items:center}
+    \\.phase-node{display:flex;align-items:center;gap:0}
+    \\.phase-dot{width:10px;height:10px;border-radius:50%;border:2px solid #2a2a3a;background:#0a0a0f}
+    \\.phase-dot.done{border-color:#565680;background:#565680}
+    \\.phase-dot.current{border-color:#7aa2f7;background:#7aa2f7;box-shadow:0 0 8px rgba(122,162,247,0.5)}
+    \\.phase-dot.fail{border-color:#f7768e;background:#f7768e}
+    \\.phase-line{width:20px;height:2px;background:#2a2a3a}
+    \\.phase-line.done{background:#565680}
+    \\.phase-lbl{font-size:8px;color:#3a3a5a;text-transform:uppercase;text-align:center;margin-top:2px}
+    \\.phase-lbl.current{color:#7aa2f7}
+    \\.phase-lbl.done{color:#565680}
+    \\.detail-panel{display:none;flex-direction:column;overflow:hidden}
+    \\.detail-panel.open{display:flex}
+    \\.detail-hdr{background:#12121a;padding:10px 14px;border-bottom:1px solid #1a1a2a;flex-shrink:0}
+    \\.detail-title{font-size:14px;color:#c8c8d0;margin-bottom:4px}
+    \\.detail-meta{font-size:10px;color:#565680;display:flex;gap:12px;flex-wrap:wrap}
+    \\.detail-desc{padding:10px 14px;color:#8888a0;font-size:11px;border-bottom:1px solid #1a1a2a;max-height:60px;overflow-y:auto;flex-shrink:0}
+    \\.detail-err{padding:8px 14px;background:#1a0a0a;color:#f7768e;font-size:11px;border-bottom:1px solid #2a1a1a;max-height:80px;overflow-y:auto;flex-shrink:0;white-space:pre-wrap}
+    \\.output-tabs{display:flex;gap:0;border-bottom:1px solid #1a1a2a;flex-shrink:0;background:#12121a}
+    \\.output-tab{padding:6px 14px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#565680;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;background:none;border-top:none;border-left:none;border-right:none}
+    \\.output-tab:hover{color:#c8c8d0}
+    \\.output-tab.active{color:#7aa2f7;border-bottom-color:#7aa2f7}
+    \\.output-tab .exit-ok{color:#9ece6a}.output-tab .exit-fail{color:#f7768e}
+    \\.output-view{flex:1;overflow-y:auto;padding:10px 14px;white-space:pre-wrap;font-size:11px;line-height:1.6;color:#a0a0b0;word-break:break-all}
     \\.queue-row{padding:5px 0;border-bottom:1px solid #1a1a2a;display:flex;gap:8px;align-items:center;font-size:12px}
     \\.queue-branch{color:#c8c8d0;flex:1}
     \\.queue-meta{color:#3a3a5a;font-size:10px}
     \\.empty{color:#3a3a5a;padding:20px 0;text-align:center;font-size:11px}
-    \\.cfg-row{padding:6px 0;display:flex;justify-content:space-between;border-bottom:1px solid #1a1a2a;font-size:12px}
-    \\.cfg-k{color:#565680}
-    \\.cfg-v{color:#c8c8d0}
+    \\.back-btn{background:none;border:1px solid #2a2a3a;color:#7aa2f7;padding:3px 10px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit}
+    \\.back-btn:hover{border-color:#7aa2f7}
     \\::-webkit-scrollbar{width:5px}
     \\::-webkit-scrollbar-track{background:#0a0a0f}
     \\::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:2px}
@@ -471,19 +576,26 @@ const DASHBOARD_HTML =
     \\    </div>
     \\    <div class="pb" id="logs"></div>
     \\  </div>
-    \\  <div class="panel">
+    \\  <div class="panel" id="tasks-panel">
     \\    <div class="ph"><span>Pipeline Tasks</span><span id="task-count">0</span></div>
     \\    <div class="pb" id="tasks"></div>
     \\  </div>
-    \\  <div class="panel">
+    \\  <div class="panel detail-panel" id="detail-panel">
+    \\    <div class="ph"><button class="back-btn" onclick="closeDetail()">Back</button><span>Task Detail</span><span></span></div>
+    \\    <div class="detail-hdr" id="detail-hdr"></div>
+    \\    <div class="detail-desc" id="detail-desc"></div>
+    \\    <div class="detail-err" id="detail-err" style="display:none"></div>
+    \\    <div class="output-tabs" id="output-tabs"></div>
+    \\    <div class="output-view" id="output-view"></div>
+    \\  </div>
+    \\  <div class="panel" id="queue-panel">
     \\    <div class="ph"><span>Integration Queue</span><span id="queue-count">0</span></div>
     \\    <div class="pb" id="queue"></div>
     \\  </div>
     \\</div>
     \\<script>
     \\const $=id=>document.getElementById(id);
-    \\let logFilter='all';
-    \\let startTs=Date.now();
+    \\let logFilter='all',selectedTaskId=null,taskDetail=null;
     \\
     \\document.querySelectorAll('.ph-filter').forEach(b=>{
     \\  b.onclick=()=>{
@@ -506,25 +618,94 @@ const DASHBOARD_HTML =
     \\    el.className='log-line log-'+d.level;
     \\    el.dataset.lvl=d.level;
     \\    const ts=new Date(d.ts*1000).toLocaleTimeString('en-GB',{hour12:false});
-    \\    el.innerHTML='<span class="log-ts">'+ts+'</span> <span class="log-lvl">['+d.level+']</span> '+escHtml(d.message);
+    \\    el.innerHTML='<span class="log-ts">'+ts+'</span> <span class="log-lvl">['+d.level+']</span> '+esc(d.message);
     \\    if(logFilter!=='all'&&d.level!==logFilter)el.style.display='none';
     \\    const logs=$('logs');
     \\    logs.appendChild(el);
     \\    if(logs.children.length>500)logs.removeChild(logs.firstChild);
     \\    logs.scrollTop=logs.scrollHeight;
-    \\  }catch(_){}
+    \\  }catch(x){}
     \\};
     \\
-    \\function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+    \\function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
     \\function badge(s){return '<span class="badge badge-'+s+'">'+s+'</span>'}
     \\
     \\const PHASES=['backlog','spec','qa','impl','done','merged'];
-    \\function phaseBar(status){
-    \\  const idx=PHASES.indexOf(status);
-    \\  return '<div class="phase-bar">'+PHASES.map((p,i)=>{
-    \\    const cls=i<idx?'done':i===idx?'current':'';
-    \\    return '<div class="phase-step '+cls+'" title="'+p+'"></div>';
-    \\  }).join('')+'</div>';
+    \\const PHASE_LABELS={backlog:'Backlog',spec:'Spec',qa:'QA',impl:'Implement',done:'Testing',merged:'Merged'};
+    \\
+    \\function phaseTrack(status){
+    \\  const idx=PHASES.indexOf(status==='retry'?'impl':status==='rebase'?'impl':status==='failed'?'impl':status);
+    \\  const isFailed=status==='failed';
+    \\  let h='<div class="phase-track">';
+    \\  PHASES.forEach((p,i)=>{
+    \\    const cls=i<idx?'done':i===idx?(isFailed?'fail':'current'):'';
+    \\    if(i>0)h+='<div class="phase-line'+(i<=idx?' done':'')+'"></div>';
+    \\    h+='<div class="phase-node"><div style="display:flex;flex-direction:column;align-items:center">';
+    \\    h+='<div class="phase-dot '+cls+'"></div>';
+    \\    h+='<div class="phase-lbl '+cls+'">'+PHASE_LABELS[p]+'</div></div></div>';
+    \\  });
+    \\  return h+'</div>';
+    \\}
+    \\
+    \\function openDetail(id){
+    \\  selectedTaskId=id;
+    \\  $('tasks-panel').style.display='none';
+    \\  $('detail-panel').classList.add('open');
+    \\  $('detail-panel').style.gridRow='1/3';
+    \\  $('queue-panel').style.display='none';
+    \\  loadDetail(id);
+    \\}
+    \\
+    \\function closeDetail(){
+    \\  selectedTaskId=null;taskDetail=null;
+    \\  $('detail-panel').classList.remove('open');
+    \\  $('detail-panel').style.gridRow='';
+    \\  $('tasks-panel').style.display='';
+    \\  $('queue-panel').style.display='';
+    \\}
+    \\
+    \\async function loadDetail(id){
+    \\  try{
+    \\    const r=await fetch('/api/tasks/'+id);
+    \\    taskDetail=await r.json();
+    \\    renderDetail();
+    \\  }catch(x){$('detail-hdr').innerHTML='<div class="empty">Failed to load</div>'}
+    \\}
+    \\
+    \\function renderDetail(){
+    \\  const t=taskDetail;if(!t)return;
+    \\  $('detail-hdr').innerHTML='<div class="detail-title">#'+t.id+' '+esc(t.title)+'</div>'
+    \\    +phaseTrack(t.status)
+    \\    +'<div class="detail-meta">'
+    \\    +badge(t.status)
+    \\    +(t.branch?'<span>branch: '+esc(t.branch)+'</span>':'')
+    \\    +(t.attempt>0?'<span>attempt '+t.attempt+'/'+t.max_attempts+'</span>':'')
+    \\    +'<span>by '+esc(t.created_by||'pipeline')+'</span>'
+    \\    +'<span>'+esc(t.created_at)+'</span>'
+    \\    +'</div>';
+    \\  $('detail-desc').textContent=t.description||'No description';
+    \\  if(t.last_error){
+    \\    $('detail-err').style.display='';
+    \\    $('detail-err').textContent=t.last_error;
+    \\  }else{$('detail-err').style.display='none'}
+    \\  const tabs=$('output-tabs');
+    \\  const view=$('output-view');
+    \\  if(!t.outputs||t.outputs.length===0){
+    \\    tabs.innerHTML='';
+    \\    view.innerHTML='<div class="empty">No agent outputs recorded yet</div>';
+    \\    return;
+    \\  }
+    \\  tabs.innerHTML=t.outputs.map((o,i)=>{
+    \\    const exitIcon=o.exit_code===0?'<span class="exit-ok"> ok</span>':'<span class="exit-fail"> x'+o.exit_code+'</span>';
+    \\    return '<button class="output-tab'+(i===0?' active':'')+'" onclick="showOutput('+i+')">'+o.phase+exitIcon+'</button>';
+    \\  }).join('');
+    \\  view.textContent=t.outputs[0].output;
+    \\}
+    \\
+    \\function showOutput(idx){
+    \\  if(!taskDetail||!taskDetail.outputs[idx])return;
+    \\  document.querySelectorAll('.output-tab').forEach((b,i)=>b.classList.toggle('active',i===idx));
+    \\  $('output-view').textContent=taskDetail.outputs[idx].output;
     \\}
     \\
     \\async function refreshTasks(){
@@ -535,31 +716,22 @@ const DASHBOARD_HTML =
     \\    const done=tasks.filter(t=>!['backlog','spec','qa','impl','retry','rebase'].includes(t.status));
     \\    $('task-count').textContent=tasks.length;
     \\    let html='';
-    \\    if(active.length>0){
-    \\      active.forEach(t=>{
-    \\        const isWorking=['spec','qa','impl','retry','rebase'].includes(t.status);
-    \\        const effectiveStatus=t.status==='retry'?'impl':t.status==='rebase'?'impl':t.status;
-    \\        html+='<div class="task-row'+(isWorking?' task-active':'')+'">';
-    \\        html+='<span class="task-id">#'+t.id+'</span>';
-    \\        html+=badge(t.status);
-    \\        html+='<span class="task-title">'+escHtml(t.title)+'</span>';
-    \\        if(t.attempt>0)html+='<span class="task-attempt">'+t.attempt+'/'+t.max_attempts+'</span>';
-    \\        html+='</div>';
-    \\        if(isWorking)html+=phaseBar(effectiveStatus);
-    \\      });
-    \\    }
-    \\    if(done.length>0){
-    \\      done.slice(0,20).forEach(t=>{
-    \\        html+='<div class="task-row">';
-    \\        html+='<span class="task-id">#'+t.id+'</span>';
-    \\        html+=badge(t.status);
-    \\        html+='<span class="task-title">'+escHtml(t.title)+'</span>';
-    \\        html+='</div>';
-    \\      });
-    \\    }
+    \\    const render=t=>{
+    \\      const isActive=['spec','qa','impl','retry','rebase'].includes(t.status);
+    \\      const sel=selectedTaskId===t.id?' selected':'';
+    \\      html+='<div class="task-row'+(isActive?' active-task':'')+sel+'" onclick="openDetail('+t.id+')">';
+    \\      html+='<span class="task-id">#'+t.id+'</span>';
+    \\      html+=badge(t.status);
+    \\      html+='<span class="task-title">'+esc(t.title)+'</span>';
+    \\      if(t.attempt>0)html+='<span class="task-attempt">'+t.attempt+'/'+t.max_attempts+'</span>';
+    \\      html+='</div>';
+    \\    };
+    \\    active.forEach(render);
+    \\    done.slice(0,20).forEach(render);
     \\    if(tasks.length===0)html='<div class="empty">No pipeline tasks yet</div>';
     \\    $('tasks').innerHTML=html;
-    \\  }catch(_){}
+    \\    if(selectedTaskId)loadDetail(selectedTaskId);
+    \\  }catch(x){}
     \\}
     \\
     \\async function refreshQueue(){
@@ -570,10 +742,10 @@ const DASHBOARD_HTML =
     \\    if(q.length===0){$('queue').innerHTML='<div class="empty">Queue empty</div>';return}
     \\    $('queue').innerHTML=q.map(e=>
     \\      '<div class="queue-row">'+badge(e.status)+
-    \\      '<span class="queue-branch">'+escHtml(e.branch)+'</span>'+
+    \\      '<span class="queue-branch">'+esc(e.branch)+'</span>'+
     \\      '<span class="queue-meta">#'+e.task_id+'</span></div>'
     \\    ).join('');
-    \\  }catch(_){}
+    \\  }catch(x){}
     \\}
     \\
     \\async function refreshStatus(){
@@ -592,7 +764,7 @@ const DASHBOARD_HTML =
     \\    $('s-merged').textContent=s.merged_tasks;
     \\    $('s-failed').textContent=s.failed_tasks;
     \\    $('s-total').textContent=s.total_tasks;
-    \\  }catch(_){}
+    \\  }catch(x){}
     \\}
     \\
     \\refreshTasks();refreshQueue();refreshStatus();

@@ -147,6 +147,19 @@ pub const Db = struct {
             \\  queued_at TEXT DEFAULT (datetime('now'))
             \\);
         );
+        try self.sqlite_db.exec(
+            \\CREATE TABLE IF NOT EXISTS task_outputs (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  task_id INTEGER NOT NULL,
+            \\  phase TEXT NOT NULL,
+            \\  output TEXT NOT NULL,
+            \\  exit_code INTEGER DEFAULT 0,
+            \\  created_at TEXT DEFAULT (datetime('now'))
+            \\);
+        );
+        try self.sqlite_db.exec(
+            \\CREATE INDEX IF NOT EXISTS idx_task_outputs_task ON task_outputs(task_id);
+        );
     }
 
     // --- Registered Groups ---
@@ -476,6 +489,45 @@ pub const Db = struct {
             "UPDATE integration_queue SET status = ?1, error_msg = ?2 WHERE id = ?3",
             .{ status, error_msg orelse "", entry_id },
         );
+    }
+
+    // --- Task Outputs ---
+
+    pub fn storeTaskOutput(self: *Db, task_id: i64, phase: []const u8, output: []const u8, exit_code: i64) !void {
+        const truncated = output[0..@min(output.len, 32000)];
+        try self.sqlite_db.execute(
+            "INSERT INTO task_outputs (task_id, phase, output, exit_code) VALUES (?1, ?2, ?3, ?4)",
+            .{ task_id, phase, truncated, exit_code },
+        );
+    }
+
+    pub const TaskOutput = struct {
+        id: i64,
+        phase: []const u8,
+        output: []const u8,
+        exit_code: i64,
+        created_at: []const u8,
+    };
+
+    pub fn getTaskOutputs(self: *Db, allocator: std.mem.Allocator, task_id: i64) ![]TaskOutput {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, phase, output, exit_code, created_at FROM task_outputs WHERE task_id = ?1 ORDER BY created_at ASC",
+            .{task_id},
+        );
+        defer rows.deinit();
+
+        var outputs = std.ArrayList(TaskOutput).init(allocator);
+        for (rows.items) |row| {
+            try outputs.append(.{
+                .id = row.getInt(0) orelse 0,
+                .phase = try allocator.dupe(u8, row.get(1) orelse ""),
+                .output = try allocator.dupe(u8, row.get(2) orelse ""),
+                .exit_code = row.getInt(3) orelse 0,
+                .created_at = try allocator.dupe(u8, row.get(4) orelse ""),
+            });
+        }
+        return outputs.toOwnedSlice();
     }
 };
 
