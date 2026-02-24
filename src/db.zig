@@ -25,6 +25,29 @@ pub const Session = struct {
     created_at: []const u8,
 };
 
+pub const PipelineTask = struct {
+    id: i64,
+    title: []const u8,
+    description: []const u8,
+    repo_path: []const u8,
+    branch: []const u8,
+    status: []const u8,
+    attempt: i64,
+    max_attempts: i64,
+    last_error: []const u8,
+    created_by: []const u8,
+    notify_chat: []const u8,
+    created_at: []const u8,
+};
+
+pub const QueueEntry = struct {
+    id: i64,
+    task_id: i64,
+    branch: []const u8,
+    status: []const u8,
+    queued_at: []const u8,
+};
+
 pub const Db = struct {
     sqlite_db: sqlite.Database,
     allocator: std.mem.Allocator,
@@ -91,6 +114,36 @@ pub const Db = struct {
             \\CREATE TABLE IF NOT EXISTS state (
             \\  key TEXT PRIMARY KEY,
             \\  value TEXT NOT NULL
+            \\);
+        );
+        try self.sqlite_db.exec(
+            \\CREATE TABLE IF NOT EXISTS pipeline_tasks (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  title TEXT NOT NULL,
+            \\  description TEXT NOT NULL,
+            \\  repo_path TEXT NOT NULL,
+            \\  branch TEXT DEFAULT '',
+            \\  status TEXT NOT NULL DEFAULT 'backlog',
+            \\  attempt INTEGER DEFAULT 0,
+            \\  max_attempts INTEGER DEFAULT 3,
+            \\  last_error TEXT DEFAULT '',
+            \\  created_by TEXT DEFAULT '',
+            \\  notify_chat TEXT DEFAULT '',
+            \\  created_at TEXT DEFAULT (datetime('now')),
+            \\  updated_at TEXT DEFAULT (datetime('now'))
+            \\);
+        );
+        try self.sqlite_db.exec(
+            \\CREATE INDEX IF NOT EXISTS idx_pipeline_status ON pipeline_tasks(status);
+        );
+        try self.sqlite_db.exec(
+            \\CREATE TABLE IF NOT EXISTS integration_queue (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  task_id INTEGER NOT NULL,
+            \\  branch TEXT NOT NULL,
+            \\  status TEXT DEFAULT 'queued',
+            \\  error_msg TEXT DEFAULT '',
+            \\  queued_at TEXT DEFAULT (datetime('now'))
             \\);
         );
     }
@@ -223,6 +276,135 @@ pub const Db = struct {
             .{ key, value },
         );
     }
+
+    // --- Pipeline Tasks ---
+
+    pub fn createPipelineTask(self: *Db, title: []const u8, description: []const u8, repo_path: []const u8, created_by: []const u8, notify_chat: []const u8) !i64 {
+        try self.sqlite_db.execute(
+            "INSERT INTO pipeline_tasks (title, description, repo_path, created_by, notify_chat) VALUES (?1, ?2, ?3, ?4, ?5)",
+            .{ title, description, repo_path, created_by, notify_chat },
+        );
+        return self.sqlite_db.lastInsertRowId();
+    }
+
+    pub fn getNextPipelineTask(self: *Db, allocator: std.mem.Allocator) !?PipelineTask {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry') ORDER BY created_at ASC LIMIT 1",
+            .{},
+        );
+        defer rows.deinit();
+        if (rows.items.len == 0) return null;
+        return try rowToPipelineTask(allocator, rows.items[0]);
+    }
+
+    pub fn getPipelineTask(self: *Db, allocator: std.mem.Allocator, task_id: i64) !?PipelineTask {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks WHERE id = ?1",
+            .{task_id},
+        );
+        defer rows.deinit();
+        if (rows.items.len == 0) return null;
+        return try rowToPipelineTask(allocator, rows.items[0]);
+    }
+
+    pub fn updateTaskStatus(self: *Db, task_id: i64, status: []const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+            .{ status, task_id },
+        );
+    }
+
+    pub fn updateTaskBranch(self: *Db, task_id: i64, branch: []const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET branch = ?1, updated_at = datetime('now') WHERE id = ?2",
+            .{ branch, task_id },
+        );
+    }
+
+    pub fn updateTaskError(self: *Db, task_id: i64, err_log: []const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET last_error = ?1, updated_at = datetime('now') WHERE id = ?2",
+            .{ err_log, task_id },
+        );
+    }
+
+    pub fn incrementTaskAttempt(self: *Db, task_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET attempt = attempt + 1, updated_at = datetime('now') WHERE id = ?1",
+            .{task_id},
+        );
+    }
+
+    pub fn getAllPipelineTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks ORDER BY created_at DESC LIMIT ?1",
+            .{limit},
+        );
+        defer rows.deinit();
+
+        var tasks = std.ArrayList(PipelineTask).init(allocator);
+        for (rows.items) |row| {
+            try tasks.append(try rowToPipelineTask(allocator, row));
+        }
+        return tasks.toOwnedSlice();
+    }
+
+    fn rowToPipelineTask(allocator: std.mem.Allocator, row: sqlite.Row) !PipelineTask {
+        return PipelineTask{
+            .id = row.getInt(0) orelse 0,
+            .title = try allocator.dupe(u8, row.get(1) orelse ""),
+            .description = try allocator.dupe(u8, row.get(2) orelse ""),
+            .repo_path = try allocator.dupe(u8, row.get(3) orelse ""),
+            .branch = try allocator.dupe(u8, row.get(4) orelse ""),
+            .status = try allocator.dupe(u8, row.get(5) orelse "backlog"),
+            .attempt = row.getInt(6) orelse 0,
+            .max_attempts = row.getInt(7) orelse 3,
+            .last_error = try allocator.dupe(u8, row.get(8) orelse ""),
+            .created_by = try allocator.dupe(u8, row.get(9) orelse ""),
+            .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
+            .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
+        };
+    }
+
+    // --- Integration Queue ---
+
+    pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8) !void {
+        try self.sqlite_db.execute(
+            "INSERT INTO integration_queue (task_id, branch) VALUES (?1, ?2)",
+            .{ task_id, branch },
+        );
+    }
+
+    pub fn getQueuedBranches(self: *Db, allocator: std.mem.Allocator) ![]QueueEntry {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, task_id, branch, status, queued_at FROM integration_queue WHERE status = 'queued' ORDER BY queued_at ASC",
+            .{},
+        );
+        defer rows.deinit();
+
+        var entries = std.ArrayList(QueueEntry).init(allocator);
+        for (rows.items) |row| {
+            try entries.append(QueueEntry{
+                .id = row.getInt(0) orelse 0,
+                .task_id = row.getInt(1) orelse 0,
+                .branch = try allocator.dupe(u8, row.get(2) orelse ""),
+                .status = try allocator.dupe(u8, row.get(3) orelse "queued"),
+                .queued_at = try allocator.dupe(u8, row.get(4) orelse ""),
+            });
+        }
+        return entries.toOwnedSlice();
+    }
+
+    pub fn updateQueueStatus(self: *Db, entry_id: i64, status: []const u8, error_msg: ?[]const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE integration_queue SET status = ?1, error_msg = ?2 WHERE id = ?3",
+            .{ status, error_msg orelse "", entry_id },
+        );
+    }
 };
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -345,6 +527,78 @@ test "session expiry removes old sessions" {
 
     try std.testing.expect((try db.getSession(alloc, "old")) == null);
     try std.testing.expect((try db.getSession(alloc, "fresh")) != null);
+}
+
+test "pipeline task lifecycle" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // Create tasks
+    const id1 = try db.createPipelineTask("Add feature X", "Detailed description", "/tmp/repo", "alice", "tg:123");
+    const id2 = try db.createPipelineTask("Fix bug Y", "Bug details", "/tmp/repo", "bob", "tg:456");
+    try std.testing.expect(id1 > 0);
+    try std.testing.expect(id2 > id1);
+
+    // Get next task (oldest first)
+    const next = try db.getNextPipelineTask(alloc);
+    try std.testing.expect(next != null);
+    try std.testing.expectEqualStrings("Add feature X", next.?.title);
+    try std.testing.expectEqualStrings("backlog", next.?.status);
+
+    // Update status
+    try db.updateTaskStatus(id1, "spec");
+    try db.updateTaskBranch(id1, "feature/task-1");
+    const updated = (try db.getPipelineTask(alloc, id1)).?;
+    try std.testing.expectEqualStrings("spec", updated.status);
+    try std.testing.expectEqualStrings("feature/task-1", updated.branch);
+
+    // Increment attempt
+    try db.incrementTaskAttempt(id1);
+    const after_inc = (try db.getPipelineTask(alloc, id1)).?;
+    try std.testing.expectEqual(@as(i64, 1), after_inc.attempt);
+
+    // Update error
+    try db.updateTaskError(id1, "test failed: assertion error");
+    const with_err = (try db.getPipelineTask(alloc, id1)).?;
+    try std.testing.expectEqualStrings("test failed: assertion error", with_err.last_error);
+
+    // List all tasks
+    const all = try db.getAllPipelineTasks(alloc, 10);
+    try std.testing.expectEqual(@as(usize, 2), all.len);
+}
+
+test "integration queue operations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    const id1 = try db.createPipelineTask("Task 1", "desc", "/repo", "", "");
+    const id2 = try db.createPipelineTask("Task 2", "desc", "/repo", "", "");
+
+    try db.enqueueForIntegration(id1, "feature/task-1");
+    try db.enqueueForIntegration(id2, "feature/task-2");
+
+    var queued = try db.getQueuedBranches(alloc);
+    try std.testing.expectEqual(@as(usize, 2), queued.len);
+    try std.testing.expectEqualStrings("feature/task-1", queued[0].branch);
+
+    // Mark first as merged
+    try db.updateQueueStatus(queued[0].id, "merged", null);
+    queued = try db.getQueuedBranches(alloc);
+    try std.testing.expectEqual(@as(usize, 1), queued.len);
+    try std.testing.expectEqualStrings("feature/task-2", queued[0].branch);
+
+    // Exclude second
+    try db.updateQueueStatus(queued[0].id, "excluded", "merge conflict");
+    queued = try db.getQueuedBranches(alloc);
+    try std.testing.expectEqual(@as(usize, 0), queued.len);
 }
 
 test "state key-value store" {
