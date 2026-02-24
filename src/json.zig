@@ -518,3 +518,52 @@ test "getInt handles float-to-int coercion" {
     try std.testing.expect(result != null);
     try std.testing.expectEqual(@as(i64, 3), result.?);
 }
+
+// ── stringify tests ────────────────────────────────────────────────────
+
+test "stringify simple string value" {
+    const alloc = std.testing.allocator;
+    const result = try stringify(alloc, Value{ .string = "hello" });
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\"hello\"", result);
+}
+
+test "stringify null" {
+    const alloc = std.testing.allocator;
+    const result = try stringify(alloc, Value{ .null = {} });
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("null", result);
+}
+
+test "stringify object with mixed types round-trips with parse" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.ObjectMap.init(alloc);
+    defer obj.deinit();
+    try obj.put("name", Value{ .string = "borg" });
+    try obj.put("count", Value{ .integer = 1 });
+    try obj.put("active", Value{ .bool = true });
+    const result = try stringify(alloc, Value{ .object = obj });
+    defer alloc.free(result);
+    var reparsed = try parse(alloc, result);
+    defer reparsed.deinit();
+    try std.testing.expectEqualStrings("borg", getString(reparsed.value, "name").?);
+    try std.testing.expectEqual(@as(i64, 1), getInt(reparsed.value, "count").?);
+    try std.testing.expectEqual(true, getBool(reparsed.value, "active").?);
+}
+
+test "stringify nested objects and arrays round-trips with parse" {
+    const alloc = std.testing.allocator;
+    const json_input = "{\"outer\":{\"inner\":\"val\"},\"list\":[1,2,3]}";
+    var parsed = try parse(alloc, json_input);
+    defer parsed.deinit();
+    const result = try stringify(alloc, parsed.value);
+    defer alloc.free(result);
+    var reparsed = try parse(alloc, result);
+    defer reparsed.deinit();
+    const outer = getObject(reparsed.value, "outer");
+    try std.testing.expect(outer != null);
+    try std.testing.expectEqualStrings("val", getString(outer.?, "inner").?);
+    const list = getArray(reparsed.value, "list");
+    try std.testing.expect(list != null);
+    try std.testing.expectEqual(@as(usize, 3), list.?.len);
+}
