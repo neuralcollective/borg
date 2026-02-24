@@ -265,3 +265,163 @@ test "findEnvValue skips comments and blank lines" {
     defer if (v) |val| alloc.free(val);
     try std.testing.expectEqualStrings("value", v.?);
 }
+
+// ── parseWatchedRepos Tests ────────────────────────────────────────────
+
+// AC1: Empty WATCHED_REPOS with no primary repo returns empty slice
+test "parseWatchedRepos: empty env with no primary repo returns empty slice" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "", "", "");
+    try std.testing.expectEqual(@as(usize, 0), repos.len);
+}
+
+// AC2: Empty WATCHED_REPOS with a primary repo returns slice of length 1
+test "parseWatchedRepos: empty env with primary repo returns single self entry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "", "/repo/primary", "zig build test");
+    try std.testing.expectEqual(@as(usize, 1), repos.len);
+    try std.testing.expectEqualStrings("/repo/primary", repos[0].path);
+    try std.testing.expectEqualStrings("zig build test", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+// AC3: Single path in WATCHED_REPOS (no test command)
+test "parseWatchedRepos: single path without test command uses default" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/secondary", "", "");
+    try std.testing.expectEqual(@as(usize, 1), repos.len);
+    try std.testing.expectEqualStrings("/repo/secondary", repos[0].path);
+    try std.testing.expectEqualStrings("make test", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == false);
+}
+
+// AC4: Single path with test command in WATCHED_REPOS
+test "parseWatchedRepos: single path with test command" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/secondary:cargo test", "", "");
+    try std.testing.expectEqual(@as(usize, 1), repos.len);
+    try std.testing.expectEqualStrings("/repo/secondary", repos[0].path);
+    try std.testing.expectEqualStrings("cargo test", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == false);
+}
+
+// AC5: Pipe-delimited multiple paths in WATCHED_REPOS
+test "parseWatchedRepos: pipe-delimited multiple paths with primary repo" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:/repo/a/cmd|/repo/b", "/repo/primary", "zig build test");
+    try std.testing.expectEqual(@as(usize, 3), repos.len);
+    // First entry is the primary repo with is_self = true
+    try std.testing.expectEqualStrings("/repo/primary", repos[0].path);
+    try std.testing.expectEqualStrings("zig build test", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == true);
+    // Second entry: /repo/a with custom test command
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("/repo/a/cmd", repos[1].test_cmd);
+    try std.testing.expect(repos[1].is_self == false);
+    // Third entry: /repo/b with default test command
+    try std.testing.expectEqualStrings("/repo/b", repos[2].path);
+    try std.testing.expectEqualStrings("make test", repos[2].test_cmd);
+    try std.testing.expect(repos[2].is_self == false);
+}
+
+// AC6: WATCHED_REPOS entry matching primary repo is skipped
+test "parseWatchedRepos: entry matching primary repo is skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/primary|/repo/other", "/repo/primary", "zig build test");
+    try std.testing.expectEqual(@as(usize, 2), repos.len);
+    // Primary is first
+    try std.testing.expectEqualStrings("/repo/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self == true);
+    // Only /repo/other should be present, /repo/primary from WATCHED_REPOS is skipped
+    try std.testing.expectEqualStrings("/repo/other", repos[1].path);
+    try std.testing.expect(repos[1].is_self == false);
+}
+
+// E1: Whitespace-only entries are skipped
+test "parseWatchedRepos: whitespace-only entries are skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a|  |/repo/b", "", "");
+    try std.testing.expectEqual(@as(usize, 2), repos.len);
+    try std.testing.expectEqualStrings("/repo/a", repos[0].path);
+    try std.testing.expectEqualStrings("/repo/b", repos[1].path);
+}
+
+// E2: Whitespace around paths is trimmed
+test "parseWatchedRepos: whitespace around paths and commands is trimmed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=  /repo/a : my test cmd  |  /repo/b  ", "", "");
+    try std.testing.expectEqual(@as(usize, 2), repos.len);
+    try std.testing.expectEqualStrings("/repo/a", repos[0].path);
+    try std.testing.expectEqualStrings("my test cmd", repos[0].test_cmd);
+    try std.testing.expectEqualStrings("/repo/b", repos[1].path);
+}
+
+// E3: Entry with colon but empty path is skipped
+test "parseWatchedRepos: entry with colon but empty path is skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=:some_cmd", "", "");
+    try std.testing.expectEqual(@as(usize, 0), repos.len);
+}
+
+// E4: Entry with colon but empty test command gets default
+test "parseWatchedRepos: entry with colon but empty command gets default" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:", "", "");
+    try std.testing.expectEqual(@as(usize, 1), repos.len);
+    try std.testing.expectEqualStrings("/repo/a", repos[0].path);
+    try std.testing.expectEqualStrings("make test", repos[0].test_cmd);
+}
+
+// E5: Trailing pipe produces no extra entry
+test "parseWatchedRepos: trailing pipe produces no extra entry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a|", "", "");
+    try std.testing.expectEqual(@as(usize, 1), repos.len);
+    try std.testing.expectEqualStrings("/repo/a", repos[0].path);
+}
+
+// E6: Primary repo with empty path does not add a self entry
+test "parseWatchedRepos: empty primary repo path does not add self entry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a", "", "some cmd");
+    try std.testing.expectEqual(@as(usize, 1), repos.len);
+    // Only the watched repo, no self entry
+    try std.testing.expectEqualStrings("/repo/a", repos[0].path);
+    try std.testing.expect(repos[0].is_self == false);
+}
