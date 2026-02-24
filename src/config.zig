@@ -38,6 +38,9 @@ pub const Config = struct {
     // WhatsApp config
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
+    // Discord config
+    discord_enabled: bool,
+    discord_token: []const u8,
     allocator: std.mem.Allocator,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
@@ -86,6 +89,8 @@ pub const Config = struct {
             .watched_repos = &.{},
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
+            .discord_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "DISCORD_ENABLED") orelse "false", "true"),
+            .discord_token = getEnv(allocator, env_content, "DISCORD_TOKEN") orelse "",
             .allocator = allocator,
         };
 
