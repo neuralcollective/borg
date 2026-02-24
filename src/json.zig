@@ -122,6 +122,116 @@ test "escapeString handles control characters" {
     try std.testing.expectEqualStrings("\\u0001\\u001f", result);
 }
 
+test "escapeString empty string" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, "");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("", result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "escapeString double quote standalone" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, "\"");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\\"", result);
+}
+
+test "escapeString backslash standalone" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, "\\");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\\\", result);
+}
+
+test "escapeString newline standalone" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, "\n");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\n", result);
+}
+
+test "escapeString carriage return standalone" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, "\r");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\r", result);
+}
+
+test "escapeString tab standalone" {
+    const alloc = std.testing.allocator;
+    const result = try escapeString(alloc, "\t");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\t", result);
+}
+
+test "escapeString control char null 0x00" {
+    const alloc = std.testing.allocator;
+    const input = &[_]u8{0x00};
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\u0000", result);
+}
+
+test "escapeString control char bell 0x07" {
+    const alloc = std.testing.allocator;
+    const input = &[_]u8{0x07};
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\u0007", result);
+}
+
+test "escapeString control char form feed 0x0C" {
+    const alloc = std.testing.allocator;
+    const input = &[_]u8{0x0C};
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\u000c", result);
+}
+
+test "escapeString control char 0x1F" {
+    const alloc = std.testing.allocator;
+    const input = &[_]u8{0x1F};
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\u001f", result);
+}
+
+test "escapeString normal ASCII passthrough" {
+    const alloc = std.testing.allocator;
+    const input = "hello world 123!@#";
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "escapeString multi-byte UTF-8 passthrough" {
+    const alloc = std.testing.allocator;
+    const input = "héllo 世界";
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings(input, result);
+    try std.testing.expectEqual(input.len, result.len);
+}
+
+test "escapeString mixed content" {
+    const alloc = std.testing.allocator;
+    // Mix of: normal text, double quote, backslash, newline, carriage return, tab, control char 0x07
+    const input = "hi\"there\\foo\nbar\rbaz\tEnd" ++ &[_]u8{0x07};
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("hi\\\"there\\\\foo\\nbar\\rbaz\\tEnd\\u0007", result);
+}
+
+test "escapeString boundary 0x1F vs 0x20" {
+    const alloc = std.testing.allocator;
+    // 0x1F should be escaped, 0x20 (space) should pass through
+    const input = &[_]u8{ 0x1F, 0x20 };
+    const result = try escapeString(alloc, input);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("\\u001f ", result);
+}
+
 test "getString returns null for missing key and wrong type" {
     const alloc = std.testing.allocator;
     var parsed = try parse(alloc, "{\"count\":42,\"flag\":true}");
