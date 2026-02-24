@@ -13,6 +13,8 @@ const Config = @import("config.zig").Config;
 
 const TICK_INTERVAL_S = 30;
 const AGENT_TIMEOUT_S = 600;
+const MAX_BACKLOG_SIZE = 5;
+const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
 
 pub const AgentPersona = enum {
     manager,
@@ -28,6 +30,7 @@ pub const Pipeline = struct {
     config: *Config,
     running: std.atomic.Value(bool),
     last_release_ts: i64,
+    last_seed_ts: i64,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -44,6 +47,7 @@ pub const Pipeline = struct {
             .config = config,
             .running = std.atomic.Value(bool).init(true),
             .last_release_ts = std.time.timestamp(),
+            .last_seed_ts = 0,
         };
     }
 
@@ -70,7 +74,11 @@ pub const Pipeline = struct {
     }
 
     fn tick(self: *Pipeline) !void {
-        const task = (try self.db.getNextPipelineTask(self.allocator)) orelse return;
+        const task = (try self.db.getNextPipelineTask(self.allocator)) orelse {
+            // Nothing to do - look for more work
+            try self.seedIfIdle();
+            return;
+        };
 
         std.log.info("Pipeline processing task #{d} [{s}]: {s}", .{ task.id, task.status, task.title });
 
@@ -82,6 +90,106 @@ pub const Pipeline = struct {
             try self.runQaPhase(task);
         } else if (std.mem.eql(u8, task.status, "impl") or std.mem.eql(u8, task.status, "retry")) {
             try self.runImplPhase(task);
+        }
+    }
+
+    fn seedIfIdle(self: *Pipeline) !void {
+        const now = std.time.timestamp();
+        if (now - self.last_seed_ts < SEED_COOLDOWN_S) return;
+
+        // Don't seed if there are already active tasks
+        const active = try self.db.getActivePipelineTaskCount();
+        if (active >= MAX_BACKLOG_SIZE) return;
+
+        std.log.info("Pipeline idle, scanning repo for improvements...", .{});
+        self.last_seed_ts = now;
+
+        self.config.refreshOAuthToken();
+
+        // Run a seeder agent against the repo to discover refactoring tasks
+        var prompt_buf = std.ArrayList(u8).init(self.allocator);
+        defer prompt_buf.deinit();
+        const w = prompt_buf.writer();
+
+        try w.writeAll(
+            \\Analyze this codebase and identify 1-3 concrete, small improvements.
+            \\Focus on refactoring and quality - NOT new features.
+            \\
+            \\Good tasks: extract duplicated code, improve error handling for a specific
+            \\function, simplify a complex conditional, add missing test coverage for an
+            \\edge case, fix a subtle bug, improve a variable name for clarity.
+            \\
+            \\Bad tasks: add new features, rewrite entire modules, add documentation,
+            \\change the architecture, add dependencies.
+            \\
+            \\For each improvement, output EXACTLY this format (one per task):
+            \\
+            \\TASK_START
+            \\TITLE: <short imperative title, max 80 chars>
+            \\DESCRIPTION: <2-4 sentences explaining what to change and why>
+            \\TASK_END
+            \\
+            \\Output ONLY the task blocks above. No other text.
+        );
+
+        const result = self.spawnAgent(.manager, prompt_buf.items, self.config.pipeline_repo) catch |err| {
+            std.log.err("Seed agent failed: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(result.output);
+        defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        // Parse TASK_START/TASK_END blocks from output
+        var created: u32 = 0;
+        var remaining = result.output;
+        while (std.mem.indexOf(u8, remaining, "TASK_START")) |start_pos| {
+            remaining = remaining[start_pos + "TASK_START".len ..];
+            const end_pos = std.mem.indexOf(u8, remaining, "TASK_END") orelse break;
+            const block = std.mem.trim(u8, remaining[0..end_pos], &[_]u8{ ' ', '\t', '\n', '\r' });
+            remaining = remaining[end_pos + "TASK_END".len ..];
+
+            // Extract TITLE: and DESCRIPTION: lines
+            var title: []const u8 = "";
+            var desc_start: usize = 0;
+            const desc_end: usize = block.len;
+            var lines = std.mem.splitScalar(u8, block, '\n');
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
+                if (std.mem.startsWith(u8, trimmed, "TITLE:")) {
+                    title = std.mem.trim(u8, trimmed["TITLE:".len..], &[_]u8{ ' ', '\t' });
+                } else if (std.mem.startsWith(u8, trimmed, "DESCRIPTION:")) {
+                    // Everything from DESCRIPTION: to end of block
+                    desc_start = @intFromPtr(trimmed.ptr) - @intFromPtr(block.ptr) + "DESCRIPTION:".len;
+                    break;
+                }
+            }
+
+            if (title.len == 0) continue;
+            const description = if (desc_start < desc_end)
+                std.mem.trim(u8, block[desc_start..desc_end], &[_]u8{ ' ', '\t', '\n', '\r' })
+            else
+                title;
+
+            _ = self.db.createPipelineTask(
+                title,
+                description,
+                self.config.pipeline_repo,
+                "seeder",
+                self.config.pipeline_admin_chat,
+            ) catch |err| {
+                std.log.err("Failed to create seeded task: {}", .{err});
+                continue;
+            };
+
+            created += 1;
+            if (active + created >= MAX_BACKLOG_SIZE) break;
+        }
+
+        if (created > 0) {
+            std.log.info("Seeded {d} new task(s) from codebase analysis", .{created});
+            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Pipeline seeded {d} new task(s) from codebase analysis", .{created}) catch return);
+        } else {
+            std.log.info("Seed scan found no actionable improvements", .{});
         }
     }
 

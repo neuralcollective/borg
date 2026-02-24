@@ -369,6 +369,17 @@ pub const Db = struct {
         };
     }
 
+    pub fn getActivePipelineTaskCount(self: *Db) !i64 {
+        var rows = try self.sqlite_db.query(
+            self.allocator,
+            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry')",
+            .{},
+        );
+        defer rows.deinit();
+        if (rows.items.len == 0) return 0;
+        return rows.items[0].getInt(0) orelse 0;
+    }
+
     // --- Integration Queue ---
 
     pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8) !void {

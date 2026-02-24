@@ -37,8 +37,8 @@ pub const Config = struct {
         const oauth = readOAuthToken(allocator, creds_path) orelse
             getEnv(allocator, env_content, "CLAUDE_CODE_OAUTH_TOKEN") orelse "";
 
-        const release_hours_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_HOURS") orelse "6";
-        const release_hours = std.fmt.parseInt(u32, release_hours_str, 10) catch 6;
+        const release_hours_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_HOURS") orelse "3";
+        const release_hours = std.fmt.parseInt(u32, release_hours_str, 10) catch 3;
 
         const collection_ms_str = getEnv(allocator, env_content, "COLLECTION_WINDOW_MS") orelse "3000";
         const cooldown_ms_str = getEnv(allocator, env_content, "COOLDOWN_MS") orelse "5000";
