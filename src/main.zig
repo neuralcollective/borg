@@ -2,7 +2,9 @@ const std = @import("std");
 const Config = @import("config.zig").Config;
 const db_mod = @import("db.zig");
 const Db = db_mod.Db;
-const Telegram = @import("telegram.zig").Telegram;
+const tg_mod = @import("telegram.zig");
+const Telegram = tg_mod.Telegram;
+const TgMessage = tg_mod.TgMessage;
 const docker_mod = @import("docker.zig");
 const Docker = docker_mod.Docker;
 const json_mod = @import("json.zig");
@@ -10,7 +12,7 @@ const json_mod = @import("json.zig");
 const POLL_INTERVAL_MS = 1000;
 
 const GroupState = struct {
-    last_agent_timestamp: []const u8,
+    last_agent_timestamp: ?[]const u8,
     consecutive_errors: u32,
 };
 
@@ -19,18 +21,17 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = try Config.load(allocator);
+    var config = try Config.load(allocator);
 
     if (config.telegram_token.len == 0) {
-        std.log.err("TELEGRAM_BOT_TOKEN not set in .env", .{});
+        std.log.err("TELEGRAM_BOT_TOKEN not set", .{});
         return;
     }
     if (config.oauth_token.len == 0) {
-        std.log.err("CLAUDE_CODE_OAUTH_TOKEN not set in .env", .{});
+        std.log.err("OAuth token not found (check ~/.claude/.credentials.json or CLAUDE_CODE_OAUTH_TOKEN in .env)", .{});
         return;
     }
 
-    // Ensure data directories
     std.fs.cwd().makePath("store") catch {};
     std.fs.cwd().makePath("data/sessions") catch {};
     std.fs.cwd().makePath("data/ipc") catch {};
@@ -44,21 +45,24 @@ pub fn main() !void {
     var docker = Docker.init(allocator);
     docker.cleanupOrphans() catch {};
 
-    // Load registered groups
-    const groups = try db.getAllGroups(allocator);
-    std.log.info("Borg running | trigger: @{s} | groups: {d}", .{ config.assistant_name, groups.len });
+    var groups_list = std.ArrayList(db_mod.RegisteredGroup).init(allocator);
+    defer groups_list.deinit();
+    {
+        const loaded = try db.getAllGroups(allocator);
+        try groups_list.appendSlice(loaded);
+        allocator.free(loaded);
+    }
+    std.log.info("Borg online | assistant: {s} | groups: {d}", .{ config.assistant_name, groups_list.items.len });
 
-    // Per-group state
     var group_states = std.StringHashMap(GroupState).init(allocator);
     defer group_states.deinit();
-    for (groups) |group| {
+    for (groups_list.items) |group| {
         try group_states.put(group.jid, GroupState{
-            .last_agent_timestamp = "",
+            .last_agent_timestamp = null,
             .consecutive_errors = 0,
         });
     }
 
-    // Main loop
     while (true) {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
@@ -66,7 +70,7 @@ pub fn main() !void {
 
         db.expireSessions(config.session_max_age_hours) catch {};
 
-        const messages = tg.getUpdates() catch |err| {
+        const messages = tg.getUpdates(cycle_alloc) catch |err| {
             std.log.err("Telegram poll error: {}", .{err});
             std.time.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
             continue;
@@ -75,7 +79,6 @@ pub fn main() !void {
         for (messages) |msg| {
             const chat_jid = try std.fmt.allocPrint(cycle_alloc, "tg:{s}", .{msg.chat_id});
 
-            // Store every message
             db.storeMessage(.{
                 .id = msg.message_id,
                 .chat_jid = chat_jid,
@@ -85,13 +88,21 @@ pub fn main() !void {
                 .timestamp = try formatTimestamp(cycle_alloc, msg.date),
                 .is_from_me = false,
             }) catch |err| {
-                std.log.err("Failed to store message: {}", .{err});
+                std.log.err("Store message: {}", .{err});
                 continue;
             };
 
+            // Handle commands
+            if (msg.text.len > 0 and msg.text[0] == '/') {
+                handleCommand(allocator, &db, &tg, msg, chat_jid, &groups_list, &group_states, &config) catch |err| {
+                    std.log.err("Command error: {}", .{err});
+                };
+                continue;
+            }
+
             // Check if registered
             var registered_group: ?db_mod.RegisteredGroup = null;
-            for (groups) |g| {
+            for (groups_list.items) |g| {
                 if (std.mem.eql(u8, g.jid, chat_jid)) {
                     registered_group = g;
                     break;
@@ -106,15 +117,18 @@ pub fn main() !void {
                 }
             }
 
-            std.log.info("Processing: {s} from {s}", .{ msg.text[0..@min(msg.text.len, 50)], msg.sender_name });
+            std.log.info("Triggered: \"{s}\" from {s}", .{ msg.text[0..@min(msg.text.len, 60)], msg.sender_name });
             tg.sendTyping(msg.chat_id) catch {};
 
-            // Get pending messages
             const state = group_states.get(chat_jid) orelse continue;
-            const pending = db.getMessagesSince(cycle_alloc, chat_jid, state.last_agent_timestamp) catch continue;
+            const since = state.last_agent_timestamp orelse "";
+            const pending = db.getMessagesSince(cycle_alloc, chat_jid, since) catch continue;
             if (pending.len == 0) continue;
 
-            const prompt = try formatPrompt(cycle_alloc, pending);
+            // Refresh OAuth token before each agent run (handles rotation)
+            config.refreshOAuthToken();
+
+            const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
             const session_id = db.getSession(cycle_alloc, group.folder) catch null;
 
             const result = runAgent(allocator, &docker, config, group, prompt, session_id) catch |err| {
@@ -123,7 +137,8 @@ pub fn main() !void {
                     s.consecutive_errors += 1;
                     if (s.consecutive_errors >= config.max_consecutive_errors) {
                         s.consecutive_errors = 0;
-                        s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch "";
+                        if (s.last_agent_timestamp) |old| allocator.free(old);
+                        s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
                     }
                 }
                 continue;
@@ -133,7 +148,8 @@ pub fn main() !void {
 
             if (group_states.getPtr(chat_jid)) |s| {
                 s.consecutive_errors = 0;
-                s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch "";
+                if (s.last_agent_timestamp) |old| allocator.free(old);
+                s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
             }
 
             if (result.new_session_id) |new_sid| {
@@ -141,14 +157,94 @@ pub fn main() !void {
             }
 
             if (result.output.len > 0) {
+                db.storeMessage(.{
+                    .id = try std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}),
+                    .chat_jid = chat_jid,
+                    .sender = "borg",
+                    .sender_name = config.assistant_name,
+                    .content = result.output,
+                    .timestamp = try formatTimestamp(cycle_alloc, std.time.timestamp()),
+                    .is_from_me = true,
+                }) catch {};
+
                 tg.sendMessage(msg.chat_id, result.output, msg.message_id) catch |err| {
-                    std.log.err("Failed to send response: {}", .{err});
+                    std.log.err("Send response: {}", .{err});
                 };
             }
         }
 
         std.time.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
     }
+}
+
+fn handleCommand(
+    allocator: std.mem.Allocator,
+    db: *Db,
+    tg: *Telegram,
+    msg: TgMessage,
+    chat_jid: []const u8,
+    groups_list: *std.ArrayList(db_mod.RegisteredGroup),
+    group_states: *std.StringHashMap(GroupState),
+    config: *Config,
+) !void {
+    if (std.mem.startsWith(u8, msg.text, "/register")) {
+        for (groups_list.items) |g| {
+            if (std.mem.eql(u8, g.jid, chat_jid)) {
+                try tg.sendMessage(msg.chat_id, "Already registered.", msg.message_id);
+                return;
+            }
+        }
+
+        const folder = try sanitizeFolder(allocator, msg.chat_title);
+        const trigger = try std.fmt.allocPrint(allocator, "@{s}", .{config.assistant_name});
+        const jid_dupe = try allocator.dupe(u8, chat_jid);
+        const name_dupe = try allocator.dupe(u8, msg.chat_title);
+
+        try db.registerGroup(jid_dupe, name_dupe, folder, trigger, true);
+
+        try groups_list.append(db_mod.RegisteredGroup{
+            .jid = jid_dupe,
+            .name = name_dupe,
+            .folder = folder,
+            .trigger = trigger,
+            .requires_trigger = true,
+        });
+        try group_states.put(jid_dupe, GroupState{
+            .last_agent_timestamp = null,
+            .consecutive_errors = 0,
+        });
+
+        var buf: [256]u8 = undefined;
+        const reply = try std.fmt.bufPrint(&buf, "Registered! Mention @{s} to talk to me.", .{config.assistant_name});
+        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+        std.log.info("Registered: {s} ({s})", .{ msg.chat_title, chat_jid });
+    } else if (std.mem.startsWith(u8, msg.text, "/chatid")) {
+        var buf: [256]u8 = undefined;
+        const reply = try std.fmt.bufPrint(&buf, "Chat: `{s}`\nType: {s}\nName: {s}", .{ chat_jid, msg.chat_type, msg.chat_title });
+        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+    } else if (std.mem.startsWith(u8, msg.text, "/ping")) {
+        try tg.sendMessage(msg.chat_id, "Borg online.", msg.message_id);
+    } else if (std.mem.startsWith(u8, msg.text, "/help") or std.mem.startsWith(u8, msg.text, "/start")) {
+        try tg.sendMessage(msg.chat_id, "/register - Register this chat\n/chatid - Show chat ID\n/ping - Check status", msg.message_id);
+    }
+}
+
+fn sanitizeFolder(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    for (name) |ch| {
+        if (std.ascii.isAlphanumeric(ch)) {
+            try buf.append(std.ascii.toLower(ch));
+        } else if (ch == ' ' or ch == '-' or ch == '_') {
+            if (buf.items.len > 0 and buf.items[buf.items.len - 1] != '-') {
+                try buf.append('-');
+            }
+        }
+    }
+    while (buf.items.len > 0 and buf.items[buf.items.len - 1] == '-') {
+        _ = buf.pop();
+    }
+    if (buf.items.len == 0) try buf.appendSlice("chat");
+    return buf.toOwnedSlice();
 }
 
 const AgentResult = struct {
@@ -168,7 +264,6 @@ fn runAgent(
     defer arena.deinit();
     const tmp = arena.allocator();
 
-    // Build container input JSON
     var input_json = std.ArrayList(u8).init(tmp);
     const escaped_prompt = try json_mod.escapeString(tmp, prompt);
     try input_json.writer().print("{{\"prompt\":\"{s}\"", .{escaped_prompt});
@@ -177,12 +272,10 @@ fn runAgent(
     }
     try input_json.writer().print(",\"model\":\"{s}\",\"assistantName\":\"{s}\"}}", .{ config.model, config.assistant_name });
 
-    // Container name
     var name_buf: [128]u8 = undefined;
     const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}", .{ group.folder, std.time.timestamp() });
 
-    // Env vars
-    var oauth_buf: [2048]u8 = undefined;
+    var oauth_buf: [4096]u8 = undefined;
     const oauth_env = try std.fmt.bufPrint(&oauth_buf, "CLAUDE_CODE_OAUTH_TOKEN={s}", .{config.oauth_token});
     var model_buf: [256]u8 = undefined;
     const model_env = try std.fmt.bufPrint(&model_buf, "CLAUDE_MODEL={s}", .{config.model});
@@ -194,7 +287,6 @@ fn runAgent(
         "NODE_OPTIONS=--max-old-space-size=384",
     };
 
-    // Bind mounts
     var cwd_buf: [512]u8 = undefined;
     const cwd = try std.fs.cwd().realpath(".", &cwd_buf);
 
@@ -217,6 +309,8 @@ fn runAgent(
         ipc_bind,
     };
 
+    std.log.info("Spawning agent: {s}", .{container_name});
+
     var run_result = try docker.runWithStdio(docker_mod.ContainerConfig{
         .image = config.container_image,
         .name = container_name,
@@ -225,7 +319,9 @@ fn runAgent(
     }, input_json.items);
     defer run_result.deinit();
 
-    // Parse NDJSON output
+    std.log.info("Agent done (exit={d}, {d} bytes)", .{ run_result.exit_code, run_result.stdout.len });
+
+    // Parse NDJSON output from Claude Code
     var output_text = std.ArrayList(u8).init(allocator);
     var new_session_id: ?[]const u8 = null;
 
@@ -242,7 +338,11 @@ fn runAgent(
                 output_text.clearRetainingCapacity();
                 try output_text.appendSlice(text);
             }
-        } else if (std.mem.eql(u8, msg_type, "session_update")) {
+            if (json_mod.getString(parsed.value, "session_id")) |sid| {
+                if (new_session_id) |old| allocator.free(old);
+                new_session_id = try allocator.dupe(u8, sid);
+            }
+        } else if (std.mem.eql(u8, msg_type, "system")) {
             if (json_mod.getString(parsed.value, "session_id")) |sid| {
                 if (new_session_id) |old| allocator.free(old);
                 new_session_id = try allocator.dupe(u8, sid);
@@ -256,12 +356,17 @@ fn runAgent(
     };
 }
 
-fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message) ![]const u8 {
+fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, assistant_name: []const u8) ![]const u8 {
     var buf = std.ArrayList(u8).init(allocator);
+    try buf.writer().print("You are {s}, a helpful AI assistant in a group chat. Respond naturally and concisely.\n\nRecent messages:\n", .{assistant_name});
     for (messages) |msg| {
-        if (msg.is_from_me) continue;
-        try buf.writer().print("[{s}] {s}: {s}\n", .{ msg.timestamp, msg.sender_name, msg.content });
+        if (msg.is_from_me) {
+            try buf.writer().print("[{s}] {s} (you): {s}\n", .{ msg.timestamp, msg.sender_name, msg.content });
+        } else {
+            try buf.writer().print("[{s}] {s}: {s}\n", .{ msg.timestamp, msg.sender_name, msg.content });
+        }
     }
+    try buf.appendSlice("\nRespond to the latest message. Be concise.");
     return buf.toOwnedSlice();
 }
 
@@ -307,4 +412,16 @@ test "formatTimestamp" {
     try std.testing.expect(ts.len > 0);
     try std.testing.expect(ts[4] == '-');
     try std.testing.expect(ts[10] == 'T');
+}
+
+test "sanitizeFolder" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const r1 = try sanitizeFolder(a, "My Test Group");
+    try std.testing.expectEqualStrings("my-test-group", r1);
+    const r2 = try sanitizeFolder(a, "hello");
+    try std.testing.expectEqualStrings("hello", r2);
+    const r3 = try sanitizeFolder(a, "---");
+    try std.testing.expectEqualStrings("chat", r3);
 }
