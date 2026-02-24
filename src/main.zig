@@ -1102,7 +1102,7 @@ fn formatTimestamp(allocator: std.mem.Allocator, unix_ts: i64) ![]const u8 {
 
 fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, assistant_name: []const u8) ![]const u8 {
     var buf = std.ArrayList(u8).init(allocator);
-    try buf.writer().print("You are {s}, a helpful AI assistant in a group chat. Respond naturally and concisely.\n\nRecent messages:\n", .{assistant_name});
+    try buf.writer().print("You are {s}. You always refer to yourself using plural pronouns (we/us/our, never I/me/my). You are a collective. Respond naturally and concisely.\n\nRecent messages:\n", .{assistant_name});
     for (messages) |m| {
         if (m.is_from_me) {
             try buf.writer().print("[{s}] {s} (you): {s}\n", .{ m.timestamp, m.sender_name, m.content });

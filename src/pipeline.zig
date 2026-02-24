@@ -523,6 +523,9 @@ pub const Pipeline = struct {
                 try self.db.updateTaskStatus(entry.task_id, "failed");
                 try self.db.updateTaskError(entry.task_id, "Excluded from release: merge conflict");
                 try excluded.append(entry.branch);
+                if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" excluded from release: merge conflict.", .{ task.id, task.title }) catch continue);
+                }
                 continue;
             }
 
@@ -542,6 +545,9 @@ pub const Pipeline = struct {
                 try self.db.updateTaskStatus(entry.task_id, "failed");
                 try self.db.updateTaskError(entry.task_id, "Excluded from release: integration tests failed");
                 try excluded.append(entry.branch);
+                if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" excluded from release: tests failed.", .{ task.id, task.title }) catch continue);
+                }
                 continue;
             }
 
@@ -549,6 +555,11 @@ pub const Pipeline = struct {
             try self.db.updateQueueStatus(entry.id, "merged", null);
             try self.db.updateTaskStatus(entry.task_id, "merged");
             try merged.append(entry.branch);
+
+            // Notify the task's originating chat
+            if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged to main.", .{ task.id, task.title }) catch continue);
+            }
         }
 
         if (merged.items.len == 0) {
