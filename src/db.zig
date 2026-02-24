@@ -393,6 +393,31 @@ pub const Db = struct {
         };
     }
 
+    pub const PipelineStats = struct {
+        active: i64,
+        merged: i64,
+        failed: i64,
+        total: i64,
+    };
+
+    pub fn getPipelineStats(self: *Db) !PipelineStats {
+        var total_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks", .{});
+        defer total_rows.deinit();
+        var active_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')", .{});
+        defer active_rows.deinit();
+        var merged_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks WHERE status = 'merged'", .{});
+        defer merged_rows.deinit();
+        var failed_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks WHERE status = 'failed'", .{});
+        defer failed_rows.deinit();
+
+        return .{
+            .total = if (total_rows.items.len > 0) total_rows.items[0].getInt(0) orelse 0 else 0,
+            .active = if (active_rows.items.len > 0) active_rows.items[0].getInt(0) orelse 0 else 0,
+            .merged = if (merged_rows.items.len > 0) merged_rows.items[0].getInt(0) orelse 0 else 0,
+            .failed = if (failed_rows.items.len > 0) failed_rows.items[0].getInt(0) orelse 0 else 0,
+        };
+    }
+
     pub fn getActivePipelineTaskCount(self: *Db) !i64 {
         var rows = try self.sqlite_db.query(
             self.allocator,
