@@ -1024,9 +1024,9 @@ fn handleCommand(
             \\*Pipeline Info*
             \\Repo: {s}
             \\Test cmd: {s}
-            \\Release interval: {d}h
+            \\Release interval: {d}m
             \\Model: {s}
-        , .{ config.pipeline_repo, config.pipeline_test_cmd, config.release_interval_hours, config.model });
+        , .{ config.pipeline_repo, config.pipeline_test_cmd, config.release_interval_mins, config.model });
         reply(sender, msg, buf.items);
     } else if (std.mem.startsWith(u8, msg.text, "/chatid")) {
         var buf: [256]u8 = undefined;
@@ -1136,7 +1136,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .pipeline_test_cmd = "echo ok",
         .pipeline_lint_cmd = "",
         .pipeline_admin_chat = "",
-        .release_interval_hours = 6,
+        .release_interval_mins = 180,
         .collection_window_ms = 3000,
         .cooldown_ms = 5000,
         .agent_timeout_s = 600,
