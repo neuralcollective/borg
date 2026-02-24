@@ -1,5 +1,11 @@
 const std = @import("std");
 
+pub const RepoConfig = struct {
+    path: []const u8,
+    test_cmd: []const u8,
+    is_self: bool, // true for primary repo (triggers self-update)
+};
+
 pub const Config = struct {
     telegram_token: []const u8,
     oauth_token: []const u8,
@@ -27,6 +33,8 @@ pub const Config = struct {
     // Web dashboard
     web_port: u16,
     dashboard_dist_dir: []const u8,
+    // Multi-repo
+    watched_repos: []RepoConfig,
     // WhatsApp config
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
@@ -51,7 +59,7 @@ pub const Config = struct {
         const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
         const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
 
-        return Config{
+        var config = Config{
             .telegram_token = getEnv(allocator, env_content, "TELEGRAM_BOT_TOKEN") orelse "",
             .oauth_token = oauth,
             .assistant_name = getEnv(allocator, env_content, "ASSISTANT_NAME") orelse "Borg",
@@ -75,10 +83,23 @@ pub const Config = struct {
             .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
             .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
             .dashboard_dist_dir = getEnv(allocator, env_content, "DASHBOARD_DIST_DIR") orelse try std.fmt.allocPrint(allocator, "{s}/dashboard/dist", .{getEnv(allocator, env_content, "PIPELINE_REPO") orelse "."}),
+            .watched_repos = &.{},
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .allocator = allocator,
         };
+
+        // Build watched_repos list
+        config.watched_repos = try parseWatchedRepos(allocator, env_content, config.pipeline_repo, config.pipeline_test_cmd);
+
+        return config;
+    }
+
+    pub fn getTestCmdForRepo(self: *Config, repo_path: []const u8) []const u8 {
+        for (self.watched_repos) |rc| {
+            if (std.mem.eql(u8, rc.path, repo_path)) return rc.test_cmd;
+        }
+        return self.pipeline_test_cmd;
     }
 
     /// Re-read OAuth token from credentials file (handles token rotation)
@@ -88,6 +109,47 @@ pub const Config = struct {
         }
     }
 };
+
+fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, primary_repo: []const u8, primary_test_cmd: []const u8) ![]RepoConfig {
+    var repos = std.ArrayList(RepoConfig).init(allocator);
+
+    // Primary repo always first
+    if (primary_repo.len > 0) {
+        try repos.append(.{ .path = primary_repo, .test_cmd = primary_test_cmd, .is_self = true });
+    }
+
+    // Parse WATCHED_REPOS: pipe-delimited, each entry is path:test_cmd
+    const watched = getEnv(allocator, env_content, "WATCHED_REPOS") orelse "";
+    if (watched.len > 0) {
+        var entries = std.mem.splitScalar(u8, watched, '|');
+        while (entries.next()) |entry| {
+            const trimmed = std.mem.trim(u8, entry, &[_]u8{ ' ', '\t' });
+            if (trimmed.len == 0) continue;
+
+            // Skip if same as primary
+            if (std.mem.indexOf(u8, trimmed, ":")) |colon| {
+                const path = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
+                const cmd = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
+                if (path.len == 0) continue;
+                if (std.mem.eql(u8, path, primary_repo)) continue;
+                try repos.append(.{
+                    .path = try allocator.dupe(u8, path),
+                    .test_cmd = if (cmd.len > 0) try allocator.dupe(u8, cmd) else "make test",
+                    .is_self = false,
+                });
+            } else {
+                if (std.mem.eql(u8, trimmed, primary_repo)) continue;
+                try repos.append(.{
+                    .path = try allocator.dupe(u8, trimmed),
+                    .test_cmd = "make test",
+                    .is_self = false,
+                });
+            }
+        }
+    }
+
+    return repos.toOwnedSlice();
+}
 
 /// Read from .env file content, falling back to process environment.
 /// .env values are NOT loaded into process.env (security: keeps secrets off child processes).

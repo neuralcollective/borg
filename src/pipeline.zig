@@ -15,6 +15,7 @@ const TICK_INTERVAL_S = 30;
 const AGENT_TIMEOUT_S = 600;
 const MAX_BACKLOG_SIZE = 5;
 const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
+const MAX_PARALLEL_AGENTS = 4;
 
 pub const AgentPersona = enum {
     manager,
@@ -32,7 +33,12 @@ pub const Pipeline = struct {
     update_ready: std.atomic.Value(bool),
     last_release_ts: i64,
     last_seed_ts: i64,
-    startup_head: [40]u8,
+    startup_heads: std.StringHashMap([40]u8),
+
+    // Pipelining: concurrent phase processing
+    inflight_tasks: std.AutoHashMap(i64, void),
+    inflight_mu: std.Thread.Mutex,
+    active_agents: std.atomic.Value(u32),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -41,8 +47,12 @@ pub const Pipeline = struct {
         tg: *Telegram,
         config: *Config,
     ) Pipeline {
-        var git = Git.init(allocator, config.pipeline_repo);
-        const head = git.revParseHead() catch [_]u8{0} ** 40;
+        var heads = std.StringHashMap([40]u8).init(allocator);
+        for (config.watched_repos) |repo| {
+            var git = Git.init(allocator, repo.path);
+            const head = git.revParseHead() catch [_]u8{0} ** 40;
+            heads.put(repo.path, head) catch {};
+        }
 
         return .{
             .allocator = allocator,
@@ -54,12 +64,15 @@ pub const Pipeline = struct {
             .update_ready = std.atomic.Value(bool).init(false),
             .last_release_ts = std.time.timestamp(),
             .last_seed_ts = 0,
-            .startup_head = head,
+            .startup_heads = heads,
+            .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
+            .inflight_mu = .{},
+            .active_agents = std.atomic.Value(u32).init(0),
         };
     }
 
     pub fn run(self: *Pipeline) void {
-        std.log.info("Pipeline thread started for repo: {s}", .{self.config.pipeline_repo});
+        std.log.info("Pipeline thread started for {d} repo(s)", .{self.config.watched_repos.len});
 
         while (self.running.load(.acquire)) {
             self.tick() catch |err| {
@@ -73,6 +86,15 @@ pub const Pipeline = struct {
             std.time.sleep(TICK_INTERVAL_S * std.time.ns_per_s);
         }
 
+        // Wait for running agents to finish (up to 30s)
+        const deadline = std.time.timestamp() + 30;
+        while (self.active_agents.load(.acquire) > 0 and std.time.timestamp() < deadline) {
+            std.time.sleep(1 * std.time.ns_per_s);
+        }
+        if (self.active_agents.load(.acquire) > 0) {
+            std.log.warn("Pipeline stopping with {d} agents still running", .{self.active_agents.load(.acquire)});
+        }
+
         std.log.info("Pipeline thread stopped", .{});
     }
 
@@ -80,25 +102,92 @@ pub const Pipeline = struct {
         self.running.store(false, .release);
     }
 
-    fn tick(self: *Pipeline) !void {
-        const task = (try self.db.getNextPipelineTask(self.allocator)) orelse {
-            // Nothing to do - look for more work
-            try self.seedIfIdle();
-            return;
-        };
+    pub fn getActiveAgentCount(self: *Pipeline) u32 {
+        return self.active_agents.load(.acquire);
+    }
 
-        std.log.info("Pipeline processing task #{d} [{s}]: {s}", .{ task.id, task.status, task.title });
+    fn tick(self: *Pipeline) !void {
+        const tasks = try self.db.getActivePipelineTasks(self.allocator, 20);
+        defer self.allocator.free(tasks);
+
+        if (tasks.len == 0) {
+            if (self.active_agents.load(.acquire) == 0) {
+                try self.seedIfIdle();
+            }
+            return;
+        }
+
+        // Per-repo phase dispatch: one task per (repo, phase) combination.
+        // Tasks from different repos in the same phase run concurrently.
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        var dispatched = std.StringHashMap(void).init(arena.allocator());
+
+        for (tasks) |task| {
+            if (self.active_agents.load(.acquire) >= MAX_PARALLEL_AGENTS) break;
+
+            // Normalize status to phase key
+            const phase: []const u8 = if (std.mem.eql(u8, task.status, "retry")) "impl" else task.status;
+
+            // Build dispatch key: "repo_path:phase"
+            const key = std.fmt.allocPrint(arena.allocator(), "{s}:{s}", .{ task.repo_path, phase }) catch continue;
+
+            if (dispatched.contains(key)) continue;
+
+            // Skip if already in-flight
+            {
+                self.inflight_mu.lock();
+                defer self.inflight_mu.unlock();
+                if (self.inflight_tasks.contains(task.id)) {
+                    dispatched.put(key, {}) catch {};
+                    continue;
+                }
+                self.inflight_tasks.put(task.id, {}) catch continue;
+            }
+
+            _ = self.active_agents.fetchAdd(1, .acq_rel);
+            std.log.info("Pipeline dispatching task #{d} [{s}] in {s}: {s}", .{ task.id, task.status, task.repo_path, task.title });
+
+            _ = std.Thread.spawn(.{}, processTaskThread, .{ self, task }) catch {
+                _ = self.active_agents.fetchSub(1, .acq_rel);
+                self.inflight_mu.lock();
+                defer self.inflight_mu.unlock();
+                _ = self.inflight_tasks.remove(task.id);
+                continue;
+            };
+
+            dispatched.put(key, {}) catch {};
+        }
+    }
+
+    fn processTaskThread(self: *Pipeline, task: db_mod.PipelineTask) void {
+        defer {
+            _ = self.active_agents.fetchSub(1, .acq_rel);
+            self.inflight_mu.lock();
+            defer self.inflight_mu.unlock();
+            _ = self.inflight_tasks.remove(task.id);
+        }
 
         if (std.mem.eql(u8, task.status, "backlog")) {
-            try self.setupBranch(task);
+            self.setupBranch(task) catch |err| {
+                std.log.err("Task #{d} backlog error: {}", .{ task.id, err });
+            };
         } else if (std.mem.eql(u8, task.status, "spec")) {
-            try self.runSpecPhase(task);
+            self.runSpecPhase(task) catch |err| {
+                std.log.err("Task #{d} spec error: {}", .{ task.id, err });
+            };
         } else if (std.mem.eql(u8, task.status, "qa")) {
-            try self.runQaPhase(task);
+            self.runQaPhase(task) catch |err| {
+                std.log.err("Task #{d} qa error: {}", .{ task.id, err });
+            };
         } else if (std.mem.eql(u8, task.status, "impl") or std.mem.eql(u8, task.status, "retry")) {
-            try self.runImplPhase(task);
+            self.runImplPhase(task) catch |err| {
+                std.log.err("Task #{d} impl error: {}", .{ task.id, err });
+            };
         } else if (std.mem.eql(u8, task.status, "rebase")) {
-            try self.runRebasePhase(task);
+            self.runRebasePhase(task) catch |err| {
+                std.log.err("Task #{d} rebase error: {}", .{ task.id, err });
+            };
         }
     }
 
@@ -111,26 +200,89 @@ pub const Pipeline = struct {
         const active = try self.db.getActivePipelineTaskCount();
         if (active >= MAX_BACKLOG_SIZE) return;
 
-        std.log.info("Pipeline idle, scanning repo for improvements...", .{});
-        self.last_seed_ts = now;
+        // Rotate seed mode: 0=refactoring, 1=bug hunting, 2=test coverage
+        const seed_mode = blk: {
+            const mode_str = self.db.getState(self.allocator, "seed_mode") catch null;
+            const prev: u32 = if (mode_str) |s| std.fmt.parseInt(u32, s, 10) catch 0 else 0;
+            if (mode_str) |s| self.allocator.free(s);
+            const next = (prev + 1) % 3;
+            var next_buf: [4]u8 = undefined;
+            const next_str = std.fmt.bufPrint(&next_buf, "{d}", .{next}) catch "0";
+            self.db.setState("seed_mode", next_str) catch {};
+            break :blk next;
+        };
 
+        const mode_label = switch (seed_mode) {
+            0 => "refactoring",
+            1 => "bug audit",
+            2 => "test coverage",
+            else => "refactoring",
+        };
+        self.last_seed_ts = now;
         self.config.refreshOAuthToken();
 
-        // Run a seeder agent against the repo to discover refactoring tasks
+        // Seed each watched repo
+        var total_created: u32 = 0;
+        const active_u32: u32 = @intCast(@max(active, 0));
+        for (self.config.watched_repos) |repo| {
+            if (active_u32 + total_created >= MAX_BACKLOG_SIZE) break;
+            const created = self.seedRepo(repo.path, seed_mode, mode_label, active_u32 + total_created);
+            total_created += created;
+        }
+
+        if (total_created > 0) {
+            std.log.info("Seeded {d} new task(s) from codebase analysis", .{total_created});
+            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Pipeline seeded {d} new task(s) from codebase analysis", .{total_created}) catch return);
+        } else {
+            std.log.info("Seed scan found no actionable improvements", .{});
+        }
+    }
+
+    fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_mode: u32, mode_label: []const u8, current_count: u32) u32 {
+        std.log.info("Scanning {s} ({s} mode)...", .{ repo_path, mode_label });
+
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
 
-        try w.writeAll(
-            \\Analyze this codebase and identify 1-3 concrete, small improvements.
-            \\Focus on refactoring and quality - NOT new features.
+        switch (seed_mode) {
+            0 => w.writeAll(
+                \\Analyze this codebase and identify 1-3 concrete, small improvements.
+                \\Focus on refactoring and quality - NOT new features.
+                \\
+                \\Good tasks: extract duplicated code, improve error handling for a specific
+                \\function, simplify a complex conditional, fix a subtle bug, improve naming.
+                \\
+                \\Bad tasks: add new features, rewrite entire modules, add documentation,
+                \\change the architecture, add dependencies.
+            ) catch return 0,
+            1 => w.writeAll(
+                \\Audit this codebase for bugs, security vulnerabilities, and reliability issues.
+                \\Focus on finding real problems - NOT style preferences.
+                \\
+                \\Look for: race conditions, memory leaks, resource leaks (unclosed files/sockets),
+                \\error handling gaps (ignored errors, missing error paths), integer overflows,
+                \\buffer overruns, SQL injection, command injection, path traversal, unvalidated
+                \\input at system boundaries, deadlock potential, undefined behavior.
+                \\
+                \\For each real issue found, create a task to fix it. Skip false positives.
+            ) catch return 0,
+            else => w.writeAll(
+                \\Analyze this codebase and identify gaps in test coverage.
+                \\Focus on finding untested code paths that matter for correctness.
+                \\
+                \\Look for: functions with no test coverage, error paths never exercised,
+                \\edge cases not covered (empty input, max values, concurrent access),
+                \\integration points between modules that lack tests,
+                \\complex conditionals where not all branches are tested.
+                \\
+                \\Create tasks to add specific test cases. Each task should target one
+                \\function or module, not broad "add tests everywhere" tasks.
+            ) catch return 0,
+        }
+
+        w.writeAll(
             \\
-            \\Good tasks: extract duplicated code, improve error handling for a specific
-            \\function, simplify a complex conditional, add missing test coverage for an
-            \\edge case, fix a subtle bug, improve a variable name for clarity.
-            \\
-            \\Bad tasks: add new features, rewrite entire modules, add documentation,
-            \\change the architecture, add dependencies.
             \\
             \\For each improvement, output EXACTLY this format (one per task):
             \\
@@ -140,11 +292,11 @@ pub const Pipeline = struct {
             \\TASK_END
             \\
             \\Output ONLY the task blocks above. No other text.
-        );
+        ) catch return 0;
 
-        const result = self.spawnAgent(.manager, prompt_buf.items, self.config.pipeline_repo) catch |err| {
-            std.log.err("Seed agent failed: {}", .{err});
-            return;
+        const result = self.spawnAgent(.manager, prompt_buf.items, repo_path, null) catch |err| {
+            std.log.err("Seed agent failed for {s}: {}", .{ repo_path, err });
+            return 0;
         };
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
@@ -160,7 +312,6 @@ pub const Pipeline = struct {
             const block = std.mem.trim(u8, remaining[0..end_pos], &[_]u8{ ' ', '\t', '\n', '\r' });
             remaining = remaining[end_pos + "TASK_END".len ..];
 
-            // Extract TITLE: and DESCRIPTION: lines
             var title: []const u8 = "";
             var desc_start: usize = 0;
             const desc_end: usize = block.len;
@@ -170,7 +321,6 @@ pub const Pipeline = struct {
                 if (std.mem.startsWith(u8, trimmed, "TITLE:")) {
                     title = std.mem.trim(u8, trimmed["TITLE:".len..], &[_]u8{ ' ', '\t' });
                 } else if (std.mem.startsWith(u8, trimmed, "DESCRIPTION:")) {
-                    // Everything from DESCRIPTION: to end of block
                     desc_start = @intFromPtr(trimmed.ptr) - @intFromPtr(block.ptr) + "DESCRIPTION:".len;
                     break;
                 }
@@ -185,7 +335,7 @@ pub const Pipeline = struct {
             _ = self.db.createPipelineTask(
                 title,
                 description,
-                self.config.pipeline_repo,
+                repo_path,
                 "seeder",
                 self.config.pipeline_admin_chat,
             ) catch |err| {
@@ -194,23 +344,18 @@ pub const Pipeline = struct {
             };
 
             created += 1;
-            if (active + created >= MAX_BACKLOG_SIZE) break;
+            if (current_count + created >= MAX_BACKLOG_SIZE) break;
         }
 
-        if (created > 0) {
-            std.log.info("Seeded {d} new task(s) from codebase analysis", .{created});
-            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Pipeline seeded {d} new task(s) from codebase analysis", .{created}) catch return);
-        } else {
-            std.log.info("Seed scan found no actionable improvements", .{});
-        }
+        return created;
     }
 
-    fn worktreePath(self: *Pipeline, task_id: i64) ![]const u8 {
-        return std.fmt.allocPrint(self.allocator, "{s}/.worktrees/task-{d}", .{ self.config.pipeline_repo, task_id });
+    fn worktreePath(self: *Pipeline, repo_path: []const u8, task_id: i64) ![]const u8 {
+        return std.fmt.allocPrint(self.allocator, "{s}/.worktrees/task-{d}", .{ repo_path, task_id });
     }
 
     fn setupBranch(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
+        var git = Git.init(self.allocator, task.repo_path);
 
         // Pull latest main
         var pull = try git.exec(&.{ "fetch", "origin", "main" });
@@ -221,11 +366,11 @@ pub const Pipeline = struct {
         const branch = try std.fmt.bufPrint(&branch_buf, "feature/task-{d}", .{task.id});
 
         // Ensure .worktrees directory exists
-        const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{self.config.pipeline_repo});
+        const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{task.repo_path});
         defer self.allocator.free(wt_dir);
         std.fs.makeDirAbsolute(wt_dir) catch {};
 
-        const wt_path = try self.worktreePath(task.id);
+        const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
 
         var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
@@ -243,9 +388,9 @@ pub const Pipeline = struct {
     }
 
     fn cleanupWorktree(self: *Pipeline, task: db_mod.PipelineTask) void {
-        const wt_path = self.worktreePath(task.id) catch return;
+        const wt_path = self.worktreePath(task.repo_path, task.id) catch return;
         defer self.allocator.free(wt_path);
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
+        var git = Git.init(self.allocator, task.repo_path);
         var rm = git.removeWorktree(wt_path) catch return;
         defer rm.deinit();
         if (rm.success()) {
@@ -254,7 +399,7 @@ pub const Pipeline = struct {
     }
 
     fn runSpecPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        const wt_path = try self.worktreePath(task.id);
+        const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
         var wt_git = Git.init(self.allocator, wt_path);
 
@@ -283,23 +428,26 @@ pub const Pipeline = struct {
             \\Do NOT modify any source files. Only write spec.md.
         );
 
-        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path) catch |err| {
+        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, null) catch |err| {
             try self.failTask(task, "manager agent spawn failed", @errorName(err));
             return;
         };
         defer self.allocator.free(result.output);
-        defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        // Store session for next phase
+        if (result.new_session_id) |sid| {
+            self.db.setTaskSessionId(task.id, sid) catch {};
+            self.allocator.free(sid);
+        }
 
         self.db.storeTaskOutput(task.id, "spec", result.output, 0) catch {};
 
-        // Commit spec.md in worktree
         var add = try wt_git.addAll();
         defer add.deinit();
         var commit = try wt_git.commit("spec: generate spec.md for task");
         defer commit.deinit();
 
         if (!commit.success()) {
-            // No changes? Manager didn't write spec.md
             try self.failTask(task, "manager produced no output", commit.stderr);
             return;
         }
@@ -309,7 +457,7 @@ pub const Pipeline = struct {
     }
 
     fn runQaPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        const wt_path = try self.worktreePath(task.id);
+        const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
         var wt_git = Git.init(self.allocator, wt_path);
 
@@ -329,12 +477,17 @@ pub const Pipeline = struct {
             \\- Do NOT write implementation code
         );
 
-        const result = self.spawnAgent(.qa, prompt_buf.items, wt_path) catch |err| {
+        const resume_sid = if (task.session_id.len > 0) task.session_id else null;
+        const result = self.spawnAgent(.qa, prompt_buf.items, wt_path, resume_sid) catch |err| {
             try self.failTask(task, "QA agent spawn failed", @errorName(err));
             return;
         };
         defer self.allocator.free(result.output);
-        defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        if (result.new_session_id) |sid| {
+            self.db.setTaskSessionId(task.id, sid) catch {};
+            self.allocator.free(sid);
+        }
 
         self.db.storeTaskOutput(task.id, "qa", result.output, 0) catch {};
 
@@ -353,17 +506,18 @@ pub const Pipeline = struct {
     }
 
     fn runImplPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        const wt_path = try self.worktreePath(task.id);
+        const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
         var wt_git = Git.init(self.allocator, wt_path);
 
         // Idempotency: if a previous run left passing code, skip the agent
-        if (self.runTestCommand(wt_path)) |pre_test| {
+        const test_cmd = self.config.getTestCmdForRepo(task.repo_path);
+        if (self.runTestCommandForRepo(wt_path, test_cmd)) |pre_test| {
             defer self.allocator.free(pre_test.stdout);
             defer self.allocator.free(pre_test.stderr);
             if (pre_test.exit_code == 0) {
                 try self.db.updateTaskStatus(task.id, "done");
-                try self.db.enqueueForIntegration(task.id, task.branch);
+                try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
                 self.cleanupWorktree(task);
                 std.log.info("Task #{d} tests already pass, skipping agent", .{task.id});
                 self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for release train.", .{task.id}));
@@ -394,12 +548,17 @@ pub const Pipeline = struct {
             try w.writeAll("\n```\nFix the failures.");
         }
 
-        const result = self.spawnAgent(.worker, prompt_buf.items, wt_path) catch |err| {
+        const resume_sid = if (task.session_id.len > 0) task.session_id else null;
+        const result = self.spawnAgent(.worker, prompt_buf.items, wt_path, resume_sid) catch |err| {
             try self.failTask(task, "worker agent spawn failed", @errorName(err));
             return;
         };
         defer self.allocator.free(result.output);
-        defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        if (result.new_session_id) |sid| {
+            self.db.setTaskSessionId(task.id, sid) catch {};
+            self.allocator.free(sid);
+        }
 
         self.db.storeTaskOutput(task.id, "impl", result.output, 0) catch {};
 
@@ -410,7 +569,7 @@ pub const Pipeline = struct {
         defer commit.deinit();
 
         // Run tests in worktree
-        const test_result = self.runTestCommand(wt_path) catch |err| {
+        const test_result = self.runTestCommandForRepo(wt_path, test_cmd) catch |err| {
             try self.failTask(task, "test command execution failed", @errorName(err));
             return;
         };
@@ -431,7 +590,7 @@ pub const Pipeline = struct {
 
         if (test_result.exit_code == 0) {
             try self.db.updateTaskStatus(task.id, "done");
-            try self.db.enqueueForIntegration(task.id, task.branch);
+            try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
             self.cleanupWorktree(task);
             std.log.info("Task #{d} passed tests, queued for integration", .{task.id});
             self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for release train.", .{task.id}));
@@ -464,7 +623,7 @@ pub const Pipeline = struct {
         }
 
         // Ensure worktree exists (may have been cleaned up after 'done')
-        const wt_path = try self.worktreePath(task.id);
+        const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
 
         const wt_exists = blk: {
@@ -472,8 +631,8 @@ pub const Pipeline = struct {
             break :blk true;
         };
         if (!wt_exists) {
-            var repo_git = Git.init(self.allocator, self.config.pipeline_repo);
-            const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{self.config.pipeline_repo});
+            var repo_git = Git.init(self.allocator, task.repo_path);
+            const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{task.repo_path});
             defer self.allocator.free(wt_dir);
             std.fs.makeDirAbsolute(wt_dir) catch {};
 
@@ -523,18 +682,24 @@ pub const Pipeline = struct {
                 try w.writeAll("\n```");
             }
 
-            const result = self.spawnAgent(.worker, prompt_buf.items, wt_path) catch |err| {
+            const resume_sid = if (task.session_id.len > 0) task.session_id else null;
+            const result = self.spawnAgent(.worker, prompt_buf.items, wt_path, resume_sid) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
             defer self.allocator.free(result.output);
-            defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+            if (result.new_session_id) |sid| {
+                self.db.setTaskSessionId(task.id, sid) catch {};
+                self.allocator.free(sid);
+            }
 
             self.db.storeTaskOutput(task.id, "rebase", result.output, 0) catch {};
         }
 
         // Run tests on the rebased branch
-        const test_result = self.runTestCommand(wt_path) catch |err| {
+        const rebase_test_cmd = self.config.getTestCmdForRepo(task.repo_path);
+        const test_result = self.runTestCommandForRepo(wt_path, rebase_test_cmd) catch |err| {
             try self.failTask(task, "rebase: test execution failed", @errorName(err));
             return;
         };
@@ -547,7 +712,7 @@ pub const Pipeline = struct {
             defer push_r.deinit();
 
             try self.db.updateTaskStatus(task.id, "done");
-            try self.db.enqueueForIntegration(task.id, task.branch);
+            try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
             self.cleanupWorktree(task);
             std.log.info("Task #{d} rebased and re-queued for integration", .{task.id});
             self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" rebased successfully, re-queued for release.", .{ task.id, task.title }) catch return);
@@ -575,8 +740,12 @@ pub const Pipeline = struct {
     }
 
     fn runTestCommand(self: *Pipeline, cwd: []const u8) !TestResult {
+        return self.runTestCommandForRepo(cwd, self.config.pipeline_test_cmd);
+    }
+
+    fn runTestCommandForRepo(self: *Pipeline, cwd: []const u8, test_cmd: []const u8) !TestResult {
         var child = std.process.Child.init(
-            &.{ "/bin/sh", "-c", self.config.pipeline_test_cmd },
+            &.{ "/bin/sh", "-c", test_cmd },
             self.allocator,
         );
         child.stdin_behavior = .Close;
@@ -622,25 +791,36 @@ pub const Pipeline = struct {
     // --- Macro Loop: Release Train ---
 
     fn checkReleaseTrain(self: *Pipeline) !void {
+        // Don't run release train while agents are active (git conflicts)
+        if (self.active_agents.load(.acquire) > 0) return;
+
         const now = std.time.timestamp();
         if (!self.config.continuous_mode) {
             const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
             if (now - self.last_release_ts < interval) return;
         }
 
-        // Check if there's anything queued
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const queued = try self.db.getQueuedBranches(arena.allocator());
-        if (queued.len == 0) return;
+        var ran_any = false;
+        for (self.config.watched_repos) |repo| {
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const queued = self.db.getQueuedBranchesForRepo(arena.allocator(), repo.path) catch continue;
+            if (queued.len == 0) continue;
 
-        std.log.info("Release train starting with {d} branches", .{queued.len});
-        try self.runReleaseTrain(queued);
-        self.last_release_ts = std.time.timestamp();
+            std.log.info("Release train for {s}: {d} branches", .{ repo.path, queued.len });
+            self.runReleaseTrain(queued, repo.path, repo.is_self) catch |err| {
+                std.log.err("Release train error for {s}: {}", .{ repo.path, err });
+            };
+            ran_any = true;
+        }
+
+        if (ran_any) {
+            self.last_release_ts = std.time.timestamp();
+        }
     }
 
-    fn runReleaseTrain(self: *Pipeline, queued: []db_mod.QueueEntry) !void {
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
+    fn runReleaseTrain(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
+        var git = Git.init(self.allocator, repo_path);
 
         self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Release train starting..."));
 
@@ -700,7 +880,8 @@ pub const Pipeline = struct {
             }
 
             // Run global tests on the release-candidate
-            const test_result = self.runTestCommand(self.config.pipeline_repo) catch {
+            const rt_test_cmd = self.config.getTestCmdForRepo(repo_path);
+            const test_result = self.runTestCommandForRepo(repo_path, rt_test_cmd) catch {
                 try excluded.append(entry.branch);
                 continue;
             };
@@ -766,8 +947,8 @@ pub const Pipeline = struct {
             defer del.deinit();
         }
 
-        // 5b. Self-update: check if main has advanced past our startup commit
-        self.checkSelfUpdate();
+        // 5b. Self-update: only for the primary (self) repo
+        if (is_self) self.checkSelfUpdate(repo_path);
 
         // 6. Generate and send digest
         const digest = try self.generateDigest(merged.items, excluded.items);
@@ -798,12 +979,13 @@ pub const Pipeline = struct {
 
     // --- Self-Update ---
 
-    fn checkSelfUpdate(self: *Pipeline) void {
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
+    fn checkSelfUpdate(self: *Pipeline, repo_path: []const u8) void {
+        var git = Git.init(self.allocator, repo_path);
         const current_head = git.revParseHead() catch return;
 
-        if (std.mem.eql(u8, &current_head, &self.startup_head)) return;
-        if (std.mem.eql(u8, &self.startup_head, &([_]u8{0} ** 40))) return;
+        const startup = self.startup_heads.get(repo_path) orelse return;
+        if (std.mem.eql(u8, &current_head, &startup)) return;
+        if (std.mem.eql(u8, &startup, &([_]u8{0} ** 40))) return;
 
         std.log.info("Self-update: main HEAD changed, rebuilding...", .{});
         self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: new commits detected, rebuilding...") catch return);
@@ -813,7 +995,7 @@ pub const Pipeline = struct {
             &.{ "zig", "build" },
             self.allocator,
         );
-        child.cwd = self.config.pipeline_repo;
+        child.cwd = repo_path;
         child.stdin_behavior = .Close;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
@@ -863,7 +1045,7 @@ pub const Pipeline = struct {
 
     // --- Agent Spawning ---
 
-    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8) !agent_mod.AgentResult {
+    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const tmp = arena.allocator();
@@ -877,9 +1059,22 @@ pub const Pipeline = struct {
         var input = std.ArrayList(u8).init(tmp);
         const esc_prompt = try json_mod.escapeString(tmp, prompt);
         const esc_sys = try json_mod.escapeString(tmp, system_prompt);
-        try input.writer().print("{{\"prompt\":\"{s}\",\"systemPrompt\":\"{s}\",\"model\":\"{s}\",\"allowedTools\":\"{s}\",\"workdir\":\"/workspace/repo\"}}", .{
-            esc_prompt, esc_sys, self.config.model, allowed_tools,
-        });
+        if (resume_session) |sid| {
+            if (sid.len > 0) {
+                const esc_sid = try json_mod.escapeString(tmp, sid);
+                try input.writer().print("{{\"prompt\":\"{s}\",\"systemPrompt\":\"{s}\",\"model\":\"{s}\",\"allowedTools\":\"{s}\",\"workdir\":\"/workspace/repo\",\"resumeSessionId\":\"{s}\"}}", .{
+                    esc_prompt, esc_sys, self.config.model, allowed_tools, esc_sid,
+                });
+            } else {
+                try input.writer().print("{{\"prompt\":\"{s}\",\"systemPrompt\":\"{s}\",\"model\":\"{s}\",\"allowedTools\":\"{s}\",\"workdir\":\"/workspace/repo\"}}", .{
+                    esc_prompt, esc_sys, self.config.model, allowed_tools,
+                });
+            }
+        } else {
+            try input.writer().print("{{\"prompt\":\"{s}\",\"systemPrompt\":\"{s}\",\"model\":\"{s}\",\"allowedTools\":\"{s}\",\"workdir\":\"/workspace/repo\"}}", .{
+                esc_prompt, esc_sys, self.config.model, allowed_tools,
+            });
+        }
 
         // Container name
         var name_buf: [128]u8 = undefined;
