@@ -1241,6 +1241,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .pipeline_lint_cmd = "",
         .pipeline_admin_chat = "",
         .release_interval_mins = 180,
+        .continuous_mode = false,
         .collection_window_ms = 3000,
         .cooldown_ms = 5000,
         .agent_timeout_s = 600,
