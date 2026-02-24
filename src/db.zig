@@ -125,6 +125,13 @@ pub const Db = struct {
         );
     }
 
+    pub fn unregisterGroup(self: *Db, jid: []const u8) !void {
+        try self.sqlite_db.execute(
+            "DELETE FROM registered_groups WHERE jid = ?1",
+            .{jid},
+        );
+    }
+
     // --- Messages ---
 
     pub fn storeMessage(self: *Db, msg: Message) !void {
