@@ -901,10 +901,17 @@ pub const Pipeline = struct {
             defer track.deinit();
         }
 
-        // 3. Restack and submit
+        // 3. Restack — if it fails (conflicts), abort and skip submit
         var restack = try gt.restack();
         defer restack.deinit();
+        if (!restack.success()) {
+            std.log.warn("gt restack failed, aborting: {s}", .{restack.stderr[0..@min(restack.stderr.len, 200)]});
+            var abort = try git.exec(&.{ "rebase", "--abort" });
+            defer abort.deinit();
+            return;
+        }
 
+        // 4. Submit stack to create/update PRs
         var submit = try gt.submitStack();
         defer submit.deinit();
         if (submit.success()) {
@@ -913,11 +920,19 @@ pub const Pipeline = struct {
             std.log.warn("gt submit --stack: {s}", .{submit.stderr[0..@min(submit.stderr.len, 200)]});
         }
 
-        // 4. Merge branches that have PRs via gh pr merge
+        // 5. Merge branches that have PRs
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
 
         for (queued) |entry| {
+            // Check if a PR exists before trying to merge
+            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
+            defer self.allocator.free(view_cmd);
+            const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
+            defer self.allocator.free(view_result.stdout);
+            defer self.allocator.free(view_result.stderr);
+            if (view_result.exit_code != 0) continue;
+
             try self.db.updateQueueStatus(entry.id, "merging", null);
 
             const merge_cmd = try std.fmt.allocPrint(
@@ -948,7 +963,7 @@ pub const Pipeline = struct {
             }
         }
 
-        // 5. Sync after merges
+        // 6. Sync after merges
         if (merged.items.len > 0) {
             var sync = try gt.repoSync();
             defer sync.deinit();
@@ -956,10 +971,10 @@ pub const Pipeline = struct {
             defer pull2.deinit();
         }
 
-        // 6. Self-update check
+        // 7. Self-update check
         if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
 
-        // 7. Notify
+        // 8. Notify
         if (merged.items.len > 0) {
             const digest = try self.generateDigest(merged.items, &.{});
             self.notify(self.config.pipeline_admin_chat, digest);
