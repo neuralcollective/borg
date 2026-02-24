@@ -812,6 +812,144 @@ test "pipeline task lifecycle" {
     try std.testing.expectEqual(@as(usize, 2), all.len);
 }
 
+test "getPipelineStats returns correct counts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // Insert tasks with various statuses as specified in AC #7
+    const t_backlog = try db.createPipelineTask("Backlog task", "desc", "/repo", "user", "");
+    // backlog is default status, no update needed
+
+    const t_spec = try db.createPipelineTask("Spec task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_spec, "spec");
+
+    const t_impl = try db.createPipelineTask("Impl task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_impl, "impl");
+
+    const t_qa = try db.createPipelineTask("QA task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_qa, "qa");
+
+    const t_retry = try db.createPipelineTask("Retry task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_retry, "retry");
+
+    const t_rebase = try db.createPipelineTask("Rebase task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_rebase, "rebase");
+
+    const t_merged = try db.createPipelineTask("Merged task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_merged, "merged");
+
+    const t_failed = try db.createPipelineTask("Failed task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_failed, "failed");
+
+    const t_done = try db.createPipelineTask("Done task", "desc", "/repo", "user", "");
+    try db.updateTaskStatus(t_done, "done");
+
+    _ = t_backlog;
+
+    const stats = try db.getPipelineStats();
+
+    // total = 9 (all tasks)
+    try std.testing.expectEqual(@as(i64, 9), stats.total);
+    // active = 6 (backlog, spec, impl, qa, retry, rebase)
+    try std.testing.expectEqual(@as(i64, 6), stats.active);
+    // merged = 1
+    try std.testing.expectEqual(@as(i64, 1), stats.merged);
+    // failed = 1
+    try std.testing.expectEqual(@as(i64, 1), stats.failed);
+}
+
+test "getPipelineStats returns zeros on empty table" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // AC #8: empty table returns all zeros
+    const stats = try db.getPipelineStats();
+
+    try std.testing.expectEqual(@as(i64, 0), stats.total);
+    try std.testing.expectEqual(@as(i64, 0), stats.active);
+    try std.testing.expectEqual(@as(i64, 0), stats.merged);
+    try std.testing.expectEqual(@as(i64, 0), stats.failed);
+}
+
+test "getPipelineStats all tasks in single status" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // Edge case #2: all tasks merged
+    const id1 = try db.createPipelineTask("Task 1", "desc", "/repo", "", "");
+    const id2 = try db.createPipelineTask("Task 2", "desc", "/repo", "", "");
+    const id3 = try db.createPipelineTask("Task 3", "desc", "/repo", "", "");
+    try db.updateTaskStatus(id1, "merged");
+    try db.updateTaskStatus(id2, "merged");
+    try db.updateTaskStatus(id3, "merged");
+
+    const stats = try db.getPipelineStats();
+
+    try std.testing.expectEqual(@as(i64, 3), stats.total);
+    try std.testing.expectEqual(@as(i64, 0), stats.active);
+    try std.testing.expectEqual(@as(i64, 3), stats.merged);
+    try std.testing.expectEqual(@as(i64, 0), stats.failed);
+}
+
+test "getPipelineStats uncovered statuses count only in total" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // Edge case #3: 'done' status is in total but not active/merged/failed
+    const id1 = try db.createPipelineTask("Done task 1", "desc", "/repo", "", "");
+    const id2 = try db.createPipelineTask("Done task 2", "desc", "/repo", "", "");
+    try db.updateTaskStatus(id1, "done");
+    try db.updateTaskStatus(id2, "done");
+
+    const stats = try db.getPipelineStats();
+
+    try std.testing.expectEqual(@as(i64, 2), stats.total);
+    try std.testing.expectEqual(@as(i64, 0), stats.active);
+    try std.testing.expectEqual(@as(i64, 0), stats.merged);
+    try std.testing.expectEqual(@as(i64, 0), stats.failed);
+
+    // Verify: active + merged + failed != total
+    try std.testing.expect(stats.active + stats.merged + stats.failed != stats.total);
+}
+
+test "getPipelineStats struct fields are correct type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // AC #3: PipelineStats struct is unchanged with fields active, merged, failed, total all i64
+    // AC #4: function signature is pub fn getPipelineStats(self: *Db) !PipelineStats
+    const stats: Db.PipelineStats = try db.getPipelineStats();
+    // Verify the struct has the expected fields and types by assigning to typed variables
+    const active: i64 = stats.active;
+    const merged: i64 = stats.merged;
+    const failed: i64 = stats.failed;
+    const total: i64 = stats.total;
+    _ = active;
+    _ = merged;
+    _ = failed;
+    _ = total;
+}
+
 test "integration queue operations" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
