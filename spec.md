@@ -1,157 +1,77 @@
-# Spec: Consolidate duplicated child-process stdout/stderr drain pattern
+# Spec: Add tests for `parseWatchedRepos` in config.zig
 
 ## Task Summary
 
-Four source files (`git.zig`, `docker.zig`, `pipeline.zig`, `agent.zig`) each contain copy-pasted logic for draining stdout/stderr from a `std.process.Child` into `ArrayList(u8)` buffers using an 8192-byte read loop, and for extracting a `u8` exit code from the `Child.Term` union via a switch on `.Exited`. This task extracts both patterns into a shared `process.zig` utility module and replaces all five call sites (two in `pipeline.zig`) with calls to the shared functions.
+The `parseWatchedRepos` function in `src/config.zig` (lines 121-160) parses the `WATCHED_REPOS` environment variable into a slice of `RepoConfig` structs but has no test coverage. Add tests for pipe-delimited multi-repo input, single-path input, and empty/missing input to prevent regressions where the pipeline watches wrong or no repositories.
 
 ## Files to Modify
 
-1. **`src/git.zig`** — Replace drain loop + exit code switch in `Git.exec` (lines 23–46) with calls to `process.drainPipe` and `process.exitCode`.
-2. **`src/docker.zig`** — Replace drain loop + exit code switch in `Docker.runWithStdio` (lines 175–189) with calls to `process.drainPipe` and `process.exitCode`.
-3. **`src/agent.zig`** — Replace drain loop + exit code switch in `runDirect` (lines 109–124) with calls to `process.drainPipe` and `process.exitCode`.
-4. **`src/pipeline.zig`** — Replace drain loop + exit code switch in `runTestCommandForRepo` (lines 757–780) and in the self-update build section (lines 1039–1064) with calls to `process.drainPipe` and `process.exitCode`.
+1. **`src/config.zig`** — Add new `test` blocks at the end of the file (after line 270), following the existing pattern used by `findEnvValue` tests.
 
 ## Files to Create
 
-1. **`src/process.zig`** — New utility module containing `drainPipe` and `exitCode`.
+None. Tests belong inline in `src/config.zig` since `parseWatchedRepos` is a private (non-`pub`) function and can only be called from within the same file.
 
 ## Function/Type Signatures
 
-### `src/process.zig`
+No new functions or types. The tests call the existing private function directly:
 
 ```zig
-const std = @import("std");
-
-/// Read all bytes from a ChildProcess pipe (stdout or stderr) into a
-/// caller-owned slice. Uses a stack-local 8192-byte buffer for reads.
-/// Returns an allocated slice that the caller must free with `allocator.free()`.
-pub fn drainPipe(allocator: std.mem.Allocator, pipe: std.fs.File) ![]u8
-
-/// Extract a u8 exit code from a process termination status.
-/// Returns the exit code for normal exits, or 1 for signals/stops/unknown.
-pub fn exitCode(term: std.process.Child.Term) u8
+fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, primary_repo: []const u8, primary_test_cmd: []const u8) ![]RepoConfig
 ```
 
-#### `drainPipe` implementation outline
+Each test block follows this pattern:
 
-- Declare `var buf: [8192]u8 = undefined;`
-- Declare `var list = std.ArrayList(u8).init(allocator);`
-- Loop: `const n = pipe.read(&buf) catch break; if (n == 0) break; try list.appendSlice(buf[0..n]);`
-- Return `try list.toOwnedSlice()`
-
-#### `exitCode` implementation outline
-
-- `return switch (term) { .Exited => |code| code, else => 1 };`
-
-### Changes to `src/git.zig`
-
-In `Git.exec`, add `const process = @import("process.zig");` at the top.
-
-Replace lines 23–46:
 ```zig
-// Before (remove):
-var stdout_buf = std.ArrayList(u8).init(self.allocator);
-var stderr_buf = std.ArrayList(u8).init(self.allocator);
-var read_buf: [8192]u8 = undefined;
-// ... drain loops ...
-const term = try child.wait();
-const exit_code: u8 = switch (term) { .Exited => |code| code, else => 1 };
-
-// After:
-const stdout_data = if (child.stdout) |pipe| try process.drainPipe(self.allocator, pipe) else try self.allocator.alloc(u8, 0);
-const stderr_data = if (child.stderr) |pipe| try process.drainPipe(self.allocator, pipe) else try self.allocator.alloc(u8, 0);
-const term = try child.wait();
-const exit_code = process.exitCode(term);
-```
-
-Return `ExecResult` with `stdout_data` and `stderr_data` directly (already owned slices).
-
-### Changes to `src/docker.zig`
-
-In `Docker.runWithStdio`, add `const process = @import("process.zig");` at the top.
-
-Replace lines 175–189:
-```zig
-// After:
-const stdout_data = if (child.stdout) |pipe| try process.drainPipe(self.allocator, pipe) else try self.allocator.alloc(u8, 0);
-const term = try child.wait();
-const exit_code = process.exitCode(term);
-```
-
-### Changes to `src/agent.zig`
-
-In `runDirect`, add `const process = @import("process.zig");` at the top.
-
-Replace lines 109–124:
-```zig
-// After:
-var stdout_buf = std.ArrayList(u8).init(allocator);
-defer stdout_buf.deinit();
-if (child.stdout) |pipe| {
-    const data = try process.drainPipe(allocator, pipe);
-    defer allocator.free(data);
-    try stdout_buf.appendSlice(data);
+test "parseWatchedRepos <description>" {
+    const alloc = std.testing.allocator;
+    // Construct env_content with WATCHED_REPOS=... as the function reads it via getEnv()
+    const env = "WATCHED_REPOS=<value>";
+    const repos = try parseWatchedRepos(alloc, env, "<primary_repo>", "<primary_test_cmd>");
+    defer alloc.free(repos);
+    // For entries with duped strings, also free them:
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            // Only free test_cmd if it was duped (not the default "make test" literal)
+        }
+    };
+    // assertions...
 }
-const term = try child.wait();
-const exit_code = process.exitCode(term);
 ```
-
-Note: `agent.zig` needs the data in an `ArrayList` because it references `stdout_buf.items` later (line 126–130). An alternative is to drain into an owned slice and use it directly, avoiding the intermediate ArrayList.
-
-Simpler alternative for `agent.zig`:
-```zig
-const stdout_data = if (child.stdout) |pipe| try process.drainPipe(allocator, pipe) else try allocator.alloc(u8, 0);
-defer allocator.free(stdout_data);
-const term = try child.wait();
-const exit_code = process.exitCode(term);
-if (exit_code != 0 and stdout_data.len == 0) return error.AgentFailed;
-return try parseNdjson(allocator, stdout_data);
-```
-
-### Changes to `src/pipeline.zig`
-
-Add `const process = @import("process.zig");` at the top.
-
-**`runTestCommandForRepo`** (lines 757–780): Replace with:
-```zig
-const stdout_data = if (child.stdout) |pipe| try process.drainPipe(self.allocator, pipe) else try self.allocator.alloc(u8, 0);
-const stderr_data = if (child.stderr) |pipe| try process.drainPipe(self.allocator, pipe) else try self.allocator.alloc(u8, 0);
-const term = try child.wait();
-const exit_code = process.exitCode(term);
-return TestResult{ .stdout = stdout_data, .stderr = stderr_data, .exit_code = exit_code };
-```
-
-**Self-update build section** (lines 1039–1064): Replace with:
-```zig
-var stderr_data = if (child.stderr) |pipe| process.drainPipe(self.allocator, pipe) catch return else "";
-defer if (stderr_data.len > 0) self.allocator.free(stderr_data);
-// Drain stdout (discard)
-if (child.stdout) |pipe| {
-    const discard = process.drainPipe(self.allocator, pipe) catch &.{};
-    if (discard.len > 0) self.allocator.free(discard);
-}
-const term = child.wait() catch |err| { std.log.err("Self-update: wait failed: {}", .{err}); return; };
-const exit_code = process.exitCode(term);
-```
-
-Note: The self-update section uses `catch return` / `catch break` patterns instead of `try` because it is a `void`-returning function that logs and returns on error rather than propagating. The refactored version preserves this error-handling style.
 
 ## Acceptance Criteria
 
-1. **`zig build` succeeds** with no compilation errors after all changes.
-2. **`zig build test` passes** — all existing unit tests in `git.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig` continue to pass.
-3. **No 8192-byte buffer loop remains** in `git.zig`, `docker.zig`, `agent.zig`, or `pipeline.zig`. All instances are replaced by calls to `process.drainPipe`.
-4. **No `switch (term) { .Exited => |code| code, else => 1 }` remains** in `git.zig`, `docker.zig`, `agent.zig`, or `pipeline.zig`. All instances are replaced by calls to `process.exitCode`.
-5. **`process.zig` contains unit tests** for both `drainPipe` and `exitCode`.
-6. **Behavioral equivalence**: The refactored code produces identical `ExecResult`, `RunResult`, `TestResult`, and `AgentResult` values for the same child process outputs as the original code.
-7. **No new public API changes** to `Git`, `Docker`, `Pipeline`, or `agent_mod` — all changes are internal implementation details.
-8. **`process.zig` is imported only by the four modified files** — it does not pull in any dependencies beyond `std`.
+1. **Empty WATCHED_REPOS, no primary repo**: Calling `parseWatchedRepos(alloc, "", "", "")` returns a zero-length slice (`repos.len == 0`).
+
+2. **Empty WATCHED_REPOS, with primary repo**: Calling with `env_content=""`, `primary_repo="/home/project"`, `primary_test_cmd="zig build test"` returns exactly one entry where `repos[0].path` equals `"/home/project"`, `repos[0].test_cmd` equals `"zig build test"`, and `repos[0].is_self == true`.
+
+3. **Single path without test command**: `WATCHED_REPOS=/repo/a` (no colon) returns the primary repo plus one additional entry with `.path == "/repo/a"`, `.test_cmd == "make test"` (the default), and `.is_self == false`.
+
+4. **Single path with test command**: `WATCHED_REPOS=/repo/a:npm test` returns the primary repo plus one entry with `.path == "/repo/a"` and `.test_cmd == "npm test"`.
+
+5. **Pipe-delimited multiple repos**: `WATCHED_REPOS=/repo/a:cmd1|/repo/b:cmd2` returns the primary repo plus two additional entries with correct paths and commands, in order.
+
+6. **Duplicate of primary repo is skipped**: If `primary_repo="/main"` and `WATCHED_REPOS=/main:other_cmd|/second:test`, the result contains only the primary entry and `/second` — the `/main` duplicate from WATCHED_REPOS is excluded.
+
+7. **Whitespace trimming**: Entries with surrounding spaces/tabs (e.g., `WATCHED_REPOS= /repo/a : cmd1 | /repo/b `) are trimmed correctly, producing entries with clean paths and commands.
+
+8. **Empty entries between pipes are skipped**: `WATCHED_REPOS=/repo/a||/repo/b` skips the empty middle entry and returns two watched repos (plus primary if set).
+
+9. **Build succeeds**: `zig build` compiles without errors.
+
+10. **All tests pass**: `zig build test` passes, including all new and existing tests.
 
 ## Edge Cases
 
-1. **Pipe is null**: When `child.stdout` or `child.stderr` is `null` (e.g., if behavior was set to `.Close` or `.Inherit`), callers must handle the `null` case before calling `drainPipe`. The `if (child.stdout) |pipe|` pattern is preserved at each call site.
-2. **Empty output**: `drainPipe` must return a valid zero-length owned slice (not undefined) when the pipe produces no bytes, so callers can safely `free()` the result.
-3. **Read error mid-stream**: The existing pattern uses `catch break` on `pipe.read()`, discarding partial read errors. `drainPipe` must preserve this behavior — a read error terminates the loop and returns whatever was accumulated so far rather than propagating the error.
-4. **Allocation failure during drain**: `appendSlice` can fail with `OutOfMemory`. `drainPipe` propagates this via `try` (matching the behavior in `git.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig:runTestCommandForRepo`). The self-update call site in `pipeline.zig` catches this at the call site level.
-5. **Signal/stop termination**: `exitCode` returns 1 for any `Term` variant other than `.Exited` (matching the existing `else => 1` in all call sites). This covers `.Signal`, `.Stopped`, and `.Unknown`.
-6. **Large output**: The 8192-byte buffer size is preserved. `ArrayList` grows dynamically, so arbitrarily large outputs are handled as before.
+1. **Completely empty env_content and no primary repo** — should return `&.{}` (empty slice, length 0), not an error.
+
+2. **WATCHED_REPOS is only whitespace/pipes** (e.g., `WATCHED_REPOS=| | |`) — all entries trim to empty and are skipped, so result contains only the primary repo (if set) or is empty.
+
+3. **Entry with colon but empty path** (e.g., `WATCHED_REPOS=:some_cmd`) — the path is empty after trim, so the entry is skipped (line 141: `if (path.len == 0) continue`).
+
+4. **Entry with colon but empty command** (e.g., `WATCHED_REPOS=/repo/a:`) — the command is empty, so the default `"make test"` is used (line 145: `if (cmd.len > 0) ... else "make test"`).
+
+5. **Path without colon matching primary repo** — entry is skipped (line 149: `if (std.mem.eql(u8, trimmed, primary_repo)) continue`).
+
+6. **Memory cleanup in tests** — tests must free the returned slice via `alloc.free(repos)` and free any allocator-duped strings (`.path` and `.test_cmd` on non-`is_self` entries where `test_cmd` was duped) to satisfy `std.testing.allocator` leak detection.
