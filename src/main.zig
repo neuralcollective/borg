@@ -11,6 +11,8 @@ const json_mod = @import("json.zig");
 const git_mod = @import("git.zig");
 const agent_mod = @import("agent.zig");
 const pipeline_mod = @import("pipeline.zig");
+const wa_mod = @import("whatsapp.zig");
+const WhatsApp = wa_mod.WhatsApp;
 
 const POLL_INTERVAL_MS = 1000;
 const MAX_AGENT_RETRIES = 3;
@@ -51,6 +53,17 @@ pub fn main() !void {
 
     var docker = Docker.init(allocator);
     docker.cleanupOrphans() catch {};
+
+    // Start WhatsApp bridge if enabled
+    var wa: ?WhatsApp = null;
+    defer if (wa) |*w| w.deinit();
+    if (config.whatsapp_enabled) {
+        wa = WhatsApp.init(allocator);
+        wa.?.start() catch |err| {
+            std.log.err("WhatsApp bridge start failed: {}", .{err});
+            wa = null;
+        };
+    }
 
     // Start pipeline thread if repo is configured
     var pipeline_db: ?Db = null;
@@ -228,6 +241,110 @@ pub fn main() !void {
             }
         }
 
+        // Poll WhatsApp messages
+        if (wa) |*w| {
+            const wa_msgs = w.poll(cycle_alloc) catch &[_]wa_mod.WaMessage{};
+            for (wa_msgs) |wa_msg| {
+                const wa_jid = try std.fmt.allocPrint(cycle_alloc, "wa:{s}", .{wa_msg.jid});
+
+                db.storeMessage(.{
+                    .id = wa_msg.id,
+                    .chat_jid = wa_jid,
+                    .sender = wa_msg.sender,
+                    .sender_name = wa_msg.sender_name,
+                    .content = wa_msg.text,
+                    .timestamp = try formatTimestamp(cycle_alloc, wa_msg.timestamp),
+                    .is_from_me = false,
+                }) catch |err| {
+                    std.log.err("Store WA message: {}", .{err});
+                    continue;
+                };
+
+                // Check if registered
+                var registered_group: ?db_mod.RegisteredGroup = null;
+                for (groups_list.items) |g| {
+                    if (std.mem.eql(u8, g.jid, wa_jid)) {
+                        registered_group = g;
+                        break;
+                    }
+                }
+                const group = registered_group orelse continue;
+
+                // Check trigger
+                if (group.requires_trigger) {
+                    if (!containsTrigger(wa_msg.text, config.assistant_name)) {
+                        continue;
+                    }
+                }
+
+                // Check if agent already running
+                if (group_states.get(wa_jid)) |state| {
+                    if (state.agent_running) continue;
+                }
+
+                std.log.info("WA triggered: \"{s}\" from {s}", .{ wa_msg.text[0..@min(wa_msg.text.len, 60)], wa_msg.sender_name });
+                w.sendTyping(wa_msg.jid) catch {};
+
+                const state = group_states.get(wa_jid) orelse continue;
+                const since = state.last_agent_timestamp orelse "";
+                const pending = db.getMessagesSince(cycle_alloc, wa_jid, since) catch continue;
+                if (pending.len == 0) continue;
+
+                config.refreshOAuthToken();
+
+                const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
+                const session_id = db.getSession(cycle_alloc, group.folder) catch null;
+
+                if (group_states.getPtr(wa_jid)) |s| s.agent_running = true;
+                const result = runAgentWithRetry(allocator, &docker, config, group, prompt, session_id);
+                if (group_states.getPtr(wa_jid)) |s| s.agent_running = false;
+
+                if (result) |res| {
+                    defer allocator.free(res.output);
+                    defer if (res.new_session_id) |sid| allocator.free(sid);
+
+                    if (group_states.getPtr(wa_jid)) |s| {
+                        s.consecutive_errors = 0;
+                        if (s.last_agent_timestamp) |old| allocator.free(old);
+                        s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
+                    }
+
+                    if (res.new_session_id) |new_sid| {
+                        db.setSession(group.folder, new_sid) catch {};
+                    }
+
+                    if (res.output.len > 0) {
+                        db.storeMessage(.{
+                            .id = try std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}),
+                            .chat_jid = wa_jid,
+                            .sender = "borg",
+                            .sender_name = config.assistant_name,
+                            .content = res.output,
+                            .timestamp = try formatTimestamp(cycle_alloc, std.time.timestamp()),
+                            .is_from_me = true,
+                        }) catch {};
+
+                        w.sendMessage(wa_msg.jid, res.output, wa_msg.id) catch |err| {
+                            std.log.err("WA send response: {}", .{err});
+                        };
+                    }
+                } else |err| {
+                    std.log.err("WA agent failed: {}", .{err});
+
+                    if (group_states.getPtr(wa_jid)) |s| {
+                        s.consecutive_errors += 1;
+                        if (s.consecutive_errors >= config.max_consecutive_errors) {
+                            s.consecutive_errors = 0;
+                            if (s.last_agent_timestamp) |old| allocator.free(old);
+                            s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
+                        }
+                    }
+
+                    w.sendMessage(wa_msg.jid, "Sorry, I encountered an error processing your message.", null) catch {};
+                }
+            }
+        }
+
         std.time.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
     }
 }
@@ -317,6 +434,9 @@ fn handleCommand(
 
         if (config.pipeline_repo.len > 0) {
             try buf.writer().print("\nPipeline: active ({s})", .{config.pipeline_repo});
+        }
+        if (config.whatsapp_enabled) {
+            try buf.appendSlice("\nWhatsApp: enabled");
         }
 
         try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
