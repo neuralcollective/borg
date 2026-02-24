@@ -50,6 +50,10 @@ pub const Pipeline = struct {
     active_agents: std.atomic.Value(u32),
     graphite_available: bool,
 
+    // Stack ordering cache — only call LLM when queued branch set changes
+    stack_cache_key: []const u8,  // sorted branch fingerprint ("" = no cache)
+    stack_cache_resp: []const u8, // raw LLM response ("" = used fallback)
+
     pub fn init(
         allocator: std.mem.Allocator,
         db: *Db,
@@ -80,6 +84,8 @@ pub const Pipeline = struct {
             .inflight_mu = .{},
             .active_agents = std.atomic.Value(u32).init(0),
             .graphite_available = false,
+            .stack_cache_key = &.{},
+            .stack_cache_resp = &.{},
         };
     }
 
@@ -218,12 +224,16 @@ pub const Pipeline = struct {
 
     fn seedIfIdle(self: *Pipeline) !void {
         const now = std.time.timestamp();
-        const cooldown: i64 = if (self.config.continuous_mode) 60 else SEED_COOLDOWN_S;
+        const cooldown: i64 = if (self.config.continuous_mode) 1800 else SEED_COOLDOWN_S;
         if (now - self.last_seed_ts < cooldown) return;
 
         // Don't seed if there are already active tasks
         const active = try self.db.getActivePipelineTaskCount();
         if (active >= MAX_BACKLOG_SIZE) return;
+
+        // Don't seed while tasks are queued for integration — wait for them to merge first
+        const pending_integration = try self.db.getQueuedIntegrationCount();
+        if (pending_integration > 0) return;
 
         // Rotate seed mode: 0=refactoring, 1=bug hunting, 2=test coverage
         const seed_mode = blk: {
@@ -891,7 +901,6 @@ pub const Pipeline = struct {
     }
 
     fn chronologicalFallback(self: *Pipeline, queued: []db_mod.QueueEntry) ![]StackEntry {
-        // Sort by task_id ascending (lowest = bottom of stack)
         const sorted = try self.allocator.alloc(db_mod.QueueEntry, queued.len);
         defer self.allocator.free(sorted);
         @memcpy(sorted, queued);
@@ -900,7 +909,6 @@ pub const Pipeline = struct {
                 return a.task_id < b.task_id;
             }
         }.cmp);
-
         var entries = try self.allocator.alloc(StackEntry, sorted.len);
         for (sorted, 0..) |entry, i| {
             entries[i] = .{
@@ -911,53 +919,107 @@ pub const Pipeline = struct {
         return entries;
     }
 
+    // Parse "branch:parent" lines from an LLM response into StackEntry slice.
+    // Uses queued entries for stable branch name pointers. Returns null if output is unusable.
+    fn parseStackResponse(self: *Pipeline, response: []const u8, queued: []db_mod.QueueEntry) ?[]StackEntry {
+        var valid_branches = std.StringHashMap(void).init(self.allocator);
+        defer valid_branches.deinit();
+        for (queued) |entry| {
+            valid_branches.put(entry.branch, {}) catch return null;
+        }
+
+        var entries = std.ArrayList(StackEntry).init(self.allocator);
+        var lines = std.mem.splitScalar(u8, response, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
+            if (trimmed.len == 0) continue;
+            const colon = std.mem.indexOf(u8, trimmed, ":") orelse continue;
+            const branch = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
+            const parent = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
+            if (branch.len == 0 or parent.len == 0) continue;
+            if (!valid_branches.contains(branch)) continue;
+            if (!std.mem.eql(u8, parent, "main") and !valid_branches.contains(parent)) continue;
+
+            var branch_ptr: []const u8 = branch;
+            var parent_ptr: []const u8 = if (std.mem.eql(u8, parent, "main")) "main" else parent;
+            for (queued) |entry| {
+                if (std.mem.eql(u8, entry.branch, branch)) branch_ptr = entry.branch;
+                if (std.mem.eql(u8, entry.branch, parent)) parent_ptr = entry.branch;
+            }
+            entries.append(.{ .branch = branch_ptr, .parent = parent_ptr }) catch {
+                entries.deinit();
+                return null;
+            };
+        }
+
+        if (entries.items.len != queued.len) {
+            entries.deinit();
+            return null;
+        }
+        return entries.toOwnedSlice() catch {
+            entries.deinit();
+            return null;
+        };
+    }
+
     fn determineStackOrder(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8) ![]StackEntry {
         if (queued.len <= 1) {
             var entries = try self.allocator.alloc(StackEntry, queued.len);
-            if (queued.len == 1) {
-                entries[0] = .{ .branch = queued[0].branch, .parent = "main" };
-            }
+            if (queued.len == 1) entries[0] = .{ .branch = queued[0].branch, .parent = "main" };
             return entries;
         }
 
-        // Build prompt with branch names and task titles
+        // Build fingerprint: sorted branch names joined with ","
+        const branch_names = try self.allocator.alloc([]const u8, queued.len);
+        defer self.allocator.free(branch_names);
+        for (queued, 0..) |entry, i| branch_names[i] = entry.branch;
+        std.mem.sort([]const u8, branch_names, {}, struct {
+            fn cmp(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.cmp);
+        const key = try std.mem.join(self.allocator, ",", branch_names);
+        defer self.allocator.free(key);
+
+        // Return cached result if branch set is unchanged
+        if (self.stack_cache_key.len > 0 and std.mem.eql(u8, key, self.stack_cache_key)) {
+            if (self.stack_cache_resp.len > 0) {
+                if (self.parseStackResponse(self.stack_cache_resp, queued)) |cached| {
+                    return cached;
+                }
+            }
+            return self.chronologicalFallback(queued);
+        }
+
+        // Call LLM to determine stack order
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
-
         try prompt_buf.appendSlice(
             \\You are organizing a Graphite branch stack for merging into main.
             \\
             \\Branches ready to merge (all tests passed):
             \\
         );
-
         for (queued) |entry| {
             const task = self.db.getPipelineTask(self.allocator, entry.task_id) catch null;
             const title = if (task) |t| t.title else "unknown";
             try prompt_buf.writer().print("- {s}: \"{s}\"\n", .{ entry.branch, title });
         }
-
         try prompt_buf.appendSlice(
             \\
             \\Rules:
             \\- Stack chronologically (lowest task ID at bottom, closest to main) as default
             \\- Deviate ONLY if a task clearly depends on another's changes
             \\- Bottom of stack merges first into main
-            \\- Output ONLY lines in format: branch:parent (one per line, bottom-up order)
-            \\- First line's parent should be "main"
-            \\- Each subsequent line's parent should be the branch on the line above it (unless reordering)
+            \\- Output ONLY lines in format: branch:parent (one per line, bottom-up)
+            \\- First line's parent must be "main"
             \\
         );
 
-        // Escape single quotes for shell
         var escaped = std.ArrayList(u8).init(self.allocator);
         defer escaped.deinit();
         for (prompt_buf.items) |c| {
-            if (c == '\'') {
-                try escaped.appendSlice("'\\''");
-            } else {
-                try escaped.append(c);
-            }
+            if (c == '\'') try escaped.appendSlice("'\\''") else try escaped.append(c);
         }
 
         const cmd = try std.fmt.allocPrint(self.allocator, "claude --print --model claude-haiku-4-5-20251001 -p '{s}'", .{escaped.items});
@@ -970,59 +1032,30 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
-        if (result.exit_code != 0) {
-            std.log.warn("Stack ordering LLM returned exit {d}, using chronological fallback", .{result.exit_code});
-            return self.chronologicalFallback(queued);
-        }
-
-        // Build a set of valid branch names for validation
-        var valid_branches = std.StringHashMap(void).init(self.allocator);
-        defer valid_branches.deinit();
-        for (queued) |entry| {
-            try valid_branches.put(entry.branch, {});
-        }
-
-        // Parse response: each line is "branch:parent"
-        var entries = std.ArrayList(StackEntry).init(self.allocator);
-        var lines = std.mem.splitScalar(u8, result.stdout, '\n');
-        while (lines.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
-            if (trimmed.len == 0) continue;
-
-            if (std.mem.indexOf(u8, trimmed, ":")) |colon| {
-                const branch = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
-                const parent = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
-                if (branch.len == 0 or parent.len == 0) continue;
-
-                // Branch must be in our queued set
-                if (!valid_branches.contains(branch)) continue;
-                // Parent must be "main" or in our queued set
-                if (!std.mem.eql(u8, parent, "main") and !valid_branches.contains(parent)) continue;
-
-                // Find the actual slice from queued (stable memory)
-                var branch_stable: []const u8 = branch;
-                var parent_stable: []const u8 = if (std.mem.eql(u8, parent, "main")) "main" else parent;
-                for (queued) |entry| {
-                    if (std.mem.eql(u8, entry.branch, branch)) branch_stable = entry.branch;
-                    if (std.mem.eql(u8, entry.branch, parent)) parent_stable = entry.branch;
+        const entries = blk: {
+            if (result.exit_code == 0) {
+                if (self.parseStackResponse(result.stdout, queued)) |parsed| {
+                    // Update cache
+                    if (self.stack_cache_key.len > 0) self.allocator.free(self.stack_cache_key);
+                    if (self.stack_cache_resp.len > 0) self.allocator.free(self.stack_cache_resp);
+                    self.stack_cache_key = self.allocator.dupe(u8, key) catch key;
+                    self.stack_cache_resp = self.allocator.dupe(u8, result.stdout) catch &.{};
+                    break :blk parsed;
                 }
-
-                try entries.append(.{ .branch = branch_stable, .parent = parent_stable });
             }
-        }
+            std.log.warn("Stack ordering: LLM output unusable, using chronological fallback", .{});
+            // Cache the fallback (empty resp = use fallback)
+            if (self.stack_cache_key.len > 0) self.allocator.free(self.stack_cache_key);
+            if (self.stack_cache_resp.len > 0) self.allocator.free(self.stack_cache_resp);
+            self.stack_cache_key = self.allocator.dupe(u8, key) catch key;
+            self.stack_cache_resp = &.{};
+            break :blk try self.chronologicalFallback(queued);
+        };
 
-        if (entries.items.len != queued.len) {
-            std.log.warn("Stack ordering: LLM returned {d} entries for {d} branches, using chronological fallback", .{ entries.items.len, queued.len });
-            entries.deinit();
-            return self.chronologicalFallback(queued);
-        }
+        std.log.info("Stack order ({s}):", .{if (result.exit_code == 0) "LLM" else "fallback"});
+        for (entries) |entry| std.log.info("  {s} -> {s}", .{ entry.branch, entry.parent });
 
-        std.log.info("Stack order (LLM-decided):", .{});
-        for (entries.items) |entry| {
-            std.log.info("  {s} -> {s}", .{ entry.branch, entry.parent });
-        }
-
-        return entries.toOwnedSlice();
+        return entries;
     }
 
     fn runGraphiteIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
@@ -1035,15 +1068,38 @@ pub const Pipeline = struct {
         var pull_r = try git.pull();
         defer pull_r.deinit();
 
-        // 2. Determine stack order via LLM, then track branches accordingly
-        const stack_order = try self.determineStackOrder(queued, repo_path);
+        // 2. Filter stale queue entries whose branches no longer exist locally
+        var live = std.ArrayList(db_mod.QueueEntry).init(self.allocator);
+        defer live.deinit();
+        for (queued) |entry| {
+            var check = git.exec(&.{ "rev-parse", "--verify", entry.branch }) catch {
+                try self.db.updateQueueStatus(entry.id, "excluded", "branch not found");
+                continue;
+            };
+            defer check.deinit();
+            if (!check.success()) {
+                std.log.warn("Excluding {s} from integration: branch not found", .{entry.branch});
+                try self.db.updateQueueStatus(entry.id, "excluded", "branch not found");
+                // Invalidate stack cache since queued set changed
+                if (self.stack_cache_key.len > 0) {
+                    self.allocator.free(self.stack_cache_key);
+                    self.stack_cache_key = &.{};
+                }
+                continue;
+            }
+            try live.append(entry);
+        }
+        if (live.items.len == 0) return;
+
+        // 3. Determine stack order via LLM (cached), then track branches
+        const stack_order = try self.determineStackOrder(live.items, repo_path);
         defer self.allocator.free(stack_order);
-        for (stack_order) |entry| {
-            var track = try gt.branchTrack(entry.branch, entry.parent);
+        for (stack_order) |se| {
+            var track = try gt.branchTrack(se.branch, se.parent);
             defer track.deinit();
         }
 
-        // 3. Restack — if it fails (conflicts), abort and skip submit
+        // 4. Restack — if it fails (conflicts), abort and skip submit
         var restack = try gt.restack();
         defer restack.deinit();
         if (!restack.success()) {
@@ -1053,22 +1109,43 @@ pub const Pipeline = struct {
             return;
         }
 
-        // 4. Submit stack to create/update PRs
+        // 5. Checkout top of stack, submit, return to main
+        const top_branch = stack_order[stack_order.len - 1].branch;
+        var co_top = try git.checkout(top_branch);
+        defer co_top.deinit();
         var submit = try gt.submitStack();
         defer submit.deinit();
+        var co_main = try git.checkout("main");
+        defer co_main.deinit();
         if (submit.success()) {
-            std.log.info("Graphite stack submitted ({d} queued branches)", .{queued.len});
+            std.log.info("Graphite stack submitted ({d} branches)", .{live.items.len});
         } else {
             std.log.warn("gt submit --stack: {s}", .{submit.stderr[0..@min(submit.stderr.len, 200)]});
         }
 
-        // 5. Merge branches that have PRs
+        // 6. Merge bottom-up in stack order; only merge if parent is main or already merged
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
+        var merged_set = std.StringHashMap(void).init(self.allocator);
+        defer merged_set.deinit();
 
-        for (queued) |entry| {
-            // Check if a PR exists before trying to merge
-            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
+        for (stack_order) |se| {
+            // Only merge if parent is already in main (either it's "main" or we just merged it)
+            const parent_ready = std.mem.eql(u8, se.parent, "main") or merged_set.contains(se.parent);
+            if (!parent_ready) continue;
+
+            // Find the queue entry for this branch
+            var q_entry: ?db_mod.QueueEntry = null;
+            for (live.items) |entry| {
+                if (std.mem.eql(u8, entry.branch, se.branch)) {
+                    q_entry = entry;
+                    break;
+                }
+            }
+            const entry = q_entry orelse continue;
+
+            // Check if a PR exists
+            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{se.branch});
             defer self.allocator.free(view_cmd);
             const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
             defer self.allocator.free(view_result.stdout);
@@ -1076,12 +1153,7 @@ pub const Pipeline = struct {
             if (view_result.exit_code != 0) continue;
 
             try self.db.updateQueueStatus(entry.id, "merging", null);
-
-            const merge_cmd = try std.fmt.allocPrint(
-                self.allocator,
-                "gh pr merge {s} --squash --delete-branch",
-                .{entry.branch},
-            );
+            const merge_cmd = try std.fmt.allocPrint(self.allocator, "gh pr merge {s} --squash --delete-branch", .{se.branch});
             defer self.allocator.free(merge_cmd);
             const merge_result = self.runTestCommandForRepo(repo_path, merge_cmd) catch {
                 try self.db.updateQueueStatus(entry.id, "queued", null);
@@ -1091,32 +1163,36 @@ pub const Pipeline = struct {
             defer self.allocator.free(merge_result.stderr);
 
             if (merge_result.exit_code != 0) {
-                std.log.warn("gh pr merge {s}: {s}", .{ entry.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
+                std.log.warn("gh pr merge {s}: {s}", .{ se.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
                 try self.db.updateQueueStatus(entry.id, "queued", null);
                 continue;
             }
 
             try self.db.updateQueueStatus(entry.id, "merged", null);
             try self.db.updateTaskStatus(entry.task_id, "merged");
-            try merged.append(entry.branch);
+            try merged.append(se.branch);
+            try merged_set.put(se.branch, {});
 
             if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
                 self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
             }
         }
 
-        // 6. Sync after merges
+        // 7. Sync after merges
         if (merged.items.len > 0) {
             var sync = try gt.repoSync();
             defer sync.deinit();
             var pull2 = try git.pull();
             defer pull2.deinit();
+            // Invalidate cache so next tick re-orders without the merged branches
+            if (self.stack_cache_key.len > 0) {
+                self.allocator.free(self.stack_cache_key);
+                self.stack_cache_key = &.{};
+            }
         }
 
-        // 7. Self-update check
+        // 8. Self-update and notify
         if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
-
-        // 8. Notify
         if (merged.items.len > 0) {
             const digest = try self.generateDigest(merged.items, &.{});
             self.notify(self.config.pipeline_admin_chat, digest);
