@@ -889,26 +889,31 @@ pub const Pipeline = struct {
         var git = Git.init(self.allocator, repo_path);
         var gt = Gt.init(self.allocator, repo_path);
 
-        self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Graphite integration starting..."));
-
-        // 1. Sync: ensure main is up to date, restack existing branches
+        // 1. Ensure main is checked out and up to date
         var co = try git.checkout("main");
         defer co.deinit();
         var pull_r = try git.pull();
         defer pull_r.deinit();
+
+        // 2. Track queued branches with Graphite (idempotent for already-tracked)
+        for (queued) |entry| {
+            var track = try gt.exec(&.{ "branch", "track", entry.branch, "--parent", "main" });
+            defer track.deinit();
+        }
+
+        // 3. Restack and submit
         var restack = try gt.restack();
         defer restack.deinit();
 
-        // 2. Submit the stack to create/update PRs
         var submit = try gt.submitStack();
         defer submit.deinit();
         if (submit.success()) {
             std.log.info("Graphite stack submitted ({d} queued branches)", .{queued.len});
         } else {
-            std.log.warn("gt submit --stack: {s}", .{submit.stderr});
+            std.log.warn("gt submit --stack: {s}", .{submit.stderr[0..@min(submit.stderr.len, 200)]});
         }
 
-        // 3. Merge consecutive ready branches bottom-up via gh pr merge
+        // 4. Merge branches that have PRs via gh pr merge
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
 
@@ -922,17 +927,16 @@ pub const Pipeline = struct {
             );
             defer self.allocator.free(merge_cmd);
             const merge_result = self.runTestCommandForRepo(repo_path, merge_cmd) catch {
-                std.log.err("gh pr merge failed for {s}", .{entry.branch});
                 try self.db.updateQueueStatus(entry.id, "queued", null);
-                break;
+                continue;
             };
             defer self.allocator.free(merge_result.stdout);
             defer self.allocator.free(merge_result.stderr);
 
             if (merge_result.exit_code != 0) {
-                std.log.warn("gh pr merge {s} failed: {s}", .{ entry.branch, merge_result.stderr });
+                std.log.warn("gh pr merge {s}: {s}", .{ entry.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
                 try self.db.updateQueueStatus(entry.id, "queued", null);
-                break;
+                continue;
             }
 
             try self.db.updateQueueStatus(entry.id, "merged", null);
@@ -944,7 +948,7 @@ pub const Pipeline = struct {
             }
         }
 
-        // 4. Sync after merges
+        // 5. Sync after merges
         if (merged.items.len > 0) {
             var sync = try gt.repoSync();
             defer sync.deinit();
@@ -952,16 +956,14 @@ pub const Pipeline = struct {
             defer pull2.deinit();
         }
 
-        // 5. Self-update check
+        // 6. Self-update check
         if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
 
-        // 6. Notify
+        // 7. Notify
         if (merged.items.len > 0) {
             const digest = try self.generateDigest(merged.items, &.{});
             self.notify(self.config.pipeline_admin_chat, digest);
             std.log.info("Graphite integration complete: {d} merged", .{merged.items.len});
-        } else {
-            self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Graphite integration: no branches merged (PRs may need CI)."));
         }
     }
 
