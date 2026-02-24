@@ -1,7 +1,6 @@
 import { useTasks, useStatus } from "@/lib/api";
 import { isActiveStatus, repoName } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 interface TaskListProps {
@@ -19,21 +18,24 @@ export function TaskList({ selectedId, onSelect }: TaskListProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Pipeline Tasks</span>
-        <span className="text-[10px] text-muted-foreground">{tasks?.length ?? 0}</span>
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
+        <span className="text-[11px] font-medium text-zinc-400">Pipeline Tasks</span>
+        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-zinc-500">{tasks?.length ?? 0}</span>
       </div>
-      <ScrollArea className="flex-1">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="p-1">
           {active.map((t) => (
             <TaskRow key={t.id} task={t} isActive showRepo={multiRepo} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
+          {done.length > 0 && active.length > 0 && (
+            <div className="mx-3 my-1.5 h-px bg-white/[0.04]" />
+          )}
           {done.slice(0, 20).map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
-          {!tasks?.length && <p className="py-8 text-center text-xs text-muted-foreground">No tasks yet</p>}
+          {!tasks?.length && <p className="py-12 text-center text-xs text-zinc-600">No tasks yet</p>}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
@@ -55,21 +57,22 @@ function TaskRow({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent",
-        isActive && "border-l-2 border-blue-400 bg-blue-950/20",
-        selected && "bg-accent"
+        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors",
+        "hover:bg-white/[0.03]",
+        isActive && "bg-blue-500/[0.04]",
+        selected && "bg-white/[0.06]"
       )}
     >
-      <span className="min-w-[28px] text-[11px] text-muted-foreground">#{task.id}</span>
+      <span className="min-w-[24px] font-mono text-[10px] text-zinc-600">#{task.id}</span>
       <StatusBadge status={task.status} />
       {showRepo && task.repo_path && (
-        <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">
+        <span className="shrink-0 rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium text-zinc-500">
           {repoName(task.repo_path)}
         </span>
       )}
-      <span className="flex-1 truncate text-xs text-foreground">{task.title}</span>
+      <span className="flex-1 truncate text-[12px] text-zinc-300">{task.title}</span>
       {task.attempt > 0 && (
-        <span className="text-[10px] text-muted-foreground">
+        <span className="font-mono text-[10px] text-zinc-600">
           {task.attempt}/{task.max_attempts}
         </span>
       )}

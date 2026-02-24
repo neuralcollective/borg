@@ -175,16 +175,21 @@ pub const Db = struct {
         try self.runMigrations();
     }
 
-    /// Set schema_version to latest so fresh installs skip ALTER migrations.
-    /// Called only when state table was just created (no rows yet).
+    /// On a truly fresh DB (empty state table), set schema_version to latest
+    /// so ALTER migrations are skipped (the CREATE TABLE already has all columns).
     fn initSchemaVersion(self: *Db) !void {
+        // Check if state table has ANY rows — if so, this is an existing DB
         var rows = try self.sqlite_db.query(
             self.allocator,
-            "SELECT value FROM state WHERE key = 'schema_version'",
+            "SELECT COUNT(*) FROM state",
             .{},
         );
         defer rows.deinit();
-        if (rows.items.len > 0) return; // existing DB, let runMigrations handle it
+        const count = if (rows.items.len > 0)
+            std.fmt.parseInt(usize, rows.items[0].get(0) orelse "0", 10) catch 0
+        else
+            0;
+        if (count > 0) return; // existing DB, let runMigrations handle it
 
         try self.sqlite_db.execute(
             "INSERT INTO state (key, value) VALUES ('schema_version', ?1)",

@@ -1,62 +1,57 @@
 import { useStatus } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
-import { Circle } from "lucide-react";
 
 function formatUptime(seconds: number) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  return `${h}h ${m}m ${s}s`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 export function Header({ connected }: { connected: boolean }) {
   const { data: status } = useStatus();
 
   return (
-    <header className="flex items-center gap-4 border-b border-border bg-card px-5 py-3">
-      <h1 className="text-sm font-bold tracking-wider text-primary">BORG</h1>
-      <span className="text-[10px] text-muted-foreground font-mono">{status?.version ?? ""}</span>
+    <header className="flex h-12 shrink-0 items-center gap-5 border-b border-white/[0.06] bg-[#0a0a0a] px-5">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white">
+          <span className="text-[10px] font-black text-black">B</span>
+        </div>
+        <span className="text-[13px] font-semibold tracking-tight text-white">Borg</span>
+        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[10px] text-zinc-500">{status?.version ?? ""}</span>
+      </div>
 
-      <div className="h-5 w-px bg-border" />
+      <div className="h-4 w-px bg-white/[0.08]" />
 
-      {status?.continuous_mode ? (
-        <Badge variant="outline" className="border-green-800 bg-green-950/50 text-green-400 text-xs">
-          CONTINUOUS
-        </Badge>
-      ) : (
-        <Badge variant="outline" className="border-amber-800 bg-amber-950/50 text-amber-400 text-xs">
-          EVERY {status?.release_interval_mins ?? "?"}M
-        </Badge>
-      )}
-
-      <div className="h-5 w-px bg-border" />
-
-      <span className="text-xs text-muted-foreground">
-        uptime{" "}
-        <span className="text-foreground">{status ? formatUptime(status.uptime_s) : "--"}</span>
-      </span>
-
-      <div className="h-5 w-px bg-border" />
-
-      <span className="text-xs text-muted-foreground">
-        model <span className="text-foreground">{status?.model ?? "--"}</span>
-      </span>
-
-      {(status?.watched_repos?.length ?? 0) > 1 && (
-        <>
-          <div className="h-5 w-px bg-border" />
-          <span className="text-xs text-muted-foreground">
-            repos <span className="text-foreground">{status?.watched_repos.length}</span>
+      <div className="flex items-center gap-4">
+        {status?.continuous_mode ? (
+          <span className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            Continuous
           </span>
-        </>
-      )}
+        ) : (
+          <span className="text-[11px] text-zinc-500">
+            Release every <span className="text-zinc-300">{status?.release_interval_mins ?? "?"}m</span>
+          </span>
+        )}
+
+        <span className="text-[11px] text-zinc-500">
+          Up <span className="text-zinc-300">{status ? formatUptime(status.uptime_s) : "--"}</span>
+        </span>
+
+        <span className="text-[11px] text-zinc-500">
+          Model <span className="text-zinc-300">{status?.model ?? "--"}</span>
+        </span>
+
+        {(status?.watched_repos?.length ?? 0) > 1 && (
+          <span className="text-[11px] text-zinc-500">
+            Repos <span className="text-zinc-300">{status?.watched_repos.length}</span>
+          </span>
+        )}
+      </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <Circle
-          className={connected ? "fill-green-500 text-green-500" : "fill-red-500 text-red-500"}
-          size={8}
-        />
-        <span className="text-[10px] text-muted-foreground">{connected ? "live" : "disconnected"}</span>
+        <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-red-500"}`} />
+        <span className="text-[11px] text-zinc-500">{connected ? "Connected" : "Disconnected"}</span>
       </div>
     </header>
   );
