@@ -1,0 +1,21 @@
+zig-out/
+zig-cache/
+.zig-cache/
+
+# Local data
+store/
+data/
+logs/
+
+# Secrets
+.env
+
+# SQLite databases
+*.db
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
