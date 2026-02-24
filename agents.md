@@ -7,7 +7,7 @@ Step-by-step setup for a fresh machine.
 - Linux (tested on Arch, should work on Ubuntu/Debian)
 - Docker daemon running
 - Zig 0.14.1+ (`curl -fsSL https://ziglang.org/download/0.14.1/zig-linux-x86_64-0.14.1.tar.xz | sudo tar -xJ -C /opt && sudo ln -s /opt/zig-linux-x86_64-0.14.1/zig /usr/local/bin/zig`)
-- Node.js 18+ (for Claude Code CLI and chat bridges)
+- Bun (for Claude Code CLI and messaging sidecar)
 - Claude Code CLI (`bun install -g @anthropic-ai/claude-code`)
 - Claude OAuth credentials at `~/.claude/.credentials.json` (created by `claude` login)
 
@@ -26,15 +26,13 @@ docker build -t borg-agent:latest -f container/Dockerfile container/
 
 This image has Node.js + Claude Code CLI. Pipeline agents run inside it.
 
-## 3. Install Chat Bridge Dependencies
+## 3. Install Sidecar Dependencies
 
 ```bash
-# WhatsApp (optional)
-cd whatsapp && bun install && cd ..
-
-# Discord (optional)
-cd discord && bun install && cd ..
+cd sidecar && bun install && cd ..
 ```
+
+This installs Discord.js and Baileys (WhatsApp) in a single process.
 
 ## 4. Build Dashboard
 

@@ -461,6 +461,13 @@ pub const Db = struct {
         );
     }
 
+    pub fn recycleFailedTasks(self: *Db) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET status = 'backlog', attempt = 0, branch = '', session_id = '', updated_at = datetime('now') WHERE status = 'failed'",
+            .{},
+        );
+    }
+
     pub fn resetTaskAttempt(self: *Db, task_id: i64) !void {
         try self.sqlite_db.execute(
             "UPDATE pipeline_tasks SET attempt = 0, branch = '', session_id = '', updated_at = datetime('now') WHERE id = ?1",

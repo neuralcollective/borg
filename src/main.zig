@@ -11,10 +11,8 @@ const Docker = docker_mod.Docker;
 const json_mod = @import("json.zig");
 const agent_mod = @import("agent.zig");
 const pipeline_mod = @import("pipeline.zig");
-const wa_mod = @import("whatsapp.zig");
-const WhatsApp = wa_mod.WhatsApp;
-const discord_mod = @import("discord.zig");
-const Discord = discord_mod.Discord;
+const sidecar_mod = @import("sidecar.zig");
+const Sidecar = sidecar_mod.Sidecar;
 const web_mod = @import("web.zig");
 const WebServer = web_mod.WebServer;
 
@@ -76,7 +74,7 @@ fn installSignalHandlers() void {
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-const Transport = enum { telegram, whatsapp, discord };
+const Transport = enum { telegram, whatsapp, discord, web };
 
 const GroupPhase = enum { idle, collecting, running, cooldown };
 
@@ -158,23 +156,26 @@ const IncomingMessage = struct {
 
 const Sender = struct {
     tg: *Telegram,
-    wa: ?*WhatsApp,
-    discord: ?*Discord,
+    sidecar: ?*Sidecar,
+    web: ?*WebServer,
 
     fn send(self: Sender, transport: Transport, original_id: []const u8, text: []const u8, reply_to: ?[]const u8) void {
         switch (transport) {
             .telegram => self.tg.sendMessage(original_id, text, reply_to) catch |err| {
                 std.log.err("TG send: {}", .{err});
             },
-            .whatsapp => if (self.wa) |w| {
-                w.sendMessage(original_id, text, reply_to) catch |err| {
+            .whatsapp => if (self.sidecar) |s| {
+                s.sendWhatsApp(original_id, text, reply_to) catch |err| {
                     std.log.err("WA send: {}", .{err});
                 };
             },
-            .discord => if (self.discord) |d| {
-                d.sendMessage(original_id, text, reply_to) catch |err| {
+            .discord => if (self.sidecar) |s| {
+                s.sendDiscord(original_id, text, reply_to) catch |err| {
                     std.log.err("Discord send: {}", .{err});
                 };
+            },
+            .web => if (self.web) |ws| {
+                ws.broadcastChatEvent(text);
             },
         }
     }
@@ -182,8 +183,9 @@ const Sender = struct {
     fn sendTyping(self: Sender, transport: Transport, original_id: []const u8) void {
         switch (transport) {
             .telegram => self.tg.sendTyping(original_id) catch {},
-            .whatsapp => if (self.wa) |w| w.sendTyping(original_id) catch {},
-            .discord => if (self.discord) |d| d.sendTyping(original_id) catch {},
+            .whatsapp => if (self.sidecar) |s| s.sendWhatsAppTyping(original_id) catch {},
+            .discord => if (self.sidecar) |s| s.sendDiscordTyping(original_id) catch {},
+            .web => {},
         }
     }
 };
@@ -471,8 +473,9 @@ pub fn main() !void {
     var db = try Db.init(allocator, "store/borg.db");
     defer db.deinit();
 
-    // Resume: reset any stuck queue entries from a previous crash/restart
+    // Resume: reset any stuck queue entries and failed tasks from a previous crash/restart
     db.resetStuckQueueEntries() catch {};
+    db.recycleFailedTasks() catch {};
 
     var tg = Telegram.init(allocator, config.telegram_token);
     try tg.connect();
@@ -488,29 +491,16 @@ pub fn main() !void {
         docker.cleanupOrphans() catch {};
     }
 
-    // Start WhatsApp bridge if enabled
-    var wa: ?WhatsApp = null;
-    defer if (wa) |*w| w.deinit();
-    if (config.whatsapp_enabled) {
-        wa = WhatsApp.init(allocator, config.assistant_name);
-        wa.?.start() catch |err| {
-            std.log.err("WhatsApp bridge start failed: {}", .{err});
-            wa = null;
+    // Start unified sidecar (Discord + WhatsApp in one bun process)
+    var sidecar: ?Sidecar = null;
+    defer if (sidecar) |*s| s.deinit();
+    if (config.discord_enabled or config.whatsapp_enabled) {
+        sidecar = Sidecar.init(allocator, config.assistant_name);
+        sidecar.?.start(config.discord_token, config.whatsapp_auth_dir, !config.whatsapp_enabled) catch |err| {
+            std.log.err("Sidecar start failed: {}", .{err});
+            sidecar = null;
         };
     }
-
-    // Start Discord bridge if enabled
-    var discord: ?Discord = null;
-    defer if (discord) |*d| d.deinit();
-    if (config.discord_enabled) {
-        discord = Discord.init(allocator, config.discord_token, config.assistant_name);
-        discord.?.start() catch |err| {
-            std.log.err("Discord bridge start failed: {}", .{err});
-            discord = null;
-        };
-    }
-
-    var sender = Sender{ .tg = &tg, .wa = if (wa) |*w| w else null, .discord = if (discord) |*d| d else null };
 
     // Start pipeline thread if repo is configured
     var pipeline_db: ?Db = null;
@@ -536,6 +526,8 @@ pub fn main() !void {
     var web = WebServer.init(allocator, &web_db, &config, config.web_port);
     web_server_global = &web;
     const web_thread = try std.Thread.spawn(.{}, WebServer.run, .{&web});
+
+    var sender = Sender{ .tg = &tg, .sidecar = if (sidecar) |*s| s else null, .web = &web };
     defer {
         web.stop();
         web_thread.join();
@@ -556,6 +548,25 @@ pub fn main() !void {
     defer gm.deinit();
     for (groups_list.items) |group| {
         gm.addGroup(group.jid);
+    }
+
+    // Auto-register web:dashboard for the dashboard chat
+    {
+        const web_jid = "web:dashboard";
+        const already = for (groups_list.items) |g| {
+            if (std.mem.eql(u8, g.jid, web_jid)) break true;
+        } else false;
+        if (!already) {
+            db.registerGroup(web_jid, "Dashboard", "dashboard", "@" ++ "Borg", false) catch {};
+            try groups_list.append(.{
+                .jid = web_jid,
+                .name = "Dashboard",
+                .folder = "dashboard",
+                .trigger = "@Borg",
+                .requires_trigger = false,
+            });
+            gm.addGroup(web_jid);
+        }
     }
 
     std.log.info("Borg {s} online | assistant: {s} | groups: {d}", .{ version, config.assistant_name, groups_list.items.len });
@@ -601,43 +612,54 @@ pub fn main() !void {
             }) catch {};
         }
 
-        // 2. Poll WhatsApp messages
-        if (wa) |*w| {
-            const wa_msgs = w.poll(cycle_alloc) catch &[_]wa_mod.WaMessage{};
-            for (wa_msgs) |msg| {
+        // 2. Poll sidecar (WhatsApp + Discord)
+        if (sidecar) |*s| {
+            const sc_msgs = s.poll(cycle_alloc) catch &[_]sidecar_mod.SidecarMessage{};
+            for (sc_msgs) |msg| {
+                const prefix: []const u8 = if (msg.source == .discord) "discord" else "wa";
+                const transport: Transport = if (msg.source == .discord) .discord else .whatsapp;
                 all_messages.append(.{
-                    .jid = try std.fmt.allocPrint(cycle_alloc, "wa:{s}", .{msg.jid}),
-                    .original_id = msg.jid,
+                    .jid = std.fmt.allocPrint(cycle_alloc, "{s}:{s}", .{ prefix, msg.chat_id }) catch continue,
+                    .original_id = msg.chat_id,
                     .message_id = msg.id,
                     .sender = msg.sender,
                     .sender_name = msg.sender_name,
                     .text = msg.text,
                     .timestamp = msg.timestamp,
                     .mentions_bot = msg.mentions_bot,
-                    .transport = .whatsapp,
-                    .chat_title = msg.jid,
+                    .transport = transport,
+                    .chat_title = msg.chat_id,
                     .chat_type = if (msg.is_group) "group" else "private",
                 }) catch {};
             }
         }
 
-        // 2b. Poll Discord messages
-        if (discord) |*d| {
-            const dc_msgs = d.poll(cycle_alloc) catch &[_]discord_mod.DiscordMessage{};
-            for (dc_msgs) |msg| {
+        // 2c. Drain web chat messages
+        {
+            const web_msgs = web.drainChatMessages();
+            defer {
+                for (web_msgs) |wm| {
+                    allocator.free(wm.sender_name);
+                    allocator.free(wm.text);
+                }
+                allocator.free(web_msgs);
+            }
+            for (web_msgs) |wm| {
+                const ts_str = formatTimestamp(cycle_alloc, wm.timestamp) catch continue;
                 all_messages.append(.{
-                    .jid = try std.fmt.allocPrint(cycle_alloc, "discord:{s}", .{msg.channel_id}),
-                    .original_id = msg.channel_id,
-                    .message_id = msg.message_id,
-                    .sender = msg.sender_id,
-                    .sender_name = msg.sender_name,
-                    .text = msg.text,
-                    .timestamp = msg.timestamp,
-                    .mentions_bot = msg.mentions_bot,
-                    .transport = .discord,
-                    .chat_title = msg.channel_id,
-                    .chat_type = if (msg.is_dm) "private" else "channel",
+                    .jid = "web:dashboard",
+                    .original_id = "web:dashboard",
+                    .message_id = std.fmt.allocPrint(cycle_alloc, "web-{d}", .{wm.timestamp}) catch continue,
+                    .sender = wm.sender_name,
+                    .sender_name = wm.sender_name,
+                    .text = wm.text,
+                    .timestamp = wm.timestamp,
+                    .mentions_bot = true,
+                    .transport = .web,
+                    .chat_title = "Dashboard",
+                    .chat_type = "private",
                 }) catch {};
+                _ = ts_str;
             }
         }
 
