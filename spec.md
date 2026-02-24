@@ -1,74 +1,100 @@
-TASK_START
-TITLE: Fix WhatsApp stdout blocking the main event loop
-DESCRIPTION: In whatsapp.zig:77-82, the `poll()` method calls `stdout.read()` on a blocking pipe fd. When the WhatsApp bridge has no data to send, this blocks indefinitely, freezing the entire main event loop (Telegram polling, agent dispatch, cooldown expiry). The pipe should be set to O_NONBLOCK after spawning the child process, or the read should be moved to a dedicated thread that feeds parsed events to the main loop via a thread-safe queue.
-TASK_END
+# Spec: Add tests for `parseWatchedRepos` in config.zig
 
-TASK_START
-TITLE: Fix subprocess stdout/stderr sequential read deadlock
-DESCRIPTION: In git.zig:27-40 and pipeline.zig:768-781, stdout is read to completion before stderr is read. If a child process fills the OS pipe buffer (~64KB on Linux) writing to stderr while also writing to stdout, the child blocks on stderr write, and the parent blocks on stdout read, causing a deadlock. Both streams must be drained concurrently, either by using separate threads per stream, poll/epoll, or by collecting both via the Zig child.collectOutput() pattern.
-TASK_END
+## 1. Task Summary
 
-TASK_START
-TITLE: Fix OAuth token memory leak in refreshOAuthToken
-DESCRIPTION: In config.zig:106-110, `refreshOAuthToken` overwrites `self.oauth_token` with a newly allocated string without freeing the previous value. This function is called every main loop iteration (every 500ms in main.zig:647), causing continuous memory growth. The old token must be freed before assigning the new one, with care to avoid freeing the initial token that may have come from a non-owned slice.
-TASK_END
+`parseWatchedRepos` in `src/config.zig:118-157` parses the `WATCHED_REPOS` environment variable into a slice of `RepoConfig` structs but has no test coverage. Tests must be added for pipe-delimited multiple paths, single-path input, path-with-test-command input, and empty string input (should return empty slice when no primary repo is set). Note: the actual delimiter is pipe (`|`), not comma; the task description's "comma-separated" is interpreted as "delimited list."
 
-TASK_START
-TITLE: Fix use-after-free on pipeline shutdown with active agents
-DESCRIPTION: In pipeline.zig:156, spawned `processTaskThread` thread handles are discarded (detached). During shutdown, `Pipeline.run()` waits at most 30s for agents then returns. The main function then destroys `pipeline_db` and the allocator, but detached agent threads may still be running and accessing `self.db` and `self.allocator`. Store thread handles and join them all during shutdown, or use a shared atomic flag that agents check before each db operation.
-TASK_END
+## 2. Files to Modify
 
-TASK_START
-TITLE: Fix Docker container name collision for concurrent agents
-DESCRIPTION: In pipeline.zig:1121-1123, container names are generated using `std.time.timestamp()` which has second granularity. If two pipeline agents are spawned within the same second, they get identical container names and Docker rejects the second container creation. Add a monotonic atomic counter or random suffix to ensure unique container names across concurrent spawns.
-TASK_END
+- `src/config.zig` — Add test blocks at the end of the file (after line 267), following the existing pattern used by the `findEnvValue` tests already present in the file.
 
-TASK_START
-TITLE: Fix formatTimestamp panic on negative or zero timestamps
-DESCRIPTION: In main.zig:1200, `@intCast(unix_ts)` casts i64 to u64 for EpochSeconds.secs. If a message has a negative or zero timestamp (e.g., timestamp 0 from WhatsApp defaults, or malformed Telegram data), this triggers a runtime panic from the safety-checked integer cast. Clamp the timestamp to a valid positive range (minimum 0) before casting, or use `@max(unix_ts, 0)` to prevent the panic.
-TASK_END
+## 3. Files to Create
 
-TASK_START
-TITLE: Fix data race on web_server_global pointer
-DESCRIPTION: In main.zig:25, `web_server_global` is a plain `?*WebServer` read from the log function (called from any thread via std.log) and written from the main thread. This is a data race under the Zig/C memory model. Replace it with `std.atomic.Value(?*WebServer)` and use atomic load/store with appropriate memory ordering to ensure correct visibility across threads.
-TASK_END
+None. Tests go directly in `src/config.zig` since `parseWatchedRepos` is a private (`fn`, not `pub fn`) function and can only be tested from within the same file. This follows the existing convention in the file (see `findEnvValue` tests at lines 208-267). The build system already includes these tests via `zig build test` (build.zig:54-59 creates a test from the `exe_mod` root module `src/main.zig`, which imports `config.zig`).
 
-TASK_START
-TITLE: Fix memory leak of session_id in /tasks command handler
-DESCRIPTION: In main.zig:1089-1103, the `/tasks` command handler frees individual fields of each PipelineTask struct (title, description, repo_path, branch, status, last_error, created_by, notify_chat, created_at) but omits `t.session_id`. Since `rowToPipelineTask` allocates `session_id` via `allocator.dupe`, this leaks memory on every `/tasks` invocation. Add `allocator.free(t.session_id)` to the cleanup block.
-TASK_END
+## 4. Function/Type Signatures
 
-TASK_START
-TITLE: Fix JSON injection via unescaped JID in WhatsApp sendMessage
-DESCRIPTION: In whatsapp.zig:161, the `jid` parameter is interpolated directly into a JSON string without escaping. A JID containing `"` or `\` would produce malformed JSON sent to the bridge process stdin, potentially causing message send failures or protocol desync. Apply `json_mod.escapeString` to the JID before interpolation, consistent with the escaping already done for the text field.
-TASK_END
+No new public functions or types are needed. The tests call the existing private function directly:
 
-TASK_START
-TITLE: Fix Telegram entity offset/length panic on negative values
-DESCRIPTION: In telegram.zig:108-109, `@intCast` converts i64 offset/length values from the Telegram API to usize. A malformed or adversarial API response with negative offset or length values will cause a runtime panic crashing the entire process. Replace `@intCast` with `std.math.cast(usize, ...)` which returns null on out-of-range values, and skip the entity on failure via `orelse continue`.
-TASK_END
+```zig
+fn parseWatchedRepos(
+    allocator: std.mem.Allocator,
+    env_content: []const u8,
+    primary_repo: []const u8,
+    primary_test_cmd: []const u8,
+) ![]RepoConfig
+```
 
-TASK_START
-TITLE: Fix web server single-read HTTP request parsing
-DESCRIPTION: In web.zig:137-141, `handleConnection` performs a single `stream.read()` to get the HTTP request. TCP may deliver the request across multiple segments, causing partial reads where only part of the request line is received. The path parsing then operates on incomplete data, leading to incorrect routing or dropped requests under load. Read in a loop until `\r\n` (end of request line) is found, with a timeout and max-size limit to prevent slow-loris attacks.
-TASK_END
+Where `RepoConfig` is (defined at `src/config.zig:3-7`):
 
-TASK_START
-TITLE: Add size limit to subprocess stdout/stderr buffers
-DESCRIPTION: In git.zig, agent.zig, docker.zig, and pipeline.zig, subprocess stdout/stderr is read into unbounded ArrayLists with no size cap. A misbehaving subprocess could write gigabytes of output, causing OOM and crashing the entire orchestrator. Add a configurable maximum buffer size (e.g., 50MB for agent output, 10MB for git/test output) and stop reading once exceeded, truncating the output.
-TASK_END
+```zig
+pub const RepoConfig = struct {
+    path: []const u8,
+    test_cmd: []const u8,
+    is_self: bool,
+};
+```
 
-TASK_START
-TITLE: Fix isBindSafe Docker mount check to resolve symlinks
-DESCRIPTION: In docker.zig:253-279, `isBindSafe` checks the string representation of the host path against a blocklist of sensitive directories. A symlink (e.g., `/tmp/innocent` pointing to `/home/user/.ssh`) bypasses all checks because only the literal string is examined. Use `std.fs.realpathAlloc` to resolve the actual filesystem path before checking against the blocklist, preventing symlink-based mount escapes in pipeline agent containers.
-TASK_END
+Each test block should use `std.testing.allocator` (or an `ArenaAllocator` wrapping it) and craft an `env_content` string containing `WATCHED_REPOS=...` to control the parsed value. The function internally calls `getEnv(allocator, env_content, "WATCHED_REPOS")`, so providing the key in `env_content` is sufficient.
 
-TASK_START
-TITLE: Fix SSE client list resource leak for idle connections
-DESCRIPTION: In web.zig:261, SSE clients are added to `sse_clients` and only removed when a write fails during `broadcastSse`. During quiet periods with no log events, disconnected clients accumulate as stale entries holding open file descriptors. Add a periodic keepalive mechanism (e.g., send SSE comment `: keepalive\n\n` every 30 seconds) that also serves to detect and prune dead connections via write failure.
-TASK_END
+**Important allocator note:** `parseWatchedRepos` allocates duped strings for secondary repo paths and test commands via `allocator.dupe`. Tests using `std.testing.allocator` must free the returned slice and its contents to avoid leak detection failures. Use an `ArenaAllocator` to simplify cleanup, consistent with the pattern in `src/is_bot_message_test.zig`.
 
-TASK_START
-TITLE: Fix deadlock risk from nested mutex acquisition in pushLog
-DESCRIPTION: In web.zig:55-75, `pushLog` acquires `log_mu` then calls `broadcastSse` which acquires `sse_mu`, establishing an implicit lock ordering (log_mu then sse_mu). While no current code path reverses this order, it is fragile and undocumented. Refactor to release `log_mu` before calling `broadcastSse` by copying the level and message into local buffers first, eliminating the nested lock acquisition entirely.
-TASK_END
+## 5. Acceptance Criteria
+
+### AC1: Empty WATCHED_REPOS with no primary repo returns empty slice
+Call `parseWatchedRepos(allocator, "", "", "")`. Assert the returned slice has length 0.
+
+### AC2: Empty WATCHED_REPOS with a primary repo returns slice of length 1
+Call `parseWatchedRepos(allocator, "", "/repo/primary", "zig build test")`. Assert:
+- Returned slice has length 1
+- `repos[0].path` equals `"/repo/primary"`
+- `repos[0].test_cmd` equals `"zig build test"`
+- `repos[0].is_self` is `true`
+
+### AC3: Single path in WATCHED_REPOS (no test command)
+Craft `env_content = "WATCHED_REPOS=/repo/secondary"` and call with empty primary repo. Assert:
+- Returned slice has length 1
+- `repos[0].path` equals `"/repo/secondary"`
+- `repos[0].test_cmd` equals `"make test"` (the default)
+- `repos[0].is_self` is `false`
+
+### AC4: Single path with test command in WATCHED_REPOS
+Craft `env_content = "WATCHED_REPOS=/repo/secondary:cargo test"`. Assert:
+- `repos[0].path` equals `"/repo/secondary"`
+- `repos[0].test_cmd` equals `"cargo test"`
+- `repos[0].is_self` is `false`
+
+### AC5: Pipe-delimited multiple paths in WATCHED_REPOS
+Craft `env_content = "WATCHED_REPOS=/repo/a:/repo/a/cmd|/repo/b"` with a primary repo set. Assert:
+- Returned slice has length 3 (primary + 2 watched)
+- `repos[0]` is the primary with `is_self = true`
+- `repos[1].path` equals `"/repo/a"` with `test_cmd` `"/repo/a/cmd"` and `is_self = false`
+- `repos[2].path` equals `"/repo/b"` with `test_cmd` `"make test"` and `is_self = false`
+
+### AC6: WATCHED_REPOS entry matching primary repo is skipped
+Craft `env_content = "WATCHED_REPOS=/repo/primary|/repo/other"` and call with `primary_repo = "/repo/primary"`. Assert:
+- Returned slice has length 2 (primary + `/repo/other` only)
+- No entry with `is_self = false` has path equal to `"/repo/primary"`
+
+### AC7: All tests pass with `zig build test`
+Running `zig build test` succeeds with zero failures.
+
+## 6. Edge Cases to Handle
+
+### E1: Whitespace-only entries are skipped
+`env_content = "WATCHED_REPOS=/repo/a|  |/repo/b"` — the whitespace-only middle entry is ignored; result contains entries for `/repo/a` and `/repo/b` only.
+
+### E2: Whitespace around paths is trimmed
+`env_content = "WATCHED_REPOS=  /repo/a : my test cmd  |  /repo/b  "` — paths and test commands have leading/trailing whitespace trimmed.
+
+### E3: Entry with colon but empty path is skipped
+`env_content = "WATCHED_REPOS=:some_cmd"` — the path portion is empty after splitting on `:`, so the entry is skipped (line 138: `if (path.len == 0) continue`).
+
+### E4: Entry with colon but empty test command gets default
+`env_content = "WATCHED_REPOS=/repo/a:"` — the test command portion is empty, so it defaults to `"make test"` (line 142: `if (cmd.len > 0) ... else "make test"`).
+
+### E5: Trailing pipe produces no extra entry
+`env_content = "WATCHED_REPOS=/repo/a|"` — the trailing empty segment is skipped.
+
+### E6: Primary repo with empty path does not add a self entry
+Call with `primary_repo = ""` — no `is_self = true` entry is added (line 122: `if (primary_repo.len > 0)`).
