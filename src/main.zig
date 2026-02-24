@@ -10,10 +10,13 @@ const Docker = docker_mod.Docker;
 const json_mod = @import("json.zig");
 
 const POLL_INTERVAL_MS = 1000;
+const MAX_AGENT_RETRIES = 3;
+const RETRY_BASE_MS = 1000;
 
 const GroupState = struct {
     last_agent_timestamp: ?[]const u8,
     consecutive_errors: u32,
+    agent_running: bool,
 };
 
 pub fn main() !void {
@@ -22,6 +25,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var config = try Config.load(allocator);
+    const start_time = std.time.timestamp();
 
     if (config.telegram_token.len == 0) {
         std.log.err("TELEGRAM_BOT_TOKEN not set", .{});
@@ -60,6 +64,7 @@ pub fn main() !void {
         try group_states.put(group.jid, GroupState{
             .last_agent_timestamp = null,
             .consecutive_errors = 0,
+            .agent_running = false,
         });
     }
 
@@ -94,7 +99,7 @@ pub fn main() !void {
 
             // Handle commands
             if (msg.text.len > 0 and msg.text[0] == '/') {
-                handleCommand(allocator, &db, &tg, msg, chat_jid, &groups_list, &group_states, &config) catch |err| {
+                handleCommand(allocator, &db, &tg, msg, chat_jid, &groups_list, &group_states, &config, start_time) catch |err| {
                     std.log.err("Command error: {}", .{err});
                 };
                 continue;
@@ -117,6 +122,14 @@ pub fn main() !void {
                 }
             }
 
+            // Check if agent already running for this group
+            if (group_states.get(chat_jid)) |state| {
+                if (state.agent_running) {
+                    std.log.info("Agent already running for {s}, queueing", .{chat_jid});
+                    continue;
+                }
+            }
+
             std.log.info("Triggered: \"{s}\" from {s}", .{ msg.text[0..@min(msg.text.len, 60)], msg.sender_name });
             tg.sendTyping(msg.chat_id) catch {};
 
@@ -130,8 +143,50 @@ pub fn main() !void {
             const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
             const session_id = db.getSession(cycle_alloc, group.folder) catch null;
 
-            const result = runAgent(allocator, &docker, config, group, prompt, session_id) catch |err| {
-                std.log.err("Agent error: {}", .{err});
+            // Mark agent as running
+            if (group_states.getPtr(chat_jid)) |s| {
+                s.agent_running = true;
+            }
+
+            const result = runAgentWithRetry(allocator, &docker, config, group, prompt, session_id);
+
+            // Mark agent as done
+            if (group_states.getPtr(chat_jid)) |s| {
+                s.agent_running = false;
+            }
+
+            if (result) |res| {
+                defer allocator.free(res.output);
+                defer if (res.new_session_id) |sid| allocator.free(sid);
+
+                if (group_states.getPtr(chat_jid)) |s| {
+                    s.consecutive_errors = 0;
+                    if (s.last_agent_timestamp) |old| allocator.free(old);
+                    s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
+                }
+
+                if (res.new_session_id) |new_sid| {
+                    db.setSession(group.folder, new_sid) catch {};
+                }
+
+                if (res.output.len > 0) {
+                    db.storeMessage(.{
+                        .id = try std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}),
+                        .chat_jid = chat_jid,
+                        .sender = "borg",
+                        .sender_name = config.assistant_name,
+                        .content = res.output,
+                        .timestamp = try formatTimestamp(cycle_alloc, std.time.timestamp()),
+                        .is_from_me = true,
+                    }) catch {};
+
+                    tg.sendMessage(msg.chat_id, res.output, msg.message_id) catch |err| {
+                        std.log.err("Send response: {}", .{err});
+                    };
+                }
+            } else |err| {
+                std.log.err("Agent failed after retries: {}", .{err});
+
                 if (group_states.getPtr(chat_jid)) |s| {
                     s.consecutive_errors += 1;
                     if (s.consecutive_errors >= config.max_consecutive_errors) {
@@ -140,35 +195,8 @@ pub fn main() !void {
                         s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
                     }
                 }
-                continue;
-            };
-            defer allocator.free(result.output);
-            defer if (result.new_session_id) |sid| allocator.free(sid);
 
-            if (group_states.getPtr(chat_jid)) |s| {
-                s.consecutive_errors = 0;
-                if (s.last_agent_timestamp) |old| allocator.free(old);
-                s.last_agent_timestamp = allocator.dupe(u8, pending[pending.len - 1].timestamp) catch null;
-            }
-
-            if (result.new_session_id) |new_sid| {
-                db.setSession(group.folder, new_sid) catch {};
-            }
-
-            if (result.output.len > 0) {
-                db.storeMessage(.{
-                    .id = try std.fmt.allocPrint(cycle_alloc, "bot-{d}", .{std.time.timestamp()}),
-                    .chat_jid = chat_jid,
-                    .sender = "borg",
-                    .sender_name = config.assistant_name,
-                    .content = result.output,
-                    .timestamp = try formatTimestamp(cycle_alloc, std.time.timestamp()),
-                    .is_from_me = true,
-                }) catch {};
-
-                tg.sendMessage(msg.chat_id, result.output, msg.message_id) catch |err| {
-                    std.log.err("Send response: {}", .{err});
-                };
+                tg.sendMessage(msg.chat_id, "Sorry, I encountered an error processing your message. Please try again.", msg.message_id) catch {};
             }
         }
 
@@ -185,6 +213,7 @@ fn handleCommand(
     groups_list: *std.ArrayList(db_mod.RegisteredGroup),
     group_states: *std.StringHashMap(GroupState),
     config: *Config,
+    start_time: i64,
 ) !void {
     if (std.mem.startsWith(u8, msg.text, "/register")) {
         for (groups_list.items) |g| {
@@ -211,12 +240,65 @@ fn handleCommand(
         try group_states.put(jid_dupe, GroupState{
             .last_agent_timestamp = null,
             .consecutive_errors = 0,
+            .agent_running = false,
         });
 
         var buf: [256]u8 = undefined;
         const reply = try std.fmt.bufPrint(&buf, "Registered! Mention @{s} to talk to me.", .{config.assistant_name});
         try tg.sendMessage(msg.chat_id, reply, msg.message_id);
         std.log.info("Registered: {s} ({s})", .{ msg.chat_title, chat_jid });
+    } else if (std.mem.startsWith(u8, msg.text, "/unregister")) {
+        var found_idx: ?usize = null;
+        for (groups_list.items, 0..) |g, idx| {
+            if (std.mem.eql(u8, g.jid, chat_jid)) {
+                found_idx = idx;
+                break;
+            }
+        }
+
+        if (found_idx) |idx| {
+            _ = groups_list.orderedRemove(idx);
+            _ = group_states.remove(chat_jid);
+            db.unregisterGroup(chat_jid) catch {};
+            try tg.sendMessage(msg.chat_id, "Unregistered. I'll stop responding here.", msg.message_id);
+            std.log.info("Unregistered: {s}", .{chat_jid});
+        } else {
+            try tg.sendMessage(msg.chat_id, "This chat is not registered.", msg.message_id);
+        }
+    } else if (std.mem.startsWith(u8, msg.text, "/status")) {
+        const uptime_secs = std.time.timestamp() - start_time;
+        const hours = @divTrunc(uptime_secs, 3600);
+        const mins = @divTrunc(@mod(uptime_secs, 3600), 60);
+
+        var active_agents: u32 = 0;
+        var it = group_states.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.agent_running) active_agents += 1;
+        }
+
+        var buf: [512]u8 = undefined;
+        const reply = try std.fmt.bufPrint(&buf,
+            \\*Borg Status*
+            \\Uptime: {d}h {d}m
+            \\Groups: {d}
+            \\Active agents: {d}
+            \\Model: {s}
+        , .{ hours, mins, groups_list.items.len, active_agents, config.model });
+        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+    } else if (std.mem.startsWith(u8, msg.text, "/groups")) {
+        if (groups_list.items.len == 0) {
+            try tg.sendMessage(msg.chat_id, "No groups registered.", msg.message_id);
+            return;
+        }
+
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try buf.appendSlice("*Registered groups:*\n");
+        for (groups_list.items) |g| {
+            const status = if (group_states.get(g.jid)) |s| (if (s.agent_running) " (running)" else "") else "";
+            try buf.writer().print("- {s} `{s}`{s}\n", .{ g.name, g.jid, status });
+        }
+        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
     } else if (std.mem.startsWith(u8, msg.text, "/chatid")) {
         var buf: [256]u8 = undefined;
         const reply = try std.fmt.bufPrint(&buf, "Chat: `{s}`\nType: {s}\nName: {s}", .{ chat_jid, msg.chat_type, msg.chat_title });
@@ -224,7 +306,15 @@ fn handleCommand(
     } else if (std.mem.startsWith(u8, msg.text, "/ping")) {
         try tg.sendMessage(msg.chat_id, "Borg online.", msg.message_id);
     } else if (std.mem.startsWith(u8, msg.text, "/help") or std.mem.startsWith(u8, msg.text, "/start")) {
-        try tg.sendMessage(msg.chat_id, "/register - Register this chat\n/chatid - Show chat ID\n/ping - Check status", msg.message_id);
+        try tg.sendMessage(msg.chat_id,
+            \\*Borg Commands*
+            \\/register - Register this chat
+            \\/unregister - Unregister this chat
+            \\/status - Show bot status
+            \\/groups - List registered groups
+            \\/chatid - Show chat ID
+            \\/ping - Check if online
+        , msg.message_id);
     }
 }
 
@@ -250,6 +340,31 @@ const AgentResult = struct {
     output: []const u8,
     new_session_id: ?[]const u8,
 };
+
+/// Run agent with exponential backoff retry
+fn runAgentWithRetry(
+    allocator: std.mem.Allocator,
+    docker: *Docker,
+    config: Config,
+    group: db_mod.RegisteredGroup,
+    prompt: []const u8,
+    session_id: ?[]const u8,
+) !AgentResult {
+    var last_err: anyerror = error.DockerCreateFailed;
+
+    for (0..MAX_AGENT_RETRIES) |attempt| {
+        const result = runAgent(allocator, docker, config, group, prompt, session_id) catch |err| {
+            last_err = err;
+            const delay = RETRY_BASE_MS * (@as(u64, 1) << @intCast(attempt));
+            std.log.warn("Agent attempt {d}/{d} failed: {} (retry in {d}ms)", .{ attempt + 1, MAX_AGENT_RETRIES, err, delay });
+            std.time.sleep(delay * std.time.ns_per_ms);
+            continue;
+        };
+        return result;
+    }
+
+    return last_err;
+}
 
 fn runAgent(
     allocator: std.mem.Allocator,
