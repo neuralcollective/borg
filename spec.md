@@ -1,81 +1,117 @@
-# Spec: Fix memory leak in Config.refreshOAuthToken
+# Spec: Fix subprocess pipe deadlock when stderr buffer fills
 
 ## Task Summary
 
-`Config.refreshOAuthToken` (`src/config.zig:111`) replaces `self.oauth_token` with a newly heap-allocated string from `readOAuthToken` but never frees the previous value. Since this function is called every main-loop iteration (~500ms in `src/main.zig:709`), on every pipeline seed cycle (`src/pipeline.zig:208`), and on every agent spawn (`src/pipeline.zig:1085`), it causes steady memory growth proportional to uptime. The fix must free the old token before replacing it, while handling the case where the initial token was not heap-allocated (empty string literal `""`).
+Multiple subprocess call sites read stdout to completion before reading stderr (or vice versa). If the child writes more than the OS pipe buffer (~64KB) to the unread stream, the child blocks on write while the parent blocks on read, causing a deadlock. The fix introduces a shared helper that reads both pipes concurrently using a dedicated thread for one stream, and replaces all sequential-read call sites with calls to this helper.
 
 ## Files to Modify
 
-- `src/config.zig` — Fix `refreshOAuthToken` to free the old token; track whether `oauth_token` is heap-owned.
+1. **`src/git.zig`** — Replace sequential stdout/stderr reads in `exec()` with concurrent helper call.
+2. **`src/gt.zig`** — Replace sequential stdout/stderr reads in `exec()` with concurrent helper call.
+3. **`src/docker.zig`** — Replace stdout-only read in `runWithStdio()` with concurrent helper call (also drains stderr, which was previously piped but never read).
+4. **`src/agent.zig`** — Replace stdout-only read in `runDirect()` with concurrent helper call.
+5. **`src/pipeline.zig`** — Replace sequential reads in `runTestCommandForRepo()` and reverse-order reads in `checkSelfUpdate()` with concurrent helper call.
+6. **`src/main.zig`** — Replace stdout-only read in `agentThreadInner()` with concurrent helper call.
 
 ## Files to Create
 
-None.
+1. **`src/subprocess.zig`** — New module containing the shared concurrent pipe-reading helper.
 
 ## Function/Type Signatures
 
-### `Config` struct (`src/config.zig:9`)
-
-Add a field to track whether the current `oauth_token` was heap-allocated and should be freed on replacement:
+### `src/subprocess.zig` (new file)
 
 ```zig
-oauth_token_owned: bool,  // true when oauth_token was allocated by readOAuthToken and must be freed
+pub const PipeOutput = struct {
+    stdout: []u8,
+    stderr: []u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *PipeOutput) void;
+};
+
+/// Read both stdout and stderr concurrently from a spawned child process.
+/// Spawns a thread to read stderr while the calling thread reads stdout.
+/// Returns owned slices for both streams. Caller frees via PipeOutput.deinit().
+/// max_size limits each stream independently (e.g. 10 * 1024 * 1024 for 10MB).
+pub fn collectOutput(
+    allocator: std.mem.Allocator,
+    child: *std.process.Child,
+    max_size: usize,
+) !PipeOutput;
 ```
 
-### `Config.load` (`src/config.zig:46`)
+Internal implementation detail: a private `readerThread` function serves as the thread entry point:
 
-Initialize `oauth_token_owned` based on whether `readOAuthToken` returned a value:
+```zig
+const ReaderContext = struct {
+    stream: std.fs.File,
+    buf: *std.ArrayList(u8),
+    max_size: usize,
+};
 
-- If `readOAuthToken` returned non-null: set `oauth_token_owned = true`
-- If it fell back to `getEnv`: set `oauth_token_owned = true` (getEnv also heap-allocates via `allocator.dupe`)
-- If it fell through to the empty string literal `""`: set `oauth_token_owned = false`
-
-### `Config.refreshOAuthToken` (`src/config.zig:111`)
-
-Updated signature (unchanged, still `pub fn refreshOAuthToken(self: *Config) void`), but new body:
-
-```
-pub fn refreshOAuthToken(self: *Config) void {
-    if (readOAuthToken(self.allocator, self.credentials_path)) |new_token| {
-        if (self.oauth_token_owned) {
-            self.allocator.free(@constCast(self.oauth_token));
-        }
-        self.oauth_token = new_token;
-        self.oauth_token_owned = true;
-    }
-}
+fn readerThread(ctx: ReaderContext) void;
 ```
 
-Key detail: `self.oauth_token` is typed `[]const u8` but the heap-allocated values came from `allocator.dupe(u8, ...)` which returns `[]u8`. Use `@constCast` to obtain the mutable slice needed by `allocator.free`. This is safe because we only free values we know were heap-allocated (guarded by `oauth_token_owned`).
+### `src/git.zig` — `Git.exec()` (modify)
+
+Replace lines 23–40 (the two sequential `if (child.stdout)` / `if (child.stderr)` read loops) with:
+
+```zig
+const subprocess = @import("subprocess.zig");
+// ...
+var output = try subprocess.collectOutput(self.allocator, &child, 10 * 1024 * 1024);
+// Use output.stdout, output.stderr; transfer ownership into ExecResult
+```
+
+The returned `ExecResult` is constructed from `output.stdout` and `output.stderr` directly (no copy needed; ownership transfers).
+
+### `src/gt.zig` — `Gt.exec()` (modify)
+
+Same change as `git.zig:exec()`. Replace the two sequential read loops with `subprocess.collectOutput()`.
+
+### `src/docker.zig` — `Docker.runWithStdio()` (modify)
+
+Replace lines 175–183 (stdout-only read loop) with `subprocess.collectOutput()`. The stderr data can be discarded (freed) after `wait()`, or logged on non-zero exit. `RunResult` is unchanged (stdout-only), but stderr is now drained to prevent deadlock.
+
+### `src/agent.zig` — `runDirect()` (modify)
+
+Replace lines 109–118 (stdout-only read loop) with `subprocess.collectOutput()`. stderr data is freed after use. On non-zero exit, stderr content can be logged before returning `error.AgentFailed`.
+
+### `src/pipeline.zig` — `Pipeline.runTestCommandForRepo()` (modify)
+
+Replace lines 821–838 (two sequential read loops) with `subprocess.collectOutput()`. The returned `TestResult` is constructed from the concurrent output.
+
+### `src/pipeline.zig` — `Pipeline.checkSelfUpdate()` (modify)
+
+Replace lines 1192–1208 (stderr-first-then-stdout read loops) with `subprocess.collectOutput()`. Currently reads stderr first which has the reverse deadlock: if stdout fills while stderr is being drained.
+
+### `src/main.zig` — `agentThreadInner()` (modify)
+
+Replace lines 946–955 (stdout-only read loop) with `subprocess.collectOutput()`. stderr data is freed after parsing stdout.
+
+### `build.zig` (modify, if needed)
+
+Add `src/subprocess.zig` as an available module if the build system requires explicit module declarations for `@import` to work. (In standard Zig projects using file-based imports within `src/`, this may not require changes.)
 
 ## Acceptance Criteria
 
-1. **Old token is freed**: After `refreshOAuthToken` is called with a new token available, the previous `oauth_token` memory is freed. Verifiable by running `zig build test` with `std.testing.allocator` (which detects leaks).
-
-2. **No double-free on literal**: When `oauth_token` is initialized to `""` (a string literal, not heap-allocated) and `refreshOAuthToken` is called for the first time, no free is attempted on the literal. Verifiable by a test that creates a Config with `oauth_token_owned = false` and calls `refreshOAuthToken`.
-
-3. **No use-after-free**: The old token pointer is not accessed after being freed. The assignment `self.oauth_token = new_token` happens after the free.
-
-4. **No-op when token unchanged**: If `readOAuthToken` returns `null` (credentials file missing or unreadable), `oauth_token` is not modified and no free occurs. Existing behavior preserved.
-
-5. **Unit test**: Add a test in `src/config.zig` that exercises `refreshOAuthToken` with `std.testing.allocator`:
-   - Construct a `Config` with a heap-allocated `oauth_token` (`oauth_token_owned = true`).
-   - Call `refreshOAuthToken` (will need a mock or a temp credentials file).
-   - Verify no leak is reported by `std.testing.allocator`.
-   - Alternatively, test the free logic directly: allocate a token, assign it, call refresh, confirm the allocator reports no leaks at scope exit.
-
-6. **Existing tests pass**: `zig build test` passes with no regressions.
+1. **No sequential pipe reads**: No call site reads stdout to completion before starting to read stderr (or vice versa). Every call site that sets both `stdout_behavior = .Pipe` and `stderr_behavior = .Pipe` must use `subprocess.collectOutput()` or equivalent concurrent reading.
+2. **Deadlock resolved**: A subprocess writing >64KB to stderr while producing minimal stdout output does not hang. Specifically: a test that spawns a child writing 128KB to stderr and 0 bytes to stdout must complete within a reasonable time.
+3. **Deadlock resolved (reverse)**: A subprocess writing >64KB to stdout while producing minimal stderr output does not hang.
+4. **Build succeeds**: `zig build` compiles without errors.
+5. **Tests pass**: `zig build test` passes, including existing tests in `git.zig`, `gt.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig`.
+6. **Behavioral equivalence**: All existing `ExecResult`, `RunResult`, `TestResult`, and `AgentResult` return values contain the same data as before. Callers are unaffected.
+7. **Thread cleanup**: The stderr reader thread is always joined before `collectOutput` returns, even if stdout reading encounters an error. No thread leaks.
+8. **New unit test**: `src/subprocess.zig` contains at least one test that spawns a child process producing >64KB on stderr and verifies both streams are fully captured without hanging.
 
 ## Edge Cases
 
-1. **Initial token is empty literal `""`**: The first call to `refreshOAuthToken` must not attempt to free the empty string literal. Handled by `oauth_token_owned = false` at init.
-
-2. **Initial token from `getEnv` or `readOAuthToken`**: Both return heap-allocated memory. `oauth_token_owned` must be `true` so the first refresh frees it.
-
-3. **Credentials file missing or invalid**: `readOAuthToken` returns `null`. `refreshOAuthToken` must be a no-op — no free, no reassignment.
-
-4. **Credentials file returns same token value**: Even if the token content is identical, `readOAuthToken` allocates a new copy each call. The old copy must still be freed. (Optimization to skip replacement when content matches is out of scope but would be a valid follow-up.)
-
-5. **Concurrent access**: `refreshOAuthToken` is called from the main loop and pipeline code. Per CLAUDE.md, SQLite uses WAL with a single connection, and the main loop is single-threaded. Confirm that `refreshOAuthToken` is only called from the main thread or that `Config` access is not shared across threads without synchronization. If it is thread-safe by design (single-threaded event loop), no mutex is needed.
-
-6. **Allocator failure in `readOAuthToken`**: If `allocator.dupe` fails inside `readOAuthToken`, it returns `null`, and `refreshOAuthToken` is a no-op. The old token remains valid. No change needed.
+1. **Child closes stdout before stderr (or vice versa)**: The reader thread for stderr must continue reading even after stdout EOF. The calling thread must join the stderr thread regardless of stdout read outcome.
+2. **Child produces zero output on one or both streams**: `collectOutput` must return empty slices (not null) for streams with no output.
+3. **Child exits before all output is read**: Pipes remain readable after child exit. `collectOutput` must drain both pipes fully before returning, then caller calls `child.wait()`.
+4. **Allocation failure during read**: If `appendSlice` fails (OOM), the reader thread must stop cleanly. The calling thread must still join the reader thread and report the error. Already-buffered data for the other stream should be freed.
+5. **Very large output (>10MB)**: The `max_size` parameter prevents unbounded memory growth. If a stream exceeds `max_size`, reading stops for that stream (the pipe is left unread and the child may block—this is the existing implicit behavior with a finite buffer, just made explicit). Callers pass a reasonable limit.
+6. **stderr set to `.Pipe` but never read (current bug in docker/agent/main)**: After the fix, all piped streams are read. No piped stream is left unread.
+7. **Concurrent access to `child` struct**: `collectOutput` receives a mutable pointer to `child`. The two threads access different fields (`child.stdout` vs `child.stderr`), which are independent `?std.fs.File` values. No mutex is needed since each thread reads only its own stream.
+8. **`checkSelfUpdate` reverse order**: Currently reads stderr first, then stdout. Has the mirror deadlock: stdout >64KB blocks child while parent drains stderr. Fixed by the same concurrent approach.
