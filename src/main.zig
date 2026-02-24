@@ -599,6 +599,7 @@ fn processIncomingMessage(
         .content = msg.text,
         .timestamp = formatTimestamp(cycle_alloc, msg.timestamp) catch return,
         .is_from_me = false,
+        .is_bot_message = false,
     }) catch return;
 
     // Handle commands
@@ -830,6 +831,7 @@ fn deliverOutcome(
                 .content = d.outcome.output,
                 .timestamp = formatTimestamp(cycle_alloc, std.time.timestamp()) catch return,
                 .is_from_me = true,
+                .is_bot_message = true,
             }) catch {};
 
             sender.send(d.transport, d.original_id, d.outcome.output, d.trigger_msg_id);
@@ -1184,8 +1186,8 @@ test "formatPrompt includes assistant identity and message context" {
     const a = arena.allocator();
 
     const msgs = [_]db_mod.Message{
-        .{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "Alice", .content = "Hi bot", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false },
-        .{ .id = "2", .chat_jid = "tg:1", .sender = "bot", .sender_name = "Borg", .content = "Hello!", .timestamp = "2024-01-01T00:00:01Z", .is_from_me = true },
+        .{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "Alice", .content = "Hi bot", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false, .is_bot_message = false },
+        .{ .id = "2", .chat_jid = "tg:1", .sender = "bot", .sender_name = "Borg", .content = "Hello!", .timestamp = "2024-01-01T00:00:01Z", .is_from_me = true, .is_bot_message = true },
     };
 
     const prompt = try formatPrompt(a, &msgs, "Borg");

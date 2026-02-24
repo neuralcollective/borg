@@ -17,6 +17,7 @@ pub const Message = struct {
     content: []const u8,
     timestamp: []const u8,
     is_from_me: bool,
+    is_bot_message: bool,
 };
 
 pub const Session = struct {
@@ -198,7 +199,7 @@ pub const Db = struct {
                 msg.content,
                 msg.timestamp,
                 @as(i64, if (msg.is_from_me) 1 else 0),
-                @as(i64, if (msg.is_from_me) 1 else 0),
+                @as(i64, if (msg.is_bot_message) 1 else 0),
             },
         );
     }
@@ -206,7 +207,7 @@ pub const Db = struct {
     pub fn getMessagesSince(self: *Db, allocator: std.mem.Allocator, chat_jid: []const u8, since: []const u8) ![]Message {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me FROM messages WHERE chat_jid = ?1 AND timestamp > ?2 ORDER BY timestamp ASC LIMIT 50",
+            "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message FROM messages WHERE chat_jid = ?1 AND timestamp > ?2 ORDER BY timestamp ASC LIMIT 50",
             .{ chat_jid, since },
         );
         defer rows.deinit();
@@ -221,6 +222,7 @@ pub const Db = struct {
                 .content = try allocator.dupe(u8, row.get(4) orelse ""),
                 .timestamp = try allocator.dupe(u8, row.get(5) orelse ""),
                 .is_from_me = (row.getInt(6) orelse 0) == 1,
+                .is_bot_message = (row.getInt(7) orelse 0) == 1,
             });
         }
         return messages.toOwnedSlice();
@@ -471,9 +473,9 @@ test "message storage and timestamp filtering" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "Alice", .content = "First", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false });
-    try db.storeMessage(.{ .id = "2", .chat_jid = "tg:1", .sender = "u2", .sender_name = "Bob", .content = "Second", .timestamp = "2024-01-01T00:01:00Z", .is_from_me = false });
-    try db.storeMessage(.{ .id = "3", .chat_jid = "tg:2", .sender = "u1", .sender_name = "Alice", .content = "Other chat", .timestamp = "2024-01-01T00:01:00Z", .is_from_me = false });
+    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "Alice", .content = "First", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false, .is_bot_message = false });
+    try db.storeMessage(.{ .id = "2", .chat_jid = "tg:1", .sender = "u2", .sender_name = "Bob", .content = "Second", .timestamp = "2024-01-01T00:01:00Z", .is_from_me = false, .is_bot_message = false });
+    try db.storeMessage(.{ .id = "3", .chat_jid = "tg:2", .sender = "u1", .sender_name = "Alice", .content = "Other chat", .timestamp = "2024-01-01T00:01:00Z", .is_from_me = false, .is_bot_message = false });
 
     // All messages for tg:1
     const all = try db.getMessagesSince(alloc, "tg:1", "");
@@ -499,8 +501,8 @@ test "message deduplication preserves original" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "A", .content = "Original", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false });
-    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "A", .content = "Duplicate", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false });
+    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "A", .content = "Original", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false, .is_bot_message = false });
+    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "A", .content = "Duplicate", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false, .is_bot_message = false });
 
     const msgs = try db.getMessagesSince(alloc, "tg:1", "");
     try std.testing.expectEqual(@as(usize, 1), msgs.len);
@@ -617,6 +619,10 @@ test "integration queue operations" {
     try db.updateQueueStatus(queued[0].id, "excluded", "merge conflict");
     queued = try db.getQueuedBranches(alloc);
     try std.testing.expectEqual(@as(usize, 0), queued.len);
+}
+
+test {
+    _ = @import("is_bot_message_test.zig");
 }
 
 test "state key-value store" {
