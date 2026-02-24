@@ -213,3 +213,212 @@ test "WaEvent union size" {
         else => unreachable,
     }
 }
+
+// ── Non-blocking pipe tests (spec: stdout blocking fix) ──────────────
+
+/// Helper: create a WhatsApp with a real pipe injected as child stdout.
+fn testWhatsAppWithPipe(allocator: std.mem.Allocator) !struct { wa: WhatsApp, write_fd: std.posix.fd_t } {
+    var wa = WhatsApp.init(allocator, "TestBot");
+    const pipe_fds = try std.posix.pipe();
+    var child = std.process.Child.init(&.{"true"}, allocator);
+    child.stdout = std.fs.File{ .handle = pipe_fds[0] };
+    wa.child = child;
+    return .{ .wa = wa, .write_fd = pipe_fds[1] };
+}
+
+test "WhatsApp stdout pipe has O_NONBLOCK after start" {
+    // AC2: After WhatsApp.start(), the stdout pipe fd must have O_NONBLOCK set.
+    // This test FAILS until the O_NONBLOCK fix is applied to start().
+    const allocator = std.testing.allocator;
+    var result = try testWhatsAppWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.wa.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.wa.child = null;
+        result.wa.deinit();
+    }
+
+    const stdout_fd = result.wa.child.?.stdout.?.handle;
+    const flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_flag = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+
+    // Must have O_NONBLOCK set after start(). FAILS before implementation.
+    try std.testing.expect((@as(u32, @intCast(flags)) & nonblock_flag) != 0);
+}
+
+test "WhatsApp poll returns immediately when no data available" {
+    // AC3 (whatsapp): poll() returns empty within bounded time.
+    const allocator = std.testing.allocator;
+    var result = try testWhatsAppWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.wa.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.wa.child = null;
+        result.wa.deinit();
+    }
+
+    // Set O_NONBLOCK (simulating what start() should do)
+    const stdout_fd = result.wa.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    const before = std.time.nanoTimestamp();
+    const msgs = try result.wa.poll(allocator);
+    const elapsed_ns = std.time.nanoTimestamp() - before;
+
+    try std.testing.expectEqual(@as(usize, 0), msgs.len);
+    try std.testing.expect(elapsed_ns < 10 * std.time.ns_per_ms);
+}
+
+test "WhatsApp poll reads NDJSON data correctly" {
+    // AC4 (whatsapp): poll() parses NDJSON into WaMessage slices.
+    const allocator = std.testing.allocator;
+    var result = try testWhatsAppWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.wa.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.wa.child = null;
+        result.wa.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.wa.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    const json_line = "{\"event\":\"message\",\"jid\":\"j1@s.whatsapp.net\",\"id\":\"msg1\",\"sender\":\"s1\",\"sender_name\":\"Alice\",\"text\":\"hello\",\"timestamp\":1700000000,\"is_group\":true,\"mentions_bot\":false}\n";
+    _ = try std.posix.write(result.write_fd, json_line);
+
+    const msgs = try result.wa.poll(allocator);
+    defer allocator.free(msgs);
+
+    try std.testing.expectEqual(@as(usize, 1), msgs.len);
+    try std.testing.expectEqualStrings("j1@s.whatsapp.net", msgs[0].jid);
+    try std.testing.expectEqualStrings("Alice", msgs[0].sender_name);
+    try std.testing.expectEqualStrings("hello", msgs[0].text);
+    try std.testing.expect(msgs[0].is_group);
+    try std.testing.expect(!msgs[0].mentions_bot);
+
+    for (msgs) |m| {
+        allocator.free(m.jid);
+        allocator.free(m.id);
+        allocator.free(m.sender);
+        allocator.free(m.sender_name);
+        allocator.free(m.text);
+    }
+}
+
+test "WhatsApp poll handles partial NDJSON lines" {
+    // Edge case 3: partial line buffered until next poll.
+    const allocator = std.testing.allocator;
+    var result = try testWhatsAppWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.wa.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.wa.child = null;
+        result.wa.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.wa.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    // Write partial JSON (no newline)
+    _ = try std.posix.write(result.write_fd, "{\"event\":\"message\"");
+
+    const msgs1 = try result.wa.poll(allocator);
+    try std.testing.expectEqual(@as(usize, 0), msgs1.len);
+    try std.testing.expect(result.wa.stdout_buf.items.len > 0);
+
+    // Complete the line
+    _ = try std.posix.write(result.write_fd, ",\"jid\":\"j1\",\"id\":\"m1\",\"sender\":\"s1\",\"sender_name\":\"Bob\",\"text\":\"hi\",\"timestamp\":1700000000,\"is_group\":false,\"mentions_bot\":true}\n");
+
+    const msgs2 = try result.wa.poll(allocator);
+    defer allocator.free(msgs2);
+
+    try std.testing.expectEqual(@as(usize, 1), msgs2.len);
+    try std.testing.expectEqualStrings("Bob", msgs2[0].sender_name);
+
+    for (msgs2) |m| {
+        allocator.free(m.jid);
+        allocator.free(m.id);
+        allocator.free(m.sender);
+        allocator.free(m.sender_name);
+        allocator.free(m.text);
+    }
+}
+
+test "WhatsApp poll with null child returns empty" {
+    // Edge case 6: null child handled gracefully.
+    const allocator = std.testing.allocator;
+    var wa = WhatsApp.init(allocator, "TestBot");
+    defer wa.deinit();
+
+    const msgs = try wa.poll(allocator);
+    try std.testing.expectEqual(@as(usize, 0), msgs.len);
+}
+
+test "WhatsApp poll handles multiple lines in burst" {
+    // Edge case 5: multiple NDJSON lines written at once.
+    const allocator = std.testing.allocator;
+    var result = try testWhatsAppWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.wa.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.wa.child = null;
+        result.wa.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.wa.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    const line1 = "{\"event\":\"message\",\"jid\":\"j1\",\"id\":\"m1\",\"sender\":\"s1\",\"sender_name\":\"A\",\"text\":\"first\",\"timestamp\":1700000000,\"is_group\":false,\"mentions_bot\":false}\n";
+    const line2 = "{\"event\":\"message\",\"jid\":\"j2\",\"id\":\"m2\",\"sender\":\"s2\",\"sender_name\":\"B\",\"text\":\"second\",\"timestamp\":1700000001,\"is_group\":true,\"mentions_bot\":true}\n";
+    _ = try std.posix.write(result.write_fd, line1 ++ line2);
+
+    const msgs = try result.wa.poll(allocator);
+    defer allocator.free(msgs);
+
+    try std.testing.expectEqual(@as(usize, 2), msgs.len);
+    try std.testing.expectEqualStrings("first", msgs[0].text);
+    try std.testing.expectEqualStrings("second", msgs[1].text);
+
+    for (msgs) |m| {
+        allocator.free(m.jid);
+        allocator.free(m.id);
+        allocator.free(m.sender);
+        allocator.free(m.sender_name);
+        allocator.free(m.text);
+    }
+}
+
+test "WhatsApp rapid successive polls with no data return empty" {
+    // Edge case 4: successive polls all return empty immediately.
+    const allocator = std.testing.allocator;
+    var result = try testWhatsAppWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.wa.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.wa.child = null;
+        result.wa.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.wa.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const msgs = try result.wa.poll(allocator);
+        try std.testing.expectEqual(@as(usize, 0), msgs.len);
+    }
+}

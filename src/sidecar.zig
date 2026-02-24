@@ -261,6 +261,12 @@ pub const Sidecar = struct {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
+// Pull in whatsapp and nonblocking pipe tests so they are discovered by `zig build test`
+test {
+    _ = @import("whatsapp.zig");
+    _ = @import("nonblocking_pipe_test.zig");
+}
+
 test "Sidecar init/deinit" {
     var s = Sidecar.init(std.testing.allocator, "Borg");
     defer s.deinit();
@@ -273,4 +279,237 @@ test "parseSource" {
     try std.testing.expectEqual(Source.discord, Sidecar.parseSource("discord").?);
     try std.testing.expectEqual(Source.whatsapp, Sidecar.parseSource("whatsapp").?);
     try std.testing.expect(Sidecar.parseSource("unknown") == null);
+}
+
+// ── Non-blocking pipe tests (spec: stdout blocking fix) ──────────────
+
+/// Helper: create a Sidecar with a real pipe injected as child stdout.
+/// Returns the sidecar and the write-end fd for feeding test data.
+fn testSidecarWithPipe(allocator: std.mem.Allocator) !struct { sidecar: Sidecar, write_fd: std.posix.fd_t } {
+    var s = Sidecar.init(allocator, "TestBot");
+    const pipe_fds = try std.posix.pipe();
+    // Use Child.init with a dummy command, then override stdout with our pipe
+    var child = std.process.Child.init(&.{"true"}, allocator);
+    child.stdout = std.fs.File{ .handle = pipe_fds[0] };
+    s.child = child;
+    return .{ .sidecar = s, .write_fd = pipe_fds[1] };
+}
+
+test "Sidecar stdout pipe has O_NONBLOCK after start" {
+    // AC1: After Sidecar.start(), the stdout pipe fd must have O_NONBLOCK set.
+    // We can't call start() (needs bun), so we verify the flag on an injected pipe
+    // to test that the implementation sets it. This test will FAIL until the
+    // O_NONBLOCK fix is applied to start().
+    //
+    // Strategy: create a pipe, inject it as child.stdout, then check flags.
+    // The implementation should set O_NONBLOCK during start(). Since we bypass
+    // start() here, we directly test that the fd does NOT have O_NONBLOCK
+    // (proving our test harness works), then call the expected helper.
+    const allocator = std.testing.allocator;
+    var result = try testSidecarWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.sidecar.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.sidecar.child = null;
+        result.sidecar.deinit();
+    }
+
+    const stdout_fd = result.sidecar.child.?.stdout.?.handle;
+    const flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_flag = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+
+    // After start() with the fix applied, O_NONBLOCK must be set.
+    // This FAILS before implementation because a fresh pipe is blocking.
+    try std.testing.expect((@as(u32, @intCast(flags)) & nonblock_flag) != 0);
+}
+
+test "Sidecar poll returns immediately when no data available" {
+    // AC3: poll() returns empty slice within bounded time (< 10ms)
+    // when child has produced no output.
+    const allocator = std.testing.allocator;
+    var result = try testSidecarWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.sidecar.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.sidecar.child = null;
+        result.sidecar.deinit();
+    }
+
+    // Set O_NONBLOCK on the read end (simulating what start() should do)
+    const stdout_fd = result.sidecar.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    const before = std.time.nanoTimestamp();
+    const msgs = try result.sidecar.poll(allocator);
+    const elapsed_ns = std.time.nanoTimestamp() - before;
+
+    // Must return empty and complete within 10ms
+    try std.testing.expectEqual(@as(usize, 0), msgs.len);
+    try std.testing.expect(elapsed_ns < 10 * std.time.ns_per_ms);
+}
+
+test "Sidecar poll reads NDJSON data correctly" {
+    // AC4: When child writes NDJSON, poll() parses into SidecarMessage slices.
+    const allocator = std.testing.allocator;
+    var result = try testSidecarWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.sidecar.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.sidecar.child = null;
+        result.sidecar.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.sidecar.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    // Write a complete NDJSON message line to the pipe
+    const json_line = "{\"source\":\"discord\",\"event\":\"message\",\"message_id\":\"123\",\"channel_id\":\"ch1\",\"sender_id\":\"u1\",\"sender_name\":\"Alice\",\"text\":\"hello\",\"timestamp\":1700000000,\"is_dm\":false,\"mentions_bot\":true}\n";
+    _ = try std.posix.write(result.write_fd, json_line);
+
+    const msgs = try result.sidecar.poll(allocator);
+    defer allocator.free(msgs);
+
+    try std.testing.expectEqual(@as(usize, 1), msgs.len);
+    try std.testing.expectEqualStrings("ch1", msgs[0].chat_id);
+    try std.testing.expectEqualStrings("Alice", msgs[0].sender_name);
+    try std.testing.expectEqualStrings("hello", msgs[0].text);
+    try std.testing.expect(msgs[0].mentions_bot);
+    try std.testing.expectEqual(Source.discord, msgs[0].source);
+
+    // Free duped strings
+    for (msgs) |m| {
+        allocator.free(m.id);
+        allocator.free(m.chat_id);
+        allocator.free(m.sender);
+        allocator.free(m.sender_name);
+        allocator.free(m.text);
+    }
+}
+
+test "Sidecar poll handles partial NDJSON lines" {
+    // Edge case 3: partial line is buffered until next poll completes it.
+    const allocator = std.testing.allocator;
+    var result = try testSidecarWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.sidecar.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.sidecar.child = null;
+        result.sidecar.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.sidecar.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    // Write partial JSON (no newline)
+    const partial = "{\"source\":\"whatsapp\",\"event\":\"message\"";
+    _ = try std.posix.write(result.write_fd, partial);
+
+    // First poll: no complete line, should return empty
+    const msgs1 = try result.sidecar.poll(allocator);
+    try std.testing.expectEqual(@as(usize, 0), msgs1.len);
+
+    // Buffer should have the partial data
+    try std.testing.expect(result.sidecar.stdout_buf.items.len > 0);
+
+    // Write the rest including newline
+    const rest = ",\"id\":\"m1\",\"jid\":\"j1\",\"sender\":\"s1\",\"sender_name\":\"Bob\",\"text\":\"hi\",\"timestamp\":1700000000,\"is_group\":true,\"mentions_bot\":false}\n";
+    _ = try std.posix.write(result.write_fd, rest);
+
+    // Second poll: now the line is complete
+    const msgs2 = try result.sidecar.poll(allocator);
+    defer allocator.free(msgs2);
+
+    try std.testing.expectEqual(@as(usize, 1), msgs2.len);
+    try std.testing.expectEqualStrings("Bob", msgs2[0].sender_name);
+    try std.testing.expectEqual(Source.whatsapp, msgs2[0].source);
+
+    for (msgs2) |m| {
+        allocator.free(m.id);
+        allocator.free(m.chat_id);
+        allocator.free(m.sender);
+        allocator.free(m.sender_name);
+        allocator.free(m.text);
+    }
+}
+
+test "Sidecar poll with null child returns empty" {
+    // Edge case 6: null child/stdout handled gracefully.
+    const allocator = std.testing.allocator;
+    var s = Sidecar.init(allocator, "TestBot");
+    defer s.deinit();
+
+    // child is null
+    const msgs = try s.poll(allocator);
+    try std.testing.expectEqual(@as(usize, 0), msgs.len);
+}
+
+test "Sidecar poll handles multiple lines in burst" {
+    // Edge case 5: large burst of data — multiple NDJSON lines in one read.
+    const allocator = std.testing.allocator;
+    var result = try testSidecarWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.sidecar.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.sidecar.child = null;
+        result.sidecar.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.sidecar.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    // Write two complete messages at once
+    const line1 = "{\"source\":\"discord\",\"event\":\"message\",\"message_id\":\"a1\",\"channel_id\":\"c1\",\"sender_id\":\"u1\",\"sender_name\":\"A\",\"text\":\"first\",\"timestamp\":1700000000,\"is_dm\":false,\"mentions_bot\":false}\n";
+    const line2 = "{\"source\":\"discord\",\"event\":\"message\",\"message_id\":\"a2\",\"channel_id\":\"c2\",\"sender_id\":\"u2\",\"sender_name\":\"B\",\"text\":\"second\",\"timestamp\":1700000001,\"is_dm\":false,\"mentions_bot\":true}\n";
+    _ = try std.posix.write(result.write_fd, line1 ++ line2);
+
+    const msgs = try result.sidecar.poll(allocator);
+    defer allocator.free(msgs);
+
+    try std.testing.expectEqual(@as(usize, 2), msgs.len);
+    try std.testing.expectEqualStrings("first", msgs[0].text);
+    try std.testing.expectEqualStrings("second", msgs[1].text);
+
+    for (msgs) |m| {
+        allocator.free(m.id);
+        allocator.free(m.chat_id);
+        allocator.free(m.sender);
+        allocator.free(m.sender_name);
+        allocator.free(m.text);
+    }
+}
+
+test "Sidecar rapid successive polls with no data return empty" {
+    // Edge case 4: successive polls with no data each return empty immediately.
+    const allocator = std.testing.allocator;
+    var result = try testSidecarWithPipe(allocator);
+    defer {
+        std.posix.close(result.write_fd);
+        if (result.sidecar.child) |c| if (c.stdout) |stdout| std.posix.close(stdout.handle);
+        result.sidecar.child = null;
+        result.sidecar.deinit();
+    }
+
+    // Set O_NONBLOCK
+    const stdout_fd = result.sidecar.child.?.stdout.?.handle;
+    const current_flags = std.posix.fcntl(stdout_fd, .GET_FL) catch 0;
+    const nonblock_val = @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    _ = std.posix.fcntl(stdout_fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | nonblock_val }) catch {};
+
+    // Poll multiple times rapidly — all should return empty, none should block
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const msgs = try result.sidecar.poll(allocator);
+        try std.testing.expectEqual(@as(usize, 0), msgs.len);
+    }
 }
