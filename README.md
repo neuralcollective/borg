@@ -184,7 +184,7 @@ WhatsApp groups use `wa:` prefix for JIDs (e.g., `wa:123456789-987654321@g.us`).
 | `PIPELINE_TEST_CMD` | `zig build test` | Command to run tests |
 | `PIPELINE_LINT_CMD` | (empty) | Optional lint command |
 | `PIPELINE_ADMIN_CHAT` | (empty) | Telegram chat ID for pipeline notifications |
-| `RELEASE_INTERVAL_HOURS` | `3` | Hours between release trains |
+| `RELEASE_INTERVAL_MINS` | `180` | Minutes between release trains |
 
 ## Container security (pipeline only)
 
