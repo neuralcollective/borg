@@ -151,6 +151,17 @@ pub const Git = struct {
     pub fn listWorktrees(self: *Git) !ExecResult {
         return self.exec(&.{ "worktree", "list", "--porcelain" });
     }
+
+    pub fn revParseHead(self: *Git) ![40]u8 {
+        var result = try self.exec(&.{ "rev-parse", "HEAD" });
+        defer result.deinit();
+        if (result.stdout.len >= 40) {
+            var hash: [40]u8 = undefined;
+            @memcpy(&hash, result.stdout[0..40]);
+            return hash;
+        }
+        return [_]u8{0} ** 40;
+    }
 };
 
 pub const ExecResult = struct {

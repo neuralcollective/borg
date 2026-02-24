@@ -29,8 +29,10 @@ pub const Pipeline = struct {
     tg: *Telegram,
     config: *Config,
     running: std.atomic.Value(bool),
+    update_ready: std.atomic.Value(bool),
     last_release_ts: i64,
     last_seed_ts: i64,
+    startup_head: [40]u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -39,6 +41,9 @@ pub const Pipeline = struct {
         tg: *Telegram,
         config: *Config,
     ) Pipeline {
+        var git = Git.init(allocator, config.pipeline_repo);
+        const head = git.revParseHead() catch [_]u8{0} ** 40;
+
         return .{
             .allocator = allocator,
             .db = db,
@@ -46,8 +51,10 @@ pub const Pipeline = struct {
             .tg = tg,
             .config = config,
             .running = std.atomic.Value(bool).init(true),
+            .update_ready = std.atomic.Value(bool).init(false),
             .last_release_ts = std.time.timestamp(),
             .last_seed_ts = 0,
+            .startup_head = head,
         };
     }
 
@@ -708,6 +715,9 @@ pub const Pipeline = struct {
             defer del.deinit();
         }
 
+        // 5b. Self-update: check if main has advanced past our startup commit
+        self.checkSelfUpdate();
+
         // 6. Generate and send digest
         const digest = try self.generateDigest(merged.items, excluded.items);
         defer self.allocator.free(digest);
@@ -734,6 +744,71 @@ pub const Pipeline = struct {
         }
 
         return buf.toOwnedSlice();
+    }
+
+    // --- Self-Update ---
+
+    fn checkSelfUpdate(self: *Pipeline) void {
+        var git = Git.init(self.allocator, self.config.pipeline_repo);
+        const current_head = git.revParseHead() catch return;
+
+        if (std.mem.eql(u8, &current_head, &self.startup_head)) return;
+        if (std.mem.eql(u8, &self.startup_head, &([_]u8{0} ** 40))) return;
+
+        std.log.info("Self-update: main HEAD changed, rebuilding...", .{});
+        self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: new commits detected, rebuilding...") catch return);
+
+        // Run zig build in the repo
+        var child = std.process.Child.init(
+            &.{ "zig", "build" },
+            self.allocator,
+        );
+        child.cwd = self.config.pipeline_repo;
+        child.stdin_behavior = .Close;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+        child.spawn() catch |err| {
+            std.log.err("Self-update: spawn build failed: {}", .{err});
+            return;
+        };
+
+        var stderr_buf = std.ArrayList(u8).init(self.allocator);
+        defer stderr_buf.deinit();
+        var read_buf: [8192]u8 = undefined;
+        if (child.stderr) |stderr| {
+            while (true) {
+                const n = stderr.read(&read_buf) catch break;
+                if (n == 0) break;
+                stderr_buf.appendSlice(read_buf[0..n]) catch break;
+            }
+        }
+        // Drain stdout too
+        if (child.stdout) |stdout| {
+            while (true) {
+                const n = stdout.read(&read_buf) catch break;
+                if (n == 0) break;
+            }
+        }
+
+        const term = child.wait() catch |err| {
+            std.log.err("Self-update: wait failed: {}", .{err});
+            return;
+        };
+        const exit_code: u8 = switch (term) {
+            .Exited => |code| code,
+            else => 1,
+        };
+
+        if (exit_code != 0) {
+            std.log.err("Self-update: build failed (exit {d}): {s}", .{ exit_code, stderr_buf.items[0..@min(stderr_buf.items.len, 500)] });
+            self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: build FAILED, continuing with old binary.") catch return);
+            return;
+        }
+
+        std.log.info("Self-update: build succeeded, scheduling restart", .{});
+        self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: build succeeded, restarting...") catch return);
+        self.update_ready.store(true, .release);
+        self.running.store(false, .release);
     }
 
     // --- Agent Spawning ---
