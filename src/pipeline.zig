@@ -85,53 +85,61 @@ pub const Pipeline = struct {
         }
     }
 
+    fn worktreePath(self: *Pipeline, task_id: i64) ![]const u8 {
+        return std.fmt.allocPrint(self.allocator, "{s}/.worktrees/task-{d}", .{ self.config.pipeline_repo, task_id });
+    }
+
     fn setupBranch(self: *Pipeline, task: db_mod.PipelineTask) !void {
         var git = Git.init(self.allocator, self.config.pipeline_repo);
 
-        // Ensure we're on a clean main
-        var co = try git.checkout("main");
-        defer co.deinit();
-        if (!co.success()) {
-            std.log.err("git checkout main failed: {s}", .{co.stderr});
-            try self.db.updateTaskStatus(task.id, "failed");
-            try self.db.updateTaskError(task.id, co.stderr);
-            return;
-        }
-
-        var pull = try git.pull();
+        // Pull latest main
+        var pull = try git.exec(&.{ "fetch", "origin", "main" });
         defer pull.deinit();
 
-        // Create feature branch
+        // Create worktree with new branch from main
         var branch_buf: [128]u8 = undefined;
         const branch = try std.fmt.bufPrint(&branch_buf, "feature/task-{d}", .{task.id});
 
-        var br = try git.createBranch(branch, "main");
-        defer br.deinit();
-        if (!br.success()) {
-            std.log.err("git branch create failed: {s}", .{br.stderr});
+        // Ensure .worktrees directory exists
+        const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{self.config.pipeline_repo});
+        defer self.allocator.free(wt_dir);
+        std.fs.makeDirAbsolute(wt_dir) catch {};
+
+        const wt_path = try self.worktreePath(task.id);
+        defer self.allocator.free(wt_path);
+
+        var wt = try git.addWorktree(wt_path, branch);
+        defer wt.deinit();
+        if (!wt.success()) {
+            std.log.err("git worktree add failed: {s}", .{wt.stderr});
             try self.db.updateTaskStatus(task.id, "failed");
-            try self.db.updateTaskError(task.id, br.stderr);
+            try self.db.updateTaskError(task.id, wt.stderr);
             return;
         }
 
         try self.db.updateTaskBranch(task.id, branch);
         try self.db.updateTaskStatus(task.id, "spec");
-        std.log.info("Created branch {s} for task #{d}", .{ branch, task.id });
+        std.log.info("Created worktree {s} (branch {s}) for task #{d}", .{ wt_path, branch, task.id });
+    }
+
+    fn cleanupWorktree(self: *Pipeline, task: db_mod.PipelineTask) void {
+        const wt_path = self.worktreePath(task.id) catch return;
+        defer self.allocator.free(wt_path);
+        var git = Git.init(self.allocator, self.config.pipeline_repo);
+        var rm = git.removeWorktree(wt_path) catch return;
+        defer rm.deinit();
+        if (rm.success()) {
+            std.log.info("Cleaned up worktree for task #{d}", .{task.id});
+        }
     }
 
     fn runSpecPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
-
-        // Checkout the task branch
-        var co = try git.checkout(task.branch);
-        defer co.deinit();
-        if (!co.success()) {
-            try self.failTask(task, "checkout failed", co.stderr);
-            return;
-        }
+        const wt_path = try self.worktreePath(task.id);
+        defer self.allocator.free(wt_path);
+        var wt_git = Git.init(self.allocator, wt_path);
 
         // Get file listing for context
-        var ls = try git.exec(&.{ "ls-files", "--full-name" });
+        var ls = try wt_git.exec(&.{ "ls-files", "--full-name" });
         defer ls.deinit();
 
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
@@ -155,17 +163,17 @@ pub const Pipeline = struct {
             \\Do NOT modify any source files. Only write spec.md.
         );
 
-        const result = self.spawnAgent(.manager, prompt_buf.items) catch |err| {
+        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path) catch |err| {
             try self.failTask(task, "manager agent spawn failed", @errorName(err));
             return;
         };
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
-        // Commit spec.md
-        var add = try git.addAll();
+        // Commit spec.md in worktree
+        var add = try wt_git.addAll();
         defer add.deinit();
-        var commit = try git.commit("spec: generate spec.md for task");
+        var commit = try wt_git.commit("spec: generate spec.md for task");
         defer commit.deinit();
 
         if (!commit.success()) {
@@ -179,14 +187,9 @@ pub const Pipeline = struct {
     }
 
     fn runQaPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
-
-        var co = try git.checkout(task.branch);
-        defer co.deinit();
-        if (!co.success()) {
-            try self.failTask(task, "checkout failed", co.stderr);
-            return;
-        }
+        const wt_path = try self.worktreePath(task.id);
+        defer self.allocator.free(wt_path);
+        var wt_git = Git.init(self.allocator, wt_path);
 
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
@@ -204,16 +207,16 @@ pub const Pipeline = struct {
             \\- Do NOT write implementation code
         );
 
-        const result = self.spawnAgent(.qa, prompt_buf.items) catch |err| {
+        const result = self.spawnAgent(.qa, prompt_buf.items, wt_path) catch |err| {
             try self.failTask(task, "QA agent spawn failed", @errorName(err));
             return;
         };
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
-        var add = try git.addAll();
+        var add = try wt_git.addAll();
         defer add.deinit();
-        var commit = try git.commit("test: add tests from QA agent");
+        var commit = try wt_git.commit("test: add tests from QA agent");
         defer commit.deinit();
 
         if (!commit.success()) {
@@ -226,14 +229,9 @@ pub const Pipeline = struct {
     }
 
     fn runImplPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        var git = Git.init(self.allocator, self.config.pipeline_repo);
-
-        var co = try git.checkout(task.branch);
-        defer co.deinit();
-        if (!co.success()) {
-            try self.failTask(task, "checkout failed", co.stderr);
-            return;
-        }
+        const wt_path = try self.worktreePath(task.id);
+        defer self.allocator.free(wt_path);
+        var wt_git = Git.init(self.allocator, wt_path);
 
         // Build prompt with error context for retries
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
@@ -258,21 +256,21 @@ pub const Pipeline = struct {
             try w.writeAll("\n```\nFix the failures.");
         }
 
-        const result = self.spawnAgent(.worker, prompt_buf.items) catch |err| {
+        const result = self.spawnAgent(.worker, prompt_buf.items, wt_path) catch |err| {
             try self.failTask(task, "worker agent spawn failed", @errorName(err));
             return;
         };
         defer self.allocator.free(result.output);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
-        // Commit implementation
-        var add = try git.addAll();
+        // Commit implementation in worktree
+        var add = try wt_git.addAll();
         defer add.deinit();
-        var commit = try git.commit("impl: implementation from worker agent");
+        var commit = try wt_git.commit("impl: implementation from worker agent");
         defer commit.deinit();
 
-        // Run tests deterministically
-        const test_result = self.runTestCommand() catch |err| {
+        // Run tests in worktree
+        const test_result = self.runTestCommand(wt_path) catch |err| {
             try self.failTask(task, "test command execution failed", @errorName(err));
             return;
         };
@@ -280,13 +278,12 @@ pub const Pipeline = struct {
         defer self.allocator.free(test_result.stderr);
 
         if (test_result.exit_code == 0) {
-            // Tests pass!
             try self.db.updateTaskStatus(task.id, "done");
             try self.db.enqueueForIntegration(task.id, task.branch);
+            self.cleanupWorktree(task);
             std.log.info("Task #{d} passed tests, queued for integration", .{task.id});
             self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for release train.", .{task.id}));
         } else {
-            // Tests failed
             if (task.attempt + 1 >= task.max_attempts) {
                 const combined = try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{
                     test_result.stdout[0..@min(test_result.stdout.len, 2000)],
@@ -295,10 +292,10 @@ pub const Pipeline = struct {
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
                 try self.db.updateTaskStatus(task.id, "failed");
+                self.cleanupWorktree(task);
                 std.log.warn("Task #{d} failed after {d} attempts", .{ task.id, task.attempt + 1 });
                 self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} FAILED after {d} attempts.", .{ task.id, task.attempt + 1 }));
             } else {
-                // Retry: store error context for next worker prompt
                 const combined = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ test_result.stdout, test_result.stderr });
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
@@ -309,8 +306,7 @@ pub const Pipeline = struct {
         }
     }
 
-    fn runTestCommand(self: *Pipeline) !TestResult {
-        // Split test command and run
+    fn runTestCommand(self: *Pipeline, cwd: []const u8) !TestResult {
         var child = std.process.Child.init(
             &.{ "/bin/sh", "-c", self.config.pipeline_test_cmd },
             self.allocator,
@@ -319,8 +315,7 @@ pub const Pipeline = struct {
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 
-        // Set cwd to repo
-        child.cwd = self.config.pipeline_repo;
+        child.cwd = cwd;
 
         try child.spawn();
 
@@ -423,8 +418,8 @@ pub const Pipeline = struct {
                 continue;
             }
 
-            // Run global tests
-            const test_result = self.runTestCommand() catch {
+            // Run global tests on the release-candidate
+            const test_result = self.runTestCommand(self.config.pipeline_repo) catch {
                 try excluded.append(entry.branch);
                 continue;
             };
@@ -504,7 +499,7 @@ pub const Pipeline = struct {
 
     // --- Agent Spawning ---
 
-    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8) !agent_mod.AgentResult {
+    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8) !agent_mod.AgentResult {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const tmp = arena.allocator();
@@ -541,9 +536,9 @@ pub const Pipeline = struct {
             "NODE_OPTIONS=--max-old-space-size=384",
         };
 
-        // Bind mount repo into container
+        // Bind mount worktree directory into container
         var bind_buf: [1024]u8 = undefined;
-        const repo_bind = try std.fmt.bufPrint(&bind_buf, "{s}:/workspace/repo", .{self.config.pipeline_repo});
+        const repo_bind = try std.fmt.bufPrint(&bind_buf, "{s}:/workspace/repo", .{workdir});
 
         const binds = [_][]const u8{repo_bind};
 
@@ -569,6 +564,7 @@ pub const Pipeline = struct {
         std.log.err("Task #{d} failed: {s}: {s}", .{ task.id, reason, detail[0..@min(detail.len, 200)] });
         try self.db.updateTaskStatus(task.id, "failed");
         try self.db.updateTaskError(task.id, detail[0..@min(detail.len, 4000)]);
+        self.cleanupWorktree(task);
         self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s}", .{ task.id, reason }));
     }
 
