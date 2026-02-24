@@ -90,6 +90,8 @@ pub const Pipeline = struct {
             try self.runQaPhase(task);
         } else if (std.mem.eql(u8, task.status, "impl") or std.mem.eql(u8, task.status, "retry")) {
             try self.runImplPhase(task);
+        } else if (std.mem.eql(u8, task.status, "rebase")) {
+            try self.runRebasePhase(task);
         }
     }
 
@@ -414,6 +416,122 @@ pub const Pipeline = struct {
         }
     }
 
+    fn runRebasePhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
+        if (task.branch.len == 0) {
+            try self.failTask(task, "rebase: no branch set", "");
+            return;
+        }
+
+        // Ensure worktree exists (may have been cleaned up after 'done')
+        const wt_path = try self.worktreePath(task.id);
+        defer self.allocator.free(wt_path);
+
+        const wt_exists = blk: {
+            std.fs.accessAbsolute(wt_path, .{}) catch break :blk false;
+            break :blk true;
+        };
+        if (!wt_exists) {
+            var repo_git = Git.init(self.allocator, self.config.pipeline_repo);
+            const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{self.config.pipeline_repo});
+            defer self.allocator.free(wt_dir);
+            std.fs.makeDirAbsolute(wt_dir) catch {};
+
+            var wt = try repo_git.addWorktreeExisting(wt_path, task.branch);
+            defer wt.deinit();
+            if (!wt.success()) {
+                try self.failTask(task, "rebase: worktree checkout failed", wt.stderr);
+                return;
+            }
+        }
+
+        var wt_git = Git.init(self.allocator, wt_path);
+
+        // Fetch latest main and attempt rebase
+        var fetch_r = try wt_git.fetch("origin");
+        defer fetch_r.deinit();
+
+        var rebase_r = try wt_git.rebase("origin/main");
+        defer rebase_r.deinit();
+
+        if (!rebase_r.success()) {
+            // Rebase has conflicts — abort and let worker agent fix them
+            var abort = try wt_git.abortRebase();
+            defer abort.deinit();
+
+            std.log.info("Task #{d} rebase conflicts, spawning worker to resolve", .{task.id});
+
+            var prompt_buf = std.ArrayList(u8).init(self.allocator);
+            defer prompt_buf.deinit();
+            const w = prompt_buf.writer();
+
+            try w.writeAll(
+                \\This branch has merge conflicts with main. Your job:
+                \\1. Run `git fetch origin && git rebase origin/main` to start the rebase
+                \\2. Resolve ALL conflicts in the affected files
+                \\3. `git add` the resolved files and `git rebase --continue`
+                \\4. Repeat until the rebase is complete
+                \\5. Make sure the code compiles and tests pass after resolving
+                \\
+                \\Read spec.md for context on what this branch does.
+            );
+
+            if (task.last_error.len > 0) {
+                try w.writeAll("\n\nPrevious error context:\n```\n");
+                const err_tail = if (task.last_error.len > 2000) task.last_error[task.last_error.len - 2000 ..] else task.last_error;
+                try w.writeAll(err_tail);
+                try w.writeAll("\n```");
+            }
+
+            const result = self.spawnAgent(.worker, prompt_buf.items, wt_path) catch |err| {
+                try self.failTask(task, "rebase: worker agent failed", @errorName(err));
+                return;
+            };
+            defer self.allocator.free(result.output);
+            defer if (result.new_session_id) |sid| self.allocator.free(sid);
+        }
+
+        // Run tests on the rebased branch
+        const test_result = self.runTestCommand(wt_path) catch |err| {
+            try self.failTask(task, "rebase: test execution failed", @errorName(err));
+            return;
+        };
+        defer self.allocator.free(test_result.stdout);
+        defer self.allocator.free(test_result.stderr);
+
+        if (test_result.exit_code == 0) {
+            // Push the rebased branch and re-queue
+            var push_r = try wt_git.exec(&.{ "push", "--force-with-lease", "origin", task.branch });
+            defer push_r.deinit();
+
+            try self.db.updateTaskStatus(task.id, "done");
+            try self.db.enqueueForIntegration(task.id, task.branch);
+            self.cleanupWorktree(task);
+            std.log.info("Task #{d} rebased and re-queued for integration", .{task.id});
+            self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" rebased successfully, re-queued for release.", .{ task.id, task.title }) catch return);
+        } else {
+            // Tests still fail after rebase — retry if attempts remain
+            if (task.attempt + 1 >= task.max_attempts) {
+                const combined = try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{
+                    test_result.stdout[0..@min(test_result.stdout.len, 2000)],
+                    test_result.stderr[0..@min(test_result.stderr.len, 2000)],
+                });
+                defer self.allocator.free(combined);
+                try self.db.updateTaskError(task.id, combined);
+                try self.db.updateTaskStatus(task.id, "failed");
+                self.cleanupWorktree(task);
+                std.log.warn("Task #{d} failed rebase after {d} attempts", .{ task.id, task.attempt + 1 });
+                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} FAILED rebase after {d} attempts.", .{ task.id, task.attempt + 1 }) catch return);
+            } else {
+                const combined = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ test_result.stdout, test_result.stderr });
+                defer self.allocator.free(combined);
+                try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
+                try self.db.incrementTaskAttempt(task.id);
+                // Stay in rebase status — will retry next tick
+                std.log.info("Task #{d} rebase tests failed, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+            }
+        }
+    }
+
     fn runTestCommand(self: *Pipeline, cwd: []const u8) !TestResult {
         var child = std.process.Child.init(
             &.{ "/bin/sh", "-c", self.config.pipeline_test_cmd },
@@ -516,15 +634,16 @@ pub const Pipeline = struct {
             defer merge.deinit();
 
             if (!merge.success()) {
-                // Merge conflict — abort and exclude
+                // Merge conflict — abort, send back for rebase
                 var abort = try git.abortMerge();
                 defer abort.deinit();
                 try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict");
-                try self.db.updateTaskStatus(entry.task_id, "failed");
-                try self.db.updateTaskError(entry.task_id, "Excluded from release: merge conflict");
+                try self.db.updateTaskError(entry.task_id, "Excluded from release: merge conflict — rebasing");
+                try self.db.resetTaskAttempt(entry.task_id);
+                try self.db.updateTaskStatus(entry.task_id, "rebase");
                 try excluded.append(entry.branch);
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" excluded from release: merge conflict.", .{ task.id, task.title }) catch continue);
+                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" has merge conflicts — rebasing automatically.", .{ task.id, task.title }) catch continue);
                 }
                 continue;
             }
@@ -538,15 +657,16 @@ pub const Pipeline = struct {
             defer self.allocator.free(test_result.stderr);
 
             if (test_result.exit_code != 0) {
-                // Tests failed after merge — revert
+                // Tests failed after merge — revert, send back for rebase
                 var reset = try git.resetHard("HEAD~1");
                 defer reset.deinit();
                 try self.db.updateQueueStatus(entry.id, "excluded", "tests failed after merge");
-                try self.db.updateTaskStatus(entry.task_id, "failed");
-                try self.db.updateTaskError(entry.task_id, "Excluded from release: integration tests failed");
+                try self.db.updateTaskError(entry.task_id, test_result.stderr[0..@min(test_result.stderr.len, 4000)]);
+                try self.db.resetTaskAttempt(entry.task_id);
+                try self.db.updateTaskStatus(entry.task_id, "rebase");
                 try excluded.append(entry.branch);
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" excluded from release: tests failed.", .{ task.id, task.title }) catch continue);
+                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed integration tests — rebasing automatically.", .{ task.id, task.title }) catch continue);
                 }
                 continue;
             }
