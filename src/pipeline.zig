@@ -159,47 +159,22 @@ pub const Pipeline = struct {
 
     fn processBacklogFiles(self: *Pipeline) void {
         for (self.config.watched_repos) |repo| {
+            // Only import once per repo — track via DB state
+            const state_key = std.fmt.allocPrint(self.allocator, "backlog_imported:{s}", .{repo.path}) catch continue;
+            defer self.allocator.free(state_key);
+            const already = self.db.getState(self.allocator, state_key) catch null;
+            if (already) |v| { self.allocator.free(v); continue; }
+
             const backlog_path = std.fmt.allocPrint(self.allocator, "{s}/BACKLOG.md", .{repo.path}) catch continue;
             defer self.allocator.free(backlog_path);
 
             const content = std.fs.cwd().readFileAlloc(self.allocator, backlog_path, 128 * 1024) catch continue;
             defer self.allocator.free(content);
-            if (std.mem.trim(u8, content, &[_]u8{ ' ', '\t', '\n', '\r' }).len == 0) continue;
+            if (std.mem.indexOf(u8, content, "TASK_START") == null) continue;
 
-            std.log.info("Found BACKLOG.md in {s}, importing tasks...", .{repo.path});
-
-            var prompt_buf = std.ArrayList(u8).init(self.allocator);
-            defer prompt_buf.deinit();
-            prompt_buf.writer().print(
-                \\You are importing a backlog of engineering tasks into a pipeline.
-                \\
-                \\For each item in the backlog below, create a task using EXACTLY this format:
-                \\
-                \\TASK_START
-                \\TITLE: <short imperative title, max 80 chars>
-                \\DESCRIPTION: <2-4 sentences: what to change and why>
-                \\TASK_END
-                \\
-                \\Rules:
-                \\- One TASK_START/TASK_END block per item
-                \\- Keep titles concise and imperative ("Fix X", "Add Y", "Refactor Z")
-                \\- Skip any item that says "Already Merged"
-                \\- Output ONLY the task blocks, no other text
-                \\
-                \\Backlog:
-                \\{s}
-            , .{content}) catch continue;
-
-            const result = self.spawnAgent(.manager, prompt_buf.items, repo.path, null) catch |err| {
-                std.log.err("Backlog import agent failed: {}", .{err});
-                continue;
-            };
-            defer self.allocator.free(result.output);
-            defer if (result.new_session_id) |sid| self.allocator.free(sid);
-
-            // Parse and create tasks (same logic as seedRepo)
+            // Parse TASK_START/TASK_END blocks directly — no LLM needed
             var created: u32 = 0;
-            var remaining = result.output;
+            var remaining = content;
             while (std.mem.indexOf(u8, remaining, "TASK_START")) |start_pos| {
                 remaining = remaining[start_pos + "TASK_START".len ..];
                 const end_pos = std.mem.indexOf(u8, remaining, "TASK_END") orelse break;
@@ -228,27 +203,65 @@ pub const Pipeline = struct {
                 created += 1;
             }
 
-            // Also create a final task to delete BACKLOG.md once all work is merged
-            _ = self.db.createPipelineTask(
-                "Remove BACKLOG.md — all tasks imported into pipeline",
-                "BACKLOG.md has served its purpose: all tasks have been loaded into the pipeline. Delete it: git rm BACKLOG.md && git add -A && git commit -m \"chore: remove BACKLOG.md — all tasks implemented\"",
-                repo.path,
-                "backlog",
-                self.config.pipeline_admin_chat,
-            ) catch {};
-            created += 1;
+            if (created == 0) continue;
 
-            // Rename BACKLOG.md to BACKLOG.md.imported so we don't re-load on next restart
-            const done_path = std.fmt.allocPrint(self.allocator, "{s}/BACKLOG.md.imported", .{repo.path}) catch continue;
-            defer self.allocator.free(done_path);
-            std.fs.renameAbsolute(backlog_path, done_path) catch {};
+            // Mark imported so we don't re-load on next restart
+            self.db.setState(state_key, "1") catch {};
 
-            std.log.info("Imported {d} tasks from BACKLOG.md in {s}", .{ created, repo.path });
+            std.log.info("Loaded {d} tasks from BACKLOG.md in {s}", .{ created, repo.path });
             self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(
                 self.allocator,
-                "Imported {d} tasks from BACKLOG.md",
+                "Loaded {d} tasks from BACKLOG.md",
                 .{created},
             ) catch return);
+        }
+    }
+
+    // Called after integration merges complete. If all backlog tasks are done and
+    // BACKLOG.md still exists, open a PR to remove it.
+    fn maybeCleanupBacklog(self: *Pipeline, repo_path: []const u8) void {
+        const remaining = self.db.getUnmergedBacklogCount() catch return;
+        if (remaining > 0) return;
+
+        const backlog_path = std.fmt.allocPrint(self.allocator, "{s}/BACKLOG.md", .{repo_path}) catch return;
+        defer self.allocator.free(backlog_path);
+        std.fs.accessAbsolute(backlog_path, .{}) catch return; // file doesn't exist
+
+        var git = Git.init(self.allocator, repo_path);
+        var co = git.checkout("main") catch return;
+        defer co.deinit();
+        var pull = git.pull() catch return;
+        defer pull.deinit();
+
+        const branch = "remove-backlog-md";
+        var cb = git.exec(&.{ "checkout", "-b", branch }) catch return;
+        defer cb.deinit();
+        if (!cb.success()) return;
+
+        std.fs.deleteFileAbsolute(backlog_path) catch {};
+        var add = git.exec(&.{ "add", "BACKLOG.md" }) catch return;
+        defer add.deinit();
+        var commit = git.exec(&.{ "commit", "-m", "chore: remove BACKLOG.md — all tasks implemented" }) catch return;
+        defer commit.deinit();
+        if (!commit.success()) {
+            _ = git.checkout("main") catch {};
+            return;
+        }
+        var push = git.exec(&.{ "push", "origin", branch }) catch return;
+        defer push.deinit();
+
+        const pr_cmd = "gh pr create --title \"chore: remove BACKLOG.md\" --body \"All backlog tasks have been implemented and merged. Removing BACKLOG.md.\" --base main";
+        const pr = self.runTestCommandForRepo(repo_path, pr_cmd) catch {
+            _ = git.checkout("main") catch {};
+            return;
+        };
+        defer self.allocator.free(pr.stdout);
+        defer self.allocator.free(pr.stderr);
+
+        _ = git.checkout("main") catch {};
+
+        if (pr.exit_code == 0) {
+            std.log.info("Opened PR to remove BACKLOG.md: {s}", .{std.mem.trim(u8, pr.stdout, &[_]u8{ ' ', '\n' })});
         }
     }
 
@@ -1287,7 +1300,10 @@ pub const Pipeline = struct {
             }
         }
 
-        // 8. Self-update and notify
+        // 8. Check if backlog is fully done
+        if (merged.items.len > 0) self.maybeCleanupBacklog(repo_path);
+
+        // 9. Self-update and notify
         if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
         if (merged.items.len > 0) {
             const digest = try self.generateDigest(merged.items, &.{});
