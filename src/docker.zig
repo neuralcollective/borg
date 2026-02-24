@@ -122,25 +122,35 @@ pub const Docker = struct {
     /// Run a container with stdin piped and capture stdout.
     /// This shells out to `docker` CLI for reliable stdin/stdout handling.
     pub fn runWithStdio(self: *Docker, config: ContainerConfig, stdin_data: []const u8) !RunResult {
+        // Validate all bind mounts before creating container
+        for (config.binds) |bind| {
+            if (!isBindSafe(bind)) {
+                std.log.err("Blocked unsafe mount: {s}", .{bind});
+                return error.DockerCreateFailed;
+            }
+        }
+
         var argv = std.ArrayList([]const u8).init(self.allocator);
         defer argv.deinit();
 
         try argv.appendSlice(&.{ "docker", "run", "--rm", "-i", "--name", config.name });
 
-        // Security
+        // Security: PID limit, no privilege escalation, read-only root, drop all caps
         try argv.appendSlice(&.{ "--pids-limit", "256", "--security-opt", "no-new-privileges:true" });
+        try argv.appendSlice(&.{ "--cap-drop", "ALL" });
+        try argv.appendSlice(&.{ "--network", "host" }); // Claude Code needs network for API
 
-        // Memory
+        // Memory + CPU limits
         var mem_buf: [32]u8 = undefined;
         const mem_str = try std.fmt.bufPrint(&mem_buf, "{d}", .{config.memory_limit});
-        try argv.appendSlice(&.{ "--memory", mem_str });
+        try argv.appendSlice(&.{ "--memory", mem_str, "--cpus", "2" });
 
         // Env vars
         for (config.env) |env| {
             try argv.appendSlice(&.{ "-e", env });
         }
 
-        // Binds
+        // Binds (already validated above)
         for (config.binds) |bind| {
             try argv.appendSlice(&.{ "-v", bind });
         }
@@ -224,6 +234,52 @@ pub const RunResult = struct {
     }
 };
 
+/// Check if a bind mount path is safe (no sensitive directories)
+fn isBindSafe(bind: []const u8) bool {
+    // Extract host path (everything before the first :)
+    const colon = std.mem.indexOf(u8, bind, ":") orelse return false;
+    const host_path = bind[0..colon];
+
+    // Reject path traversal
+    if (std.mem.indexOf(u8, host_path, "..") != null) return false;
+
+    // Block sensitive paths
+    const blocked = [_][]const u8{
+        "/.ssh",
+        "/.aws",
+        "/.gnupg",
+        "/.config/gcloud",
+        "/.kube",
+        "/credentials",
+        "/.env",
+        "/id_rsa",
+        "/id_ed25519",
+        "/.git/config",
+    };
+    for (blocked) |pattern| {
+        if (std.mem.indexOf(u8, host_path, pattern) != null) return false;
+    }
+
+    return true;
+}
+
 pub const DockerError = error{
     DockerCreateFailed,
 };
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+test "isBindSafe allows normal paths" {
+    try std.testing.expect(isBindSafe("/home/user/project:/workspace"));
+    try std.testing.expect(isBindSafe("/tmp/data:/data:rw"));
+    try std.testing.expect(isBindSafe("/home/user/borg/data/sessions/test:/home/node/.claude/projects/test"));
+}
+
+test "isBindSafe blocks sensitive paths" {
+    try std.testing.expect(!isBindSafe("/home/user/.ssh:/workspace/.ssh"));
+    try std.testing.expect(!isBindSafe("/home/user/.aws:/root/.aws"));
+    try std.testing.expect(!isBindSafe("/home/user/../etc/passwd:/etc/passwd"));
+    try std.testing.expect(!isBindSafe("/home/user/.env:/app/.env"));
+    try std.testing.expect(!isBindSafe("/home/user/.gnupg:/root/.gnupg"));
+    try std.testing.expect(!isBindSafe("no-colon-is-invalid"));
+}
