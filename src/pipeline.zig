@@ -539,6 +539,11 @@ pub const Pipeline = struct {
             var gt_create = try gt.create(branch, title);
             defer gt_create.deinit();
 
+            // gt create checks out the new branch in the main worktree — switch back to main
+            // BEFORE creating the worktree so git won't reject the duplicate checkout
+            var co_back = try git.checkout("main");
+            defer co_back.deinit();
+
             if (!gt_create.success()) {
                 // Fallback: create branch with git
                 var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
@@ -1200,49 +1205,29 @@ pub const Pipeline = struct {
         }
         if (live.items.len == 0) return;
 
-        // 3. Determine stack order via LLM (cached), then track branches
+        // 3. Determine merge order via LLM (cached); each branch targets main independently
         const stack_order = try self.determineStackOrder(live.items, repo_path);
         defer self.allocator.free(stack_order);
+
+        // 4. Submit each branch as an independent PR (no --stack, no restack, no re-parenting)
         for (stack_order) |se| {
-            var track = try gt.branchTrack(se.branch, se.parent);
-            defer track.deinit();
+            var co_branch = try git.checkout(se.branch);
+            defer co_branch.deinit();
+            if (!co_branch.success()) continue;
+            var submit = try gt.submit();
+            defer submit.deinit();
+            if (!submit.success()) {
+                std.log.warn("gt submit {s}: {s}", .{ se.branch, submit.stderr[0..@min(submit.stderr.len, 200)] });
+            }
+            var co_main2 = try git.checkout("main");
+            defer co_main2.deinit();
         }
 
-        // 4. Restack — if it fails (conflicts), abort and skip submit
-        var restack = try gt.restack();
-        defer restack.deinit();
-        if (!restack.success()) {
-            std.log.warn("gt restack failed, aborting: {s}", .{restack.stderr[0..@min(restack.stderr.len, 200)]});
-            var abort = try git.exec(&.{ "rebase", "--abort" });
-            defer abort.deinit();
-            return;
-        }
-
-        // 5. Checkout top of stack, submit, return to main
-        const top_branch = stack_order[stack_order.len - 1].branch;
-        var co_top = try git.checkout(top_branch);
-        defer co_top.deinit();
-        var submit = try gt.submitStack();
-        defer submit.deinit();
-        var co_main = try git.checkout("main");
-        defer co_main.deinit();
-        if (submit.success()) {
-            std.log.info("Graphite stack submitted ({d} branches)", .{live.items.len});
-        } else {
-            std.log.warn("gt submit --stack: {s}", .{submit.stderr[0..@min(submit.stderr.len, 200)]});
-        }
-
-        // 6. Merge bottom-up in stack order; only merge if parent is main or already merged
+        // 5. Merge in stack order (LLM-determined); all PRs target main so no dependency ordering needed
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
-        var merged_set = std.StringHashMap(void).init(self.allocator);
-        defer merged_set.deinit();
 
         for (stack_order) |se| {
-            // Only merge if parent is already in main (either it's "main" or we just merged it)
-            const parent_ready = std.mem.eql(u8, se.parent, "main") or merged_set.contains(se.parent);
-            if (!parent_ready) continue;
-
             // Find the queue entry for this branch
             var q_entry: ?db_mod.QueueEntry = null;
             for (live.items) |entry| {
@@ -1280,7 +1265,6 @@ pub const Pipeline = struct {
             try self.db.updateQueueStatus(entry.id, "merged", null);
             try self.db.updateTaskStatus(entry.task_id, "merged");
             try merged.append(se.branch);
-            try merged_set.put(se.branch, {});
 
             if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
                 self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
