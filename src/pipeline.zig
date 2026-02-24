@@ -320,7 +320,7 @@ pub const Pipeline = struct {
         child.stderr_behavior = .Pipe;
 
         // Set cwd to repo
-        child.cwd = .{ .cwd_relative = self.config.pipeline_repo };
+        child.cwd = self.config.pipeline_repo;
 
         try child.spawn();
 
