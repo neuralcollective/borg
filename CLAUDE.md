@@ -11,8 +11,7 @@ src/
   db.zig            # SQLite schema, CRUD, migrations
   sqlite.zig        # Low-level SQLite C bindings
   telegram.zig      # Telegram Bot API long-poll client
-  whatsapp.zig      # WhatsApp Node.js bridge wrapper (NDJSON IPC)
-  discord.zig       # Discord Node.js bridge wrapper (NDJSON IPC)
+  sidecar.zig       # Unified Discord+WhatsApp bridge (single bun process, NDJSON IPC)
   agent.zig         # Claude subprocess runner, NDJSON stream parser
   pipeline.zig      # Autonomous engineering: spec→qa→impl→test→release
   docker.zig        # Docker container lifecycle via Unix socket
@@ -24,8 +23,7 @@ container/
   Dockerfile        # Pipeline agent image (node + claude CLI)
   entrypoint.sh     # Agent entrypoint: parses JSON input, runs claude
 dashboard/          # React + Vite + Tailwind web dashboard
-whatsapp/           # WhatsApp bridge (Node.js, Baileys)
-discord/            # Discord bridge (Node.js, discord.js)
+sidecar/            # Unified messaging bridge (bun, discord.js + Baileys)
 vendor/sqlite/      # Vendored SQLite amalgamation
 ```
 
@@ -54,8 +52,8 @@ See `src/config.zig` for the full list with defaults.
 
 ## Key Patterns
 
-- **Transport-agnostic messaging**: `Transport` enum (`.telegram`, `.whatsapp`, `.discord`) + `Sender` struct dispatches to the right backend.
-- **Node.js bridges**: WhatsApp and Discord use subprocess bridges (`node whatsapp/bridge.js`, `node discord/bridge.js`) communicating via NDJSON over stdin/stdout. Zig spawns and polls them.
+- **Transport-agnostic messaging**: `Transport` enum (`.telegram`, `.whatsapp`, `.discord`, `.web`) + `Sender` struct dispatches to the right backend.
+- **Unified sidecar**: Discord and WhatsApp run in a single bun process (`sidecar/bridge.js`) communicating via multiplexed NDJSON over stdin/stdout. Events have a `source` field; commands have a `target` field.
 - **Per-group state machine**: `IDLE → COLLECTING → RUNNING → COOLDOWN → IDLE`. Collection window batches messages. Rate-limited per group.
 - **Pipeline phases**: `backlog → spec → qa → impl → test → done → release`. Each task gets a git worktree. Agents run in Docker containers with `--cap-drop ALL`.
 - **SQLite WAL mode**: All threads share one DB connection with `busy_timeout=5000ms`.
@@ -70,7 +68,7 @@ See `src/config.zig` for the full list with defaults.
 
 ## Deployment
 
-Three options: `zig build && ./zig-out/bin/borg` (bare metal), `docker compose up -d` (Docker Compose), or systemd (`borg.service`). The systemd service needs a PATH that includes zig, node, docker, and bun.
+Three options: `zig build && ./zig-out/bin/borg` (bare metal), `docker compose up -d` (Docker Compose), or systemd (`borg.service`). The systemd service needs a PATH that includes zig, docker, and bun.
 
 ## Dashboard
 

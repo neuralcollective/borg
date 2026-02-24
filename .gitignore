@@ -17,6 +17,9 @@ whatsapp/node_modules/
 # Discord
 discord/node_modules/
 
+# Sidecar
+sidecar/node_modules/
+
 # Pipeline worktrees
 .worktrees/
 

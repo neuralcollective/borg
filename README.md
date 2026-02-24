@@ -147,33 +147,28 @@ Shows pipeline task list with repo badges (when multiple repos configured), task
 
 To rebuild after changes: `cd dashboard && bun run build`
 
-## WhatsApp support
+## Messaging sidecar (Discord + WhatsApp)
+
+Discord and WhatsApp run in a single bun process (`sidecar/bridge.js`):
 
 ```bash
-cd whatsapp && bun install && cd ..
+cd sidecar && bun install && cd ..
 ```
 
 Add to `.env`:
 ```
+# Discord
+DISCORD_ENABLED=true
+DISCORD_TOKEN=your-bot-token
+
+# WhatsApp (scan QR on first start)
 WHATSAPP_ENABLED=true
 WHATSAPP_AUTH_DIR=whatsapp/auth
 ```
 
-Scan the QR code on first start. Auth state persists in `WHATSAPP_AUTH_DIR`.
+**Discord setup**: Create a bot at [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent** under Bot settings, and invite to your server with `bot` + `applications.commands` scopes.
 
-## Discord support
-
-```bash
-cd discord && bun install && cd ..
-```
-
-Add to `.env`:
-```
-DISCORD_ENABLED=true
-DISCORD_TOKEN=your-bot-token
-```
-
-Create a bot at [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent** under Bot settings, and invite to your server with `bot` + `applications.commands` scopes.
+**WhatsApp**: Scan the QR code on first start. Auth state persists in `WHATSAPP_AUTH_DIR`.
 
 ## Config
 

@@ -35,6 +35,11 @@ COPY --from=build /app/zig-out/bin/borg /usr/local/bin/borg
 COPY --from=build /app/dashboard/dist /opt/borg/dashboard/dist
 COPY --from=build /app/container /opt/borg/container
 
+# Sidecar (Discord + WhatsApp bridge)
+COPY sidecar/package.json /opt/borg/sidecar/package.json
+RUN cd /opt/borg/sidecar && bun install --production
+COPY sidecar/bridge.js /opt/borg/sidecar/bridge.js
+
 ENV DASHBOARD_DIST_DIR=/opt/borg/dashboard/dist
 
 WORKDIR /data

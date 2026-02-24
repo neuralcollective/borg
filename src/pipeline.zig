@@ -359,7 +359,15 @@ pub const Pipeline = struct {
         const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
 
-        // Delete old branch if it exists (from a previous recycled attempt)
+        // Clean up stale worktree/branch from a previous attempt
+        var rm_wt = try git.exec(&.{ "worktree", "remove", "--force", wt_path });
+        defer rm_wt.deinit();
+        if (!rm_wt.success()) {
+            // Worktree may be corrupted (.git dir instead of file) — nuke and prune
+            std.fs.deleteTreeAbsolute(wt_path) catch {};
+            var prune = try git.exec(&.{ "worktree", "prune" });
+            defer prune.deinit();
+        }
         var del_branch = try git.exec(&.{ "branch", "-D", branch });
         defer del_branch.deinit();
 
