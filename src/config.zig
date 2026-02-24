@@ -423,3 +423,376 @@ test "parseWatchedRepos path without colon matching primary skipped" {
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
 }
+
+// ── parseWatchedRepos Tests (explicit allocator) ───────────────────────
+
+test "parseWatchedRepos: primary repo is first" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/other:cmd_other
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "test_cmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len >= 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expectEqualStrings("test_cmd", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+test "parseWatchedRepos: empty primary repo omitted" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/a:cmd_a
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/a", repos[0].path);
+    try std.testing.expectEqualStrings("cmd_a", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == false);
+}
+
+test "parseWatchedRepos: multiple pipe-delimited repos" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/a:cmd_a|/b:cmd_b
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 3);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self == true);
+    try std.testing.expectEqualStrings("/a", repos[1].path);
+    try std.testing.expectEqualStrings("cmd_a", repos[1].test_cmd);
+    try std.testing.expectEqualStrings("/b", repos[2].path);
+    try std.testing.expectEqualStrings("cmd_b", repos[2].test_cmd);
+}
+
+test "parseWatchedRepos: entry without colon uses default cmd" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/repo/path
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/repo/path", repos[0].path);
+    try std.testing.expectEqualStrings("make test", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: entry with colon but empty cmd uses default" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/repo/path:
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/repo/path", repos[0].path);
+    try std.testing.expectEqualStrings("make test", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: duplicate primary is skipped" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/primary:other_cmd|/other:cmd
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 2);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self == true);
+    try std.testing.expectEqualStrings("/other", repos[1].path);
+    try std.testing.expectEqualStrings("cmd", repos[1].test_cmd);
+}
+
+test "parseWatchedRepos: empty entries are skipped" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=||/a:cmd||
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/a", repos[0].path);
+    try std.testing.expectEqualStrings("cmd", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: whitespace-only entries are skipped" {
+    const alloc = std.testing.allocator;
+    const env = "WATCHED_REPOS=  | \t |/a:cmd";
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/a", repos[0].path);
+    try std.testing.expectEqualStrings("cmd", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: leading and trailing whitespace is trimmed" {
+    const alloc = std.testing.allocator;
+    const env = "WATCHED_REPOS=  /path : cmd  ";
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/path", repos[0].path);
+    try std.testing.expectEqualStrings("cmd", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: entry with empty path after colon is skipped" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=:cmd
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 0);
+}
+
+test "parseWatchedRepos: no WATCHED_REPOS in env" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\OTHER_KEY=value
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expectEqualStrings("pcmd", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+test "parseWatchedRepos: watched entries have is_self false" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/a:x|/b:y|/c
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 4);
+    try std.testing.expect(repos[0].is_self == true);
+    for (repos[1..]) |r| {
+        try std.testing.expect(r.is_self == false);
+    }
+}
+
+// ── parseWatchedRepos Edge Cases ───────────────────────────────────────
+
+test "parseWatchedRepos: empty env and empty primary" {
+    const alloc = std.testing.allocator;
+    const repos = try parseWatchedRepos(alloc, "", "", "");
+    defer alloc.free(repos);
+    try std.testing.expect(repos.len == 0);
+}
+
+test "parseWatchedRepos: WATCHED_REPOS is empty string" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+test "parseWatchedRepos: single entry without delimiter" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/single:test
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/single", repos[0].path);
+    try std.testing.expectEqualStrings("test", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: duplicate primary without colon" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/primary
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+test "parseWatchedRepos: duplicate primary with colon" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/primary:other_cmd
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expectEqualStrings("pcmd", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+test "parseWatchedRepos: colon in command portion" {
+    const alloc = std.testing.allocator;
+    const env = "WATCHED_REPOS=/repo:make -C /path test";
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/repo", repos[0].path);
+    try std.testing.expectEqualStrings("make -C /path test", repos[0].test_cmd);
+}
+
+test "parseWatchedRepos: multiple consecutive pipes" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=/a:x|||/b:y
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 2);
+    try std.testing.expectEqualStrings("/a", repos[0].path);
+    try std.testing.expectEqualStrings("x", repos[0].test_cmd);
+    try std.testing.expectEqualStrings("/b", repos[1].path);
+    try std.testing.expectEqualStrings("y", repos[1].test_cmd);
+}
+
+test "parseWatchedRepos: whitespace around path matching primary" {
+    const alloc = std.testing.allocator;
+    const env = "WATCHED_REPOS=  /primary  ";
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self == true);
+}
+
+test "parseWatchedRepos: entry that is only a colon" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\WATCHED_REPOS=:
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "", "");
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 0);
+}
