@@ -52,6 +52,31 @@ pub fn main() !void {
     var docker = Docker.init(allocator);
     docker.cleanupOrphans() catch {};
 
+    // Start pipeline thread if repo is configured
+    var pipeline_db: ?Db = null;
+    var pipeline: ?pipeline_mod.Pipeline = null;
+    var pipeline_thread: ?std.Thread = null;
+    defer {
+        if (pipeline) |*p| {
+            p.stop();
+            if (pipeline_thread) |t| t.join();
+        }
+        if (pipeline_db) |*pdb| pdb.deinit();
+    }
+
+    if (config.pipeline_repo.len > 0) {
+        pipeline_db = try Db.init(allocator, "store/borg.db");
+        pipeline = pipeline_mod.Pipeline.init(
+            allocator,
+            &pipeline_db.?,
+            &docker,
+            &tg,
+            &config,
+        );
+        pipeline_thread = try std.Thread.spawn(.{}, pipeline_mod.Pipeline.run, .{&pipeline.?});
+        std.log.info("Pipeline thread started for: {s}", .{config.pipeline_repo});
+    }
+
     var groups_list = std.ArrayList(db_mod.RegisteredGroup).init(allocator);
     defer groups_list.deinit();
     {
@@ -102,7 +127,7 @@ pub fn main() !void {
 
             // Handle commands
             if (msg.text.len > 0 and msg.text[0] == '/') {
-                handleCommand(allocator, &db, &tg, msg, chat_jid, &groups_list, &group_states, &config, start_time) catch |err| {
+                handleCommand(allocator, &db, &tg, msg, chat_jid, &groups_list, &group_states, &config, start_time, if (pipeline_db) |*pdb| pdb else null) catch |err| {
                     std.log.err("Command error: {}", .{err});
                 };
                 continue;
@@ -217,6 +242,7 @@ fn handleCommand(
     group_states: *std.StringHashMap(GroupState),
     config: *Config,
     start_time: i64,
+    pipeline_db: ?*Db,
 ) !void {
     if (std.mem.startsWith(u8, msg.text, "/register")) {
         for (groups_list.items) |g| {
@@ -279,15 +305,21 @@ fn handleCommand(
             if (entry.value_ptr.agent_running) active_agents += 1;
         }
 
-        var buf: [512]u8 = undefined;
-        const reply = try std.fmt.bufPrint(&buf,
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try buf.writer().print(
             \\*Borg Status*
             \\Uptime: {d}h {d}m
             \\Groups: {d}
             \\Active agents: {d}
             \\Model: {s}
         , .{ hours, mins, groups_list.items.len, active_agents, config.model });
-        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+
+        if (config.pipeline_repo.len > 0) {
+            try buf.writer().print("\nPipeline: active ({s})", .{config.pipeline_repo});
+        }
+
+        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
     } else if (std.mem.startsWith(u8, msg.text, "/groups")) {
         if (groups_list.items.len == 0) {
             try tg.sendMessage(msg.chat_id, "No groups registered.", msg.message_id);
@@ -301,6 +333,94 @@ fn handleCommand(
             const status = if (group_states.get(g.jid)) |s| (if (s.agent_running) " (running)" else "") else "";
             try buf.writer().print("- {s} `{s}`{s}\n", .{ g.name, g.jid, status });
         }
+        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
+    } else if (std.mem.startsWith(u8, msg.text, "/task ")) {
+        const pdb = pipeline_db orelse {
+            try tg.sendMessage(msg.chat_id, "Pipeline not configured. Set PIPELINE_REPO in .env", msg.message_id);
+            return;
+        };
+
+        // Parse: /task <title> or /task <title>\n<description>
+        const rest = std.mem.trim(u8, msg.text[6..], &[_]u8{ ' ', '\t' });
+        if (rest.len == 0) {
+            try tg.sendMessage(msg.chat_id, "Usage: /task <title> [description on next line]", msg.message_id);
+            return;
+        }
+
+        var title: []const u8 = rest;
+        var description: []const u8 = rest;
+        if (std.mem.indexOf(u8, rest, "\n")) |nl| {
+            title = std.mem.trim(u8, rest[0..nl], &[_]u8{ ' ', '\t', '\r' });
+            description = std.mem.trim(u8, rest[nl + 1 ..], &[_]u8{ ' ', '\t', '\r' });
+        }
+
+        const task_id = try pdb.createPipelineTask(
+            title,
+            description,
+            config.pipeline_repo,
+            msg.sender_name,
+            chat_jid,
+        );
+
+        var reply_buf: [256]u8 = undefined;
+        const reply = try std.fmt.bufPrint(&reply_buf, "Task #{d} created: {s}", .{ task_id, title[0..@min(title.len, 100)] });
+        try tg.sendMessage(msg.chat_id, reply, msg.message_id);
+        std.log.info("Pipeline task #{d} created by {s}: {s}", .{ task_id, msg.sender_name, title });
+    } else if (std.mem.startsWith(u8, msg.text, "/tasks")) {
+        const pdb = pipeline_db orelse {
+            try tg.sendMessage(msg.chat_id, "Pipeline not configured.", msg.message_id);
+            return;
+        };
+
+        const tasks = try pdb.getAllPipelineTasks(allocator, 20);
+        defer {
+            for (tasks) |t| {
+                allocator.free(t.title);
+                allocator.free(t.description);
+                allocator.free(t.repo_path);
+                allocator.free(t.branch);
+                allocator.free(t.status);
+                allocator.free(t.last_error);
+                allocator.free(t.created_by);
+                allocator.free(t.notify_chat);
+                allocator.free(t.created_at);
+            }
+            allocator.free(tasks);
+        }
+
+        if (tasks.len == 0) {
+            try tg.sendMessage(msg.chat_id, "No pipeline tasks.", msg.message_id);
+            return;
+        }
+
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try buf.appendSlice("*Pipeline Tasks*\n");
+        for (tasks) |t| {
+            const status_icon = if (std.mem.eql(u8, t.status, "done") or std.mem.eql(u8, t.status, "merged"))
+                "+"
+            else if (std.mem.eql(u8, t.status, "failed"))
+                "x"
+            else
+                "~";
+            try buf.writer().print("[{s}] #{d} {s} ({s})\n", .{ status_icon, t.id, t.title[0..@min(t.title.len, 50)], t.status });
+        }
+        try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
+    } else if (std.mem.startsWith(u8, msg.text, "/pipeline")) {
+        if (config.pipeline_repo.len == 0) {
+            try tg.sendMessage(msg.chat_id, "Pipeline not configured. Set PIPELINE_REPO in .env", msg.message_id);
+            return;
+        }
+
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try buf.writer().print(
+            \\*Pipeline Info*
+            \\Repo: {s}
+            \\Test cmd: {s}
+            \\Release interval: {d}h
+            \\Model: {s}
+        , .{ config.pipeline_repo, config.pipeline_test_cmd, config.release_interval_hours, config.model });
         try tg.sendMessage(msg.chat_id, buf.items, msg.message_id);
     } else if (std.mem.startsWith(u8, msg.text, "/chatid")) {
         var buf: [256]u8 = undefined;
@@ -317,6 +437,11 @@ fn handleCommand(
             \\/groups - List registered groups
             \\/chatid - Show chat ID
             \\/ping - Check if online
+            \\
+            \\*Pipeline*
+            \\/task <title> - Create engineering task
+            \\/tasks - List pipeline tasks
+            \\/pipeline - Show pipeline info
         , msg.message_id);
     }
 }
