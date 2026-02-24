@@ -17,6 +17,9 @@ pub const Config = struct {
     pipeline_lint_cmd: []const u8,
     pipeline_admin_chat: []const u8,
     release_interval_hours: u32,
+    // WhatsApp config
+    whatsapp_enabled: bool,
+    whatsapp_auth_dir: []const u8,
     allocator: std.mem.Allocator,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
@@ -47,6 +50,8 @@ pub const Config = struct {
             .pipeline_lint_cmd = getEnv(allocator, env_content, "PIPELINE_LINT_CMD") orelse "",
             .pipeline_admin_chat = getEnv(allocator, env_content, "PIPELINE_ADMIN_CHAT") orelse "",
             .release_interval_hours = release_hours,
+            .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
+            .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .allocator = allocator,
         };
     }
