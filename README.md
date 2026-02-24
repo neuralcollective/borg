@@ -1,6 +1,6 @@
 # borg
 
-Autonomous AI agent orchestrator that runs Claude Code inside Docker containers, triggered via Telegram. Includes an autonomous engineering pipeline with three agent personas (Manager, QA, Worker) for automated feature development. Written in Zig.
+Autonomous AI agent orchestrator that runs Claude Code inside Docker containers, triggered via Telegram and WhatsApp. Includes an autonomous engineering pipeline with three agent personas (Manager, QA, Worker) for automated feature development. Written in Zig.
 
 Each registered chat gets its own isolated Docker container with Claude Code CLI. Messages are collected, formatted into prompts, and piped to the container via stdin. Responses stream back as NDJSON and are sent to the chat. Sessions persist across invocations.
 
@@ -101,7 +101,7 @@ The pipeline runs as a separate thread and processes tasks through a multi-stage
 6. **Done**: Tests pass, branch queued for integration
 7. **Retry**: Tests fail, Worker gets stderr context and retries (max 3 attempts)
 
-Each task gets its own git branch (`feature/task-{id}`). Git is the state machine.
+Each task gets its own git worktree at `{repo}/.worktrees/task-{id}`, keeping the main working tree clean. Git is the state machine.
 
 ### Macro-loop (release train)
 
@@ -132,6 +132,27 @@ Runs every N hours (configurable, default 6h):
 | `PIPELINE_ADMIN_CHAT` | (empty) | Telegram chat ID for pipeline notifications |
 | `RELEASE_INTERVAL_HOURS` | `6` | Hours between release trains |
 
+## WhatsApp Support
+
+Borg can connect to WhatsApp Web as an additional messaging backend using a Node.js bridge built on [Baileys](https://github.com/WhiskeySockets/Baileys).
+
+### Setup
+
+```bash
+cd whatsapp && bun install && cd ..
+```
+
+Add to `.env`:
+
+```
+WHATSAPP_ENABLED=true
+WHATSAPP_AUTH_DIR=whatsapp/auth
+```
+
+On first start, a QR code will be printed to the terminal. Scan it with WhatsApp on your phone (Settings > Linked Devices > Link a Device). Auth state is persisted in the `WHATSAPP_AUTH_DIR` directory.
+
+WhatsApp groups use `wa:` prefix for JIDs (e.g., `wa:123456789-987654321@g.us`). Register and trigger them the same way as Telegram groups.
+
 ## Config
 
 | Variable | Default | Description |
@@ -143,6 +164,8 @@ Runs every N hours (configurable, default 6h):
 | `DATA_DIR` | `data` | Directory for session and IPC data |
 | `CONTAINER_IMAGE` | `borg-agent:latest` | Docker image for agent containers |
 | `CLAUDE_MODEL` | `claude-opus-4-6` | Model passed to Claude Code CLI |
+| `WHATSAPP_ENABLED` | `false` | Enable WhatsApp Web bridge |
+| `WHATSAPP_AUTH_DIR` | `whatsapp/auth` | Directory for WhatsApp auth state |
 
 ## Container security
 
