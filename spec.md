@@ -1,74 +1,111 @@
-TASK_START
-TITLE: Fix WhatsApp stdout blocking the main event loop
-DESCRIPTION: In whatsapp.zig:77-82, the `poll()` method calls `stdout.read()` on a blocking pipe fd. When the WhatsApp bridge has no data to send, this blocks indefinitely, freezing the entire main event loop (Telegram polling, agent dispatch, cooldown expiry). The pipe should be set to O_NONBLOCK after spawning the child process, or the read should be moved to a dedicated thread that feeds parsed events to the main loop via a thread-safe queue.
-TASK_END
+# Spec: Fix subprocess pipe deadlock when stderr buffer fills
 
-TASK_START
-TITLE: Fix subprocess stdout/stderr sequential read deadlock
-DESCRIPTION: In git.zig:27-40 and pipeline.zig:768-781, stdout is read to completion before stderr is read. If a child process fills the OS pipe buffer (~64KB on Linux) writing to stderr while also writing to stdout, the child blocks on stderr write, and the parent blocks on stdout read, causing a deadlock. Both streams must be drained concurrently, either by using separate threads per stream, poll/epoll, or by collecting both via the Zig child.collectOutput() pattern.
-TASK_END
+## Task Summary
 
-TASK_START
-TITLE: Fix OAuth token memory leak in refreshOAuthToken
-DESCRIPTION: In config.zig:106-110, `refreshOAuthToken` overwrites `self.oauth_token` with a newly allocated string without freeing the previous value. This function is called every main loop iteration (every 500ms in main.zig:647), causing continuous memory growth. The old token must be freed before assigning the new one, with care to avoid freeing the initial token that may have come from a non-owned slice.
-TASK_END
+In five subprocess call sites (`git.zig:exec()`, `docker.zig:runWithStdio()`, `agent.zig:runDirect()`, `pipeline.zig:runTestCommandForRepo()`, `main.zig:agentThreadInner()`), stdout is read to completion before stderr is drained. If a child process writes more than the OS pipe buffer (~64KB on Linux) to stderr before stdout EOF, the child blocks on its stderr write while the parent blocks on its stdout read, causing a deadlock. Fix by draining both streams concurrently using a shared helper that spawns a thread for the secondary stream.
 
-TASK_START
-TITLE: Fix use-after-free on pipeline shutdown with active agents
-DESCRIPTION: In pipeline.zig:156, spawned `processTaskThread` thread handles are discarded (detached). During shutdown, `Pipeline.run()` waits at most 30s for agents then returns. The main function then destroys `pipeline_db` and the allocator, but detached agent threads may still be running and accessing `self.db` and `self.allocator`. Store thread handles and join them all during shutdown, or use a shared atomic flag that agents check before each db operation.
-TASK_END
+## Files to Modify
 
-TASK_START
-TITLE: Fix Docker container name collision for concurrent agents
-DESCRIPTION: In pipeline.zig:1121-1123, container names are generated using `std.time.timestamp()` which has second granularity. If two pipeline agents are spawned within the same second, they get identical container names and Docker rejects the second container creation. Add a monotonic atomic counter or random suffix to ensure unique container names across concurrent spawns.
-TASK_END
+1. `src/git.zig` — `exec()` at lines 11-54: replace sequential stdout-then-stderr reads with concurrent drain
+2. `src/docker.zig` — `runWithStdio()` at lines 124-196: stderr is piped but never read; drain it concurrently with stdout
+3. `src/agent.zig` — `runDirect()` at lines 56-131: stderr is piped but never read; drain it concurrently with stdout
+4. `src/pipeline.zig` — `runTestCommandForRepo()` at lines 736-779: replace sequential stdout-then-stderr reads with concurrent drain
+5. `src/main.zig` — `agentThreadInner()` at lines 878-947: stderr is piped but never read; drain it concurrently with stdout
 
-TASK_START
-TITLE: Fix formatTimestamp panic on negative or zero timestamps
-DESCRIPTION: In main.zig:1200, `@intCast(unix_ts)` casts i64 to u64 for EpochSeconds.secs. If a message has a negative or zero timestamp (e.g., timestamp 0 from WhatsApp defaults, or malformed Telegram data), this triggers a runtime panic from the safety-checked integer cast. Clamp the timestamp to a valid positive range (minimum 0) before casting, or use `@max(unix_ts, 0)` to prevent the panic.
-TASK_END
+## Files to Create
 
-TASK_START
-TITLE: Fix data race on web_server_global pointer
-DESCRIPTION: In main.zig:25, `web_server_global` is a plain `?*WebServer` read from the log function (called from any thread via std.log) and written from the main thread. This is a data race under the Zig/C memory model. Replace it with `std.atomic.Value(?*WebServer)` and use atomic load/store with appropriate memory ordering to ensure correct visibility across threads.
-TASK_END
+None. The helper function should be added to an existing file. Since `git.zig` already defines the most general-purpose `ExecResult` and all five call sites share the same pattern, add the concurrent-drain helper as a standalone public function in a new section of `src/git.zig` (or alternatively as a new `src/subprocess.zig` if the implementer prefers — either is acceptable as long as all five sites use it).
 
-TASK_START
-TITLE: Fix memory leak of session_id in /tasks command handler
-DESCRIPTION: In main.zig:1089-1103, the `/tasks` command handler frees individual fields of each PipelineTask struct (title, description, repo_path, branch, status, last_error, created_by, notify_chat, created_at) but omits `t.session_id`. Since `rowToPipelineTask` allocates `session_id` via `allocator.dupe`, this leaks memory on every `/tasks` invocation. Add `allocator.free(t.session_id)` to the cleanup block.
-TASK_END
+## Function/Type Signatures
 
-TASK_START
-TITLE: Fix JSON injection via unescaped JID in WhatsApp sendMessage
-DESCRIPTION: In whatsapp.zig:161, the `jid` parameter is interpolated directly into a JSON string without escaping. A JID containing `"` or `\` would produce malformed JSON sent to the bridge process stdin, potentially causing message send failures or protocol desync. Apply `json_mod.escapeString` to the JID before interpolation, consistent with the escaping already done for the text field.
-TASK_END
+### New helper function (in `src/git.zig` or `src/subprocess.zig`)
 
-TASK_START
-TITLE: Fix Telegram entity offset/length panic on negative values
-DESCRIPTION: In telegram.zig:108-109, `@intCast` converts i64 offset/length values from the Telegram API to usize. A malformed or adversarial API response with negative offset or length values will cause a runtime panic crashing the entire process. Replace `@intCast` with `std.math.cast(usize, ...)` which returns null on out-of-range values, and skip the entity on failure via `orelse continue`.
-TASK_END
+```zig
+/// Reads both stdout and stderr from a spawned child process concurrently.
+/// Spawns a thread to drain stderr while the calling thread drains stdout.
+/// Returns owned slices for both streams. Caller must free with `allocator`.
+pub fn collectPipeOutput(
+    allocator: std.mem.Allocator,
+    stdout_pipe: std.fs.File,
+    stderr_pipe: std.fs.File,
+    max_size: usize,
+) struct { stdout: []u8, stderr: []u8 }
+```
 
-TASK_START
-TITLE: Fix web server single-read HTTP request parsing
-DESCRIPTION: In web.zig:137-141, `handleConnection` performs a single `stream.read()` to get the HTTP request. TCP may deliver the request across multiple segments, causing partial reads where only part of the request line is received. The path parsing then operates on incomplete data, leading to incorrect routing or dropped requests under load. Read in a loop until `\r\n` (end of request line) is found, with a timeout and max-size limit to prevent slow-loris attacks.
-TASK_END
+The function should:
+- Spawn a `std.Thread` that reads `stderr_pipe` into a buffer up to `max_size`
+- On the calling thread, read `stdout_pipe` into a buffer up to `max_size`
+- Join the stderr thread
+- Return both buffers as owned slices
 
-TASK_START
-TITLE: Add size limit to subprocess stdout/stderr buffers
-DESCRIPTION: In git.zig, agent.zig, docker.zig, and pipeline.zig, subprocess stdout/stderr is read into unbounded ArrayLists with no size cap. A misbehaving subprocess could write gigabytes of output, causing OOM and crashing the entire orchestrator. Add a configurable maximum buffer size (e.g., 50MB for agent output, 10MB for git/test output) and stop reading once exceeded, truncating the output.
-TASK_END
+### Changes to existing functions
 
-TASK_START
-TITLE: Fix isBindSafe Docker mount check to resolve symlinks
-DESCRIPTION: In docker.zig:253-279, `isBindSafe` checks the string representation of the host path against a blocklist of sensitive directories. A symlink (e.g., `/tmp/innocent` pointing to `/home/user/.ssh`) bypasses all checks because only the literal string is examined. Use `std.fs.realpathAlloc` to resolve the actual filesystem path before checking against the blocklist, preventing symlink-based mount escapes in pipeline agent containers.
-TASK_END
+**`git.zig:Git.exec()`** — Replace lines 23-40 (the sequential read loops) with a call to `collectPipeOutput(self.allocator, child.stdout.?, child.stderr.?, max_size)`. The returned stdout/stderr slices feed directly into `ExecResult`.
 
-TASK_START
-TITLE: Fix SSE client list resource leak for idle connections
-DESCRIPTION: In web.zig:261, SSE clients are added to `sse_clients` and only removed when a write fails during `broadcastSse`. During quiet periods with no log events, disconnected clients accumulate as stale entries holding open file descriptors. Add a periodic keepalive mechanism (e.g., send SSE comment `: keepalive\n\n` every 30 seconds) that also serves to detect and prune dead connections via write failure.
-TASK_END
+**`docker.zig:Docker.runWithStdio()`** — Replace lines 175-183 (stdout-only read loop) with a call to `collectPipeOutput(self.allocator, child.stdout.?, child.stderr.?, max_size)`. The stderr output can be logged on non-zero exit or discarded. Update `RunResult` to optionally include stderr:
 
-TASK_START
-TITLE: Fix deadlock risk from nested mutex acquisition in pushLog
-DESCRIPTION: In web.zig:55-75, `pushLog` acquires `log_mu` then calls `broadcastSse` which acquires `sse_mu`, establishing an implicit lock ordering (log_mu then sse_mu). While no current code path reverses this order, it is fragile and undocumented. Refactor to release `log_mu` before calling `broadcastSse` by copying the level and message into local buffers first, eliminating the nested lock acquisition entirely.
-TASK_END
+```zig
+pub const RunResult = struct {
+    stdout: []const u8,
+    stderr: []const u8,  // new field
+    exit_code: u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *RunResult) void {
+        self.allocator.free(self.stdout);
+        self.allocator.free(self.stderr);
+    }
+};
+```
+
+**`agent.zig:runDirect()`** — Replace lines 109-118 (stdout-only read loop) with a call to `collectPipeOutput`. Log stderr at `err` level when exit_code != 0, to aid debugging of `AgentFailed` errors.
+
+**`pipeline.zig:Pipeline.runTestCommandForRepo()`** — Replace lines 749-766 (sequential read loops) with a call to `collectPipeOutput`. `TestResult` already has both `stdout` and `stderr` fields, so wire them through directly.
+
+**`main.zig:agentThreadInner()`** — Replace lines 919-928 (stdout-only read loop) with a call to `collectPipeOutput`. Log stderr at `err` level on failure. The `AgentOutcome` struct does not need to change since stderr is for diagnostics only.
+
+### Thread function signature (internal to helper)
+
+```zig
+fn stderrReaderThread(stderr_pipe: std.fs.File, buf: *std.ArrayList(u8), max_size: usize) void
+```
+
+## Acceptance Criteria
+
+1. **No deadlock on large stderr**: A subprocess that writes >64KB to stderr before writing to stdout must complete without hanging. Test by running a command like `/bin/sh -c "dd if=/dev/urandom bs=1024 count=128 status=none >&2; echo done"` through `git.zig:exec()` and verifying it returns within a reasonable time.
+
+2. **No deadlock on large stdout**: A subprocess that writes >64KB to stdout must still complete. Verify no regression from the existing behavior.
+
+3. **Both streams captured**: `git.zig:exec()` and `pipeline.zig:runTestCommandForRepo()` must return both stdout and stderr content accurately in their result structs.
+
+4. **Stderr available for diagnostics**: `agent.zig:runDirect()` and `main.zig:agentThreadInner()` must log stderr content (at minimum at `err` level) when the subprocess exits with a non-zero exit code.
+
+5. **docker.zig stderr captured**: `docker.zig:runWithStdio()` `RunResult` includes the new `stderr` field. Callers of `runWithStdio()` updated to handle the new field (check all call sites in `pipeline.zig`).
+
+6. **Thread cleanup**: The stderr reader thread is always joined before `child.wait()` is called, ensuring no thread leak on any code path (including error paths via `errdefer`).
+
+7. **Existing tests pass**: `zig build test` passes with no regressions. The existing tests in `git.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig` continue to pass.
+
+8. **Interleaved output correctness**: When a process writes interleaved stdout and stderr, both streams are fully captured (no truncation or data loss up to the max buffer size).
+
+## Edge Cases
+
+1. **Child closes stderr before stdout (or vice versa)**: The thread reading the early-closed stream must exit cleanly while the other thread continues reading. The join must not hang.
+
+2. **Child produces no stderr**: The stderr thread should return an empty slice without error. This is the common case for git commands.
+
+3. **Child produces no stdout**: The stdout read should return an empty slice. The stderr thread should still drain stderr fully.
+
+4. **Child exits before all output is read**: After the child exits, the pipes remain readable until drained. The readers must continue reading until EOF, not stop at child exit.
+
+5. **Thread spawn failure**: If `std.Thread.spawn` fails (resource exhaustion), fall back to sequential reads (accepting the deadlock risk) or propagate the error. At minimum, do not crash.
+
+6. **Allocator failure during stderr read**: If the stderr thread hits `OutOfMemory` while appending to its buffer, it should stop reading and return what it has. The main thread must still join it and proceed.
+
+7. **errdefer on main thread**: If the main thread's stdout read hits an error after the stderr thread is spawned, the stderr thread must be joined (via `errdefer`) before the error propagates, to avoid a detached thread holding a dangling pipe fd.
+
+8. **Max buffer enforcement**: If either stream exceeds `max_size`, stop reading that stream (close the pipe or discard further reads). The child may receive SIGPIPE on the truncated stream; this is acceptable.
+
+9. **Signal interruption (EINTR)**: The read loops should handle `EINTR` by retrying. Zig's `std.fs.File.read()` handles this internally, but verify.
+
+10. **`runWithStdio` callers**: All callers of `Docker.runWithStdio()` in `pipeline.zig` must be updated to account for the new `stderr` field in `RunResult.deinit()`, otherwise memory leaks.
