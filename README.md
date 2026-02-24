@@ -1,6 +1,6 @@
 # borg
 
-Autonomous AI agent orchestrator that runs Claude Code inside Docker containers, triggered via Telegram. Written in Zig.
+Autonomous AI agent orchestrator that runs Claude Code inside Docker containers, triggered via Telegram. Includes an autonomous engineering pipeline with three agent personas (Manager, QA, Worker) for automated feature development. Written in Zig.
 
 Each registered chat gets its own isolated Docker container with Claude Code CLI. Messages are collected, formatted into prompts, and piped to the container via stdin. Responses stream back as NDJSON and are sent to the chat. Sessions persist across invocations.
 
@@ -12,14 +12,28 @@ Telegram Bot API
     v
 borg (Zig binary)
     |
-    +-- SQLite (groups, messages, sessions, state)
+    +-- SQLite (groups, messages, sessions, pipeline tasks, integration queue)
     |
     +-- Docker CLI
+    |     |
+    |     v
+    |   borg-agent container (Node 22 + Claude Code CLI)
+    |       reads JSON from stdin -> runs claude --print --output-format stream-json
+    |       writes NDJSON to stdout
+    |
+    +-- Pipeline Thread (autonomous engineering)
           |
-          v
-        borg-agent container (Node 22 + Claude Code CLI)
-            reads JSON from stdin → runs claude --print --output-format stream-json
-            writes NDJSON to stdout
+          +-- Micro-loop: backlog -> spec -> qa -> impl -> test -> done
+          |     Manager agent -> spec.md
+          |     QA agent -> test files
+          |     Worker agent -> implementation
+          |     Zig runs tests deterministically
+          |     Retry with error context (max 3 attempts)
+          |
+          +-- Macro-loop: release train (every N hours)
+                Merge queued branches one-by-one
+                Self-healing: exclude failing branches
+                Push to main, notify admin
 ```
 
 ## Requirements
@@ -66,9 +80,57 @@ zig build
 | `/groups` | List all registered groups |
 | `/chatid` | Show the chat's internal ID |
 | `/ping` | Check if the bot is online |
+| `/task <title>` | Create an engineering pipeline task |
+| `/tasks` | List pipeline tasks and their status |
+| `/pipeline` | Show pipeline configuration |
 | `/help` | List available commands |
 
 After registering, mention the bot by name (e.g. `@Borg`) to trigger a response.
+
+## Autonomous Engineering Pipeline
+
+The pipeline runs as a separate thread and processes tasks through a multi-stage loop:
+
+### Micro-loop (per task)
+
+1. **Backlog**: Task created via `/task` command
+2. **Spec**: Manager agent reads the codebase and writes `spec.md` with requirements, file paths, and acceptance criteria
+3. **QA**: QA agent reads `spec.md` and writes test files that should initially fail
+4. **Impl**: Worker agent reads spec + tests and writes implementation code
+5. **Test**: Zig runs the configured test command deterministically
+6. **Done**: Tests pass, branch queued for integration
+7. **Retry**: Tests fail, Worker gets stderr context and retries (max 3 attempts)
+
+Each task gets its own git branch (`feature/task-{id}`). Git is the state machine.
+
+### Macro-loop (release train)
+
+Runs every N hours (configurable, default 6h):
+
+1. Freeze the integration queue
+2. Create `release-candidate` branch from `main`
+3. Merge feature branches one-by-one, run tests after each
+4. Self-healing: exclude branches that cause merge conflicts or test failures
+5. Fast-forward `main` to release-candidate
+6. Push to remote, notify admin via Telegram with digest
+
+### Agent personas
+
+| Persona | Tools | Role |
+|---------|-------|------|
+| Manager | Read, Glob, Grep, Write | Writes spec.md only |
+| QA | Read, Glob, Grep, Write | Writes test files only |
+| Worker | Read, Glob, Grep, Write, Edit, Bash | Implements features |
+
+### Pipeline config
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PIPELINE_REPO` | (empty) | Path to target repository (enables pipeline) |
+| `PIPELINE_TEST_CMD` | `zig build test` | Command to run tests |
+| `PIPELINE_LINT_CMD` | (empty) | Optional lint command |
+| `PIPELINE_ADMIN_CHAT` | (empty) | Telegram chat ID for pipeline notifications |
+| `RELEASE_INTERVAL_HOURS` | `6` | Hours between release trains |
 
 ## Config
 
@@ -89,7 +151,7 @@ Each agent container runs with:
 - `--cap-drop ALL` (no Linux capabilities)
 - `--security-opt no-new-privileges:true`
 - `--pids-limit 256`
-- `--memory 512MB`
+- `--memory 512MB` (1GB for pipeline agents)
 - `--cpus 2`
 - `--network host` (required for Claude Code API access)
 - `--rm` (auto-removed after exit)
@@ -101,7 +163,7 @@ Each agent container runs with:
 zig build test
 ```
 
-20 tests across all modules: JSON parsing, SQLite bindings, config parsing, HTTP chunked decoding, NDJSON parsing, prompt formatting, folder sanitization, trigger detection, and database operations.
+Tests across all modules: JSON parsing, SQLite bindings, config parsing, HTTP chunked decoding, NDJSON parsing, prompt formatting, folder sanitization, trigger detection, database operations, git operations, pipeline logic.
 
 ## License
 
