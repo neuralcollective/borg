@@ -290,7 +290,7 @@ pub const Db = struct {
     pub fn getNextPipelineTask(self: *Db, allocator: std.mem.Allocator) !?PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry') ORDER BY created_at ASC LIMIT 1",
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase') ORDER BY created_at ASC LIMIT 1",
             .{},
         );
         defer rows.deinit();
@@ -327,6 +327,13 @@ pub const Db = struct {
         try self.sqlite_db.execute(
             "UPDATE pipeline_tasks SET last_error = ?1, updated_at = datetime('now') WHERE id = ?2",
             .{ err_log, task_id },
+        );
+    }
+
+    pub fn resetTaskAttempt(self: *Db, task_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET attempt = 0, updated_at = datetime('now') WHERE id = ?1",
+            .{task_id},
         );
     }
 
@@ -372,7 +379,7 @@ pub const Db = struct {
     pub fn getActivePipelineTaskCount(self: *Db) !i64 {
         var rows = try self.sqlite_db.query(
             self.allocator,
-            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry')",
+            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')",
             .{},
         );
         defer rows.deinit();

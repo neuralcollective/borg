@@ -81,6 +81,18 @@ pub const Git = struct {
         return self.exec(&.{ "merge", "--abort" });
     }
 
+    pub fn fetch(self: *Git, remote: []const u8) !ExecResult {
+        return self.exec(&.{ "fetch", remote });
+    }
+
+    pub fn rebase(self: *Git, onto: []const u8) !ExecResult {
+        return self.exec(&.{ "rebase", onto });
+    }
+
+    pub fn abortRebase(self: *Git) !ExecResult {
+        return self.exec(&.{ "rebase", "--abort" });
+    }
+
     pub fn push(self: *Git, remote: []const u8, branch: []const u8) !ExecResult {
         return self.exec(&.{ "push", remote, branch });
     }
