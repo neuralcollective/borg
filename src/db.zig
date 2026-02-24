@@ -853,3 +853,233 @@ test "state key-value store" {
     try db.setState("k", "v2");
     try std.testing.expectEqualStrings("v2", (try db.getState(alloc, "k")).?);
 }
+
+// ── AC1: Round-trip preserves all five fields ──────────────────────────
+test "registerGroup round-trip preserves all five fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:rt1", "Round Trip Group", "rt-folder", "@TestBot", true);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("grp:rt1", groups[0].jid);
+    try std.testing.expectEqualStrings("Round Trip Group", groups[0].name);
+    try std.testing.expectEqualStrings("rt-folder", groups[0].folder);
+    try std.testing.expectEqualStrings("@TestBot", groups[0].trigger);
+    try std.testing.expectEqual(true, groups[0].requires_trigger);
+}
+
+// ── AC2: Round-trip with requires_trigger=false ────────────────────────
+test "registerGroup round-trip with requires_trigger false" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:rt2", "No Trigger Group", "nt-folder", "@NTBot", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("grp:rt2", groups[0].jid);
+    try std.testing.expectEqualStrings("No Trigger Group", groups[0].name);
+    try std.testing.expectEqualStrings("nt-folder", groups[0].folder);
+    try std.testing.expectEqualStrings("@NTBot", groups[0].trigger);
+    try std.testing.expectEqual(false, groups[0].requires_trigger);
+}
+
+// ── AC3: Round-trip with custom trigger pattern ────────────────────────
+test "registerGroup round-trip with custom trigger pattern" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:cmd", "Cmd Group", "cmd-folder", "!cmd", true);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("!cmd", groups[0].trigger);
+}
+
+// ── AC4: unregisterGroup removes group from getAllGroups ────────────────
+test "unregisterGroup removes group from getAllGroups" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:a", "Group A", "folder-a", "@A", true);
+    try db.registerGroup("grp:b", "Group B", "folder-b", "@B", false);
+
+    const before = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 2), before.len);
+
+    try db.unregisterGroup("grp:a");
+
+    const after = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), after.len);
+    try std.testing.expectEqualStrings("grp:b", after[0].jid);
+}
+
+// ── AC5: unregisterGroup on non-existent JID does not error ────────────
+test "unregisterGroup on non-existent JID does not error" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // Must not return an error
+    try db.unregisterGroup("nonexistent:jid");
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 0), groups.len);
+}
+
+// ── AC6: getAllGroups on empty database returns empty slice ─────────────
+test "getAllGroups on empty database returns empty slice" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 0), groups.len);
+}
+
+// ── AC7: Register, unregister, re-register round-trip ──────────────────
+test "register unregister re-register round-trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:cycle", "Original Name", "cycle-folder", "@OrigBot", true);
+    try db.unregisterGroup("grp:cycle");
+    try db.registerGroup("grp:cycle", "New Name", "cycle-folder", "@NewBot", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("grp:cycle", groups[0].jid);
+    try std.testing.expectEqualStrings("New Name", groups[0].name);
+    try std.testing.expectEqualStrings("@NewBot", groups[0].trigger);
+    try std.testing.expectEqual(false, groups[0].requires_trigger);
+}
+
+// ── Edge Case 1: Empty string trigger ──────────────────────────────────
+test "registerGroup preserves empty string trigger" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:empty", "Empty Trigger", "empty-folder", "", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    // Empty string from SQLite is non-null, so it must be preserved as ""
+    // and NOT fall back to the schema default "@Borg".
+    try std.testing.expectEqualStrings("", groups[0].trigger);
+}
+
+// ── Edge Case 2: Unicode in name and trigger ───────────────────────────
+test "registerGroup preserves unicode in name and trigger" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:uni", "Группа Тест", "uni-folder", "@Бот", true);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("Группа Тест", groups[0].name);
+    try std.testing.expectEqualStrings("@Бот", groups[0].trigger);
+}
+
+// ── Edge Case 3: Unregister middle of multiple groups ──────────────────
+test "unregisterGroup removes middle group leaving others intact" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:A", "Group A", "folder-A", "@A", true);
+    try db.registerGroup("grp:B", "Group B", "folder-B", "@B", false);
+    try db.registerGroup("grp:C", "Group C", "folder-C", "@C", true);
+
+    try db.unregisterGroup("grp:B");
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 2), groups.len);
+
+    // Collect JIDs to verify A and C remain (order not guaranteed by SQL)
+    var found_a = false;
+    var found_c = false;
+    for (groups) |g| {
+        if (std.mem.eql(u8, g.jid, "grp:A")) {
+            found_a = true;
+            try std.testing.expectEqualStrings("Group A", g.name);
+            try std.testing.expectEqualStrings("folder-A", g.folder);
+            try std.testing.expectEqualStrings("@A", g.trigger);
+            try std.testing.expectEqual(true, g.requires_trigger);
+        } else if (std.mem.eql(u8, g.jid, "grp:C")) {
+            found_c = true;
+            try std.testing.expectEqualStrings("Group C", g.name);
+            try std.testing.expectEqualStrings("folder-C", g.folder);
+            try std.testing.expectEqualStrings("@C", g.trigger);
+            try std.testing.expectEqual(true, g.requires_trigger);
+        }
+    }
+    try std.testing.expect(found_a);
+    try std.testing.expect(found_c);
+}
+
+// ── Edge Case 4: Double unregister ─────────────────────────────────────
+test "double unregisterGroup does not error" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:double", "Double", "double-folder", "@D", true);
+    try db.unregisterGroup("grp:double");
+    // Second unregister on already-removed JID must not error
+    try db.unregisterGroup("grp:double");
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 0), groups.len);
+}
+
+// ── Edge Case 5: Upsert updates trigger and folder fields ──────────────
+test "registerGroup upsert updates trigger and folder fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("grp:upsert", "V1", "folder-v1", "@TrigV1", true);
+    try db.registerGroup("grp:upsert", "V2", "folder-v2", "@TrigV2", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("grp:upsert", groups[0].jid);
+    try std.testing.expectEqualStrings("V2", groups[0].name);
+    try std.testing.expectEqualStrings("folder-v2", groups[0].folder);
+    try std.testing.expectEqualStrings("@TrigV2", groups[0].trigger);
+    try std.testing.expectEqual(false, groups[0].requires_trigger);
+}
