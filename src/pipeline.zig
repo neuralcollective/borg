@@ -683,11 +683,18 @@ pub const Pipeline = struct {
                 defer abort.deinit();
                 try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict");
                 try self.db.updateTaskError(entry.task_id, "Excluded from release: merge conflict — rebasing");
-                try self.db.resetTaskAttempt(entry.task_id);
-                try self.db.updateTaskStatus(entry.task_id, "rebase");
+                try self.db.incrementTaskAttempt(entry.task_id);
                 try excluded.append(entry.branch);
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" has merge conflicts — rebasing automatically.", .{ task.id, task.title }) catch continue);
+                    if (task.attempt + 1 >= task.max_attempts) {
+                        try self.db.updateTaskStatus(entry.task_id, "failed");
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed after {d} attempts (merge conflicts).", .{ task.id, task.title, task.max_attempts }) catch continue);
+                    } else {
+                        try self.db.updateTaskStatus(entry.task_id, "rebase");
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" has merge conflicts — rebasing (attempt {d}/{d}).", .{ task.id, task.title, task.attempt + 1, task.max_attempts }) catch continue);
+                    }
+                } else {
+                    try self.db.updateTaskStatus(entry.task_id, "rebase");
                 }
                 continue;
             }
@@ -706,11 +713,18 @@ pub const Pipeline = struct {
                 defer reset.deinit();
                 try self.db.updateQueueStatus(entry.id, "excluded", "tests failed after merge");
                 try self.db.updateTaskError(entry.task_id, test_result.stderr[0..@min(test_result.stderr.len, 4000)]);
-                try self.db.resetTaskAttempt(entry.task_id);
-                try self.db.updateTaskStatus(entry.task_id, "rebase");
+                try self.db.incrementTaskAttempt(entry.task_id);
                 try excluded.append(entry.branch);
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed integration tests — rebasing automatically.", .{ task.id, task.title }) catch continue);
+                    if (task.attempt + 1 >= task.max_attempts) {
+                        try self.db.updateTaskStatus(entry.task_id, "failed");
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed after {d} attempts (integration tests).", .{ task.id, task.title, task.max_attempts }) catch continue);
+                    } else {
+                        try self.db.updateTaskStatus(entry.task_id, "rebase");
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed integration tests — rebasing (attempt {d}/{d}).", .{ task.id, task.title, task.attempt + 1, task.max_attempts }) catch continue);
+                    }
+                } else {
+                    try self.db.updateTaskStatus(entry.task_id, "rebase");
                 }
                 continue;
             }
