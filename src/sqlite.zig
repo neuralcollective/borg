@@ -64,9 +64,10 @@ pub const Database = struct {
             if (db) |d| _ = c.sqlite3_close(d);
             return SqliteError.OpenFailed;
         }
-        // WAL mode for concurrent reads
+        // WAL mode for concurrent reads, busy timeout for multi-thread access
         _ = c.sqlite3_exec(db.?, "PRAGMA journal_mode=WAL;", null, null, null);
         _ = c.sqlite3_exec(db.?, "PRAGMA foreign_keys=ON;", null, null, null);
+        _ = c.sqlite3_busy_timeout(db.?, 5000);
         return Database{ .db = db.? };
     }
 
