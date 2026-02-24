@@ -12,17 +12,17 @@ export default function App() {
   const { logs, connected } = useLogs();
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
+    <div className="flex h-screen flex-col bg-[#0a0a0a] text-foreground antialiased">
       <Header connected={connected} />
       <StatsBar />
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-px bg-border">
+      <div className="grid min-h-0 flex-1 grid-cols-[1fr_1fr] grid-rows-[1fr_auto]">
         {/* Left: Logs */}
-        <div className="row-span-2 bg-background">
+        <div className="row-span-2 overflow-hidden border-r border-white/[0.06]">
           <LogViewer logs={logs} />
         </div>
 
         {/* Right top: Task list or detail */}
-        <div className="bg-background">
+        <div className="overflow-hidden border-b border-white/[0.06]">
           {selectedTaskId !== null ? (
             <TaskDetail taskId={selectedTaskId} onBack={() => setSelectedTaskId(null)} />
           ) : (
@@ -31,7 +31,7 @@ export default function App() {
         </div>
 
         {/* Right bottom: Queue */}
-        <div className="bg-background">
+        <div className="overflow-hidden">
           <QueuePanel />
         </div>
       </div>

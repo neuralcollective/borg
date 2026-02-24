@@ -1,6 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { LogEvent } from "@/lib/types";
 
@@ -29,51 +27,55 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Live Logs</span>
-        <div className="flex gap-1">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
+        <span className="text-[11px] font-medium text-zinc-400">Logs</span>
+        <div className="flex gap-0.5">
           {FILTERS.map((f) => (
-            <Button
+            <button
               key={f}
-              variant="outline"
-              size="sm"
               className={cn(
-                "h-5 px-2 text-[9px] uppercase",
-                filter === f && "border-blue-400 text-blue-400"
+                "rounded-md px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide transition-colors",
+                filter === f
+                  ? "bg-white/[0.08] text-zinc-200"
+                  : "text-zinc-600 hover:text-zinc-400"
               )}
               onClick={() => setFilter(f)}
             >
               {f}
-            </Button>
+            </button>
           ))}
         </div>
       </div>
-      <ScrollArea className="flex-1" onScrollCapture={handleScroll} ref={containerRef}>
-        <div className="space-y-0 p-3">
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto overscroll-contain"
+      >
+        <div className="p-3">
           {filtered.map((log, i) => (
             <LogLine key={i} log={log} />
           ))}
           <div ref={bottomRef} />
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
 
 const levelColors: Record<string, string> = {
-  info: "text-blue-400",
-  warn: "text-amber-400",
-  err: "text-red-400",
-  debug: "text-muted-foreground/60",
+  info: "text-blue-400/80",
+  warn: "text-amber-400/80",
+  err: "text-red-400/80",
+  debug: "text-zinc-600",
 };
 
 function LogLine({ log }: { log: LogEvent }) {
   const ts = new Date(log.ts * 1000).toLocaleTimeString("en-GB", { hour12: false });
   return (
     <div className="whitespace-pre-wrap break-all py-px font-mono text-[11px] leading-relaxed">
-      <span className="text-muted-foreground/40">{ts}</span>{" "}
-      <span className={levelColors[log.level] ?? "text-muted-foreground"}>[{log.level}]</span>{" "}
-      {log.message}
+      <span className="text-zinc-600">{ts}</span>{" "}
+      <span className={levelColors[log.level] ?? "text-zinc-500"}>{log.level.padEnd(4)}</span>{" "}
+      <span className="text-zinc-300">{log.message}</span>
     </div>
   );
 }

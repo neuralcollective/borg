@@ -153,7 +153,11 @@ pub const Git = struct {
     }
 
     pub fn revParseHead(self: *Git) ![40]u8 {
-        var result = try self.exec(&.{ "rev-parse", "HEAD" });
+        return self.revParse("HEAD");
+    }
+
+    pub fn revParse(self: *Git, ref: []const u8) ![40]u8 {
+        var result = try self.exec(&.{ "rev-parse", ref });
         defer result.deinit();
         if (result.stdout.len >= 40) {
             var hash: [40]u8 = undefined;
