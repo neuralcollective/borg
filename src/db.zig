@@ -198,37 +198,20 @@ pub const Db = struct {
     }
 
     fn runMigrations(self: *Db) !void {
+        // Always try all ALTER TABLEs — they're idempotent (duplicate column is caught).
+        // This handles the case where schema_version was set but columns weren't actually added.
         const migrations = [_][*:0]const u8{
-            // v1: Add session_id to pipeline_tasks
             "ALTER TABLE pipeline_tasks ADD COLUMN session_id TEXT DEFAULT ''",
-            // v2: Add repo_path to integration_queue
             "ALTER TABLE integration_queue ADD COLUMN repo_path TEXT DEFAULT ''",
         };
 
-        // Read current version from state table
-        var ver_rows = try self.sqlite_db.query(
-            self.allocator,
-            "SELECT value FROM state WHERE key = 'schema_version'",
-            .{},
-        );
-        defer ver_rows.deinit();
-        const current: usize = if (ver_rows.items.len > 0)
-            std.fmt.parseInt(usize, ver_rows.items[0].get(0) orelse "0", 10) catch 0
-        else
-            0;
-
-        if (current >= migrations.len) return;
-
-        for (migrations[current..], current..) |sql, i| {
-            self.sqlite_db.exec(sql) catch |err| {
-                // "duplicate column name" is expected if base schema already has the column
-                std.log.debug("Migration {d} skipped (already applied): {}", .{ i + 1, err });
+        for (migrations, 1..) |sql, i| {
+            self.sqlite_db.execQuiet(sql) catch {
                 continue;
             };
-            std.log.info("Applied migration {d}/{d}", .{ i + 1, migrations.len });
+            std.log.info("Applied migration {d}/{d}", .{ i, migrations.len });
         }
 
-        // Store new version
         var buf: [16]u8 = undefined;
         const ver_str = std.fmt.bufPrint(&buf, "{d}", .{migrations.len}) catch "0";
         try self.sqlite_db.execute(
