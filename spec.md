@@ -1,116 +1,67 @@
-# Spec: Fix SSE client file descriptor leak in web server
+# Spec: Fix WhatsApp/Sidecar stdout blocking the main event loop
 
 ## Task Summary
 
-In `src/web.zig`, when SSE client writes fail during broadcast, the client's `std.net.Stream` is removed from the tracking list via `swapRemove()` but never closed, leaking the underlying file descriptor. Since `handleConnection()` deliberately skips closing the stream for SSE paths (returning before the `stream.close()` call on line 229), disconnected SSE clients accumulate leaked file descriptors indefinitely. The fix must call `stream.close()` on every removed SSE client entry across all three broadcast sites, and also close all remaining SSE client streams during server shutdown.
+The `poll()` methods in `src/whatsapp.zig` (line 77) and `src/sidecar.zig` (line 99) call `stdout.read()` on a blocking pipe fd. When the bridge child process has no data to send, this blocks indefinitely, freezing the entire single-threaded main event loop in `src/main.zig:578` — halting Telegram polling, agent dispatch, cooldown expiry, and web dashboard message draining. The fix is to set `O_NONBLOCK` on the child process stdout pipe fd immediately after spawning, so that `read()` returns `error.WouldBlock` (caught by the existing `catch break`) instead of blocking.
 
 ## Files to Modify
 
-- `src/web.zig`
+1. **`src/sidecar.zig`** — This is the actively-used unified bridge (Discord + WhatsApp). Set `O_NONBLOCK` on `child.stdout` after `child.spawn()` in `start()`. This is the primary fix since `main.zig` uses `Sidecar.poll()` at line 617.
+2. **`src/whatsapp.zig`** — The standalone WhatsApp module has the same blocking pattern. Set `O_NONBLOCK` on `child.stdout` after `child.spawn()` in `start()` for consistency and correctness if this module is used independently.
 
 ## Files to Create
 
-_(none)_
+None.
 
 ## Function/Type Signatures
 
-No new functions or types are needed. The following existing functions require changes:
+No new functions or types are needed. The changes are within existing function bodies.
 
-### `fn broadcastSse(self: *WebServer, level: []const u8, message: []const u8) void`
-**Location:** `src/web.zig:126`
-**Change:** Before the `continue` in the `catch` block (line 143), close the stream that was swap-removed. Since `swapRemove(i)` returns the removed element, capture it and call `.close()` on it.
+### `src/sidecar.zig` — `Sidecar.start()`
 
-```zig
-// Current (line 142-144):
-self.sse_clients.items[i].writeAll(line) catch {
-    _ = self.sse_clients.swapRemove(i);
-    continue;
-};
-
-// New:
-self.sse_clients.items[i].writeAll(line) catch {
-    const removed = self.sse_clients.swapRemove(i);
-    removed.close();
-    continue;
-};
-```
-
-### `fn broadcastChatEvent(self: *WebServer, text: []const u8) void`
-**Location:** `src/web.zig:103`
-**Change:** Same pattern — close the removed stream in the `catch` block (line 118-120).
+After `try child.spawn();` (line 78), add a call to set `O_NONBLOCK` on the stdout fd:
 
 ```zig
-// Current (line 118-120):
-self.chat_sse_clients.items[i].writeAll(line) catch {
-    _ = self.chat_sse_clients.swapRemove(i);
-    continue;
-};
-
-// New:
-self.chat_sse_clients.items[i].writeAll(line) catch {
-    const removed = self.chat_sse_clients.swapRemove(i);
-    removed.close();
-    continue;
-};
-```
-
-### `fn handleChatPost(self: *WebServer, stream: std.net.Stream, request: []const u8) void`
-**Location:** `src/web.zig:313`
-**Change:** Same pattern in the inline chat SSE broadcast loop (line 371-373).
-
-```zig
-// Current (line 371-373):
-self.chat_sse_clients.items[i].writeAll(line) catch {
-    _ = self.chat_sse_clients.swapRemove(i);
-    continue;
-};
-
-// New:
-self.chat_sse_clients.items[i].writeAll(line) catch {
-    const removed = self.chat_sse_clients.swapRemove(i);
-    removed.close();
-    continue;
-};
-```
-
-### `pub fn stop(self: *WebServer) void`
-**Location:** `src/web.zig:177`
-**Change:** After setting `running` to false and before the self-connect unblock, close all remaining SSE client streams in both `sse_clients` and `chat_sse_clients` to prevent leaking file descriptors on shutdown.
-
-```zig
-// Add after line 178 (self.running.store(false, .release)):
-{
-    self.sse_mu.lock();
-    defer self.sse_mu.unlock();
-    for (self.sse_clients.items) |client| {
-        client.close();
-    }
-    self.sse_clients.clearRetainingCapacity();
-}
-{
-    self.chat_sse_mu.lock();
-    defer self.chat_sse_mu.unlock();
-    for (self.chat_sse_clients.items) |client| {
-        client.close();
-    }
-    self.chat_sse_clients.clearRetainingCapacity();
+// Inside start(), after child.spawn():
+if (child.stdout) |stdout| {
+    const fd = stdout.handle;
+    const current_flags = std.posix.fcntl(fd, .GET_FL) catch 0;
+    _ = std.posix.fcntl(fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })) }) catch {};
 }
 ```
+
+### `src/whatsapp.zig` — `WhatsApp.start()`
+
+After `try child.spawn();` (line 53), add the same `O_NONBLOCK` pattern:
+
+```zig
+// Inside start(), after child.spawn():
+if (child.stdout) |stdout| {
+    const fd = stdout.handle;
+    const current_flags = std.posix.fcntl(fd, .GET_FL) catch 0;
+    _ = std.posix.fcntl(fd, .SET_FL, .{ .flags = @as(u32, @intCast(current_flags)) | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })) }) catch {};
+}
+```
+
+### `poll()` methods — No signature changes
+
+The existing `catch break` in both `sidecar.zig:100` and `whatsapp.zig:78` already handles the `error.WouldBlock` that `read()` returns on a non-blocking fd with no data available. No changes to the `poll()` methods are required.
 
 ## Acceptance Criteria
 
-1. **`broadcastSse` closes removed streams:** When `writeAll` fails for an SSE log client, `stream.close()` is called on the removed entry before continuing the loop.
-2. **`broadcastChatEvent` closes removed streams:** When `writeAll` fails for a chat SSE client, `stream.close()` is called on the removed entry before continuing the loop.
-3. **`handleChatPost` closes removed streams:** When `writeAll` fails for a chat SSE client in the inline broadcast loop, `stream.close()` is called on the removed entry before continuing the loop.
-4. **`stop()` closes all remaining SSE clients:** On server shutdown, all streams in `sse_clients` and `chat_sse_clients` are closed before the lists are cleared.
-5. **Existing tests pass:** `zig build test` passes without regressions. The `jsonEscape` and `parsePath` tests in `src/web.zig` continue to pass.
-6. **No double-close:** The `swapRemove()` return value is used exactly once for `.close()`, ensuring no stream is closed twice.
+1. **Non-blocking read**: After `Sidecar.start()` is called, the stdout pipe fd has `O_NONBLOCK` set (verifiable via `fcntl(fd, F_GETFL)` in a test).
+2. **Non-blocking read (whatsapp)**: After `WhatsApp.start()` is called, the stdout pipe fd has `O_NONBLOCK` set.
+3. **poll() returns immediately when no data**: `Sidecar.poll()` returns an empty slice within bounded time (< 10ms) when the child process has produced no output, instead of blocking indefinitely.
+4. **poll() still reads data**: When the child process writes NDJSON lines to stdout, `poll()` correctly reads and parses them into `SidecarMessage` / `WaMessage` slices (existing parsing logic unchanged).
+5. **Main loop continues**: The main loop in `main.zig:578` completes a full cycle (Telegram poll → sidecar poll → web drain → group state checks → sleep) without blocking on sidecar stdout.
+6. **Existing tests pass**: `zig build test` passes with no regressions. The existing `Sidecar init/deinit`, `WhatsApp init/deinit`, and `parseSource` tests remain green.
+7. **No new threads introduced**: The fix uses `O_NONBLOCK` on the existing pipe fd, not a reader thread, keeping the architecture simple.
 
-## Edge Cases
+## Edge Cases to Handle
 
-1. **`stream.close()` itself fails:** `std.net.Stream.close()` returns `void` in Zig's standard library (it calls `std.posix.close` which cannot fail in practice for valid fds), so no error handling is needed.
-2. **Empty client list:** The broadcast loops already handle empty lists correctly (the `while` condition is false immediately). No change needed.
-3. **All clients fail simultaneously:** The `swapRemove` + close pattern works correctly even when every client in the list fails, because `swapRemove` shrinks the list and the loop index `i` is not incremented on removal.
-4. **Concurrent access during shutdown:** The `stop()` cleanup acquires `sse_mu` and `chat_sse_mu` before iterating, which is consistent with the locking discipline used by broadcast functions. A broadcast in progress will complete before `stop()` acquires the lock (or vice versa), preventing double-close races.
-5. **SSE client disconnects between registration and first broadcast:** The client's first failed write will trigger removal + close. This is the normal path and works correctly with the fix.
-6. **Server accepts new SSE connections while `stop()` is running:** After `stop()` clears the lists, the `run()` loop may still accept one more connection (the self-connect used to unblock `accept()`). This is not an SSE connection, so it is handled normally and closed by `handleConnection`.
+1. **`fcntl` failure**: If `fcntl(GET_FL)` or `fcntl(SET_FL)` fails (unlikely on a valid pipe fd), the code should log a warning but not prevent the process from starting. The worst case is the old blocking behavior.
+2. **Child process exits before poll**: If the child process exits, `stdout.read()` returns 0 (EOF) regardless of blocking mode. The existing `if (n == 0) break;` handles this correctly in both files.
+3. **Partial NDJSON lines**: A non-blocking read may return a partial line (data available but no trailing `\n` yet). The existing `stdout_buf` accumulation logic and `indexOf("\n")` line-splitting already handles this — partial data is buffered until the next `poll()` call completes the line.
+4. **Rapid successive polls with no data**: When the main loop polls at 500ms intervals and there's no data, each `poll()` call will immediately get `WouldBlock` and return an empty slice. This is the desired behavior and introduces no CPU overhead beyond the syscall.
+5. **Large burst of data**: If the bridge writes many lines between polls, the non-blocking read loop (`while (true) { read ... if (n < buf.len) break; }`) will drain all available data in a single poll call, same as before. The `n < read_buf.len` heuristic correctly detects when the kernel buffer is drained.
+6. **stdout is null**: Both `poll()` methods already guard `child.stdout orelse return &[_]...{}` at the top, so a null stdout (impossible with `.Pipe` behavior, but defensive) is handled.
