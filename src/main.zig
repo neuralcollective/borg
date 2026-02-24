@@ -405,6 +405,31 @@ const GroupManager = struct {
     }
 };
 
+// ── Self-Update ─────────────────────────────────────────────────────────
+
+fn reexecSelf() void {
+    // Read the binary path from /proc/self/exe
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = std.fs.readLinkAbsolute("/proc/self/exe", &exe_buf) catch {
+        std.log.err("Self-update: failed to read /proc/self/exe", .{});
+        return;
+    };
+
+    // Null-terminate for execve
+    const exe_z = std.posix.toPosixPath(exe_path) catch {
+        std.log.err("Self-update: path too long", .{});
+        return;
+    };
+
+    // argv: just the binary itself (no args needed)
+    const argv = [_:null]?[*:0]const u8{&exe_z};
+    // Inherit current environment
+    const envp = std.c.environ;
+
+    const err = std.posix.execveZ(&exe_z, &argv, envp);
+    std.log.err("Self-update: execve failed: {}", .{err});
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 pub fn main() !void {
@@ -433,6 +458,9 @@ pub fn main() !void {
 
     var db = try Db.init(allocator, "store/borg.db");
     defer db.deinit();
+
+    // Resume: reset any stuck queue entries from a previous crash/restart
+    db.resetStuckQueueEntries() catch {};
 
     var tg = Telegram.init(allocator, config.telegram_token);
     try tg.connect();
@@ -615,12 +643,38 @@ pub fn main() !void {
         // 7. Refresh OAuth token periodically
         config.refreshOAuthToken();
 
+        // 8. Check if pipeline triggered a self-update
+        if (pipeline) |*p| {
+            if (p.update_ready.load(.acquire)) {
+                std.log.info("Self-update triggered, shutting down for restart...", .{});
+                break;
+            }
+        }
+
         std.time.sleep(POLL_INTERVAL_MS * std.time.ns_per_ms);
     }
 
     // ── Graceful Shutdown ───────────────────────────────────────────────
     std.log.info("Shutdown requested, waiting for agents...", .{});
     gm.joinAll();
+
+    const should_reexec = if (pipeline) |*p| p.update_ready.load(.acquire) else false;
+    if (should_reexec) {
+        // Explicitly clean up before execve (defers won't run after successful execve)
+        if (pipeline) |*p| {
+            p.stop();
+            if (pipeline_thread) |t| t.join();
+        }
+        web.stop();
+        web_thread.join();
+        db.deinit();
+
+        std.log.info("Self-update: re-executing new binary...", .{});
+        reexecSelf();
+        // If execve failed, fall through to normal exit
+        std.log.err("Self-update: execve failed, shutting down normally", .{});
+    }
+
     std.log.info("Borg stopped.", .{});
 }
 

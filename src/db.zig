@@ -419,6 +419,13 @@ pub const Db = struct {
         return entries.toOwnedSlice();
     }
 
+    pub fn resetStuckQueueEntries(self: *Db) !void {
+        try self.sqlite_db.execute(
+            "UPDATE integration_queue SET status = 'queued' WHERE status = 'merging'",
+            .{},
+        );
+    }
+
     pub fn updateQueueStatus(self: *Db, entry_id: i64, status: []const u8, error_msg: ?[]const u8) !void {
         try self.sqlite_db.execute(
             "UPDATE integration_queue SET status = ?1, error_msg = ?2 WHERE id = ?3",
