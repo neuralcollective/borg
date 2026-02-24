@@ -571,7 +571,7 @@ Chat agents bypass containers entirely — they run as direct `claude` subproces
 |----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | (required) | Telegram Bot API token |
 | `ASSISTANT_NAME` | `Borg` | Bot display name and trigger word |
-| `CLAUDE_MODEL` | `claude-opus-4-6` | Model for Claude Code CLI |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model for Claude Code CLI |
 | `COLLECTION_WINDOW_MS` | `3000` | Message batching window |
 | `COOLDOWN_MS` | `5000` | Post-agent cooldown |
 | `AGENT_TIMEOUT_S` | `600` | Max agent runtime |

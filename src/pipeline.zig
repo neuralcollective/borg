@@ -26,6 +26,11 @@ pub const AgentPersona = enum {
     worker,
 };
 
+const StackEntry = struct {
+    branch: []const u8,
+    parent: []const u8,
+};
+
 pub const Pipeline = struct {
     allocator: std.mem.Allocator,
     db: *Db,
@@ -885,6 +890,141 @@ pub const Pipeline = struct {
         }
     }
 
+    fn chronologicalFallback(self: *Pipeline, queued: []db_mod.QueueEntry) ![]StackEntry {
+        // Sort by task_id ascending (lowest = bottom of stack)
+        const sorted = try self.allocator.alloc(db_mod.QueueEntry, queued.len);
+        defer self.allocator.free(sorted);
+        @memcpy(sorted, queued);
+        std.mem.sort(db_mod.QueueEntry, sorted, {}, struct {
+            fn cmp(_: void, a: db_mod.QueueEntry, b: db_mod.QueueEntry) bool {
+                return a.task_id < b.task_id;
+            }
+        }.cmp);
+
+        var entries = try self.allocator.alloc(StackEntry, sorted.len);
+        for (sorted, 0..) |entry, i| {
+            entries[i] = .{
+                .branch = entry.branch,
+                .parent = if (i == 0) "main" else sorted[i - 1].branch,
+            };
+        }
+        return entries;
+    }
+
+    fn determineStackOrder(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8) ![]StackEntry {
+        if (queued.len <= 1) {
+            var entries = try self.allocator.alloc(StackEntry, queued.len);
+            if (queued.len == 1) {
+                entries[0] = .{ .branch = queued[0].branch, .parent = "main" };
+            }
+            return entries;
+        }
+
+        // Build prompt with branch names and task titles
+        var prompt_buf = std.ArrayList(u8).init(self.allocator);
+        defer prompt_buf.deinit();
+
+        try prompt_buf.appendSlice(
+            \\You are organizing a Graphite branch stack for merging into main.
+            \\
+            \\Branches ready to merge (all tests passed):
+            \\
+        );
+
+        for (queued) |entry| {
+            const task = self.db.getPipelineTask(self.allocator, entry.task_id) catch null;
+            const title = if (task) |t| t.title else "unknown";
+            try prompt_buf.writer().print("- {s}: \"{s}\"\n", .{ entry.branch, title });
+        }
+
+        try prompt_buf.appendSlice(
+            \\
+            \\Rules:
+            \\- Stack chronologically (lowest task ID at bottom, closest to main) as default
+            \\- Deviate ONLY if a task clearly depends on another's changes
+            \\- Bottom of stack merges first into main
+            \\- Output ONLY lines in format: branch:parent (one per line, bottom-up order)
+            \\- First line's parent should be "main"
+            \\- Each subsequent line's parent should be the branch on the line above it (unless reordering)
+            \\
+        );
+
+        // Escape single quotes for shell
+        var escaped = std.ArrayList(u8).init(self.allocator);
+        defer escaped.deinit();
+        for (prompt_buf.items) |c| {
+            if (c == '\'') {
+                try escaped.appendSlice("'\\''");
+            } else {
+                try escaped.append(c);
+            }
+        }
+
+        const cmd = try std.fmt.allocPrint(self.allocator, "claude --print --model claude-haiku-4-5-20251001 -p '{s}'", .{escaped.items});
+        defer self.allocator.free(cmd);
+
+        const result = self.runTestCommandForRepo(repo_path, cmd) catch {
+            std.log.warn("Stack ordering LLM call failed, using chronological fallback", .{});
+            return self.chronologicalFallback(queued);
+        };
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        if (result.exit_code != 0) {
+            std.log.warn("Stack ordering LLM returned exit {d}, using chronological fallback", .{result.exit_code});
+            return self.chronologicalFallback(queued);
+        }
+
+        // Build a set of valid branch names for validation
+        var valid_branches = std.StringHashMap(void).init(self.allocator);
+        defer valid_branches.deinit();
+        for (queued) |entry| {
+            try valid_branches.put(entry.branch, {});
+        }
+
+        // Parse response: each line is "branch:parent"
+        var entries = std.ArrayList(StackEntry).init(self.allocator);
+        var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
+            if (trimmed.len == 0) continue;
+
+            if (std.mem.indexOf(u8, trimmed, ":")) |colon| {
+                const branch = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
+                const parent = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
+                if (branch.len == 0 or parent.len == 0) continue;
+
+                // Branch must be in our queued set
+                if (!valid_branches.contains(branch)) continue;
+                // Parent must be "main" or in our queued set
+                if (!std.mem.eql(u8, parent, "main") and !valid_branches.contains(parent)) continue;
+
+                // Find the actual slice from queued (stable memory)
+                var branch_stable: []const u8 = branch;
+                var parent_stable: []const u8 = if (std.mem.eql(u8, parent, "main")) "main" else parent;
+                for (queued) |entry| {
+                    if (std.mem.eql(u8, entry.branch, branch)) branch_stable = entry.branch;
+                    if (std.mem.eql(u8, entry.branch, parent)) parent_stable = entry.branch;
+                }
+
+                try entries.append(.{ .branch = branch_stable, .parent = parent_stable });
+            }
+        }
+
+        if (entries.items.len != queued.len) {
+            std.log.warn("Stack ordering: LLM returned {d} entries for {d} branches, using chronological fallback", .{ entries.items.len, queued.len });
+            entries.deinit();
+            return self.chronologicalFallback(queued);
+        }
+
+        std.log.info("Stack order (LLM-decided):", .{});
+        for (entries.items) |entry| {
+            std.log.info("  {s} -> {s}", .{ entry.branch, entry.parent });
+        }
+
+        return entries.toOwnedSlice();
+    }
+
     fn runGraphiteIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
         var git = Git.init(self.allocator, repo_path);
         var gt = Gt.init(self.allocator, repo_path);
@@ -895,9 +1035,11 @@ pub const Pipeline = struct {
         var pull_r = try git.pull();
         defer pull_r.deinit();
 
-        // 2. Track queued branches with Graphite (idempotent for already-tracked)
-        for (queued) |entry| {
-            var track = try gt.exec(&.{ "branch", "track", entry.branch, "--parent", "main" });
+        // 2. Determine stack order via LLM, then track branches accordingly
+        const stack_order = try self.determineStackOrder(queued, repo_path);
+        defer self.allocator.free(stack_order);
+        for (stack_order) |entry| {
+            var track = try gt.branchTrack(entry.branch, entry.parent);
             defer track.deinit();
         }
 
