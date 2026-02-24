@@ -217,3 +217,140 @@ pub const Db = struct {
         );
     }
 };
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+test "group registration round trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("tg:123", "Test Group", "test-group", "@Bot", true);
+    try db.registerGroup("tg:456", "Other", "other", "@Bot", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 2), groups.len);
+    try std.testing.expectEqualStrings("tg:123", groups[0].jid);
+    try std.testing.expectEqualStrings("test-group", groups[0].folder);
+    try std.testing.expect(groups[0].requires_trigger);
+    try std.testing.expect(!groups[1].requires_trigger);
+}
+
+test "registerGroup upserts on conflict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("tg:123", "Old Name", "folder", "@Bot", true);
+    try db.registerGroup("tg:123", "New Name", "folder", "@Bot", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("New Name", groups[0].name);
+    try std.testing.expect(!groups[0].requires_trigger);
+}
+
+test "message storage and timestamp filtering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "Alice", .content = "First", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false });
+    try db.storeMessage(.{ .id = "2", .chat_jid = "tg:1", .sender = "u2", .sender_name = "Bob", .content = "Second", .timestamp = "2024-01-01T00:01:00Z", .is_from_me = false });
+    try db.storeMessage(.{ .id = "3", .chat_jid = "tg:2", .sender = "u1", .sender_name = "Alice", .content = "Other chat", .timestamp = "2024-01-01T00:01:00Z", .is_from_me = false });
+
+    // All messages for tg:1
+    const all = try db.getMessagesSince(alloc, "tg:1", "");
+    try std.testing.expectEqual(@as(usize, 2), all.len);
+    try std.testing.expectEqualStrings("First", all[0].content);
+    try std.testing.expectEqualStrings("Second", all[1].content);
+
+    // Only messages after first timestamp
+    const after = try db.getMessagesSince(alloc, "tg:1", "2024-01-01T00:00:00Z");
+    try std.testing.expectEqual(@as(usize, 1), after.len);
+    try std.testing.expectEqualStrings("Second", after[0].content);
+
+    // Different chat isolation
+    const other = try db.getMessagesSince(alloc, "tg:2", "");
+    try std.testing.expectEqual(@as(usize, 1), other.len);
+}
+
+test "message deduplication preserves original" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "A", .content = "Original", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false });
+    try db.storeMessage(.{ .id = "1", .chat_jid = "tg:1", .sender = "u1", .sender_name = "A", .content = "Duplicate", .timestamp = "2024-01-01T00:00:00Z", .is_from_me = false });
+
+    const msgs = try db.getMessagesSince(alloc, "tg:1", "");
+    try std.testing.expectEqual(@as(usize, 1), msgs.len);
+    try std.testing.expectEqualStrings("Original", msgs[0].content);
+}
+
+test "session set get and overwrite" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try std.testing.expect((try db.getSession(alloc, "folder1")) == null);
+
+    try db.setSession("folder1", "session-aaa");
+    try std.testing.expectEqualStrings("session-aaa", (try db.getSession(alloc, "folder1")).?);
+
+    try db.setSession("folder1", "session-bbb");
+    try std.testing.expectEqualStrings("session-bbb", (try db.getSession(alloc, "folder1")).?);
+}
+
+test "session expiry removes old sessions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    // Insert old session via raw SQL (no params — exec doesn't bind)
+    try db.sqlite_db.exec(
+        "INSERT INTO sessions (folder, session_id, created_at) VALUES ('old', 'old-sess', datetime('now', '-25 hours'))"
+    );
+    try db.setSession("fresh", "fresh-sess");
+
+    try std.testing.expect((try db.getSession(alloc, "old")) != null);
+    try std.testing.expect((try db.getSession(alloc, "fresh")) != null);
+
+    try db.expireSessions(4);
+
+    try std.testing.expect((try db.getSession(alloc, "old")) == null);
+    try std.testing.expect((try db.getSession(alloc, "fresh")) != null);
+}
+
+test "state key-value store" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try std.testing.expect((try db.getState(alloc, "k")) == null);
+    try db.setState("k", "v1");
+    try std.testing.expectEqualStrings("v1", (try db.getState(alloc, "k")).?);
+    try db.setState("k", "v2");
+    try std.testing.expectEqualStrings("v2", (try db.getState(alloc, "k")).?);
+}

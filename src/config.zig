@@ -91,3 +91,66 @@ fn findEnvValue(allocator: std.mem.Allocator, content: []const u8, key: []const 
     }
     return null;
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+test "findEnvValue basic parsing" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\KEY1=value1
+        \\KEY2 = value2
+        \\KEY3=
+    ;
+
+    const v1 = findEnvValue(alloc, env, "KEY1");
+    defer if (v1) |v| alloc.free(v);
+    try std.testing.expectEqualStrings("value1", v1.?);
+
+    const v2 = findEnvValue(alloc, env, "KEY2");
+    defer if (v2) |v| alloc.free(v);
+    try std.testing.expectEqualStrings("value2", v2.?);
+
+    const v3 = findEnvValue(alloc, env, "KEY3");
+    defer if (v3) |v| alloc.free(v);
+    try std.testing.expectEqualStrings("", v3.?);
+
+    try std.testing.expect(findEnvValue(alloc, env, "MISSING") == null);
+}
+
+test "findEnvValue strips matching quotes" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\A="hello world"
+        \\B='single quoted'
+        \\C="mismatched'
+    ;
+
+    const v1 = findEnvValue(alloc, env, "A");
+    defer if (v1) |v| alloc.free(v);
+    try std.testing.expectEqualStrings("hello world", v1.?);
+
+    const v2 = findEnvValue(alloc, env, "B");
+    defer if (v2) |v| alloc.free(v);
+    try std.testing.expectEqualStrings("single quoted", v2.?);
+
+    // Mismatched quotes are preserved
+    const v3 = findEnvValue(alloc, env, "C");
+    defer if (v3) |v| alloc.free(v);
+    try std.testing.expectEqualStrings("\"mismatched'", v3.?);
+}
+
+test "findEnvValue skips comments and blank lines" {
+    const alloc = std.testing.allocator;
+    const env =
+        \\# comment
+        \\
+        \\  # indented comment
+        \\REAL=value
+    ;
+
+    try std.testing.expect(findEnvValue(alloc, env, "#") == null);
+
+    const v = findEnvValue(alloc, env, "REAL");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("value", v.?);
+}

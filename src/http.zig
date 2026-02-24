@@ -173,3 +173,21 @@ fn decodeChunked(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
 
     return result.toOwnedSlice();
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+test "decodeChunked reassembles chunks" {
+    const alloc = std.testing.allocator;
+    const chunked = "4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
+    const result = try decodeChunked(alloc, chunked);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("Wikipedia", result);
+}
+
+test "decodeChunked handles single chunk" {
+    const alloc = std.testing.allocator;
+    const chunked = "d\r\nHello, World!\r\n0\r\n\r\n";
+    const result = try decodeChunked(alloc, chunked);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("Hello, World!", result);
+}
