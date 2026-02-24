@@ -592,3 +592,7 @@ test "AC8: stop then join ordering ensures all threads complete before proceedin
 // AC7: Build succeeds — verified by running `zig build test`
 // This is an implicit test: if this file compiles and all tests run, AC7 passes.
 // =============================================================================
+
+test {
+    _ = @import("pipeline_task_id_test.zig");
+}
