@@ -127,7 +127,9 @@ fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, prim
     }
 
     // Parse WATCHED_REPOS: pipe-delimited, each entry is path:test_cmd
-    const watched = getEnv(allocator, env_content, "WATCHED_REPOS") orelse "";
+    const watched_opt = getEnv(allocator, env_content, "WATCHED_REPOS");
+    defer if (watched_opt) |w| allocator.free(w);
+    const watched = watched_opt orelse "";
     if (watched.len > 0) {
         var entries = std.mem.splitScalar(u8, watched, '|');
         while (entries.next()) |entry| {
