@@ -1,0 +1,14 @@
+zig-out/
+zig-cache/
+.zig-cache/
+.git/
+data/
+store/
+logs/
+*.db
+.env
+whatsapp/auth/
+whatsapp/node_modules/
+dashboard/node_modules/
+dashboard/dist/
+.worktrees/

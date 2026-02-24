@@ -1,0 +1,15 @@
+[Unit]
+Description=Borg AI Agent Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=shulgin
+WorkingDirectory=/home/shulgin/borg
+ExecStart=/home/shulgin/borg/zig-out/bin/borg
+Restart=always
+RestartSec=5
+Environment=HOME=/home/shulgin
+
+[Install]
+WantedBy=multi-user.target
