@@ -1320,3 +1320,7 @@ test "digest generation formatting" {
     try std.testing.expect(std.mem.indexOf(u8, result, "Excluded: 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "feature/task-3") != null);
 }
+
+test {
+    _ = @import("pipeline_shutdown_test.zig");
+}
