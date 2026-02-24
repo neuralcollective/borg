@@ -7,6 +7,8 @@ const tg_mod = @import("telegram.zig");
 const Telegram = tg_mod.Telegram;
 const git_mod = @import("git.zig");
 const Git = git_mod.Git;
+const gt_mod = @import("gt.zig");
+const Gt = gt_mod.Gt;
 const json_mod = @import("json.zig");
 const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
@@ -41,6 +43,7 @@ pub const Pipeline = struct {
     inflight_tasks: std.AutoHashMap(i64, void),
     inflight_mu: std.Thread.Mutex,
     active_agents: std.atomic.Value(u32),
+    graphite_available: bool,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -71,11 +74,14 @@ pub const Pipeline = struct {
             .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
             .inflight_mu = .{},
             .active_agents = std.atomic.Value(u32).init(0),
+            .graphite_available = false,
         };
     }
 
     pub fn run(self: *Pipeline) void {
         std.log.info("Pipeline thread started for {d} repo(s)", .{self.config.watched_repos.len});
+
+        self.initGraphite();
 
         while (self.running.load(.acquire)) {
             self.tick() catch |err| {
@@ -109,6 +115,34 @@ pub const Pipeline = struct {
 
     pub fn getActiveAgentCount(self: *Pipeline) u32 {
         return self.active_agents.load(.acquire);
+    }
+
+    fn initGraphite(self: *Pipeline) void {
+        if (!self.config.graphite_enabled) return;
+
+        // Check if gt CLI is available
+        var child = std.process.Child.init(&.{ "gt", "--version" }, self.allocator);
+        child.stdin_behavior = .Close;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+        child.spawn() catch {
+            std.log.warn("Graphite CLI (gt) not found, falling back to legacy release train", .{});
+            return;
+        };
+        _ = child.wait() catch return;
+
+        // Init Graphite for each watched repo
+        for (self.config.watched_repos) |repo| {
+            var gt = Gt.init(self.allocator, repo.path);
+            var r = gt.repoInit("main") catch continue;
+            defer r.deinit();
+            if (r.success()) {
+                std.log.info("Graphite initialized for {s}", .{repo.path});
+            }
+        }
+
+        self.graphite_available = true;
+        std.log.info("Graphite stacking enabled", .{});
     }
 
     fn tick(self: *Pipeline) !void {
@@ -347,9 +381,8 @@ pub const Pipeline = struct {
         var pull = try git.exec(&.{ "fetch", "origin", "main" });
         defer pull.deinit();
 
-        // Create worktree with new branch from main
         var branch_buf: [128]u8 = undefined;
-        const branch = try std.fmt.bufPrint(&branch_buf, "feature/task-{d}", .{task.id});
+        const branch = try std.fmt.bufPrint(&branch_buf, "task-{d}", .{task.id});
 
         // Ensure .worktrees directory exists
         const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{task.repo_path});
@@ -363,7 +396,6 @@ pub const Pipeline = struct {
         var rm_wt = try git.exec(&.{ "worktree", "remove", "--force", wt_path });
         defer rm_wt.deinit();
         if (!rm_wt.success()) {
-            // Worktree may be corrupted (.git dir instead of file) — nuke and prune
             std.fs.deleteTreeAbsolute(wt_path) catch {};
             var prune = try git.exec(&.{ "worktree", "prune" });
             defer prune.deinit();
@@ -371,13 +403,45 @@ pub const Pipeline = struct {
         var del_branch = try git.exec(&.{ "branch", "-D", branch });
         defer del_branch.deinit();
 
-        var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
-        defer wt.deinit();
-        if (!wt.success()) {
-            std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
-            try self.db.updateTaskError(task.id, wt.stderr);
-            // Stay in backlog, will retry next tick
-            return;
+        if (self.graphite_available) {
+            // Graphite: create stacked branch, then attach worktree
+            var co = try git.checkout("main");
+            defer co.deinit();
+
+            const title = try std.fmt.allocPrint(self.allocator, "task-{d}: {s}", .{ task.id, task.title });
+            defer self.allocator.free(title);
+
+            var gt = Gt.init(self.allocator, task.repo_path);
+            var gt_create = try gt.create(branch, title);
+            defer gt_create.deinit();
+
+            if (!gt_create.success()) {
+                // Fallback: create branch with git
+                var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
+                defer wt.deinit();
+                if (!wt.success()) {
+                    std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
+                    try self.db.updateTaskError(task.id, wt.stderr);
+                    return;
+                }
+            } else {
+                // Attach worktree to the gt-created branch
+                var wt = try git.addWorktreeExisting(wt_path, branch);
+                defer wt.deinit();
+                if (!wt.success()) {
+                    std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
+                    try self.db.updateTaskError(task.id, wt.stderr);
+                    return;
+                }
+            }
+        } else {
+            var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
+            defer wt.deinit();
+            if (!wt.success()) {
+                std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
+                try self.db.updateTaskError(task.id, wt.stderr);
+                return;
+            }
         }
 
         try self.db.updateTaskBranch(task.id, branch);
@@ -802,15 +866,102 @@ pub const Pipeline = struct {
             const queued = self.db.getQueuedBranchesForRepo(arena.allocator(), repo.path) catch continue;
             if (queued.len == 0) continue;
 
-            std.log.info("Release train for {s}: {d} branches", .{ repo.path, queued.len });
-            self.runReleaseTrain(queued, repo.path, repo.is_self) catch |err| {
-                std.log.err("Release train error for {s}: {}", .{ repo.path, err });
-            };
+            if (self.graphite_available) {
+                std.log.info("Graphite integration for {s}: {d} branches", .{ repo.path, queued.len });
+                self.runGraphiteIntegration(queued, repo.path, repo.is_self) catch |err| {
+                    std.log.err("Graphite integration error for {s}: {}", .{ repo.path, err });
+                };
+            } else {
+                std.log.info("Release train for {s}: {d} branches", .{ repo.path, queued.len });
+                self.runReleaseTrain(queued, repo.path, repo.is_self) catch |err| {
+                    std.log.err("Release train error for {s}: {}", .{ repo.path, err });
+                };
+            }
             ran_any = true;
         }
 
         if (ran_any) {
             self.last_release_ts = std.time.timestamp();
+        }
+    }
+
+    fn runGraphiteIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
+        var git = Git.init(self.allocator, repo_path);
+        var gt = Gt.init(self.allocator, repo_path);
+
+        self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Graphite integration starting..."));
+
+        // 1. Sync: ensure main is up to date, restack existing branches
+        var co = try git.checkout("main");
+        defer co.deinit();
+        var pull_r = try git.pull();
+        defer pull_r.deinit();
+        var restack = try gt.restack();
+        defer restack.deinit();
+
+        // 2. Submit the stack to create/update PRs
+        var submit = try gt.submitStack();
+        defer submit.deinit();
+        if (submit.success()) {
+            std.log.info("Graphite stack submitted ({d} queued branches)", .{queued.len});
+        } else {
+            std.log.warn("gt submit --stack: {s}", .{submit.stderr});
+        }
+
+        // 3. Merge consecutive ready branches bottom-up via gh pr merge
+        var merged = std.ArrayList([]const u8).init(self.allocator);
+        defer merged.deinit();
+
+        for (queued) |entry| {
+            try self.db.updateQueueStatus(entry.id, "merging", null);
+
+            const merge_cmd = try std.fmt.allocPrint(
+                self.allocator,
+                "gh pr merge {s} --squash --delete-branch",
+                .{entry.branch},
+            );
+            defer self.allocator.free(merge_cmd);
+            const merge_result = self.runTestCommandForRepo(repo_path, merge_cmd) catch {
+                std.log.err("gh pr merge failed for {s}", .{entry.branch});
+                try self.db.updateQueueStatus(entry.id, "queued", null);
+                break;
+            };
+            defer self.allocator.free(merge_result.stdout);
+            defer self.allocator.free(merge_result.stderr);
+
+            if (merge_result.exit_code != 0) {
+                std.log.warn("gh pr merge {s} failed: {s}", .{ entry.branch, merge_result.stderr });
+                try self.db.updateQueueStatus(entry.id, "queued", null);
+                break;
+            }
+
+            try self.db.updateQueueStatus(entry.id, "merged", null);
+            try self.db.updateTaskStatus(entry.task_id, "merged");
+            try merged.append(entry.branch);
+
+            if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
+            }
+        }
+
+        // 4. Sync after merges
+        if (merged.items.len > 0) {
+            var sync = try gt.repoSync();
+            defer sync.deinit();
+            var pull2 = try git.pull();
+            defer pull2.deinit();
+        }
+
+        // 5. Self-update check
+        if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
+
+        // 6. Notify
+        if (merged.items.len > 0) {
+            const digest = try self.generateDigest(merged.items, &.{});
+            self.notify(self.config.pipeline_admin_chat, digest);
+            std.log.info("Graphite integration complete: {d} merged", .{merged.items.len});
+        } else {
+            self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Graphite integration: no branches merged (PRs may need CI)."));
         }
     }
 
