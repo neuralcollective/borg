@@ -23,6 +23,8 @@ pub const Config = struct {
     agent_timeout_s: i64,
     max_concurrent_agents: u32,
     rate_limit_per_minute: u32,
+    // Web dashboard
+    web_port: u16,
     // WhatsApp config
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
@@ -45,6 +47,7 @@ pub const Config = struct {
         const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "600";
         const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
         const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
+        const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
 
         return Config{
             .telegram_token = getEnv(allocator, env_content, "TELEGRAM_BOT_TOKEN") orelse "",
@@ -67,6 +70,7 @@ pub const Config = struct {
             .agent_timeout_s = std.fmt.parseInt(i64, timeout_s_str, 10) catch 600,
             .max_concurrent_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
             .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
+            .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .allocator = allocator,
