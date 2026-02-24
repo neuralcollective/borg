@@ -12,6 +12,7 @@ const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
 
 const TICK_INTERVAL_S = 30;
+const REMOTE_CHECK_INTERVAL_S = 300; // Check for remote updates every 5 minutes
 const AGENT_TIMEOUT_S = 600;
 const MAX_BACKLOG_SIZE = 5;
 const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
@@ -33,6 +34,7 @@ pub const Pipeline = struct {
     update_ready: std.atomic.Value(bool),
     last_release_ts: i64,
     last_seed_ts: i64,
+    last_remote_check_ts: i64,
     startup_heads: std.StringHashMap([40]u8),
 
     // Pipelining: concurrent phase processing
@@ -64,6 +66,7 @@ pub const Pipeline = struct {
             .update_ready = std.atomic.Value(bool).init(false),
             .last_release_ts = std.time.timestamp(),
             .last_seed_ts = 0,
+            .last_remote_check_ts = 0,
             .startup_heads = heads,
             .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
             .inflight_mu = .{},
@@ -82,6 +85,8 @@ pub const Pipeline = struct {
             self.checkReleaseTrain() catch |err| {
                 std.log.err("Release train error: {}", .{err});
             };
+
+            self.checkRemoteUpdates();
 
             std.time.sleep(TICK_INTERVAL_S * std.time.ns_per_s);
         }
@@ -978,6 +983,41 @@ pub const Pipeline = struct {
     }
 
     // --- Self-Update ---
+
+    /// Periodically fetch origin and pull if the self repo has new commits.
+    fn checkRemoteUpdates(self: *Pipeline) void {
+        const now = std.time.timestamp();
+        if (now - self.last_remote_check_ts < REMOTE_CHECK_INTERVAL_S) return;
+        self.last_remote_check_ts = now;
+
+        // Only check the primary (self) repo
+        for (self.config.watched_repos) |repo| {
+            if (!repo.is_self) continue;
+
+            var git = Git.init(self.allocator, repo.path);
+
+            var fetch_result = git.fetch("origin") catch return;
+            defer fetch_result.deinit();
+            if (!fetch_result.success()) return;
+
+            const local = git.revParseHead() catch return;
+            const remote = git.revParse("origin/main") catch return;
+
+            if (std.mem.eql(u8, &local, &remote)) return;
+
+            std.log.info("Remote update detected on {s}, pulling...", .{repo.path});
+            var pull_result = git.pull() catch return;
+            defer pull_result.deinit();
+
+            if (!pull_result.success()) {
+                std.log.err("Remote pull failed: {s}", .{pull_result.stderr});
+                return;
+            }
+
+            self.checkSelfUpdate(repo.path);
+            return;
+        }
+    }
 
     fn checkSelfUpdate(self: *Pipeline, repo_path: []const u8) void {
         var git = Git.init(self.allocator, repo_path);
