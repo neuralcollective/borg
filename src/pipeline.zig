@@ -1099,8 +1099,12 @@ pub const Pipeline = struct {
 
         // Container name
         var name_buf: [128]u8 = undefined;
-        const container_name = try std.fmt.bufPrint(&name_buf, "borg-pipeline-{s}-{d}", .{
-            @tagName(persona), std.time.timestamp(),
+        const seq = struct {
+            var counter = std.atomic.Value(u32).init(0);
+        };
+        const n = seq.counter.fetchAdd(1, .monotonic);
+        const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}-{d}", .{
+            @tagName(persona), std.time.timestamp(), n,
         });
 
         // Env vars

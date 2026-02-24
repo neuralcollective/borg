@@ -812,7 +812,7 @@ fn spawnAgentForGroup(
     const pending = try db.getMessagesSince(cycle_alloc, info.jid, last_ts);
     if (pending.len == 0) return;
 
-    const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name);
+    const prompt = try formatPrompt(cycle_alloc, pending, config.assistant_name, config.web_port);
     const session_id = db.getSession(cycle_alloc, group.folder) catch null;
 
     // Ensure session dir exists
@@ -1251,17 +1251,48 @@ fn formatTimestamp(allocator: std.mem.Allocator, unix_ts: i64) ![]const u8 {
     });
 }
 
-fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, assistant_name: []const u8) ![]const u8 {
+fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, assistant_name: []const u8, web_port: u16) ![]const u8 {
     var buf = std.ArrayList(u8).init(allocator);
-    try buf.writer().print("You are {s}. You always refer to yourself using plural pronouns (we/us/our, never I/me/my). You are a collective. Respond naturally and concisely.\n\nRecent messages:\n", .{assistant_name});
+    const w = buf.writer();
+
+    // Director system prompt
+    try w.print(
+        \\You are {s}, a director-level AI agent with full administrative control over the borg system.
+        \\You speak using plural pronouns (we/us/our, never I/me/my). You are a collective.
+        \\
+        \\## Capabilities
+        \\
+        \\You can manage the engineering pipeline, monitor system status, and control all aspects of borg
+        \\by calling the local REST API at http://127.0.0.1:{d}. Use curl from your Bash tool.
+        \\
+        \\### API Reference
+        \\```
+        \\GET    /api/tasks                     List all tasks (JSON array)
+        \\GET    /api/tasks/<id>                Get task detail + agent output
+        \\POST   /api/tasks                     Create task: {{"title":"...","description":"...","repo":"..."}}
+        \\DELETE /api/tasks/<id>                Cancel/delete a task
+        \\POST   /api/release                   Trigger release train now
+        \\GET    /api/queue                      Integration queue
+        \\GET    /api/status                     System status
+        \\```
+        \\
+        \\You have full Bash, Read, Write, Edit, Glob, Grep access to the filesystem.
+        \\You can inspect repos, read code, review agent output, and make decisions.
+        \\Be proactive: if something looks wrong, diagnose and fix it.
+        \\Keep responses concise for chat. Use detail only when asked.
+        \\
+    , .{ assistant_name, web_port });
+
+    // Message history
+    try w.writeAll("\n## Recent messages\n");
     for (messages) |m| {
         if (m.is_from_me) {
-            try buf.writer().print("[{s}] {s} (you): {s}\n", .{ m.timestamp, m.sender_name, m.content });
+            try w.print("[{s}] {s} (you): {s}\n", .{ m.timestamp, m.sender_name, m.content });
         } else {
-            try buf.writer().print("[{s}] {s}: {s}\n", .{ m.timestamp, m.sender_name, m.content });
+            try w.print("[{s}] {s}: {s}\n", .{ m.timestamp, m.sender_name, m.content });
         }
     }
-    try buf.appendSlice("\nRespond to the latest message. Be concise.");
+    try w.writeAll("\nRespond to the latest message. Be concise.");
     return buf.toOwnedSlice();
 }
 
@@ -1345,7 +1376,7 @@ test "formatPrompt includes assistant identity and message context" {
         .{ .id = "2", .chat_jid = "tg:1", .sender = "bot", .sender_name = "Borg", .content = "Hello!", .timestamp = "2024-01-01T00:00:01Z", .is_from_me = true, .is_bot_message = true },
     };
 
-    const prompt = try formatPrompt(a, &msgs, "Borg");
+    const prompt = try formatPrompt(a, &msgs, "Borg", 3131);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "You are Borg") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Alice: Hi bot") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Borg (you): Hello!") != null);

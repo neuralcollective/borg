@@ -41,7 +41,7 @@ pub const Discord = struct {
 
     pub fn start(self: *Discord) !void {
         var child = std.process.Child.init(
-            &.{ "node", "discord/bridge.js", self.assistant_name },
+            &.{ "bun", "discord/bridge.js", self.assistant_name },
             self.allocator,
         );
         child.stdin_behavior = .Pipe;

@@ -44,7 +44,7 @@ pub const WhatsApp = struct {
 
     pub fn start(self: *WhatsApp) !void {
         var child = std.process.Child.init(
-            &.{ "node", "whatsapp/bridge.js", self.assistant_name },
+            &.{ "bun", "whatsapp/bridge.js", self.assistant_name },
             self.allocator,
         );
         child.stdin_behavior = .Pipe;
