@@ -360,13 +360,6 @@ pub const Db = struct {
         );
     }
 
-    pub fn resetTaskAttempt(self: *Db, task_id: i64) !void {
-        try self.sqlite_db.execute(
-            "UPDATE pipeline_tasks SET attempt = 0, updated_at = datetime('now') WHERE id = ?1",
-            .{task_id},
-        );
-    }
-
     pub fn incrementTaskAttempt(self: *Db, task_id: i64) !void {
         try self.sqlite_db.execute(
             "UPDATE pipeline_tasks SET attempt = attempt + 1, updated_at = datetime('now') WHERE id = ?1",
