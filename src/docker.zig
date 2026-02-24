@@ -203,6 +203,21 @@ pub const Docker = struct {
         return resp.status == .ok;
     }
 
+    pub fn killContainer(self: *Docker, name: []const u8) !void {
+        var argv = [_][]const u8{ "docker", "kill", name };
+        var child = std.process.Child.init(&argv, self.allocator);
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+        try child.spawn();
+        _ = try child.wait();
+    }
+
+    pub fn isAvailable(self: *Docker) bool {
+        var resp = http.unixRequest(self.allocator, self.socket_path, .GET, "/v1.43/_ping", null) catch return false;
+        defer resp.deinit();
+        return resp.status == .ok;
+    }
+
     pub fn cleanupOrphans(self: *Docker) !void {
         var path_buf: [256]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "/v1.43/containers/json?all=true&filters={{\"label\":[\"borg.managed=true\"]}}", .{});

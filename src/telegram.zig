@@ -56,7 +56,7 @@ pub const Telegram = struct {
     pub fn getUpdates(self: *Telegram, alloc: std.mem.Allocator) ![]TgMessage {
         var url_buf: [512]u8 = undefined;
         var params_buf: [256]u8 = undefined;
-        const params = try std.fmt.bufPrint(&params_buf, "getUpdates?timeout=30&offset={d}&allowed_updates=[\"message\"]", .{self.last_update_id + 1});
+        const params = try std.fmt.bufPrint(&params_buf, "getUpdates?timeout=2&offset={d}&allowed_updates=[\"message\"]", .{self.last_update_id + 1});
         const url = try self.apiUrl(&url_buf, params);
 
         var resp = try http.get(self.allocator, url);
