@@ -42,7 +42,7 @@ docker build -t borg-agent:latest -f container/Dockerfile container/
 cat > .env <<EOF
 TELEGRAM_BOT_TOKEN=your-token
 ASSISTANT_NAME=Borg
-CLAUDE_MODEL=claude-opus-4-6
+CLAUDE_MODEL=claude-sonnet-4-6
 PIPELINE_REPO=/path/to/your/repo
 EOF
 

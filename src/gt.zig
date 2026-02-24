@@ -88,6 +88,10 @@ pub const Gt = struct {
         return self.exec(&.{ "log", "short" });
     }
 
+    pub fn branchTrack(self: *Gt, branch: []const u8, parent: []const u8) !ExecResult {
+        return self.exec(&.{ "branch", "track", branch, "--parent", parent });
+    }
+
     pub fn branchDelete(self: *Gt, name: []const u8) !ExecResult {
         return self.exec(&.{ "branch", "delete", "--force", name });
     }
