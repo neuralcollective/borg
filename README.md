@@ -97,9 +97,17 @@ This prevents rapid-fire messages from spawning multiple agents and ensures mess
 
 The pipeline runs as a separate thread and processes tasks through a multi-stage loop:
 
+### Continuous operation
+
+When the backlog is empty, the pipeline automatically scans the target repository and seeds small refactoring/quality tasks. This means borg never truly idles - it continuously improves the codebase. Seeded tasks focus on refactoring, not new features: extracting duplication, improving error handling, adding missing test coverage, simplifying complex code.
+
+Seeding respects a cooldown (1h between scans) and a backlog cap (max 5 active tasks) to avoid runaway task creation.
+
+Tasks can also be created manually via `/task <title>` in chat.
+
 ### Micro-loop (per task)
 
-1. **Backlog**: Task created via `/task` command
+1. **Backlog**: Task created via seeder or `/task` command
 2. **Spec**: Manager agent reads the codebase and writes `spec.md` with requirements, file paths, and acceptance criteria
 3. **QA**: QA agent reads `spec.md` and writes test files that should initially fail
 4. **Impl**: Worker agent reads spec + tests and writes implementation code
@@ -111,7 +119,7 @@ Each task gets its own git worktree at `{repo}/.worktrees/task-{id}`, keeping th
 
 ### Macro-loop (release train)
 
-Runs every N hours (configurable, default 6h):
+Runs every N hours (configurable, default 3h):
 
 1. Freeze the integration queue
 2. Create `release-candidate` branch from `main`
@@ -176,7 +184,7 @@ WhatsApp groups use `wa:` prefix for JIDs (e.g., `wa:123456789-987654321@g.us`).
 | `PIPELINE_TEST_CMD` | `zig build test` | Command to run tests |
 | `PIPELINE_LINT_CMD` | (empty) | Optional lint command |
 | `PIPELINE_ADMIN_CHAT` | (empty) | Telegram chat ID for pipeline notifications |
-| `RELEASE_INTERVAL_HOURS` | `6` | Hours between release trains |
+| `RELEASE_INTERVAL_HOURS` | `3` | Hours between release trains |
 
 ## Container security (pipeline only)
 
