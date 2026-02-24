@@ -789,9 +789,6 @@ pub const Pipeline = struct {
     // --- Macro Loop: Release Train ---
 
     fn checkReleaseTrain(self: *Pipeline) !void {
-        // Don't run release train while agents are active (git conflicts)
-        if (self.active_agents.load(.acquire) > 0) return;
-
         const now = std.time.timestamp();
         if (!self.config.continuous_mode) {
             const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
