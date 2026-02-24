@@ -76,10 +76,18 @@ pub const Database = struct {
     }
 
     pub fn exec(self: *Database, sql: [*:0]const u8) SqliteError!void {
+        return self.execImpl(sql, true);
+    }
+
+    pub fn execQuiet(self: *Database, sql: [*:0]const u8) SqliteError!void {
+        return self.execImpl(sql, false);
+    }
+
+    fn execImpl(self: *Database, sql: [*:0]const u8, log_errors: bool) SqliteError!void {
         var err_msg: [*c]u8 = null;
         const rc = c.sqlite3_exec(self.db, sql, null, null, &err_msg);
         if (err_msg) |msg| {
-            std.log.err("SQLite exec error: {s}", .{msg});
+            if (log_errors) std.log.err("SQLite exec error: {s}", .{msg});
             c.sqlite3_free(msg);
         }
         if (rc != c.SQLITE_OK) return SqliteError.ExecFailed;
