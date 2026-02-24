@@ -1,13 +1,15 @@
 # borg
 
-Autonomous AI agent orchestrator for Telegram and WhatsApp. Chat messages run Claude Code as a subprocess; the engineering pipeline runs agents in Docker containers with git worktree isolation. Supports multiple repositories with independent pipelines. Includes a web dashboard for monitoring. Written in Zig.
+Autonomous AI agent orchestrator for Telegram, WhatsApp, and Discord. Chat messages run Claude Code as a subprocess; the engineering pipeline runs agents in Docker containers with git worktree isolation. Supports multiple repositories with independent pipelines. Includes a web dashboard for monitoring. Written in Zig.
 
 ## Architecture
 
 ```
 Telegram Bot API ──┐
-                   ├──> borg (Zig binary) ──> Web Dashboard (:3131)
-WhatsApp Web ──────┘        |
+                   │
+WhatsApp Web ──────┼──> borg (Zig binary) ──> Web Dashboard (:3131)
+                   │
+Discord Gateway ───┘        |
                             +── SQLite (groups, messages, sessions, pipeline tasks)
                             |
                             +── Per-Group State Machine (chat agents)
@@ -159,6 +161,20 @@ WHATSAPP_AUTH_DIR=whatsapp/auth
 
 Scan the QR code on first start. Auth state persists in `WHATSAPP_AUTH_DIR`.
 
+## Discord support
+
+```bash
+cd discord && bun install && cd ..
+```
+
+Add to `.env`:
+```
+DISCORD_ENABLED=true
+DISCORD_TOKEN=your-bot-token
+```
+
+Create a bot at [Discord Developer Portal](https://discord.com/developers/applications), enable **Message Content Intent** under Bot settings, and invite to your server with `bot` + `applications.commands` scopes.
+
 ## Config
 
 | Variable | Default | Description |
@@ -166,7 +182,7 @@ Scan the QR code on first start. Auth state persists in `WHATSAPP_AUTH_DIR`.
 | `TELEGRAM_BOT_TOKEN` | (required) | Telegram Bot API token |
 | `CLAUDE_CODE_OAUTH_TOKEN` | (auto) | OAuth token (auto-read from credentials file) |
 | `ASSISTANT_NAME` | `Borg` | Bot name and trigger word |
-| `CLAUDE_MODEL` | `claude-opus-4-6` | Model for Claude Code CLI |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model for Claude Code CLI |
 | `COLLECTION_WINDOW_MS` | `3000` | Message batching window |
 | `COOLDOWN_MS` | `5000` | Cooldown after agent completes |
 | `AGENT_TIMEOUT_S` | `600` | Max agent runtime |
