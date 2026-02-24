@@ -862,6 +862,7 @@ test "integration queue operations" {
 
 test {
     _ = @import("is_bot_message_test.zig");
+    _ = @import("sqlite_bindparams_test.zig");
 }
 
 test "state key-value store" {
