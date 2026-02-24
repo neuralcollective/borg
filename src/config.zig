@@ -26,6 +26,7 @@ pub const Config = struct {
     rate_limit_per_minute: u32,
     // Web dashboard
     web_port: u16,
+    dashboard_dist_dir: []const u8,
     // WhatsApp config
     whatsapp_enabled: bool,
     whatsapp_auth_dir: []const u8,
@@ -73,6 +74,7 @@ pub const Config = struct {
             .max_concurrent_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
             .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
             .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
+            .dashboard_dist_dir = getEnv(allocator, env_content, "DASHBOARD_DIST_DIR") orelse try std.fmt.allocPrint(allocator, "{s}/dashboard/dist", .{getEnv(allocator, env_content, "PIPELINE_REPO") orelse "."}),
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .allocator = allocator,

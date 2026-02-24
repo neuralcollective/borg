@@ -146,9 +146,7 @@ pub const WebServer = struct {
         const request = buf[0..n];
         const path = parsePath(request);
 
-        if (std.mem.eql(u8, path, "/")) {
-            self.serveDashboard(stream);
-        } else if (std.mem.eql(u8, path, "/api/logs")) {
+        if (std.mem.eql(u8, path, "/api/logs")) {
             self.serveSse(stream);
             return; // Don't close — SSE keeps connection open
         } else if (std.mem.eql(u8, path, "/api/tasks")) {
@@ -160,7 +158,8 @@ pub const WebServer = struct {
         } else if (std.mem.eql(u8, path, "/api/status")) {
             self.serveStatusJson(stream);
         } else {
-            self.serve404(stream);
+            // Static file serving from dashboard/dist — SPA fallback to index.html
+            self.serveStatic(stream, path);
         }
         stream.close();
     }
@@ -176,13 +175,58 @@ pub const WebServer = struct {
         return "/";
     }
 
-    fn serveDashboard(self: *WebServer, stream: std.net.Stream) void {
-        _ = self;
-        const html = DASHBOARD_HTML;
-        var header_buf: [256]u8 = undefined;
-        const header = std.fmt.bufPrint(&header_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{html.len}) catch return;
+    fn serveStatic(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        const dist_dir = self.config.dashboard_dist_dir;
+
+        // Resolve file path: try exact match first, then SPA fallback to index.html
+        var file_path_buf: [1024]u8 = undefined;
+        const file_rel = if (std.mem.eql(u8, path, "/")) "index.html" else if (path.len > 1) path[1..] else "index.html";
+
+        const full_path = std.fmt.bufPrint(&file_path_buf, "{s}/{s}", .{ dist_dir, file_rel }) catch {
+            self.serve404(stream);
+            return;
+        };
+
+        // Prevent path traversal
+        if (std.mem.indexOf(u8, full_path, "..") != null) {
+            self.serve404(stream);
+            return;
+        }
+
+        const file = std.fs.openFileAbsolute(full_path, .{}) catch {
+            // SPA fallback: serve index.html for non-asset routes
+            var idx_buf: [1024]u8 = undefined;
+            const idx_path = std.fmt.bufPrint(&idx_buf, "{s}/index.html", .{dist_dir}) catch {
+                self.serve404(stream);
+                return;
+            };
+            const idx = std.fs.openFileAbsolute(idx_path, .{}) catch {
+                self.serve404(stream);
+                return;
+            };
+            defer idx.close();
+            self.sendFile(stream, idx, "text/html");
+            return;
+        };
+        defer file.close();
+
+        const content_type = guessContentType(full_path);
+        self.sendFile(stream, file, content_type);
+    }
+
+    fn sendFile(_: *WebServer, stream: std.net.Stream, file: std.fs.File, content_type: []const u8) void {
+        const stat = file.stat() catch return;
+        var header_buf: [512]u8 = undefined;
+        const header = std.fmt.bufPrint(&header_buf, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nCache-Control: public, max-age=31536000\r\nConnection: close\r\n\r\n", .{ content_type, stat.size }) catch return;
         stream.writeAll(header) catch return;
-        stream.writeAll(html) catch return;
+
+        // Stream file in chunks
+        var buf: [16384]u8 = undefined;
+        while (true) {
+            const n = file.read(&buf) catch return;
+            if (n == 0) break;
+            stream.writeAll(buf[0..n]) catch return;
+        }
     }
 
     fn serveSse(self: *WebServer, stream: std.net.Stream) void {
@@ -390,6 +434,17 @@ pub const WebServer = struct {
     }
 };
 
+fn guessContentType(path: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, path, ".html")) return "text/html";
+    if (std.mem.endsWith(u8, path, ".css")) return "text/css";
+    if (std.mem.endsWith(u8, path, ".js")) return "application/javascript";
+    if (std.mem.endsWith(u8, path, ".json")) return "application/json";
+    if (std.mem.endsWith(u8, path, ".svg")) return "image/svg+xml";
+    if (std.mem.endsWith(u8, path, ".png")) return "image/png";
+    if (std.mem.endsWith(u8, path, ".ico")) return "image/x-icon";
+    return "application/octet-stream";
+}
+
 fn jsonEscapeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     // Truncate very large outputs for JSON response
     const max_len = 16000;
@@ -456,7 +511,9 @@ fn jsonEscape(buf: []u8, input: []const u8) []const u8 {
     return buf[0..pos];
 }
 
-const DASHBOARD_HTML =
+// Old inline HTML removed — now served from dashboard/dist/ (React + shadcn/ui)
+// To build: cd dashboard && bun run build
+const _removed_start =
     \\<!DOCTYPE html>
     \\<html><head><meta charset="utf-8"><title>Borg Dashboard</title>
     \\<style>

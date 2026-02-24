@@ -1248,6 +1248,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .max_concurrent_agents = 4,
         .rate_limit_per_minute = 5,
         .web_port = 3131,
+        .dashboard_dist_dir = "/tmp/dashboard-test",
         .whatsapp_enabled = false,
         .whatsapp_auth_dir = "",
         .allocator = allocator,
