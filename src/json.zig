@@ -242,3 +242,251 @@ test "getString returns null for missing key and wrong type" {
     try std.testing.expect(getString(parsed.value, "flag") == null);
     try std.testing.expectEqual(@as(i64, 42), getInt(parsed.value, "count").?);
 }
+
+// ── getString tests ────────────────────────────────────────────────────
+
+test "getString returns correct value for present key" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"greeting":"hello","empty":""}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("hello", getString(parsed.value, "greeting").?);
+}
+
+test "getString returns null for missing key" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"name":"alice"}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getString(parsed.value, "missing") == null);
+    try std.testing.expect(getString(parsed.value, "nonexistent") == null);
+}
+
+test "getString returns null for wrong value type" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"count":42,"flag":true,"pi":3.14,"nothing":null}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getString(parsed.value, "count") == null);
+    try std.testing.expect(getString(parsed.value, "flag") == null);
+    try std.testing.expect(getString(parsed.value, "pi") == null);
+    try std.testing.expect(getString(parsed.value, "nothing") == null);
+}
+
+test "getString returns null for non-object value" {
+    const alloc = std.testing.allocator;
+
+    // String value
+    var parsed_str = try parse(alloc,
+        \\"just a string"
+    );
+    defer parsed_str.deinit();
+    try std.testing.expect(getString(parsed_str.value, "key") == null);
+
+    // Integer value
+    var parsed_int = try parse(alloc, "123");
+    defer parsed_int.deinit();
+    try std.testing.expect(getString(parsed_int.value, "key") == null);
+
+    // Null value
+    var parsed_null = try parse(alloc, "null");
+    defer parsed_null.deinit();
+    try std.testing.expect(getString(parsed_null.value, "key") == null);
+}
+
+// ── getInt tests ───────────────────────────────────────────────────────
+
+test "getInt returns correct value for present key" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"count":42}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(i64, 42), getInt(parsed.value, "count").?);
+}
+
+test "getInt returns null for missing key" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"count":42}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getInt(parsed.value, "missing") == null);
+    try std.testing.expect(getInt(parsed.value, "nonexistent") == null);
+}
+
+test "getInt returns null for wrong value type" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"name":"alice","flag":true,"nothing":null}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getInt(parsed.value, "name") == null);
+    try std.testing.expect(getInt(parsed.value, "flag") == null);
+    try std.testing.expect(getInt(parsed.value, "nothing") == null);
+}
+
+test "getInt coerces float to int" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"value":3.0}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(i64, 3), getInt(parsed.value, "value").?);
+}
+
+test "getInt returns null for non-object value" {
+    const alloc = std.testing.allocator;
+
+    // String value
+    var parsed_str = try parse(alloc,
+        \\"just a string"
+    );
+    defer parsed_str.deinit();
+    try std.testing.expect(getInt(parsed_str.value, "key") == null);
+
+    // Integer value (top-level integer is not an object)
+    var parsed_int = try parse(alloc, "99");
+    defer parsed_int.deinit();
+    try std.testing.expect(getInt(parsed_int.value, "key") == null);
+
+    // Null value
+    var parsed_null = try parse(alloc, "null");
+    defer parsed_null.deinit();
+    try std.testing.expect(getInt(parsed_null.value, "key") == null);
+}
+
+// ── getBool tests ──────────────────────────────────────────────────────
+
+test "getBool returns correct value for present key" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"active":true,"disabled":false}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(true, getBool(parsed.value, "active").?);
+    try std.testing.expectEqual(false, getBool(parsed.value, "disabled").?);
+}
+
+test "getBool returns null for missing key" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"active":true}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getBool(parsed.value, "missing") == null);
+    try std.testing.expect(getBool(parsed.value, "nonexistent") == null);
+}
+
+test "getBool returns null for wrong value type" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"name":"alice","count":42,"nothing":null}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getBool(parsed.value, "name") == null);
+    try std.testing.expect(getBool(parsed.value, "count") == null);
+    try std.testing.expect(getBool(parsed.value, "nothing") == null);
+}
+
+test "getBool returns null for non-object value" {
+    const alloc = std.testing.allocator;
+
+    // String value
+    var parsed_str = try parse(alloc,
+        \\"just a string"
+    );
+    defer parsed_str.deinit();
+    try std.testing.expect(getBool(parsed_str.value, "key") == null);
+
+    // Boolean value (top-level bool is not an object)
+    var parsed_bool = try parse(alloc, "true");
+    defer parsed_bool.deinit();
+    try std.testing.expect(getBool(parsed_bool.value, "key") == null);
+
+    // Null value
+    var parsed_null = try parse(alloc, "null");
+    defer parsed_null.deinit();
+    try std.testing.expect(getBool(parsed_null.value, "key") == null);
+}
+
+// ── Edge case tests ────────────────────────────────────────────────────
+
+test "all getters return null for null JSON value" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"key":null}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expect(getString(parsed.value, "key") == null);
+    try std.testing.expect(getInt(parsed.value, "key") == null);
+    try std.testing.expect(getBool(parsed.value, "key") == null);
+}
+
+test "all getters return null for empty object" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc, "{}");
+    defer parsed.deinit();
+
+    try std.testing.expect(getString(parsed.value, "anything") == null);
+    try std.testing.expect(getInt(parsed.value, "anything") == null);
+    try std.testing.expect(getBool(parsed.value, "anything") == null);
+}
+
+test "getString returns empty string for empty string value" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"empty":""}
+    );
+    defer parsed.deinit();
+
+    const result = getString(parsed.value, "empty");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("", result.?);
+}
+
+test "getInt handles negative and zero values" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"negative":-7,"zero":0}
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(i64, -7), getInt(parsed.value, "negative").?);
+    try std.testing.expectEqual(@as(i64, 0), getInt(parsed.value, "zero").?);
+}
+
+test "getBool distinguishes false from null" {
+    const alloc = std.testing.allocator;
+    var parsed = try parse(alloc,
+        \\{"present_false":false,"null_val":null}
+    );
+    defer parsed.deinit();
+
+    // false should be returned as ?bool = false, not null
+    const result_false = getBool(parsed.value, "present_false");
+    try std.testing.expect(result_false != null);
+    try std.testing.expectEqual(false, result_false.?);
+
+    // null JSON value should return ?bool = null
+    const result_null = getBool(parsed.value, "null_val");
+    try std.testing.expect(result_null == null);
+
+    // missing key should return ?bool = null
+    const result_missing = getBool(parsed.value, "no_such_key");
+    try std.testing.expect(result_missing == null);
+}
