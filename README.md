@@ -1,132 +1,133 @@
 # borg
 
-Autonomous AI agent orchestrator triggered via Telegram and WhatsApp. Chat messages run Claude Code directly as a subprocess. The autonomous engineering pipeline runs agents in Docker containers with git worktree isolation. Written in Zig.
-
-Each registered chat gets a per-group state machine with message batching, rate limiting, and non-blocking threaded agent execution. Messages are collected during a configurable window, formatted into prompts, and piped to `claude --print`. Responses stream back as NDJSON and are sent to the chat. Sessions persist across invocations via `--resume`.
+Autonomous AI agent orchestrator for Telegram and WhatsApp. Chat messages run Claude Code as a subprocess; the engineering pipeline runs agents in Docker containers with git worktree isolation. Supports multiple repositories with independent pipelines. Includes a web dashboard for monitoring. Written in Zig.
 
 ## Architecture
 
 ```
 Telegram Bot API ──┐
-                   ├──> borg (Zig binary)
+                   ├──> borg (Zig binary) ──> Web Dashboard (:3131)
 WhatsApp Web ──────┘        |
                             +── SQLite (groups, messages, sessions, pipeline tasks)
                             |
-                            +── Per-Group State Machine
-                            |     IDLE → COLLECTING (3s window) → RUNNING → COOLDOWN → IDLE
-                            |     Agent runs as direct claude subprocess (threaded)
-                            |     Messages batched during collection window
-                            |     Rate limited (N triggers/min/group)
+                            +── Per-Group State Machine (chat agents)
+                            |     IDLE → COLLECTING → RUNNING → COOLDOWN → IDLE
+                            |     Direct claude subprocess, threaded, rate-limited
                             |
                             +── Pipeline Thread (autonomous engineering)
-                                  |
-                                  +── Micro-loop: backlog → spec → qa → impl → test → done
-                                  |     Each task in isolated git worktree
-                                  |     Agents run in Docker containers (security boundary)
-                                  |
-                                  +── Macro-loop: release train (every N hours)
-                                        Merge queued branches, self-healing, push to main
+                                  Multi-repo: independent worktrees, tests, release trains
+                                  Concurrent phase processing (up to 4 agents)
+                                  Per-repo phase dispatch: same phase runs in parallel across repos
+                                  backlog → spec → qa → impl → test → done
+                                  Release train merges to main, self-heals, self-updates
 ```
 
 ## Requirements
 
 - Zig 0.14.1+
-- Docker (only for pipeline; chat works without Docker)
-- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
-- Claude Code OAuth credentials (`~/.claude/.credentials.json`) or `CLAUDE_CODE_OAUTH_TOKEN` env var
+- Docker (pipeline only; chat works without Docker)
+- Telegram bot token ([@BotFather](https://t.me/BotFather))
+- Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
+- OAuth credentials (`~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN`)
 
-## Setup
-
-### 1. Build the container image (for pipeline only)
+## Quick start
 
 ```bash
+# Build container image (pipeline only)
 docker build -t borg-agent:latest -f container/Dockerfile container/
-```
 
-### 2. Configure environment
-
-Create a `.env` file in the project root:
-
-```
-TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+# Configure
+cat > .env <<EOF
+TELEGRAM_BOT_TOKEN=your-token
 ASSISTANT_NAME=Borg
 CLAUDE_MODEL=claude-opus-4-6
+PIPELINE_REPO=/path/to/your/repo
+EOF
+
+# Build and run
+zig build && ./zig-out/bin/borg
 ```
 
-The OAuth token is read automatically from `~/.claude/.credentials.json` (rotated by Claude Code). You can also set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` as a fallback.
-
-### 3. Build and run
-
-```bash
-zig build
-./zig-out/bin/borg
-```
-
-Stop with `SIGTERM` or `Ctrl+C` for graceful shutdown (waits for running agents).
+Stop with `Ctrl+C` for graceful shutdown (waits for running agents).
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/register` | Register the current chat for agent responses |
-| `/unregister` | Unregister the current chat |
-| `/status` | Show uptime, group count, active agents, model |
-| `/groups` | List all registered groups with phases |
-| `/chatid` | Show the chat's internal ID |
-| `/ping` | Check if the bot is online |
+| `/register` | Register this chat for agent responses |
+| `/unregister` | Unregister this chat |
+| `/status` | Show version, uptime, groups, model |
+| `/version` | Show build version |
+| `/groups` | List registered groups with phases |
 | `/task <title>` | Create an engineering pipeline task |
-| `/tasks` | List pipeline tasks and their status |
-| `/pipeline` | Show pipeline configuration |
-| `/help` | List available commands |
+| `/tasks` | List pipeline tasks |
+| `/pipeline` | Show pipeline config |
+| `/chatid` | Show chat ID |
+| `/ping` | Check if online |
+| `/help` | List commands |
 
-After registering, mention the bot by name (e.g. `@Borg`) to trigger a response. Commands work from both Telegram and WhatsApp.
+Mention the bot by name (e.g. `@Borg`) to trigger a response.
 
-## Chat Agent Lifecycle
+## Chat agent lifecycle
 
-When a trigger is detected, the per-group state machine manages the agent lifecycle:
+Per-group state machine prevents spam and batches messages:
 
-1. **IDLE**: Waiting for trigger
-2. **COLLECTING** (3s window): Accumulating messages. Additional messages extend the window slightly.
-3. **RUNNING**: Agent thread spawned. `claude` runs as a direct subprocess. Messages during this phase are stored and included in the next invocation.
-4. **COOLDOWN** (5s): Brief pause before accepting new triggers.
+1. **IDLE** → trigger detected (`@Borg`)
+2. **COLLECTING** (3s) → accumulating messages
+3. **RUNNING** → `claude` subprocess in dedicated thread
+4. **COOLDOWN** (5s) → brief pause before next trigger
 
-This prevents rapid-fire messages from spawning multiple agents and ensures message batching.
+Rate limited to N triggers/min/group. Messages during RUNNING are stored for the next invocation. Sessions persist via `--resume`.
 
-## Autonomous Engineering Pipeline
+## Engineering pipeline
 
-The pipeline runs as a separate thread and processes tasks through a multi-stage loop:
+The pipeline runs as a separate thread with concurrent phase processing — multiple tasks progress simultaneously across different phases. Each watched repo gets independent worktrees, test commands, and release trains.
 
-### Continuous operation
+### Multi-repo support
 
-When the backlog is empty, the pipeline automatically scans the target repository and seeds small refactoring/quality tasks. This means borg never truly idles - it continuously improves the codebase. Seeded tasks focus on refactoring, not new features: extracting duplication, improving error handling, adding missing test coverage, simplifying complex code.
+Configure multiple repositories for the pipeline to work on in parallel:
 
-Seeding respects a cooldown (1h between scans) and a backlog cap (max 5 active tasks) to avoid runaway task creation.
+```bash
+# Primary repo (always first, triggers self-update on merge)
+PIPELINE_REPO=/home/user/my-project
+PIPELINE_TEST_CMD=zig build test
 
-Tasks can also be created manually via `/task <title>` in chat.
+# Additional repos (pipe-delimited, each entry is path:test_cmd)
+WATCHED_REPOS=/home/user/api-server:go test ./...|/home/user/frontend:bun test
+```
 
-### Micro-loop (per task)
+Each repo operates independently: separate worktrees, separate test commands, separate release trains. Tasks from different repos in the same phase run concurrently; same-repo tasks in the same phase are serialized.
 
-1. **Backlog**: Task created via seeder or `/task` command
-2. **Spec**: Manager agent reads the codebase and writes `spec.md` with requirements, file paths, and acceptance criteria
-3. **QA**: QA agent reads `spec.md` and writes test files that should initially fail
-4. **Impl**: Worker agent reads spec + tests and writes implementation code
-5. **Test**: Zig runs the configured test command deterministically
-6. **Done**: Tests pass, branch queued for integration
-7. **Retry**: Tests fail, Worker gets stderr context and retries (max 3 attempts)
+### Task lifecycle
 
-Each task gets its own git worktree at `{repo}/.worktrees/task-{id}`, keeping the main working tree clean.
+1. **Backlog** → branch + worktree created in the task's repo
+2. **Spec** → Manager agent writes `spec.md` (requirements, file paths, acceptance criteria)
+3. **QA** → QA agent writes tests that initially fail
+4. **Impl** → Worker agent implements code to pass tests
+5. **Test** → repo-specific test command runs
+6. **Done** → queued for release train
+7. **Retry** → on test failure, Worker gets error context (max 3 attempts)
 
-### Macro-loop (release train)
+Each task gets its own git worktree at `{repo}/.worktrees/task-{id}`. Session continuity: agents resume from the previous phase's session.
 
-Runs every N hours (configurable, default 3h):
+### Release train
 
-1. Freeze the integration queue
-2. Create `release-candidate` branch from `main`
-3. Merge feature branches one-by-one, run tests after each
-4. Self-healing: exclude branches that cause merge conflicts or test failures
-5. Fast-forward `main` to release-candidate
-6. Push to remote, notify admin via Telegram with digest
+Runs at configurable intervals (default 3h), independently per repo:
+
+1. Create `release-candidate` from `main`
+2. Merge branches one-by-one, test after each (using repo-specific test command)
+3. Exclude branches causing conflicts or test failures (sent back for rebase)
+4. Fast-forward `main`, push, notify admin
+5. Self-update: rebuild and restart if primary repo's source changed
+
+### Auto-seeding
+
+When idle, the pipeline scans each watched repo, rotating between three analysis modes:
+- **Refactoring**: code quality, duplication, naming
+- **Bug audit**: security vulnerabilities, race conditions, resource leaks
+- **Test coverage**: untested code paths, missing edge cases
+
+Seeded tasks are small and focused. Cooldown: 1h (60s in continuous mode). Backlog cap: 5 tasks.
 
 ### Agent personas
 
@@ -136,78 +137,68 @@ Runs every N hours (configurable, default 3h):
 | QA | Read, Glob, Grep, Write | Writes test files only |
 | Worker | Read, Glob, Grep, Write, Edit, Bash | Implements features |
 
-## WhatsApp Support
+## Web dashboard
 
-Borg can connect to WhatsApp Web as an additional messaging backend using a Node.js bridge built on [Baileys](https://github.com/WhiskeySockets/Baileys).
+Accessible at `http://127.0.0.1:3131` (configurable via `WEB_PORT`).
 
-### Setup
+Shows pipeline task list with repo badges (when multiple repos configured), task detail with agent output, release queue, live log stream (SSE), and system status including version, uptime, and repo count.
+
+To rebuild after changes: `cd dashboard && bun run build`
+
+## WhatsApp support
 
 ```bash
 cd whatsapp && bun install && cd ..
 ```
 
 Add to `.env`:
-
 ```
 WHATSAPP_ENABLED=true
 WHATSAPP_AUTH_DIR=whatsapp/auth
 ```
 
-On first start, a QR code will be printed to the terminal. Scan it with WhatsApp on your phone (Settings > Linked Devices > Link a Device). Auth state is persisted in the `WHATSAPP_AUTH_DIR` directory.
-
-WhatsApp groups use `wa:` prefix for JIDs (e.g., `wa:123456789-987654321@g.us`). Register and trigger them the same way as Telegram groups.
+Scan the QR code on first start. Auth state persists in `WHATSAPP_AUTH_DIR`.
 
 ## Config
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | (required) | Telegram Bot API token |
-| `CLAUDE_CODE_OAUTH_TOKEN` | (from credentials file) | OAuth token for Claude Code |
-| `ASSISTANT_NAME` | `Borg` | Bot's display name and trigger word |
-| `TRIGGER_PATTERN` | `@Borg` | Mention pattern to trigger the bot |
-| `DATA_DIR` | `data` | Directory for session and IPC data |
-| `CONTAINER_IMAGE` | `borg-agent:latest` | Docker image for pipeline containers |
-| `CLAUDE_MODEL` | `claude-opus-4-6` | Model passed to Claude Code CLI |
-| `COLLECTION_WINDOW_MS` | `3000` | Message collection window before spawning agent |
-| `COOLDOWN_MS` | `5000` | Cooldown period after agent completes |
-| `AGENT_TIMEOUT_S` | `600` | Max seconds an agent can run |
-| `MAX_CONCURRENT_AGENTS` | `4` | Global limit on concurrent agent runs |
-| `RATE_LIMIT_PER_MINUTE` | `5` | Max triggers per minute per group |
-| `WHATSAPP_ENABLED` | `false` | Enable WhatsApp Web bridge |
-| `WHATSAPP_AUTH_DIR` | `whatsapp/auth` | Directory for WhatsApp auth state |
+| `CLAUDE_CODE_OAUTH_TOKEN` | (auto) | OAuth token (auto-read from credentials file) |
+| `ASSISTANT_NAME` | `Borg` | Bot name and trigger word |
+| `CLAUDE_MODEL` | `claude-opus-4-6` | Model for Claude Code CLI |
+| `COLLECTION_WINDOW_MS` | `3000` | Message batching window |
+| `COOLDOWN_MS` | `5000` | Cooldown after agent completes |
+| `AGENT_TIMEOUT_S` | `600` | Max agent runtime |
+| `MAX_CONCURRENT_AGENTS` | `4` | Global concurrent agent limit |
+| `RATE_LIMIT_PER_MINUTE` | `5` | Triggers per minute per group |
+| `WEB_PORT` | `3131` | Dashboard port |
+| `WHATSAPP_ENABLED` | `false` | Enable WhatsApp bridge |
 
-### Pipeline config
+### Pipeline
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PIPELINE_REPO` | (empty) | Path to target repository (enables pipeline) |
-| `PIPELINE_TEST_CMD` | `zig build test` | Command to run tests |
-| `PIPELINE_LINT_CMD` | (empty) | Optional lint command |
-| `PIPELINE_ADMIN_CHAT` | (empty) | Telegram chat ID for pipeline notifications |
+| `PIPELINE_REPO` | (empty) | Primary repo path (enables pipeline) |
+| `PIPELINE_TEST_CMD` | `zig build test` | Test command for primary repo |
+| `WATCHED_REPOS` | (empty) | Additional repos (`path:cmd\|path:cmd`) |
+| `PIPELINE_ADMIN_CHAT` | (empty) | Chat ID for notifications |
 | `RELEASE_INTERVAL_MINS` | `180` | Minutes between release trains |
+| `CONTINUOUS_MODE` | `false` | Run release train after every completed task |
 
-## Container security (pipeline only)
+## Database migrations
 
-Pipeline agent containers run with:
+Schema upgrades are handled automatically via versioned migrations. Fresh installs get the full schema; existing databases run only new ALTER TABLE migrations. The migration version is tracked in the `state` table.
 
-- `--cap-drop ALL` (no Linux capabilities)
-- `--security-opt no-new-privileges:true`
-- `--pids-limit 256`
-- `--memory 1GB`
-- `--cpus 2`
-- `--network host` (required for Claude Code API access)
-- `--rm` (auto-removed after exit)
-- Bind mount validation blocks sensitive paths (`.ssh`, `.aws`, `.gnupg`, `.env`, etc.)
+## Container security
 
-Chat agents run as direct subprocesses (no container overhead).
+Pipeline containers run with: `--cap-drop ALL`, `--security-opt no-new-privileges`, `--pids-limit 256`, `--memory 1GB`, `--cpus 2`, `--network host`, `--rm`. Bind mount validation blocks sensitive paths. Chat agents run as direct subprocesses.
 
 ## Testing
 
 ```bash
 zig build test
 ```
-
-Tests across all modules: JSON parsing, SQLite bindings, config parsing, HTTP chunked decoding, NDJSON parsing, prompt formatting, folder sanitization, trigger detection, database operations, git operations, pipeline logic, state machine transitions, rate limiting.
 
 ## License
 

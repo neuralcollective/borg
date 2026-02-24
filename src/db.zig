@@ -39,15 +39,20 @@ pub const PipelineTask = struct {
     created_by: []const u8,
     notify_chat: []const u8,
     created_at: []const u8,
+    session_id: []const u8,
 };
 
 pub const QueueEntry = struct {
     id: i64,
     task_id: i64,
     branch: []const u8,
+    repo_path: []const u8,
     status: []const u8,
     queued_at: []const u8,
 };
+
+// Must match the number of entries in runMigrations()
+const SCHEMA_VERSION = "2";
 
 pub const Db = struct {
     sqlite_db: sqlite.Database,
@@ -67,6 +72,7 @@ pub const Db = struct {
     }
 
     fn migrate(self: *Db) !void {
+        // Base schema (all CREATE IF NOT EXISTS — safe to rerun)
         try self.sqlite_db.exec(
             \\CREATE TABLE IF NOT EXISTS registered_groups (
             \\  jid TEXT PRIMARY KEY,
@@ -130,6 +136,7 @@ pub const Db = struct {
             \\  last_error TEXT DEFAULT '',
             \\  created_by TEXT DEFAULT '',
             \\  notify_chat TEXT DEFAULT '',
+            \\  session_id TEXT DEFAULT '',
             \\  created_at TEXT DEFAULT (datetime('now')),
             \\  updated_at TEXT DEFAULT (datetime('now'))
             \\);
@@ -142,6 +149,7 @@ pub const Db = struct {
             \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
             \\  task_id INTEGER NOT NULL,
             \\  branch TEXT NOT NULL,
+            \\  repo_path TEXT DEFAULT '',
             \\  status TEXT DEFAULT 'queued',
             \\  error_msg TEXT DEFAULT '',
             \\  queued_at TEXT DEFAULT (datetime('now'))
@@ -159,6 +167,68 @@ pub const Db = struct {
         );
         try self.sqlite_db.exec(
             \\CREATE INDEX IF NOT EXISTS idx_task_outputs_task ON task_outputs(task_id);
+        );
+
+        // For fresh installs, mark schema as current so ALTER migrations are skipped.
+        try self.initSchemaVersion();
+        // For existing databases, run any new ALTER TABLE migrations.
+        try self.runMigrations();
+    }
+
+    /// Set schema_version to latest so fresh installs skip ALTER migrations.
+    /// Called only when state table was just created (no rows yet).
+    fn initSchemaVersion(self: *Db) !void {
+        var rows = try self.sqlite_db.query(
+            self.allocator,
+            "SELECT value FROM state WHERE key = 'schema_version'",
+            .{},
+        );
+        defer rows.deinit();
+        if (rows.items.len > 0) return; // existing DB, let runMigrations handle it
+
+        try self.sqlite_db.execute(
+            "INSERT INTO state (key, value) VALUES ('schema_version', ?1)",
+            .{SCHEMA_VERSION},
+        );
+    }
+
+    fn runMigrations(self: *Db) !void {
+        const migrations = [_][*:0]const u8{
+            // v1: Add session_id to pipeline_tasks
+            "ALTER TABLE pipeline_tasks ADD COLUMN session_id TEXT DEFAULT ''",
+            // v2: Add repo_path to integration_queue
+            "ALTER TABLE integration_queue ADD COLUMN repo_path TEXT DEFAULT ''",
+        };
+
+        // Read current version from state table
+        var ver_rows = try self.sqlite_db.query(
+            self.allocator,
+            "SELECT value FROM state WHERE key = 'schema_version'",
+            .{},
+        );
+        defer ver_rows.deinit();
+        const current: usize = if (ver_rows.items.len > 0)
+            std.fmt.parseInt(usize, ver_rows.items[0].get(0) orelse "0", 10) catch 0
+        else
+            0;
+
+        if (current >= migrations.len) return;
+
+        for (migrations[current..], current..) |sql, i| {
+            self.sqlite_db.exec(sql) catch |err| {
+                // "duplicate column name" is expected if base schema already has the column
+                std.log.debug("Migration {d} skipped (already applied): {}", .{ i + 1, err });
+                continue;
+            };
+            std.log.info("Applied migration {d}/{d}", .{ i + 1, migrations.len });
+        }
+
+        // Store new version
+        var buf: [16]u8 = undefined;
+        const ver_str = std.fmt.bufPrint(&buf, "{d}", .{migrations.len}) catch "0";
+        try self.sqlite_db.execute(
+            "INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?1)",
+            .{ver_str},
         );
     }
 
@@ -306,7 +376,7 @@ pub const Db = struct {
         // Priority: rebase > retry > impl > qa > spec > backlog
         var rows = try self.sqlite_db.query(
             allocator,
-            \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at
+            \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '')
             \\FROM pipeline_tasks
             \\WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')
             \\ORDER BY
@@ -328,10 +398,39 @@ pub const Db = struct {
         return try rowToPipelineTask(allocator, rows.items[0]);
     }
 
+    pub fn getActivePipelineTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '')
+            \\FROM pipeline_tasks
+            \\WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')
+            \\ORDER BY
+            \\  CASE status
+            \\    WHEN 'rebase' THEN 0
+            \\    WHEN 'retry' THEN 1
+            \\    WHEN 'impl' THEN 2
+            \\    WHEN 'qa' THEN 3
+            \\    WHEN 'spec' THEN 4
+            \\    WHEN 'backlog' THEN 5
+            \\  END,
+            \\  created_at ASC
+            \\LIMIT ?1
+            ,
+            .{limit},
+        );
+        defer rows.deinit();
+
+        var tasks = std.ArrayList(PipelineTask).init(allocator);
+        for (rows.items) |row| {
+            tasks.append(rowToPipelineTask(allocator, row) catch continue) catch continue;
+        }
+        return tasks.toOwnedSlice();
+    }
+
     pub fn getPipelineTask(self: *Db, allocator: std.mem.Allocator, task_id: i64) !?PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks WHERE id = ?1",
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '') FROM pipeline_tasks WHERE id = ?1",
             .{task_id},
         );
         defer rows.deinit();
@@ -360,6 +459,13 @@ pub const Db = struct {
         );
     }
 
+    pub fn setTaskSessionId(self: *Db, task_id: i64, session_id: []const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET session_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            .{ session_id, task_id },
+        );
+    }
+
     pub fn incrementTaskAttempt(self: *Db, task_id: i64) !void {
         try self.sqlite_db.execute(
             "UPDATE pipeline_tasks SET attempt = attempt + 1, updated_at = datetime('now') WHERE id = ?1",
@@ -370,7 +476,7 @@ pub const Db = struct {
     pub fn getAllPipelineTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks ORDER BY created_at DESC LIMIT ?1",
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '') FROM pipeline_tasks ORDER BY created_at DESC LIMIT ?1",
             .{limit},
         );
         defer rows.deinit();
@@ -396,6 +502,7 @@ pub const Db = struct {
             .created_by = try allocator.dupe(u8, row.get(9) orelse ""),
             .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
             .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
+            .session_id = try allocator.dupe(u8, row.get(12) orelse ""),
         };
     }
 
@@ -437,22 +544,21 @@ pub const Db = struct {
 
     // --- Integration Queue ---
 
-    pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8) !void {
-        // Remove any existing queued entries for this task to prevent duplicates
+    pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8, repo_path: []const u8) !void {
         try self.sqlite_db.execute(
             "DELETE FROM integration_queue WHERE task_id = ?1 AND status = 'queued'",
             .{task_id},
         );
         try self.sqlite_db.execute(
-            "INSERT INTO integration_queue (task_id, branch) VALUES (?1, ?2)",
-            .{ task_id, branch },
+            "INSERT INTO integration_queue (task_id, branch, repo_path) VALUES (?1, ?2, ?3)",
+            .{ task_id, branch, repo_path },
         );
     }
 
     pub fn getQueuedBranches(self: *Db, allocator: std.mem.Allocator) ![]QueueEntry {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, task_id, branch, status, queued_at FROM integration_queue WHERE status = 'queued' ORDER BY queued_at ASC",
+            "SELECT id, task_id, branch, COALESCE(repo_path, ''), status, queued_at FROM integration_queue WHERE status = 'queued' ORDER BY queued_at ASC",
             .{},
         );
         defer rows.deinit();
@@ -463,8 +569,31 @@ pub const Db = struct {
                 .id = row.getInt(0) orelse 0,
                 .task_id = row.getInt(1) orelse 0,
                 .branch = try allocator.dupe(u8, row.get(2) orelse ""),
-                .status = try allocator.dupe(u8, row.get(3) orelse "queued"),
-                .queued_at = try allocator.dupe(u8, row.get(4) orelse ""),
+                .repo_path = try allocator.dupe(u8, row.get(3) orelse ""),
+                .status = try allocator.dupe(u8, row.get(4) orelse "queued"),
+                .queued_at = try allocator.dupe(u8, row.get(5) orelse ""),
+            });
+        }
+        return entries.toOwnedSlice();
+    }
+
+    pub fn getQueuedBranchesForRepo(self: *Db, allocator: std.mem.Allocator, repo_path: []const u8) ![]QueueEntry {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, task_id, branch, COALESCE(repo_path, ''), status, queued_at FROM integration_queue WHERE status = 'queued' AND repo_path = ?1 ORDER BY queued_at ASC",
+            .{repo_path},
+        );
+        defer rows.deinit();
+
+        var entries = std.ArrayList(QueueEntry).init(allocator);
+        for (rows.items) |row| {
+            try entries.append(QueueEntry{
+                .id = row.getInt(0) orelse 0,
+                .task_id = row.getInt(1) orelse 0,
+                .branch = try allocator.dupe(u8, row.get(2) orelse ""),
+                .repo_path = try allocator.dupe(u8, row.get(3) orelse ""),
+                .status = try allocator.dupe(u8, row.get(4) orelse "queued"),
+                .queued_at = try allocator.dupe(u8, row.get(5) orelse ""),
             });
         }
         return entries.toOwnedSlice();
@@ -699,8 +828,8 @@ test "integration queue operations" {
     const id1 = try db.createPipelineTask("Task 1", "desc", "/repo", "", "");
     const id2 = try db.createPipelineTask("Task 2", "desc", "/repo", "", "");
 
-    try db.enqueueForIntegration(id1, "feature/task-1");
-    try db.enqueueForIntegration(id2, "feature/task-2");
+    try db.enqueueForIntegration(id1, "feature/task-1", "/repo");
+    try db.enqueueForIntegration(id2, "feature/task-2", "/repo");
 
     var queued = try db.getQueuedBranches(alloc);
     try std.testing.expectEqual(@as(usize, 2), queued.len);

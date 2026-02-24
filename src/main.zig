@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const Config = @import("config.zig").Config;
 const db_mod = @import("db.zig");
 const Db = db_mod.Db;
@@ -14,6 +15,8 @@ const wa_mod = @import("whatsapp.zig");
 const WhatsApp = wa_mod.WhatsApp;
 const web_mod = @import("web.zig");
 const WebServer = web_mod.WebServer;
+
+pub const version = "0.1.0-" ++ build_options.git_hash;
 
 const POLL_INTERVAL_MS = 500;
 
@@ -535,7 +538,7 @@ pub fn main() !void {
         gm.addGroup(group.jid);
     }
 
-    std.log.info("Borg online | assistant: {s} | groups: {d}", .{ config.assistant_name, groups_list.items.len });
+    std.log.info("Borg {s} online | assistant: {s} | groups: {d}", .{ version, config.assistant_name, groups_list.items.len });
 
     // ── Main Loop ───────────────────────────────────────────────────────
 
@@ -1023,11 +1026,12 @@ fn handleCommand(
         defer buf.deinit();
         try buf.writer().print(
             \\*Borg Status*
+            \\Version: {s}
             \\Uptime: {d}h {d}m
             \\Groups: {d}
             \\Active agents: {d}
             \\Model: {s}
-        , .{ hours, mins, groups_list.items.len, gm.getActiveCount(), config.model });
+        , .{ version, hours, mins, groups_list.items.len, gm.getActiveCount(), config.model });
 
         if (config.pipeline_repo.len > 0) {
             try buf.writer().print("\nPipeline: active ({s})", .{config.pipeline_repo});
@@ -1138,6 +1142,8 @@ fn handleCommand(
         reply(sender, msg, text);
     } else if (std.mem.startsWith(u8, msg.text, "/ping")) {
         reply(sender, msg, "Borg online.");
+    } else if (std.mem.startsWith(u8, msg.text, "/version")) {
+        reply(sender, msg, "Borg " ++ version);
     } else if (std.mem.startsWith(u8, msg.text, "/help") or std.mem.startsWith(u8, msg.text, "/start")) {
         reply(sender, msg,
             \\*Borg Commands*
@@ -1147,6 +1153,7 @@ fn handleCommand(
             \\/groups - List registered groups
             \\/chatid - Show chat ID
             \\/ping - Check if online
+            \\/version - Show version
             \\
             \\*Pipeline*
             \\/task <title> - Create engineering task
@@ -1249,6 +1256,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .rate_limit_per_minute = 5,
         .web_port = 3131,
         .dashboard_dist_dir = "/tmp/dashboard-test",
+        .watched_repos = &.{},
         .whatsapp_enabled = false,
         .whatsapp_auth_dir = "",
         .allocator = allocator,

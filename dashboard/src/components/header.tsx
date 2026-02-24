@@ -15,6 +15,7 @@ export function Header({ connected }: { connected: boolean }) {
   return (
     <header className="flex items-center gap-4 border-b border-border bg-card px-5 py-3">
       <h1 className="text-sm font-bold tracking-wider text-primary">BORG</h1>
+      <span className="text-[10px] text-muted-foreground font-mono">{status?.version ?? ""}</span>
 
       <div className="h-5 w-px bg-border" />
 
@@ -40,6 +41,15 @@ export function Header({ connected }: { connected: boolean }) {
       <span className="text-xs text-muted-foreground">
         model <span className="text-foreground">{status?.model ?? "--"}</span>
       </span>
+
+      {(status?.watched_repos?.length ?? 0) > 1 && (
+        <>
+          <div className="h-5 w-px bg-border" />
+          <span className="text-xs text-muted-foreground">
+            repos <span className="text-foreground">{status?.watched_repos.length}</span>
+          </span>
+        </>
+      )}
 
       <div className="ml-auto flex items-center gap-2">
         <Circle

@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ArrowLeft, GitBranch, User, Clock, AlertTriangle } from "lucide-react";
+import { ArrowLeft, GitBranch, User, Clock, AlertTriangle, FolderGit2 } from "lucide-react";
+import { repoName } from "@/lib/types";
 
 interface TaskDetailProps {
   taskId: number;
@@ -40,6 +41,11 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         <PhaseTracker status={task.status} />
 
         <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+          {task.repo_path && (
+            <span className="flex items-center gap-1" title={task.repo_path}>
+              <FolderGit2 size={11} /> {repoName(task.repo_path)}
+            </span>
+          )}
           {task.branch && (
             <span className="flex items-center gap-1">
               <GitBranch size={11} /> {task.branch}

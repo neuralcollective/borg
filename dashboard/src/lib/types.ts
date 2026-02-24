@@ -4,6 +4,7 @@ export interface Task {
   description: string;
   status: string;
   branch: string;
+  repo_path: string;
   attempt: number;
   max_attempts: number;
   created_by: string;
@@ -27,22 +28,35 @@ export interface QueueEntry {
   id: number;
   task_id: number;
   branch: string;
+  repo_path: string;
   status: string;
   queued_at: string;
 }
 
+export interface WatchedRepo {
+  path: string;
+  test_cmd: string;
+  is_self: boolean;
+}
+
 export interface Status {
+  version: string;
   uptime_s: number;
   model: string;
-  pipeline_repo: string;
+  watched_repos: WatchedRepo[];
   release_interval_mins: number;
-  test_cmd: string;
   continuous_mode: boolean;
   assistant_name: string;
   active_tasks: number;
   merged_tasks: number;
   failed_tasks: number;
   total_tasks: number;
+}
+
+export function repoName(path: string): string {
+  if (!path) return "";
+  const parts = path.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || path;
 }
 
 export interface LogEvent {
