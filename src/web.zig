@@ -3,6 +3,7 @@ const db_mod = @import("db.zig");
 const Db = db_mod.Db;
 const json_mod = @import("json.zig");
 const Config = @import("config.zig").Config;
+const main = @import("main.zig");
 
 const LogEntry = struct {
     timestamp: i64,
@@ -281,12 +282,15 @@ pub const WebServer = struct {
             var esc_desc: [512]u8 = undefined;
             const title = jsonEscape(&esc_title, t.title);
             const desc = jsonEscape(&esc_desc, t.description);
-            w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"created_by\":\"{s}\",\"created_at\":\"{s}\"}}", .{
+            var esc_repo: [512]u8 = undefined;
+            const repo = jsonEscape(&esc_repo, t.repo_path);
+            w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"created_by\":\"{s}\",\"created_at\":\"{s}\"}}", .{
                 t.id,
                 title,
                 desc,
                 t.status,
                 t.branch,
+                repo,
                 t.attempt,
                 t.max_attempts,
                 t.created_by,
@@ -332,12 +336,15 @@ pub const WebServer = struct {
         const desc = jsonEscape(&esc_desc, task.description);
         const last_err = jsonEscape(&esc_err, task.last_error);
 
-        w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"last_error\":\"{s}\",\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"outputs\":[", .{
+        var esc_repo: [512]u8 = undefined;
+        const repo = jsonEscape(&esc_repo, task.repo_path);
+        w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"last_error\":\"{s}\",\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"outputs\":[", .{
             task.id,
             title,
             desc,
             task.status,
             task.branch,
+            repo,
             task.attempt,
             task.max_attempts,
             last_err,
@@ -377,10 +384,13 @@ pub const WebServer = struct {
 
         for (queued, 0..) |q, i| {
             if (i > 0) w.writeAll(",") catch return;
-            w.print("{{\"id\":{d},\"task_id\":{d},\"branch\":\"{s}\",\"status\":\"{s}\",\"queued_at\":\"{s}\"}}", .{
+            var esc_repo: [512]u8 = undefined;
+            const repo = jsonEscape(&esc_repo, q.repo_path);
+            w.print("{{\"id\":{d},\"task_id\":{d},\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"status\":\"{s}\",\"queued_at\":\"{s}\"}}", .{
                 q.id,
                 q.task_id,
                 q.branch,
+                repo,
                 q.status,
                 q.queued_at,
             }) catch return;
@@ -396,13 +406,33 @@ pub const WebServer = struct {
 
         const stats = self.db.getPipelineStats() catch db_mod.Db.PipelineStats{ .active = 0, .merged = 0, .failed = 0, .total = 0 };
 
-        var buf: [2048]u8 = undefined;
-        const body = std.fmt.bufPrint(&buf, "{{\"uptime_s\":{d},\"model\":\"{s}\",\"pipeline_repo\":\"{s}\",\"release_interval_mins\":{d},\"test_cmd\":\"{s}\",\"continuous_mode\":{s},\"assistant_name\":\"{s}\",\"active_tasks\":{d},\"merged_tasks\":{d},\"failed_tasks\":{d},\"total_tasks\":{d}}}", .{
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        var buf = std.ArrayList(u8).init(alloc);
+        const w = buf.writer();
+
+        // Build watched_repos JSON array
+        w.print("{{\"version\":\"{s}\",\"uptime_s\":{d},\"model\":\"{s}\",\"watched_repos\":[", .{
+            main.version,
             uptime,
             self.config.model,
-            self.config.pipeline_repo,
+        }) catch return;
+
+        for (self.config.watched_repos, 0..) |repo, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            var esc_path: [512]u8 = undefined;
+            var esc_cmd: [512]u8 = undefined;
+            w.print("{{\"path\":\"{s}\",\"test_cmd\":\"{s}\",\"is_self\":{s}}}", .{
+                jsonEscape(&esc_path, repo.path),
+                jsonEscape(&esc_cmd, repo.test_cmd),
+                if (repo.is_self) "true" else "false",
+            }) catch return;
+        }
+
+        w.print("],\"release_interval_mins\":{d},\"continuous_mode\":{s},\"assistant_name\":\"{s}\",\"active_tasks\":{d},\"merged_tasks\":{d},\"failed_tasks\":{d},\"total_tasks\":{d}}}", .{
             self.config.release_interval_mins,
-            self.config.pipeline_test_cmd,
             if (self.config.continuous_mode) "true" else "false",
             self.config.assistant_name,
             stats.active,
@@ -411,7 +441,7 @@ pub const WebServer = struct {
             stats.total,
         }) catch return;
 
-        self.sendJson(stream, body);
+        self.sendJson(stream, buf.items);
     }
 
     fn sendJson(_: *WebServer, stream: std.net.Stream, body: []const u8) void {
