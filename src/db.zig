@@ -290,9 +290,24 @@ pub const Db = struct {
     }
 
     pub fn getNextPipelineTask(self: *Db, allocator: std.mem.Allocator) !?PipelineTask {
+        // Priority: rebase > retry > impl > qa > spec > backlog
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase') ORDER BY created_at ASC LIMIT 1",
+            \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at
+            \\FROM pipeline_tasks
+            \\WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')
+            \\ORDER BY
+            \\  CASE status
+            \\    WHEN 'rebase' THEN 0
+            \\    WHEN 'retry' THEN 1
+            \\    WHEN 'impl' THEN 2
+            \\    WHEN 'qa' THEN 3
+            \\    WHEN 'spec' THEN 4
+            \\    WHEN 'backlog' THEN 5
+            \\  END,
+            \\  created_at ASC
+            \\LIMIT 1
+            ,
             .{},
         );
         defer rows.deinit();
@@ -392,6 +407,11 @@ pub const Db = struct {
     // --- Integration Queue ---
 
     pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8) !void {
+        // Remove any existing queued entries for this task to prevent duplicates
+        try self.sqlite_db.execute(
+            "DELETE FROM integration_queue WHERE task_id = ?1 AND status = 'queued'",
+            .{task_id},
+        );
         try self.sqlite_db.execute(
             "INSERT INTO integration_queue (task_id, branch) VALUES (?1, ?2)",
             .{ task_id, branch },

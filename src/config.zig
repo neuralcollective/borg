@@ -17,6 +17,7 @@ pub const Config = struct {
     pipeline_lint_cmd: []const u8,
     pipeline_admin_chat: []const u8,
     release_interval_mins: u32,
+    continuous_mode: bool,
     // Agent lifecycle
     collection_window_ms: i64,
     cooldown_ms: i64,
@@ -65,6 +66,7 @@ pub const Config = struct {
             .pipeline_lint_cmd = getEnv(allocator, env_content, "PIPELINE_LINT_CMD") orelse "",
             .pipeline_admin_chat = getEnv(allocator, env_content, "PIPELINE_ADMIN_CHAT") orelse "",
             .release_interval_mins = release_mins,
+            .continuous_mode = std.mem.eql(u8, getEnv(allocator, env_content, "CONTINUOUS_MODE") orelse "false", "true"),
             .collection_window_ms = std.fmt.parseInt(i64, collection_ms_str, 10) catch 3000,
             .cooldown_ms = std.fmt.parseInt(i64, cooldown_ms_str, 10) catch 5000,
             .agent_timeout_s = std.fmt.parseInt(i64, timeout_s_str, 10) catch 600,

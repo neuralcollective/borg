@@ -104,7 +104,8 @@ pub const Pipeline = struct {
 
     fn seedIfIdle(self: *Pipeline) !void {
         const now = std.time.timestamp();
-        if (now - self.last_seed_ts < SEED_COOLDOWN_S) return;
+        const cooldown: i64 = if (self.config.continuous_mode) 60 else SEED_COOLDOWN_S;
+        if (now - self.last_seed_ts < cooldown) return;
 
         // Don't seed if there are already active tasks
         const active = try self.db.getActivePipelineTaskCount();
@@ -225,7 +226,7 @@ pub const Pipeline = struct {
         const wt_path = try self.worktreePath(task.id);
         defer self.allocator.free(wt_path);
 
-        var wt = try git.addWorktree(wt_path, branch);
+        var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
         defer wt.deinit();
         if (!wt.success()) {
             std.log.err("git worktree add failed: {s}", .{wt.stderr});
@@ -350,6 +351,20 @@ pub const Pipeline = struct {
         defer self.allocator.free(wt_path);
         var wt_git = Git.init(self.allocator, wt_path);
 
+        // Idempotency: if a previous run left passing code, skip the agent
+        if (self.runTestCommand(wt_path)) |pre_test| {
+            defer self.allocator.free(pre_test.stdout);
+            defer self.allocator.free(pre_test.stderr);
+            if (pre_test.exit_code == 0) {
+                try self.db.updateTaskStatus(task.id, "done");
+                try self.db.enqueueForIntegration(task.id, task.branch);
+                self.cleanupWorktree(task);
+                std.log.info("Task #{d} tests already pass, skipping agent", .{task.id});
+                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for release train.", .{task.id}));
+                return;
+            }
+        } else |_| {}
+
         // Build prompt with error context for retries
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
@@ -409,7 +424,6 @@ pub const Pipeline = struct {
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
                 try self.db.updateTaskStatus(task.id, "failed");
-                self.cleanupWorktree(task);
                 std.log.warn("Task #{d} failed after {d} attempts", .{ task.id, task.attempt + 1 });
                 self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} FAILED after {d} attempts.", .{ task.id, task.attempt + 1 }));
             } else {
@@ -525,7 +539,6 @@ pub const Pipeline = struct {
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
                 try self.db.updateTaskStatus(task.id, "failed");
-                self.cleanupWorktree(task);
                 std.log.warn("Task #{d} failed rebase after {d} attempts", .{ task.id, task.attempt + 1 });
                 self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} FAILED rebase after {d} attempts.", .{ task.id, task.attempt + 1 }) catch return);
             } else {
@@ -588,8 +601,10 @@ pub const Pipeline = struct {
 
     fn checkReleaseTrain(self: *Pipeline) !void {
         const now = std.time.timestamp();
-        const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
-        if (now - self.last_release_ts < interval) return;
+        if (!self.config.continuous_mode) {
+            const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
+            if (now - self.last_release_ts < interval) return;
+        }
 
         // Check if there's anything queued
         var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -720,7 +735,6 @@ pub const Pipeline = struct {
 
         // 6. Generate and send digest
         const digest = try self.generateDigest(merged.items, excluded.items);
-        defer self.allocator.free(digest);
         self.notify(self.config.pipeline_admin_chat, digest);
         std.log.info("Release train complete: {d} merged, {d} excluded", .{ merged.items.len, excluded.items.len });
     }
@@ -858,6 +872,13 @@ pub const Pipeline = struct {
 
         std.log.info("Spawning {s} agent: {s}", .{ @tagName(persona), container_name });
 
+        // Start timeout watchdog
+        var agent_done = std.atomic.Value(bool).init(false);
+        const name_for_watchdog = try self.allocator.dupe(u8, container_name);
+        const watchdog = std.Thread.spawn(.{}, agentTimeoutWatchdog, .{
+            &agent_done, self.docker, name_for_watchdog, AGENT_TIMEOUT_S,
+        }) catch null;
+
         var run_result = try self.docker.runWithStdio(docker_mod.ContainerConfig{
             .image = self.config.container_image,
             .name = container_name,
@@ -867,9 +888,26 @@ pub const Pipeline = struct {
         }, input.items);
         defer run_result.deinit();
 
+        // Cancel watchdog
+        agent_done.store(true, .release);
+        if (watchdog) |w| w.join();
+        self.allocator.free(name_for_watchdog);
+
         std.log.info("{s} agent done (exit={d}, {d} bytes)", .{ @tagName(persona), run_result.exit_code, run_result.stdout.len });
 
         return try agent_mod.parseNdjson(self.allocator, run_result.stdout);
+    }
+
+    fn agentTimeoutWatchdog(done: *std.atomic.Value(bool), docker: *Docker, name: []const u8, timeout_s: i64) void {
+        const deadline = std.time.timestamp() + timeout_s;
+        while (std.time.timestamp() < deadline) {
+            if (done.load(.acquire)) return;
+            std.time.sleep(5 * std.time.ns_per_s);
+        }
+        if (!done.load(.acquire)) {
+            std.log.warn("Agent timeout ({d}s): killing container {s}", .{ timeout_s, name });
+            docker.killContainer(name) catch {};
+        }
     }
 
     // --- Helpers ---
@@ -878,11 +916,12 @@ pub const Pipeline = struct {
         std.log.err("Task #{d} failed: {s}: {s}", .{ task.id, reason, detail[0..@min(detail.len, 200)] });
         try self.db.updateTaskStatus(task.id, "failed");
         try self.db.updateTaskError(task.id, detail[0..@min(detail.len, 4000)]);
-        self.cleanupWorktree(task);
+        // Keep worktree for debugging - don't clean up on failure
         self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s}", .{ task.id, reason }));
     }
 
     fn notify(self: *Pipeline, chat_id: []const u8, message: []const u8) void {
+        defer self.allocator.free(message);
         if (chat_id.len == 0) return;
         // Strip "tg:" prefix for Telegram API
         const raw_id = if (std.mem.startsWith(u8, chat_id, "tg:")) chat_id[3..] else chat_id;
