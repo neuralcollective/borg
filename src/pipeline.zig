@@ -1180,15 +1180,23 @@ pub const Pipeline = struct {
     // --- Helpers ---
 
     fn failTask(self: *Pipeline, task: db_mod.PipelineTask, reason: []const u8, detail: []const u8) !void {
-        std.log.warn("Task #{d} failed ({s}), recycling to backlog: {s}", .{ task.id, reason, detail[0..@min(detail.len, 200)] });
-        try self.recycleTask(task);
-        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s} — recycling to backlog", .{ task.id, reason }));
+        try self.db.incrementTaskAttempt(task.id);
+        try self.db.updateTaskError(task.id, detail[0..@min(detail.len, 4000)]);
+
+        if (task.attempt + 1 >= task.max_attempts) {
+            std.log.warn("Task #{d} failed ({s}), exhausted {d} attempts — shelving", .{ task.id, reason, task.max_attempts });
+            try self.db.updateTaskStatus(task.id, "failed");
+            self.cleanupWorktree(task);
+            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s} — gave up after {d} attempts", .{ task.id, reason, task.max_attempts }));
+        } else {
+            std.log.warn("Task #{d} failed ({s}), recycling to backlog ({d}/{d}): {s}", .{ task.id, reason, task.attempt + 1, task.max_attempts, detail[0..@min(detail.len, 200)] });
+            try self.recycleTask(task);
+            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} failed: {s} — retry {d}/{d}", .{ task.id, reason, task.attempt + 1, task.max_attempts }));
+        }
     }
 
     fn recycleTask(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        try self.db.resetTaskAttempt(task.id);
         try self.db.updateTaskStatus(task.id, "backlog");
-        // Clean up old worktree so it gets a fresh one
         self.cleanupWorktree(task);
     }
 
