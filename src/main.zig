@@ -8,6 +8,7 @@ const TgMessage = tg_mod.TgMessage;
 const docker_mod = @import("docker.zig");
 const Docker = docker_mod.Docker;
 const json_mod = @import("json.zig");
+const git_mod = @import("git.zig");
 
 const POLL_INTERVAL_MS = 1000;
 const MAX_AGENT_RETRIES = 3;
