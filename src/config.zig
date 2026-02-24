@@ -11,6 +11,12 @@ pub const Config = struct {
     credentials_path: []const u8,
     session_max_age_hours: i64,
     max_consecutive_errors: u32,
+    // Pipeline config
+    pipeline_repo: []const u8,
+    pipeline_test_cmd: []const u8,
+    pipeline_lint_cmd: []const u8,
+    pipeline_admin_chat: []const u8,
+    release_interval_hours: u32,
     allocator: std.mem.Allocator,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
@@ -21,6 +27,9 @@ pub const Config = struct {
         const creds_path = try std.fmt.allocPrint(allocator, "{s}/.claude/.credentials.json", .{home});
         const oauth = readOAuthToken(allocator, creds_path) orelse
             getEnv(allocator, env_content, "CLAUDE_CODE_OAUTH_TOKEN") orelse "";
+
+        const release_hours_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_HOURS") orelse "6";
+        const release_hours = std.fmt.parseInt(u32, release_hours_str, 10) catch 6;
 
         return Config{
             .telegram_token = getEnv(allocator, env_content, "TELEGRAM_BOT_TOKEN") orelse "",
@@ -33,6 +42,11 @@ pub const Config = struct {
             .credentials_path = creds_path,
             .session_max_age_hours = 4,
             .max_consecutive_errors = 3,
+            .pipeline_repo = getEnv(allocator, env_content, "PIPELINE_REPO") orelse "",
+            .pipeline_test_cmd = getEnv(allocator, env_content, "PIPELINE_TEST_CMD") orelse "zig build test",
+            .pipeline_lint_cmd = getEnv(allocator, env_content, "PIPELINE_LINT_CMD") orelse "",
+            .pipeline_admin_chat = getEnv(allocator, env_content, "PIPELINE_ADMIN_CHAT") orelse "",
+            .release_interval_hours = release_hours,
             .allocator = allocator,
         };
     }
