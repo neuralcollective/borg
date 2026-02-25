@@ -1142,6 +1142,34 @@ pub const Db = struct {
         return proposalFromRow(allocator, rows.items[0]);
     }
 
+    pub fn getRecentMergedTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, session_id FROM pipeline_tasks WHERE status = 'merged' ORDER BY id DESC LIMIT ?1",
+            .{limit},
+        );
+        defer rows.deinit();
+        var tasks = std.ArrayList(PipelineTask).init(allocator);
+        for (rows.items) |row| {
+            try tasks.append(PipelineTask{
+                .id = row.getInt(0) orelse 0,
+                .title = try allocator.dupe(u8, row.get(1) orelse ""),
+                .description = try allocator.dupe(u8, row.get(2) orelse ""),
+                .repo_path = try allocator.dupe(u8, row.get(3) orelse ""),
+                .branch = try allocator.dupe(u8, row.get(4) orelse ""),
+                .status = try allocator.dupe(u8, row.get(5) orelse ""),
+                .attempt = row.getInt(6) orelse 0,
+                .max_attempts = row.getInt(7) orelse 3,
+                .last_error = try allocator.dupe(u8, row.get(8) orelse ""),
+                .created_by = try allocator.dupe(u8, row.get(9) orelse ""),
+                .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
+                .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
+                .session_id = try allocator.dupe(u8, row.get(12) orelse ""),
+            });
+        }
+        return tasks.toOwnedSlice();
+    }
+
     pub fn updateProposalTriage(self: *Db, proposal_id: i64, score: i64, impact: i64, feasibility: i64, risk: i64, effort: i64, reasoning: []const u8) !void {
         try self.sqlite_db.execute(
             "UPDATE proposals SET triage_score = ?1, triage_impact = ?2, triage_feasibility = ?3, triage_risk = ?4, triage_effort = ?5, triage_reasoning = ?6 WHERE id = ?7",

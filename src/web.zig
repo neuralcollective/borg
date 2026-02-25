@@ -1005,6 +1005,13 @@ pub const WebServer = struct {
             };
             self.serveJsonResponse(stream, 200, "{\"status\":\"dismissed\"}");
             std.log.info("Proposal #{d} dismissed", .{proposal_id});
+        } else if (std.mem.eql(u8, action, "reopen")) {
+            self.db.updateProposalStatus(proposal_id, "proposed") catch {
+                self.serve500(stream);
+                return;
+            };
+            self.serveJsonResponse(stream, 200, "{\"status\":\"proposed\"}");
+            std.log.info("Proposal #{d} reopened", .{proposal_id});
         } else {
             self.serveJsonResponse(stream, 400, "{\"error\":\"unknown action\"}");
         }
@@ -1024,11 +1031,15 @@ pub const WebServer = struct {
             return;
         }
 
+        // Get recent merged tasks for duplicate/already-done detection
+        const merged_tasks = self.db.getRecentMergedTasks(alloc, 50) catch &[0]db_mod.PipelineTask{};
+
         // Build prompt listing all proposals
         var prompt_buf = std.ArrayList(u8).init(alloc);
         const pw = prompt_buf.writer();
         pw.writeAll(
-            \\Rate each proposal on 4 dimensions (1-5 scale).
+            \\Rate each proposal on 4 dimensions (1-5 scale), and flag proposals
+            \\that should be auto-dismissed.
             \\
             \\Dimensions:
             \\- impact: How much value does this deliver? (5 = critical fix/feature, 1 = cosmetic)
@@ -1038,13 +1049,26 @@ pub const WebServer = struct {
             \\
             \\Overall score formula: (impact * 2 + feasibility * 2 - risk - effort) mapped to 1-10 scale.
             \\
-            \\Reply with ONLY a JSON array, no markdown fences, no commentary:
-            \\[{"id": <number>, "impact": <1-5>, "feasibility": <1-5>, "risk": <1-5>, "effort": <1-5>, "score": <1-10>, "reasoning": "<one sentence>"}]
+            \\Set "dismiss": true if the proposal should be auto-closed for any of these reasons:
+            \\- Already implemented (covered by a recently merged task)
+            \\- Duplicate of another proposal in this list
+            \\- Nonsensical, vague, or not actionable
+            \\- Irrelevant to the project
             \\
-            \\Proposals:
+            \\Reply with ONLY a JSON array, no markdown fences, no commentary:
+            \\[{"id": <number>, "impact": <1-5>, "feasibility": <1-5>, "risk": <1-5>, "effort": <1-5>, "score": <1-10>, "reasoning": "<one sentence>", "dismiss": <true|false>}]
             \\
         ) catch return;
 
+        if (merged_tasks.len > 0) {
+            pw.writeAll("Recently merged tasks (for duplicate detection):\n") catch return;
+            for (merged_tasks) |t| {
+                pw.print("- {s}\n", .{t.title}) catch return;
+            }
+            pw.writeAll("\n") catch return;
+        }
+
+        pw.writeAll("Proposals to evaluate:\n\n") catch return;
         for (proposals) |p| {
             pw.print("- ID {d}: {s}\n  Description: {s}\n  Rationale: {s}\n\n", .{
                 p.id,
@@ -1121,6 +1145,7 @@ pub const WebServer = struct {
         };
 
         var scored: u32 = 0;
+        var dismissed: u32 = 0;
         for (items) |item| {
             const p_id = json_mod.getInt(item, "id") orelse continue;
             const impact = json_mod.getInt(item, "impact") orelse continue;
@@ -1129,14 +1154,21 @@ pub const WebServer = struct {
             const effort = json_mod.getInt(item, "effort") orelse continue;
             const score = json_mod.getInt(item, "score") orelse continue;
             const reasoning = json_mod.getString(item, "reasoning") orelse "";
+            const should_dismiss = json_mod.getBool(item, "dismiss") orelse false;
 
             self.db.updateProposalTriage(p_id, score, impact, feasibility, risk, effort, reasoning) catch continue;
             scored += 1;
+
+            if (should_dismiss) {
+                self.db.updateProposalStatus(p_id, "auto_dismissed") catch continue;
+                dismissed += 1;
+                std.log.info("Triage: auto-dismissed proposal #{d}: {s}", .{ p_id, reasoning });
+            }
         }
 
-        std.log.info("Triage: scored {d}/{d} proposals", .{ scored, proposals.len });
-        var resp_buf: [64]u8 = undefined;
-        const resp = std.fmt.bufPrint(&resp_buf, "{{\"scored\":{d}}}", .{scored}) catch return;
+        std.log.info("Triage: scored {d}/{d} proposals, auto-dismissed {d}", .{ scored, proposals.len, dismissed });
+        var resp_buf: [128]u8 = undefined;
+        const resp = std.fmt.bufPrint(&resp_buf, "{{\"scored\":{d},\"dismissed\":{d}}}", .{ scored, dismissed }) catch return;
         self.serveJsonResponse(stream, 200, resp);
     }
 
