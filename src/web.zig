@@ -723,7 +723,9 @@ pub const WebServer = struct {
             const desc = jsonEscape(&esc_desc, t.description);
             var esc_repo: [512]u8 = undefined;
             const repo = jsonEscape(&esc_repo, t.repo_path);
-            w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"created_by\":\"{s}\",\"created_at\":\"{s}\"}}", .{
+            var esc_err: [512]u8 = undefined;
+            const last_err = jsonEscape(&esc_err, t.last_error[0..@min(t.last_error.len, 200)]);
+            w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"last_error\":\"{s}\"}}", .{
                 t.id,
                 title,
                 desc,
@@ -734,6 +736,7 @@ pub const WebServer = struct {
                 t.max_attempts,
                 t.created_by,
                 t.created_at,
+                last_err,
             }) catch return;
         }
 

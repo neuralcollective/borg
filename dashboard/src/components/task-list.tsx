@@ -51,34 +51,45 @@ function TaskRow({
   selected,
   onClick,
 }: {
-  task: { id: number; title: string; status: string; repo_path?: string; attempt: number; max_attempts: number };
+  task: { id: number; title: string; status: string; repo_path?: string; attempt: number; max_attempts: number; last_error?: string };
   isActive?: boolean;
   showRepo?: boolean;
   selected?: boolean;
   onClick: () => void;
 }) {
+  const isStuck = task.attempt >= 3 && isActive;
+  const hasError = !!task.last_error;
+
   return (
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 md:py-2 text-left transition-colors active:bg-white/[0.06]",
+        "flex w-full flex-col gap-0.5 rounded-lg px-3 py-2.5 md:py-2 text-left transition-colors active:bg-white/[0.06]",
         "hover:bg-white/[0.03]",
-        isActive && "bg-blue-500/[0.04]",
+        isActive && !isStuck && "bg-blue-500/[0.04]",
+        isStuck && "bg-red-500/[0.04]",
         selected && "bg-white/[0.06]"
       )}
     >
-      <span className="min-w-[24px] font-mono text-[10px] text-zinc-600">#{task.id}</span>
-      <StatusBadge status={task.status} />
-      {showRepo && task.repo_path && (
-        <span className="shrink-0 rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium text-zinc-500">
-          {repoName(task.repo_path)}
-        </span>
-      )}
-      <span className="flex-1 truncate text-[13px] md:text-[12px] text-zinc-300">{task.title}</span>
-      {task.attempt > 0 && (
-        <span className="font-mono text-[10px] text-zinc-600">
-          {task.attempt}/{task.max_attempts}
-        </span>
+      <div className="flex w-full items-center gap-2.5">
+        <span className="min-w-[24px] font-mono text-[10px] text-zinc-600">#{task.id}</span>
+        <StatusBadge status={task.status} />
+        {showRepo && task.repo_path && (
+          <span className="shrink-0 rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium text-zinc-500">
+            {repoName(task.repo_path)}
+          </span>
+        )}
+        <span className="flex-1 truncate text-[13px] md:text-[12px] text-zinc-300">{task.title}</span>
+        {task.attempt > 0 && (
+          <span className={cn("font-mono text-[10px]", isStuck ? "text-red-400/80" : "text-zinc-600")}>
+            {task.attempt}/{task.max_attempts}
+          </span>
+        )}
+      </div>
+      {hasError && isActive && (
+        <div className="ml-[34px] truncate text-[10px] text-red-400/60">
+          {task.last_error}
+        </div>
       )}
     </button>
   );

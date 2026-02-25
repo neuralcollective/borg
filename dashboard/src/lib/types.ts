@@ -9,6 +9,7 @@ export interface Task {
   max_attempts: number;
   created_by: string;
   created_at: string;
+  last_error?: string;
 }
 
 export interface TaskDetail extends Task {
