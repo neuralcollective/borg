@@ -3,6 +3,7 @@ const std = @import("std");
 pub const RepoConfig = struct {
     path: []const u8,
     test_cmd: []const u8,
+    prompt_file: []const u8 = "",
     is_self: bool = false,
     auto_merge: bool = true,
 };
@@ -134,6 +135,19 @@ pub const Config = struct {
         return self.pipeline_test_cmd;
     }
 
+    pub fn getRepoPrompt(self: *Config, repo_path: []const u8) ?[]const u8 {
+        // Check explicit prompt_file from config
+        for (self.watched_repos) |rc| {
+            if (std.mem.eql(u8, rc.path, repo_path) and rc.prompt_file.len > 0) {
+                return std.fs.cwd().readFileAlloc(self.allocator, rc.prompt_file, 64 * 1024) catch null;
+            }
+        }
+        // Auto-detect .borg/prompt.md in repo root
+        const auto_path = std.fmt.allocPrint(self.allocator, "{s}/.borg/prompt.md", .{repo_path}) catch return null;
+        defer self.allocator.free(auto_path);
+        return std.fs.cwd().readFileAlloc(self.allocator, auto_path, 64 * 1024) catch null;
+    }
+
     /// Re-read OAuth token from credentials file (handles token rotation)
     pub fn refreshOAuthToken(self: *Config) void {
         if (readOAuthToken(self.allocator, self.credentials_path)) |new_token| {
@@ -150,8 +164,8 @@ fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, prim
         try repos.append(.{ .path = primary_repo, .test_cmd = primary_test_cmd, .is_self = true, .auto_merge = primary_auto_merge });
     }
 
-    // Parse WATCHED_REPOS: pipe-delimited, each entry is path:test_cmd
-    // Append !manual to disable auto-merge: /path:cmd!manual
+    // Parse WATCHED_REPOS: pipe-delimited, each entry is path:test_cmd or path:test_cmd:prompt_file
+    // Append !manual to disable auto-merge: /path:cmd!manual or /path:cmd:prompt!manual
     const watched_opt = getEnv(allocator, env_content, "WATCHED_REPOS");
     defer if (watched_opt) |w| allocator.free(w);
     const watched = watched_opt orelse "";
@@ -164,20 +178,29 @@ fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, prim
             // Skip if same as primary
             if (std.mem.indexOf(u8, trimmed, ":")) |colon| {
                 const path = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
-                var cmd = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
+                var rest = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
                 if (path.len == 0) continue;
                 if (std.mem.eql(u8, path, primary_repo)) continue;
 
                 // Check for !manual suffix
                 var auto_merge = true;
-                if (std.mem.endsWith(u8, cmd, "!manual")) {
+                if (std.mem.endsWith(u8, rest, "!manual")) {
                     auto_merge = false;
-                    cmd = std.mem.trim(u8, cmd[0 .. cmd.len - 7], &[_]u8{ ' ', '\t' });
+                    rest = std.mem.trim(u8, rest[0 .. rest.len - 7], &[_]u8{ ' ', '\t' });
+                }
+
+                // Split rest into cmd and optional prompt_file (second colon)
+                var cmd = rest;
+                var prompt_file: []const u8 = "";
+                if (std.mem.indexOf(u8, rest, ":")) |colon2| {
+                    cmd = std.mem.trim(u8, rest[0..colon2], &[_]u8{ ' ', '\t' });
+                    prompt_file = std.mem.trim(u8, rest[colon2 + 1 ..], &[_]u8{ ' ', '\t' });
                 }
 
                 try repos.append(.{
                     .path = try allocator.dupe(u8, path),
                     .test_cmd = if (cmd.len > 0) try allocator.dupe(u8, cmd) else "make test",
+                    .prompt_file = if (prompt_file.len > 0) try allocator.dupe(u8, prompt_file) else "",
                     .auto_merge = auto_merge,
                 });
             } else {
