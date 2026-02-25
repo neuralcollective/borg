@@ -49,6 +49,8 @@ pub const DirectAgentConfig = struct {
     session_id: ?[]const u8,
     session_dir: []const u8,
     assistant_name: []const u8,
+    workdir: []const u8 = "",
+    allowed_tools: ?[]const u8 = null,
 };
 
 /// Run claude CLI directly as a subprocess (no Docker container).
@@ -72,11 +74,15 @@ pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt
     if (config.session_id) |sid| {
         try argv.appendSlice(&.{ "--resume", sid });
     }
+    if (config.allowed_tools) |tools| {
+        try argv.appendSlice(&.{ "--allowedTools", tools });
+    }
 
     var child = std.process.Child.init(argv.items, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
+    if (config.workdir.len > 0) child.cwd = config.workdir;
 
     // Set environment: inherit current env + override OAuth token
     var env_map = std.process.EnvMap.init(allocator);
