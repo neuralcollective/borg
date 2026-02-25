@@ -1633,17 +1633,21 @@ pub const Pipeline = struct {
         });
 
         // Pass git author env vars to container based on GIT_AUTHOR_MODE
-        var git_name_buf: [256]u8 = undefined;
-        var git_email_buf: [256]u8 = undefined;
-        if (self.config.getGitAuthor()) |_| {
-            if (self.config.git_user_name.len > 0) {
-                const name_env = try std.fmt.bufPrint(&git_name_buf, "GIT_AUTHOR_NAME={s}", .{self.config.git_user_name});
-                try env_list.append(name_env);
-            }
-            if (self.config.git_user_email.len > 0) {
-                const email_env = try std.fmt.bufPrint(&git_email_buf, "GIT_AUTHOR_EMAIL={s}", .{self.config.git_user_email});
-                try env_list.append(email_env);
-            }
+        var git_aname_buf: [256]u8 = undefined;
+        var git_aemail_buf: [256]u8 = undefined;
+        var git_cname_buf: [256]u8 = undefined;
+        var git_cemail_buf: [256]u8 = undefined;
+        if (self.config.git_user_name.len > 0 and !std.mem.eql(u8, self.config.git_author_mode, "borg")) {
+            const an = try std.fmt.bufPrint(&git_aname_buf, "GIT_AUTHOR_NAME={s}", .{self.config.git_user_name});
+            const cn = try std.fmt.bufPrint(&git_cname_buf, "GIT_COMMITTER_NAME={s}", .{self.config.git_user_name});
+            try env_list.append(an);
+            try env_list.append(cn);
+        }
+        if (self.config.git_user_email.len > 0 and !std.mem.eql(u8, self.config.git_author_mode, "borg")) {
+            const ae = try std.fmt.bufPrint(&git_aemail_buf, "GIT_AUTHOR_EMAIL={s}", .{self.config.git_user_email});
+            const ce = try std.fmt.bufPrint(&git_cemail_buf, "GIT_COMMITTER_EMAIL={s}", .{self.config.git_user_email});
+            try env_list.append(ae);
+            try env_list.append(ce);
         }
 
         const env = env_list.items;
