@@ -18,8 +18,12 @@ pub const StreamCallback = struct {
 
 /// Parse NDJSON stream output from Claude Code CLI.
 /// Extracts the final result text and session_id for resumption.
+/// Falls back to collecting all assistant text messages if `result` is empty
+/// (which happens when the agent's last turn is a tool call, not text).
 pub fn parseNdjson(allocator: std.mem.Allocator, data: []const u8) !AgentResult {
     var output_text = std.ArrayList(u8).init(allocator);
+    var assistant_text = std.ArrayList(u8).init(allocator);
+    defer assistant_text.deinit();
     var new_session_id: ?[]const u8 = null;
 
     var lines = std.mem.splitScalar(u8, data, '\n');
@@ -44,7 +48,28 @@ pub fn parseNdjson(allocator: std.mem.Allocator, data: []const u8) !AgentResult 
                 if (new_session_id) |old| allocator.free(old);
                 new_session_id = try allocator.dupe(u8, sid);
             }
+        } else if (std.mem.eql(u8, msg_type, "assistant")) {
+            // Collect text from assistant messages as fallback
+            if (json_mod.getObject(parsed.value, "message")) |msg| {
+                if (json_mod.getArray(msg, "content")) |content| {
+                    for (content) |item| {
+                        if (json_mod.getString(item, "type")) |ct| {
+                            if (std.mem.eql(u8, ct, "text")) {
+                                if (json_mod.getString(item, "text")) |text| {
+                                    if (assistant_text.items.len > 0) try assistant_text.appendSlice("\n");
+                                    try assistant_text.appendSlice(text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    // Use result text if available, otherwise fall back to assistant text
+    if (output_text.items.len == 0 and assistant_text.items.len > 0) {
+        try output_text.appendSlice(assistant_text.items);
     }
 
     return AgentResult{
