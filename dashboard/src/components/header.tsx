@@ -79,6 +79,13 @@ export function Header({
           Model <span className="text-zinc-300">{status?.model ?? "--"}</span>
         </span>
 
+        {(status?.dispatched_agents ?? 0) > 0 && (
+          <span className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+            {status?.dispatched_agents} agent{(status?.dispatched_agents ?? 0) > 1 ? "s" : ""}
+          </span>
+        )}
+
         {(status?.watched_repos?.length ?? 0) > 1 && (
           <span className="text-[11px] text-zinc-500">
             Repos <span className="text-zinc-300">{status?.watched_repos.length}</span>

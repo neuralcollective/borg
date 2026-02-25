@@ -191,11 +191,13 @@ test "AC6: PipelineStats struct has expected fields" {
         .merged = 20,
         .failed = 5,
         .total = 35,
+        .dispatched = 2,
     };
     try std.testing.expectEqual(@as(i64, 10), stats.active);
     try std.testing.expectEqual(@as(i64, 20), stats.merged);
     try std.testing.expectEqual(@as(i64, 5), stats.failed);
     try std.testing.expectEqual(@as(i64, 35), stats.total);
+    try std.testing.expectEqual(@as(i64, 2), stats.dispatched);
 }
 
 test "AC6: getPipelineStats returns PipelineStats type" {

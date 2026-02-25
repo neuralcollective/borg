@@ -881,6 +881,7 @@ pub const Db = struct {
         merged: i64,
         failed: i64,
         total: i64,
+        dispatched: i64,
     };
 
     pub fn getPipelineStats(self: *Db) !PipelineStats {
@@ -889,17 +890,19 @@ pub const Db = struct {
             \\  COUNT(*) AS total,
             \\  COUNT(CASE WHEN status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase') THEN 1 END) AS active,
             \\  COUNT(CASE WHEN status = 'merged' THEN 1 END) AS merged,
-            \\  COUNT(CASE WHEN status = 'failed' THEN 1 END) AS failed
+            \\  COUNT(CASE WHEN status = 'failed' THEN 1 END) AS failed,
+            \\  COUNT(CASE WHEN dispatched_at != '' THEN 1 END) AS dispatched
             \\FROM pipeline_tasks
         , .{});
         defer rows.deinit();
-        if (rows.items.len == 0) return .{ .total = 0, .active = 0, .merged = 0, .failed = 0 };
+        if (rows.items.len == 0) return .{ .total = 0, .active = 0, .merged = 0, .failed = 0, .dispatched = 0 };
         const row = rows.items[0];
         return .{
             .total = row.getInt(0) orelse 0,
             .active = row.getInt(1) orelse 0,
             .merged = row.getInt(2) orelse 0,
             .failed = row.getInt(3) orelse 0,
+            .dispatched = row.getInt(4) orelse 0,
         };
     }
 

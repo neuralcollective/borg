@@ -54,6 +54,7 @@ export interface Status {
   merged_tasks: number;
   failed_tasks: number;
   total_tasks: number;
+  dispatched_agents: number;
 }
 
 export function repoName(path: string): string {
