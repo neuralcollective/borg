@@ -16,7 +16,6 @@ export function ChatPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const esRef = useRef<EventSource | null>(null);
 
-  // Load history on mount
   useEffect(() => {
     fetch("/api/chat/messages")
       .then((r) => r.json())
@@ -24,7 +23,6 @@ export function ChatPanel() {
       .catch(() => {});
   }, []);
 
-  // SSE for real-time events
   const connect = useCallback(() => {
     if (esRef.current) esRef.current.close();
     const es = new EventSource("/api/chat/events");
@@ -50,7 +48,6 @@ export function ChatPanel() {
     return () => esRef.current?.close();
   }, [connect]);
 
-  // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [messages.length]);
@@ -83,9 +80,9 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-10 shrink-0 items-center border-b border-white/[0.06] px-4">
-        <span className="text-[11px] font-medium text-zinc-400">Chat</span>
+        <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Chat</span>
         {sending && (
-          <span className="ml-2 text-[10px] text-zinc-600 animate-pulse">
+          <span className="ml-2 text-[11px] md:text-[10px] text-zinc-600 animate-pulse">
             thinking...
           </span>
         )}
@@ -108,8 +105,8 @@ export function ChatPanel() {
             placeholder="Message the director..."
             rows={1}
             className={cn(
-              "flex-1 resize-none rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2",
-              "text-[12px] text-zinc-200 placeholder:text-zinc-600",
+              "flex-1 resize-none rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 md:py-2",
+              "text-[14px] md:text-[12px] text-zinc-200 placeholder:text-zinc-600",
               "focus:border-white/[0.15] focus:outline-none"
             )}
           />
@@ -117,9 +114,9 @@ export function ChatPanel() {
             onClick={handleSend}
             disabled={!input.trim() || sending}
             className={cn(
-              "rounded-lg px-3 py-2 text-[11px] font-medium transition-colors",
+              "rounded-lg px-4 md:px-3 py-2.5 md:py-2 text-[13px] md:text-[11px] font-medium transition-colors",
               input.trim() && !sending
-                ? "bg-white/[0.08] text-zinc-200 hover:bg-white/[0.12]"
+                ? "bg-blue-500/20 text-blue-300 active:bg-blue-500/30 hover:bg-blue-500/25"
                 : "text-zinc-700 cursor-not-allowed"
             )}
           >
@@ -137,7 +134,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-3 py-2 text-[12px] leading-relaxed",
+          "max-w-[85%] rounded-lg px-3 py-2 text-[13px] md:text-[12px] leading-relaxed",
           isUser
             ? "bg-blue-500/[0.15] text-zinc-200"
             : "bg-white/[0.05] text-zinc-300"

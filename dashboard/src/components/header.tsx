@@ -12,12 +12,40 @@ export function Header({
   connected,
   onToggleChat,
   chatOpen,
+  mobile,
 }: {
   connected: boolean;
   onToggleChat?: () => void;
   chatOpen?: boolean;
+  mobile?: boolean;
 }) {
   const { data: status } = useStatus();
+
+  if (mobile) {
+    return (
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#0a0a0a] px-4">
+        <div className="flex items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white">
+            <span className="text-[10px] font-black text-black">B</span>
+          </div>
+          <span className="text-[13px] font-semibold tracking-tight text-white">Borg</span>
+        </div>
+
+        <div className="ml-auto flex items-center gap-3">
+          {status?.continuous_mode && (
+            <span className="flex items-center gap-1 text-[11px] text-zinc-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Cont
+            </span>
+          )}
+          <span className="text-[11px] tabular-nums text-zinc-500">
+            {status ? formatUptime(status.uptime_s) : "--"}
+          </span>
+          <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-red-500"}`} />
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-5 border-b border-white/[0.06] bg-[#0a0a0a] px-5">
