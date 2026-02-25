@@ -485,6 +485,7 @@ pub fn main() !void {
     // Resume: reset any stuck queue entries and failed tasks from a previous crash/restart
     db.resetStuckQueueEntries() catch {};
     db.recycleFailedTasks() catch {};
+    db.logEvent("info", "system", "Borg started", version);
 
     var tg = Telegram.init(allocator, config.telegram_token);
     try tg.connect();
@@ -891,6 +892,7 @@ fn processIncomingMessage(
     // Start collection window
     if (gm.onTrigger(msg.jid, msg.message_id, msg.original_id, msg.transport, config)) {
         std.log.info("Triggered: \"{s}\" from {s}", .{ msg.text[0..@min(msg.text.len, 60)], msg.sender_name });
+        db.logEvent("info", "chat", msg.text[0..@min(msg.text.len, 200)], msg.jid);
         sender.sendTyping(msg.transport, msg.original_id);
     }
 }
@@ -966,6 +968,7 @@ fn spawnAgentForGroup(
     }
 
     std.log.info("Agent spawned for {s}", .{info.jid});
+    db.logEvent("info", "agent", "Agent spawned", info.jid);
 }
 
 fn agentThreadFn(ctx: *AgentContext, gm: *GroupManager) void {
@@ -1007,6 +1010,11 @@ fn agentThreadFn(ctx: *AgentContext, gm: *GroupManager) void {
             outcome.last_msg_timestamp,
             outcome.success,
         ) catch {};
+        if (outcome.success) {
+            db.logEvent("info", "agent", "Agent completed", ctx.jid);
+        } else {
+            db.logEvent("error", "agent", "Agent failed", ctx.jid);
+        }
     }
 
     gm.setOutcome(ctx.jid, outcome);
@@ -1120,6 +1128,12 @@ fn deliverOutcome(
     // Mark run as delivered in DB
     if (d.outcome.run_id > 0) {
         db.markChatAgentRunDelivered(d.outcome.run_id) catch {};
+        db.logEvent(
+            if (d.outcome.success) "info" else "error",
+            "chat",
+            if (d.outcome.success) "Response delivered" else "Error response delivered",
+            d.jid,
+        );
     }
 }
 

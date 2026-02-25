@@ -216,6 +216,23 @@ pub const Db = struct {
             \\);
         );
 
+        try self.sqlite_db.exec(
+            \\CREATE TABLE IF NOT EXISTS events (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  ts INTEGER NOT NULL,
+            \\  level TEXT NOT NULL DEFAULT 'info',
+            \\  category TEXT NOT NULL DEFAULT 'system',
+            \\  message TEXT NOT NULL,
+            \\  metadata TEXT DEFAULT ''
+            \\);
+        );
+        try self.sqlite_db.exec(
+            \\CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+        );
+        try self.sqlite_db.exec(
+            \\CREATE INDEX IF NOT EXISTS idx_events_category ON events(category, ts);
+        );
+
         // For fresh installs, mark schema as current so ALTER migrations are skipped.
         try self.initSchemaVersion();
         // For existing databases, run any new ALTER TABLE migrations.
@@ -257,6 +274,9 @@ pub const Db = struct {
             "CREATE TABLE IF NOT EXISTS chat_agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', transport TEXT DEFAULT '', original_id TEXT DEFAULT '', trigger_msg_id TEXT DEFAULT '', folder TEXT DEFAULT '', output TEXT DEFAULT '', new_session_id TEXT DEFAULT '', last_msg_timestamp TEXT DEFAULT '', started_at TEXT DEFAULT (datetime('now')), completed_at TEXT)",
             "ALTER TABLE pipeline_tasks ADD COLUMN dispatched_at TEXT DEFAULT ''",
             "ALTER TABLE integration_queue ADD COLUMN unknown_retries INTEGER DEFAULT 0",
+            "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, level TEXT NOT NULL DEFAULT 'info', category TEXT NOT NULL DEFAULT 'system', message TEXT NOT NULL, metadata TEXT DEFAULT '')",
+            "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)",
+            "CREATE INDEX IF NOT EXISTS idx_events_category ON events(category, ts)",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -581,6 +601,108 @@ pub const Db = struct {
         );
     }
 
+    // --- Events ---
+
+    pub fn logEvent(self: *Db, level: []const u8, category: []const u8, message: []const u8, metadata: []const u8) void {
+        const ts = std.time.timestamp();
+        self.sqlite_db.execute(
+            "INSERT INTO events (ts, level, category, message, metadata) VALUES (?1, ?2, ?3, ?4, ?5)",
+            .{ ts, level, category, message, metadata },
+        ) catch {};
+        // Auto-prune old events (keep last 10000)
+        self.sqlite_db.execute(
+            "DELETE FROM events WHERE id <= (SELECT id FROM events ORDER BY id DESC LIMIT 1 OFFSET 10000)",
+            .{},
+        ) catch {};
+    }
+
+    pub const EventRow = struct {
+        id: i64,
+        ts: i64,
+        level: []const u8,
+        category: []const u8,
+        message: []const u8,
+        metadata: []const u8,
+    };
+
+    pub fn getEvents(self: *Db, allocator: std.mem.Allocator, category: ?[]const u8, level: ?[]const u8, since_ts: i64, limit_n: i64) ![]EventRow {
+        var result = std.ArrayList(EventRow).init(allocator);
+
+        if (category) |cat| {
+            if (level) |lvl| {
+                var rows = try self.sqlite_db.query(
+                    allocator,
+                    "SELECT id, ts, level, category, message, COALESCE(metadata,'') FROM events WHERE category = ?1 AND level = ?2 AND ts >= ?3 ORDER BY ts DESC LIMIT ?4",
+                    .{ cat, lvl, since_ts, limit_n },
+                );
+                defer rows.deinit();
+                for (rows.items) |row| {
+                    try result.append(.{
+                        .id = std.fmt.parseInt(i64, row.get(0) orelse "0", 10) catch 0,
+                        .ts = std.fmt.parseInt(i64, row.get(1) orelse "0", 10) catch 0,
+                        .level = try allocator.dupe(u8, row.get(2) orelse "info"),
+                        .category = try allocator.dupe(u8, row.get(3) orelse "system"),
+                        .message = try allocator.dupe(u8, row.get(4) orelse ""),
+                        .metadata = try allocator.dupe(u8, row.get(5) orelse ""),
+                    });
+                }
+            } else {
+                var rows = try self.sqlite_db.query(
+                    allocator,
+                    "SELECT id, ts, level, category, message, COALESCE(metadata,'') FROM events WHERE category = ?1 AND ts >= ?2 ORDER BY ts DESC LIMIT ?3",
+                    .{ cat, since_ts, limit_n },
+                );
+                defer rows.deinit();
+                for (rows.items) |row| {
+                    try result.append(.{
+                        .id = std.fmt.parseInt(i64, row.get(0) orelse "0", 10) catch 0,
+                        .ts = std.fmt.parseInt(i64, row.get(1) orelse "0", 10) catch 0,
+                        .level = try allocator.dupe(u8, row.get(2) orelse "info"),
+                        .category = try allocator.dupe(u8, row.get(3) orelse "system"),
+                        .message = try allocator.dupe(u8, row.get(4) orelse ""),
+                        .metadata = try allocator.dupe(u8, row.get(5) orelse ""),
+                    });
+                }
+            }
+        } else if (level) |lvl| {
+            var rows = try self.sqlite_db.query(
+                allocator,
+                "SELECT id, ts, level, category, message, COALESCE(metadata,'') FROM events WHERE level = ?1 AND ts >= ?2 ORDER BY ts DESC LIMIT ?3",
+                .{ lvl, since_ts, limit_n },
+            );
+            defer rows.deinit();
+            for (rows.items) |row| {
+                try result.append(.{
+                    .id = std.fmt.parseInt(i64, row.get(0) orelse "0", 10) catch 0,
+                    .ts = std.fmt.parseInt(i64, row.get(1) orelse "0", 10) catch 0,
+                    .level = try allocator.dupe(u8, row.get(2) orelse "info"),
+                    .category = try allocator.dupe(u8, row.get(3) orelse "system"),
+                    .message = try allocator.dupe(u8, row.get(4) orelse ""),
+                    .metadata = try allocator.dupe(u8, row.get(5) orelse ""),
+                });
+            }
+        } else {
+            var rows = try self.sqlite_db.query(
+                allocator,
+                "SELECT id, ts, level, category, message, COALESCE(metadata,'') FROM events WHERE ts >= ?1 ORDER BY ts DESC LIMIT ?2",
+                .{ since_ts, limit_n },
+            );
+            defer rows.deinit();
+            for (rows.items) |row| {
+                try result.append(.{
+                    .id = std.fmt.parseInt(i64, row.get(0) orelse "0", 10) catch 0,
+                    .ts = std.fmt.parseInt(i64, row.get(1) orelse "0", 10) catch 0,
+                    .level = try allocator.dupe(u8, row.get(2) orelse "info"),
+                    .category = try allocator.dupe(u8, row.get(3) orelse "system"),
+                    .message = try allocator.dupe(u8, row.get(4) orelse ""),
+                    .metadata = try allocator.dupe(u8, row.get(5) orelse ""),
+                });
+            }
+        }
+
+        return result.toOwnedSlice();
+    }
+
     // --- Pipeline Tasks ---
 
     pub fn createPipelineTask(self: *Db, title: []const u8, description: []const u8, repo_path: []const u8, created_by: []const u8, notify_chat: []const u8) !i64 {
@@ -588,7 +710,9 @@ pub const Db = struct {
             "INSERT INTO pipeline_tasks (title, description, repo_path, created_by, notify_chat) VALUES (?1, ?2, ?3, ?4, ?5)",
             .{ title, description, repo_path, created_by, notify_chat },
         );
-        return self.sqlite_db.lastInsertRowId();
+        const id = self.sqlite_db.lastInsertRowId();
+        self.logEvent("info", "pipeline", title[0..@min(title.len, 200)], "created");
+        return id;
     }
 
     pub fn getNextPipelineTask(self: *Db, allocator: std.mem.Allocator) !?PipelineTask {
@@ -664,6 +788,10 @@ pub const Db = struct {
             "UPDATE pipeline_tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
             .{ status, task_id },
         );
+        var buf: [64]u8 = undefined;
+        const meta = std.fmt.bufPrint(&buf, "task_id={d}", .{task_id}) catch "";
+        const level: []const u8 = if (std.mem.eql(u8, status, "failed")) "error" else "info";
+        self.logEvent(level, "pipeline", status, meta);
     }
 
     pub fn updateTaskBranch(self: *Db, task_id: i64, branch: []const u8) !void {
