@@ -197,6 +197,23 @@ pub const Db = struct {
             \\);
         );
 
+        try self.sqlite_db.exec(
+            \\CREATE TABLE IF NOT EXISTS chat_agent_runs (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  jid TEXT NOT NULL,
+            \\  status TEXT NOT NULL DEFAULT 'running',
+            \\  transport TEXT DEFAULT '',
+            \\  original_id TEXT DEFAULT '',
+            \\  trigger_msg_id TEXT DEFAULT '',
+            \\  folder TEXT DEFAULT '',
+            \\  output TEXT DEFAULT '',
+            \\  new_session_id TEXT DEFAULT '',
+            \\  last_msg_timestamp TEXT DEFAULT '',
+            \\  started_at TEXT DEFAULT (datetime('now')),
+            \\  completed_at TEXT
+            \\);
+        );
+
         // For fresh installs, mark schema as current so ALTER migrations are skipped.
         try self.initSchemaVersion();
         // For existing databases, run any new ALTER TABLE migrations.
@@ -235,6 +252,7 @@ pub const Db = struct {
             "ALTER TABLE task_outputs ADD COLUMN raw_stream TEXT DEFAULT ''",
             "CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, repo_path TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', rationale TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'proposed', created_at TEXT DEFAULT (datetime('now')))",
             "UPDATE proposals SET status = 'proposed' WHERE status = 'pending'",
+            "CREATE TABLE IF NOT EXISTS chat_agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', transport TEXT DEFAULT '', original_id TEXT DEFAULT '', trigger_msg_id TEXT DEFAULT '', folder TEXT DEFAULT '', output TEXT DEFAULT '', new_session_id TEXT DEFAULT '', last_msg_timestamp TEXT DEFAULT '', started_at TEXT DEFAULT (datetime('now')), completed_at TEXT)",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -380,6 +398,121 @@ pub const Db = struct {
             "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
             .{ key, value },
         );
+    }
+
+    // --- Chat Agent Runs ---
+
+    pub fn createChatAgentRun(self: *Db, jid: []const u8, transport: []const u8, original_id: []const u8, trigger_msg_id: []const u8, folder: []const u8) !i64 {
+        try self.sqlite_db.execute(
+            "INSERT INTO chat_agent_runs (jid, status, transport, original_id, trigger_msg_id, folder) VALUES (?1, 'running', ?2, ?3, ?4, ?5)",
+            .{ jid, transport, original_id, trigger_msg_id, folder },
+        );
+        return self.sqlite_db.lastInsertRowId();
+    }
+
+    pub fn completeChatAgentRun(self: *Db, run_id: i64, output: []const u8, new_session_id: []const u8, last_msg_ts: []const u8, success: bool) !void {
+        const status = if (success) "completed" else "failed";
+        try self.sqlite_db.execute(
+            "UPDATE chat_agent_runs SET status = ?1, output = ?2, new_session_id = ?3, last_msg_timestamp = ?4, completed_at = datetime('now') WHERE id = ?5",
+            .{ status, output, new_session_id, last_msg_ts, run_id },
+        );
+    }
+
+    pub fn markChatAgentRunDelivered(self: *Db, run_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE chat_agent_runs SET status = 'delivered' WHERE id = ?1",
+            .{run_id},
+        );
+    }
+
+    pub const ChatAgentRun = struct {
+        id: i64,
+        jid: []const u8,
+        status: []const u8,
+        transport: []const u8,
+        original_id: []const u8,
+        trigger_msg_id: []const u8,
+        folder: []const u8,
+        output: []const u8,
+        new_session_id: []const u8,
+        last_msg_timestamp: []const u8,
+    };
+
+    pub fn getUndeliveredRuns(self: *Db, allocator: std.mem.Allocator) ![]ChatAgentRun {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, jid, status, transport, original_id, trigger_msg_id, folder, output, COALESCE(new_session_id, ''), COALESCE(last_msg_timestamp, '') FROM chat_agent_runs WHERE status IN ('completed', 'failed')",
+            .{},
+        );
+        defer rows.deinit();
+
+        var runs = std.ArrayList(ChatAgentRun).init(allocator);
+        for (rows.items) |row| {
+            try runs.append(.{
+                .id = std.fmt.parseInt(i64, row.get(0) orelse "0", 10) catch 0,
+                .jid = try allocator.dupe(u8, row.get(1) orelse ""),
+                .status = try allocator.dupe(u8, row.get(2) orelse ""),
+                .transport = try allocator.dupe(u8, row.get(3) orelse ""),
+                .original_id = try allocator.dupe(u8, row.get(4) orelse ""),
+                .trigger_msg_id = try allocator.dupe(u8, row.get(5) orelse ""),
+                .folder = try allocator.dupe(u8, row.get(6) orelse ""),
+                .output = try allocator.dupe(u8, row.get(7) orelse ""),
+                .new_session_id = try allocator.dupe(u8, row.get(8) orelse ""),
+                .last_msg_timestamp = try allocator.dupe(u8, row.get(9) orelse ""),
+            });
+        }
+        return runs.toOwnedSlice();
+    }
+
+    pub fn abandonRunningAgents(self: *Db) !void {
+        try self.sqlite_db.execute(
+            "UPDATE chat_agent_runs SET status = 'abandoned', completed_at = datetime('now') WHERE status = 'running'",
+            .{},
+        );
+    }
+
+    pub const UnansweredEntry = struct { jid: []const u8, last_user_ts: []const u8 };
+
+    pub fn getUnansweredMessages(self: *Db, allocator: std.mem.Allocator, max_age_s: i64) ![]UnansweredEntry {
+        var results = std.ArrayList(UnansweredEntry).init(allocator);
+
+        // For each registered group, find the latest user message and latest bot message
+        var groups = try self.sqlite_db.query(allocator, "SELECT jid FROM registered_groups", .{});
+        defer groups.deinit();
+
+        for (groups.items) |grow| {
+            const jid = grow.get(0) orelse continue;
+
+            // Latest user message timestamp
+            var user_rows = try self.sqlite_db.query(allocator,
+                "SELECT timestamp FROM messages WHERE chat_jid = ?1 AND is_bot_message = 0 ORDER BY timestamp DESC LIMIT 1",
+                .{jid},
+            );
+            defer user_rows.deinit();
+            const user_ts = if (user_rows.items.len > 0) user_rows.items[0].get(0) orelse "" else "";
+            if (user_ts.len == 0) continue;
+
+            // Latest bot message timestamp
+            var bot_rows = try self.sqlite_db.query(allocator,
+                "SELECT timestamp FROM messages WHERE chat_jid = ?1 AND is_bot_message = 1 ORDER BY timestamp DESC LIMIT 1",
+                .{jid},
+            );
+            defer bot_rows.deinit();
+            const bot_ts = if (bot_rows.items.len > 0) bot_rows.items[0].get(0) orelse "" else "";
+
+            // If no bot reply, or user message is newer than bot reply
+            const unanswered = bot_ts.len == 0 or std.mem.order(u8, user_ts, bot_ts) == .gt;
+            if (!unanswered) continue;
+
+            // Check age — skip messages older than max_age_s
+            _ = max_age_s; // TODO: parse ISO timestamp and compare with now
+
+            try results.append(.{
+                .jid = try allocator.dupe(u8, jid),
+                .last_user_ts = try allocator.dupe(u8, user_ts),
+            });
+        }
+        return results.toOwnedSlice();
     }
 
     // --- Pipeline Tasks ---

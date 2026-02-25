@@ -109,6 +109,7 @@ const AgentOutcome = struct {
     new_session_id: ?[]const u8,
     success: bool,
     last_msg_timestamp: []const u8,
+    run_id: i64 = 0,
 
     fn deinit(self: *AgentOutcome, allocator: std.mem.Allocator) void {
         allocator.free(self.output);
@@ -128,6 +129,8 @@ const AgentContext = struct {
     oauth_token: []const u8,
     assistant_name: []const u8,
     last_msg_timestamp: []const u8,
+    run_id: i64 = 0,
+    db: ?*Db = null,
 
     fn deinit(self: *AgentContext) void {
         self.allocator.free(self.jid);
@@ -579,6 +582,80 @@ pub fn main() !void {
         }
     }
 
+    // ── Startup Recovery ─────────────────────────────────────────────────
+    // Mark any in-flight agent runs from previous instance as abandoned
+    db.abandonRunningAgents() catch {};
+
+    // Deliver any completed-but-undelivered agent runs from previous instance
+    {
+        const undelivered = db.getUndeliveredRuns(allocator) catch &[_]Db.ChatAgentRun{};
+        for (undelivered) |run| {
+            const transport: Transport = if (std.mem.eql(u8, run.transport, "telegram"))
+                .telegram
+            else if (std.mem.eql(u8, run.transport, "whatsapp"))
+                .whatsapp
+            else if (std.mem.eql(u8, run.transport, "discord"))
+                .discord
+            else
+                .web;
+
+            if (std.mem.eql(u8, run.status, "completed") and run.output.len > 0) {
+                // Store bot message
+                db.storeMessage(.{
+                    .id = std.fmt.allocPrint(allocator, "bot-recovery-{d}", .{run.id}) catch continue,
+                    .chat_jid = run.jid,
+                    .sender = "borg",
+                    .sender_name = config.assistant_name,
+                    .content = run.output,
+                    .timestamp = formatTimestamp(allocator, std.time.timestamp()) catch continue,
+                    .is_from_me = true,
+                    .is_bot_message = true,
+                }) catch {};
+
+                sender.send(transport, run.original_id, run.output, if (run.trigger_msg_id.len > 0) run.trigger_msg_id else null);
+
+                if (run.new_session_id.len > 0) {
+                    db.setSession(run.folder, run.new_session_id) catch {};
+                }
+                std.log.info("Recovered undelivered response for {s}", .{run.jid});
+            }
+            db.markChatAgentRunDelivered(run.id) catch {};
+        }
+        if (undelivered.len > 0) allocator.free(undelivered);
+    }
+
+    // Re-trigger unanswered messages from before the crash
+    if (db.getUnansweredMessages(allocator, 300)) |unanswered| {
+        for (unanswered) |entry| {
+            std.log.info("Found unanswered message in {s}, will re-trigger", .{entry.jid});
+            // Find the group's transport
+            const group_info = for (groups_list.items) |g| {
+                if (std.mem.eql(u8, g.jid, entry.jid)) break g;
+            } else continue;
+
+            const transport: Transport = if (std.mem.startsWith(u8, entry.jid, "tg:"))
+                .telegram
+            else if (std.mem.startsWith(u8, entry.jid, "whatsapp:"))
+                .whatsapp
+            else if (std.mem.startsWith(u8, entry.jid, "discord:"))
+                .discord
+            else
+                .web;
+
+            // Trigger collection with immediate deadline so it spawns on first tick
+            if (gm.onTrigger(entry.jid, "recovery", group_info.jid, transport, &config)) {
+                gm.mu.lock();
+                if (gm.states.getPtr(entry.jid)) |state| {
+                    state.collect_deadline_ms = 0; // expire immediately
+                }
+                gm.mu.unlock();
+            }
+            allocator.free(entry.jid);
+            allocator.free(entry.last_user_ts);
+        }
+        allocator.free(unanswered);
+    } else |_| {}
+
     std.log.info("Borg {s} online | assistant: {s} | groups: {d}", .{ version, config.assistant_name, groups_list.items.len });
 
     // ── Main Loop ───────────────────────────────────────────────────────
@@ -852,6 +929,16 @@ fn spawnAgentForGroup(
     const session_dir = try std.fmt.bufPrint(&session_dir_buf, "data/sessions/{s}", .{group.folder});
     std.fs.cwd().makePath(session_dir) catch {};
 
+    // Record agent run in DB (ACID — survives restart)
+    const trigger_id = info.trigger_msg_id orelse "";
+    const run_id = db.createChatAgentRun(
+        info.jid,
+        @tagName(info.transport),
+        info.original_id,
+        trigger_id,
+        group.folder,
+    ) catch 0;
+
     // Build heap-allocated agent context (owned by the thread)
     const ctx = try allocator.create(AgentContext);
     ctx.* = .{
@@ -864,6 +951,8 @@ fn spawnAgentForGroup(
         .oauth_token = try allocator.dupe(u8, config.oauth_token),
         .assistant_name = try allocator.dupe(u8, config.assistant_name),
         .last_msg_timestamp = try allocator.dupe(u8, pending[pending.len - 1].timestamp),
+        .run_id = run_id,
+        .db = db,
     };
 
     // Spawn thread
@@ -887,6 +976,10 @@ fn agentThreadFn(ctx: *AgentContext, gm: *GroupManager) void {
 
     const outcome = agentThreadInner(ctx) catch |err| {
         std.log.err("Agent error for {s}: {}", .{ ctx.jid, err });
+        // Persist failure to DB
+        if (ctx.db) |db| {
+            db.completeChatAgentRun(ctx.run_id, "", "", ctx.last_msg_timestamp, false) catch {};
+        }
         const err_outcome = ctx.allocator.create(AgentOutcome) catch return;
         err_outcome.* = .{
             .output = ctx.allocator.dupe(u8, "") catch {
@@ -899,10 +992,22 @@ fn agentThreadFn(ctx: *AgentContext, gm: *GroupManager) void {
                 ctx.allocator.destroy(err_outcome);
                 return;
             },
+            .run_id = ctx.run_id,
         };
         gm.setOutcome(ctx.jid, err_outcome);
         return;
     };
+
+    // Persist outcome to DB before signaling in-memory
+    if (ctx.db) |db| {
+        db.completeChatAgentRun(
+            ctx.run_id,
+            outcome.output,
+            outcome.new_session_id orelse "",
+            outcome.last_msg_timestamp,
+            outcome.success,
+        ) catch {};
+    }
 
     gm.setOutcome(ctx.jid, outcome);
 }
@@ -973,6 +1078,7 @@ fn agentThreadInner(ctx: *AgentContext) !*AgentOutcome {
         .new_session_id = result.new_session_id,
         .success = exit_code == 0 or result.output.len > 0,
         .last_msg_timestamp = try ctx.allocator.dupe(u8, ctx.last_msg_timestamp),
+        .run_id = ctx.run_id,
     };
 
     return outcome;
@@ -989,12 +1095,6 @@ fn deliverOutcome(
     defer d.outcome.deinit(allocator);
 
     if (d.outcome.success) {
-        // Update last agent timestamp
-        {
-            // TODO: this is a bit of a hack - we access the state directly
-            // but the phase is already COOLDOWN so no contention
-        }
-
         if (d.outcome.new_session_id) |new_sid| {
             db.setSession(d.folder, new_sid) catch {};
         }
@@ -1015,6 +1115,11 @@ fn deliverOutcome(
         }
     } else {
         sender.send(d.transport, d.original_id, "Sorry, I encountered an error processing your message.", d.trigger_msg_id);
+    }
+
+    // Mark run as delivered in DB
+    if (d.outcome.run_id > 0) {
+        db.markChatAgentRunDelivered(d.outcome.run_id) catch {};
     }
 }
 
