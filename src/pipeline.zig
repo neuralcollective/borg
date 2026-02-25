@@ -399,7 +399,7 @@ pub const Pipeline = struct {
             \\Output ONLY the task blocks above. No other text.
         ) catch return 0;
 
-        const result = self.spawnAgent(.manager, prompt_buf.items, repo_path, null) catch |err| {
+        const result = self.spawnAgent(.manager, prompt_buf.items, repo_path, null, 0) catch |err| {
             std.log.err("Seed agent failed for {s}: {}", .{ repo_path, err });
             return 0;
         };
@@ -510,6 +510,10 @@ pub const Pipeline = struct {
         if (rm.success()) {
             std.log.info("Cleaned up worktree for task #{d}", .{task.id});
         }
+        // Clean up per-task session dir
+        const sess_path = std.fmt.allocPrint(self.allocator, "store/sessions/task-{d}", .{task.id}) catch return;
+        defer self.allocator.free(sess_path);
+        std.fs.cwd().deleteTree(sess_path) catch {};
     }
 
     fn runSpecPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
@@ -542,7 +546,7 @@ pub const Pipeline = struct {
             \\Do NOT modify any source files. Only write spec.md.
         );
 
-        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, null) catch |err| {
+        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, null, task.id) catch |err| {
             try self.failTask(task, "manager agent spawn failed", @errorName(err));
             return;
         };
@@ -592,7 +596,7 @@ pub const Pipeline = struct {
         );
 
         const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-        const result = self.spawnAgent(.qa, prompt_buf.items, wt_path, resume_sid) catch |err| {
+        const result = self.spawnAgent(.qa, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
             try self.failTask(task, "QA agent spawn failed", @errorName(err));
             return;
         };
@@ -663,7 +667,7 @@ pub const Pipeline = struct {
         }
 
         const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-        const result = self.spawnAgent(.worker, prompt_buf.items, wt_path, resume_sid) catch |err| {
+        const result = self.spawnAgent(.worker, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
             try self.failTask(task, "worker agent spawn failed", @errorName(err));
             return;
         };
@@ -808,9 +812,9 @@ pub const Pipeline = struct {
                 try w.writeAll("\n```");
             }
 
-            const resume_sid = if (task.session_id.len > 0) task.session_id else null;
             // Run on host (not Docker) — rebase needs full git repo access via .git dir
-            const result = self.spawnAgentHost(prompt_buf.items, wt_path, resume_sid) catch |err| {
+            // Always start fresh (null session) — Docker session IDs don't exist in host session store
+            const result = self.spawnAgentHost(prompt_buf.items, wt_path, null) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
@@ -1288,7 +1292,7 @@ pub const Pipeline = struct {
         }, prompt);
     }
 
-    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult {
+    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const tmp = arena.allocator();
@@ -1297,6 +1301,13 @@ pub const Pipeline = struct {
 
         const system_prompt = getSystemPrompt(persona);
         const allowed_tools = getAllowedTools(persona);
+
+        // Per-task session dir — persists Claude sessions across container runs
+        const session_dir = try std.fmt.allocPrint(tmp, "store/sessions/task-{d}/.claude", .{task_id});
+        std.fs.cwd().makePath(session_dir) catch |err| {
+            std.log.warn("Failed to create session dir {s}: {}", .{ session_dir, err });
+        };
+        const abs_session_dir = try std.fs.cwd().realpathAlloc(tmp, session_dir);
 
         // Build JSON input
         var input = std.ArrayList(u8).init(tmp);
@@ -1342,11 +1353,13 @@ pub const Pipeline = struct {
             "NODE_OPTIONS=--max-old-space-size=384",
         };
 
-        // Bind mount worktree directory into container
+        // Bind mounts: worktree + persistent session dir
         var bind_buf: [1024]u8 = undefined;
         const repo_bind = try std.fmt.bufPrint(&bind_buf, "{s}:/workspace/repo", .{workdir});
+        var sess_bind_buf: [1024]u8 = undefined;
+        const sess_bind = try std.fmt.bufPrint(&sess_bind_buf, "{s}:/home/node/.claude", .{abs_session_dir});
 
-        const binds = [_][]const u8{repo_bind};
+        const binds = [_][]const u8{ repo_bind, sess_bind };
 
         std.log.info("Spawning {s} agent: {s}", .{ @tagName(persona), container_name });
 
