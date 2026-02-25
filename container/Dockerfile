@@ -9,8 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
-RUN bun install -g @anthropic-ai/claude-code@latest
+# Install Claude Code CLI and make it accessible to all users
+RUN bun install -g @anthropic-ai/claude-code@latest \
+    && chmod o+x /root \
+    && chmod -R o+rx /root/.bun
 
 # Create workspace dirs
 RUN mkdir -p /workspace/group /workspace/ipc /home/bun/.claude
