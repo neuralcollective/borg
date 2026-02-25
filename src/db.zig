@@ -392,12 +392,13 @@ pub const Db = struct {
             allocator,
             \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '')
             \\FROM pipeline_tasks
-            \\WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')
+            \\WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')
             \\ORDER BY
             \\  CASE status
             \\    WHEN 'rebase' THEN 0
             \\    WHEN 'retry' THEN 1
             \\    WHEN 'impl' THEN 2
+            \\    WHEN 'qa_fix' THEN 3
             \\    WHEN 'qa' THEN 3
             \\    WHEN 'spec' THEN 4
             \\    WHEN 'backlog' THEN 5
@@ -417,12 +418,13 @@ pub const Db = struct {
             allocator,
             \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '')
             \\FROM pipeline_tasks
-            \\WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')
+            \\WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')
             \\ORDER BY
             \\  CASE status
             \\    WHEN 'rebase' THEN 0
             \\    WHEN 'retry' THEN 1
             \\    WHEN 'impl' THEN 2
+            \\    WHEN 'qa_fix' THEN 3
             \\    WHEN 'qa' THEN 3
             \\    WHEN 'spec' THEN 4
             \\    WHEN 'backlog' THEN 5
@@ -552,7 +554,7 @@ pub const Db = struct {
         var rows = try self.sqlite_db.query(self.allocator,
             \\SELECT
             \\  COUNT(*) AS total,
-            \\  COUNT(CASE WHEN status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase') THEN 1 END) AS active,
+            \\  COUNT(CASE WHEN status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase') THEN 1 END) AS active,
             \\  COUNT(CASE WHEN status = 'merged' THEN 1 END) AS merged,
             \\  COUNT(CASE WHEN status = 'failed' THEN 1 END) AS failed
             \\FROM pipeline_tasks
@@ -571,7 +573,7 @@ pub const Db = struct {
     pub fn getActivePipelineTaskCount(self: *Db) !i64 {
         var rows = try self.sqlite_db.query(
             self.allocator,
-            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')",
+            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')",
             .{},
         );
         defer rows.deinit();

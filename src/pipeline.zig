@@ -390,12 +390,12 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.raw_stream);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
+        self.db.storeTaskOutputFull(0, "seed", result.output, result.raw_stream, 0) catch {};
+
         if (result.output.len == 0) {
-            std.log.warn("Seed agent returned empty output for {s}", .{repo_path});
+            std.log.warn("Seed agent returned empty output for {s} ({d} raw bytes)", .{ repo_path, result.raw_stream.len });
             return 0;
         }
-
-        self.db.storeTaskOutputFull(0, "seed", result.output, result.raw_stream, 0) catch {};
 
         // Parse TASK_START/TASK_END blocks from output
         var created: u32 = 0;
@@ -453,12 +453,12 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.raw_stream);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
+        self.db.storeTaskOutputFull(0, "seed_proposals", result.output, result.raw_stream, 0) catch {};
+
         if (result.output.len == 0) {
-            std.log.warn("Seed proposal agent returned empty output for {s}", .{repo_path});
+            std.log.warn("Seed proposal agent returned empty output for {s} ({d} raw bytes)", .{ repo_path, result.raw_stream.len });
             return 0;
         }
-
-        self.db.storeTaskOutputFull(0, "seed_proposals", result.output, result.raw_stream, 0) catch {};
 
         var created: u32 = 0;
         var remaining = result.output;
