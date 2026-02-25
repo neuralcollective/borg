@@ -298,8 +298,19 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
   return null;
 }
 
+function downloadText(text: string, filename: string) {
+  const blob = new Blob([text], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
   const [viewMode, setViewMode] = useState<"summary" | "trace" | "diff">("summary");
+  const [copied, setCopied] = useState(false);
 
   const labeled = useMemo(() => {
     const phaseCounts: Record<string, number> = {};
@@ -353,31 +364,55 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
           {selected.exit_code === 0 ? "passed" : `exit ${selected.exit_code}`}
         </span>
         {!isDiff && (
-          <div className="ml-auto flex rounded-md border border-white/[0.08]">
-            <button
-              onClick={() => setViewMode("summary")}
-              className={cn(
-                "px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
-                viewMode === "summary"
-                  ? "bg-white/[0.08] text-zinc-200"
-                  : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              Summary
-            </button>
-            {hasStream && (
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex rounded-md border border-white/[0.08]">
               <button
-                onClick={() => setViewMode("trace")}
+                onClick={() => setViewMode("summary")}
                 className={cn(
-                  "border-l border-white/[0.08] px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
-                  viewMode === "trace"
+                  "px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
+                  viewMode === "summary"
                     ? "bg-white/[0.08] text-zinc-200"
                     : "text-zinc-500 hover:text-zinc-300"
                 )}
               >
-                Full Trace
+                Summary
               </button>
-            )}
+              {hasStream && (
+                <button
+                  onClick={() => setViewMode("trace")}
+                  className={cn(
+                    "border-l border-white/[0.08] px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
+                    viewMode === "trace"
+                      ? "bg-white/[0.08] text-zinc-200"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  Full Trace
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                const text = viewMode === "trace" && hasStream ? selected.raw_stream : selected.output;
+                navigator.clipboard.writeText(text || "").then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                });
+              }}
+              className="rounded-md px-2 py-1 md:py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button
+              onClick={() => {
+                const text = viewMode === "trace" && hasStream ? selected.raw_stream : selected.output;
+                const ext = viewMode === "trace" && hasStream ? "ndjson" : "txt";
+                downloadText(text || "", `task-${selected.id}-${selected.phase}.${ext}`);
+              }}
+              className="rounded-md px-2 py-1 md:py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
+            >
+              Download
+            </button>
           </div>
         )}
       </div>
