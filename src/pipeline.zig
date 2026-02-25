@@ -16,7 +16,7 @@ const REMOTE_CHECK_INTERVAL_S = 300; // Check for remote updates every 5 minutes
 const AGENT_TIMEOUT_S = 600;
 const MAX_BACKLOG_SIZE = 5;
 const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
-const MAX_PARALLEL_AGENTS = 4;
+const MAX_PARALLEL_AGENTS = 2; // fallback; overridden by config.max_pipeline_agents
 
 pub const AgentPersona = enum {
     manager,
@@ -238,7 +238,7 @@ pub const Pipeline = struct {
         }
 
         for (tasks) |task| {
-            if (self.active_agents.load(.acquire) >= MAX_PARALLEL_AGENTS) break;
+            if (self.active_agents.load(.acquire) >= self.config.max_pipeline_agents) break;
 
             // Skip if already in-flight
             {
