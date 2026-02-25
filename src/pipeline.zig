@@ -285,7 +285,7 @@ pub const Pipeline = struct {
             self.runSpecPhase(task) catch |err| {
                 std.log.err("Task #{d} spec error: {}", .{ task.id, err });
             };
-        } else if (std.mem.eql(u8, task.status, "qa")) {
+        } else if (std.mem.eql(u8, task.status, "qa") or std.mem.eql(u8, task.status, "qa_fix")) {
             self.runQaPhase(task) catch |err| {
                 std.log.err("Task #{d} qa error: {}", .{ task.id, err });
             };
@@ -605,7 +605,13 @@ pub const Pipeline = struct {
 
         try w.writeAll(prompts.qa_phase);
 
-        const resume_sid = if (task.session_id.len > 0) task.session_id else null;
+        if (std.mem.eql(u8, task.status, "qa_fix") and task.last_error.len > 0) {
+            const err_tail = if (task.last_error.len > 3000) task.last_error[task.last_error.len - 3000 ..] else task.last_error;
+            try w.print(prompts.qa_fix_fmt, .{err_tail});
+        }
+
+        // qa_fix gets a fresh session since the impl agent overwrote the QA session
+        const resume_sid = if (std.mem.eql(u8, task.status, "qa_fix")) null else if (task.session_id.len > 0) task.session_id else null;
         const result = self.spawnAgent(.qa, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
             try self.failTask(task, "QA agent spawn failed", @errorName(err));
             return;
@@ -622,20 +628,31 @@ pub const Pipeline = struct {
 
         var add = try wt_git.addAll();
         defer add.deinit();
-        var commit = try wt_git.commit("test: add tests from QA agent");
+        const is_fix = std.mem.eql(u8, task.status, "qa_fix");
+        const commit_msg = if (is_fix) "test: fix tests from QA agent" else "test: add tests from QA agent";
+        var commit = try wt_git.commit(commit_msg);
         defer commit.deinit();
 
         if (!commit.success()) {
-            try self.failTask(task, "QA produced no test files", commit.stderr);
+            if (is_fix) {
+                try self.failTask(task, "QA fix produced no changes", commit.stderr);
+            } else {
+                try self.failTask(task, "QA produced no test files", commit.stderr);
+            }
             return;
         }
 
+        const diff_phase = if (is_fix) "qa_fix_diff" else "qa_diff";
         var qa_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
         defer qa_diff.deinit();
-        if (qa_diff.success()) self.db.storeTaskOutput(task.id, "qa_diff", qa_diff.stdout, 0) catch {};
+        if (qa_diff.success()) self.db.storeTaskOutput(task.id, diff_phase, qa_diff.stdout, 0) catch {};
 
         try self.db.updateTaskStatus(task.id, "impl");
-        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: tests written, starting implementation", .{task.id}));
+        if (is_fix) {
+            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: QA fixed tests, retrying implementation", .{task.id}));
+        } else {
+            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: tests written, starting implementation", .{task.id}));
+        }
     }
 
     fn runImplPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
@@ -739,8 +756,17 @@ pub const Pipeline = struct {
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
                 try self.db.incrementTaskAttempt(task.id);
-                try self.db.updateTaskStatus(task.id, "retry");
-                std.log.info("Task #{d} test failed, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+
+                // After 2+ impl attempts, check if the error is in test files themselves
+                if (task.attempt >= 1 and isTestFileError(test_result.stderr, test_result.stdout)) {
+                    try self.db.updateTaskStatus(task.id, "qa_fix");
+                    self.db.setTaskSessionId(task.id, "") catch {};
+                    std.log.info("Task #{d} test error appears to be in test files, routing to QA fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts });
+                    self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} test code has bugs — sending back to QA for fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts }));
+                } else {
+                    try self.db.updateTaskStatus(task.id, "retry");
+                    std.log.info("Task #{d} test failed, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+                }
             }
         }
     }
@@ -1528,6 +1554,24 @@ pub const Pipeline = struct {
     }
 
     // --- Helpers ---
+
+    fn isTestFileError(stderr: []const u8, stdout: []const u8) bool {
+        const outputs = [_][]const u8{ stderr, stdout };
+        for (&outputs) |output| {
+            if (output.len == 0) continue;
+            // Compile errors referencing test files (e.g. "src/foo_test.zig:12:5: error:")
+            if (std.mem.indexOf(u8, output, "_test.zig") != null and
+                std.mem.indexOf(u8, output, "error:") != null) return true;
+            if (std.mem.indexOf(u8, output, "/tests/") != null and
+                std.mem.indexOf(u8, output, "error:") != null) return true;
+            // Segfault during test execution — often test setup (use-after-free, wrong allocator)
+            if (std.mem.indexOf(u8, output, "Segmentation fault") != null) return true;
+            // Zig panic in test code
+            if (std.mem.indexOf(u8, output, "panicked") != null and
+                std.mem.indexOf(u8, output, "_test") != null) return true;
+        }
+        return false;
+    }
 
     fn failTask(self: *Pipeline, task: db_mod.PipelineTask, reason: []const u8, detail: []const u8) !void {
         try self.db.incrementTaskAttempt(task.id);
