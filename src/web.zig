@@ -227,6 +227,10 @@ pub const WebServer = struct {
             self.serveQueueJson(stream);
         } else if (std.mem.eql(u8, path, "/api/status")) {
             self.serveStatusJson(stream);
+        } else if (std.mem.startsWith(u8, path, "/api/proposals/") and std.mem.eql(u8, method, "POST")) {
+            self.handleProposalAction(stream, path);
+        } else if (std.mem.startsWith(u8, path, "/api/proposals")) {
+            self.serveProposalsJson(stream, path);
         } else {
             self.serveStatic(stream, path);
         }
@@ -671,6 +675,110 @@ pub const WebServer = struct {
 
         w.writeAll("]") catch return;
         self.sendJson(stream, buf.items);
+    }
+
+    fn serveProposalsJson(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        // Parse optional ?status= filter from path
+        const status_filter: ?[]const u8 = if (std.mem.indexOf(u8, path, "?status=")) |pos|
+            path[pos + "?status=".len ..]
+        else
+            null;
+
+        const proposals = self.db.getProposals(alloc, status_filter, 100) catch {
+            self.serve500(stream);
+            return;
+        };
+
+        var buf = std.ArrayList(u8).init(alloc);
+        const w = buf.writer();
+        w.writeAll("[") catch return;
+
+        for (proposals, 0..) |p, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            var esc_title: [512]u8 = undefined;
+            var esc_desc: [4096]u8 = undefined;
+            var esc_rat: [4096]u8 = undefined;
+            var esc_repo: [512]u8 = undefined;
+            const title = jsonEscape(&esc_title, p.title);
+            const desc = jsonEscape(&esc_desc, p.description);
+            const rat = jsonEscape(&esc_rat, p.rationale);
+            const repo = jsonEscape(&esc_repo, p.repo_path);
+            w.print("{{\"id\":{d},\"repo_path\":\"{s}\",\"title\":\"{s}\",\"description\":\"{s}\",\"rationale\":\"{s}\",\"status\":\"{s}\",\"created_at\":\"{s}\"}}", .{
+                p.id,
+                repo,
+                title,
+                desc,
+                rat,
+                p.status,
+                p.created_at,
+            }) catch return;
+        }
+
+        w.writeAll("]") catch return;
+        self.sendJson(stream, buf.items);
+    }
+
+    fn handleProposalAction(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        // /api/proposals/:id/approve or /api/proposals/:id/dismiss
+        const rest = path["/api/proposals/".len..];
+        const slash_pos = std.mem.indexOf(u8, rest, "/") orelse {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"missing action\"}");
+            return;
+        };
+        const id_str = rest[0..slash_pos];
+        const action = rest[slash_pos + 1 ..];
+        const proposal_id = std.fmt.parseInt(i64, id_str, 10) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid proposal ID\"}");
+            return;
+        };
+
+        if (std.mem.eql(u8, action, "approve")) {
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const alloc = arena.allocator();
+
+            const proposal = self.db.getProposal(alloc, proposal_id) catch {
+                self.serve500(stream);
+                return;
+            } orelse {
+                self.serveJsonResponse(stream, 404, "{\"error\":\"proposal not found\"}");
+                return;
+            };
+
+            const task_id = self.db.createPipelineTask(
+                proposal.title,
+                proposal.description,
+                proposal.repo_path,
+                "proposal",
+                "",
+            ) catch {
+                self.serve500(stream);
+                return;
+            };
+
+            self.db.updateProposalStatus(proposal_id, "approved") catch {
+                self.serve500(stream);
+                return;
+            };
+
+            var buf: [128]u8 = undefined;
+            const resp = std.fmt.bufPrint(&buf, "{{\"status\":\"approved\",\"task_id\":{d}}}", .{task_id}) catch return;
+            self.serveJsonResponse(stream, 200, resp);
+            std.log.info("Proposal #{d} approved → task #{d}: {s}", .{ proposal_id, task_id, proposal.title });
+        } else if (std.mem.eql(u8, action, "dismiss")) {
+            self.db.updateProposalStatus(proposal_id, "dismissed") catch {
+                self.serve500(stream);
+                return;
+            };
+            self.serveJsonResponse(stream, 200, "{\"status\":\"dismissed\"}");
+            std.log.info("Proposal #{d} dismissed", .{proposal_id});
+        } else {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"unknown action\"}");
+        }
     }
 
     fn serveStatusJson(self: *WebServer, stream: std.net.Stream) void {

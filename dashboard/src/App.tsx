@@ -6,12 +6,14 @@ import { TaskList } from "@/components/task-list";
 import { TaskDetail } from "@/components/task-detail";
 import { LogViewer } from "@/components/log-viewer";
 import { QueuePanel } from "@/components/queue-panel";
+import { ProposalsPanel } from "@/components/proposals-panel";
 import { ChatPanel } from "@/components/chat-panel";
 
 export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<"queue" | "proposals">("queue");
   const { logs, connected } = useLogs();
 
   return (
@@ -39,9 +41,37 @@ export default function App() {
           )}
         </div>
 
-        {/* Center bottom: Queue */}
-        <div className="overflow-hidden">
-          <QueuePanel repoFilter={repoFilter} />
+        {/* Center bottom: Queue / Proposals */}
+        <div className="flex flex-col overflow-hidden">
+          <div className="flex shrink-0 border-b border-white/[0.06]">
+            <button
+              onClick={() => setBottomTab("queue")}
+              className={`px-4 py-1.5 text-[11px] font-medium transition-colors ${
+                bottomTab === "queue"
+                  ? "text-zinc-200 border-b border-zinc-200"
+                  : "text-zinc-500 hover:text-zinc-400"
+              }`}
+            >
+              Queue
+            </button>
+            <button
+              onClick={() => setBottomTab("proposals")}
+              className={`px-4 py-1.5 text-[11px] font-medium transition-colors ${
+                bottomTab === "proposals"
+                  ? "text-zinc-200 border-b border-zinc-200"
+                  : "text-zinc-500 hover:text-zinc-400"
+              }`}
+            >
+              Proposals
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            {bottomTab === "queue" ? (
+              <QueuePanel repoFilter={repoFilter} />
+            ) : (
+              <ProposalsPanel repoFilter={repoFilter} />
+            )}
+          </div>
         </div>
 
         {/* Right: Chat (when open) */}

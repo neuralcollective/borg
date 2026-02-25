@@ -52,8 +52,18 @@ pub const QueueEntry = struct {
     pr_number: i64,
 };
 
+pub const Proposal = struct {
+    id: i64,
+    repo_path: []const u8,
+    title: []const u8,
+    description: []const u8,
+    rationale: []const u8,
+    status: []const u8, // pending, approved, dismissed
+    created_at: []const u8,
+};
+
 // Must match the number of entries in runMigrations()
-const SCHEMA_VERSION = "4";
+const SCHEMA_VERSION = "5";
 
 pub const Db = struct {
     sqlite_db: sqlite.Database,
@@ -170,6 +180,17 @@ pub const Db = struct {
         try self.sqlite_db.exec(
             \\CREATE INDEX IF NOT EXISTS idx_task_outputs_task ON task_outputs(task_id);
         );
+        try self.sqlite_db.exec(
+            \\CREATE TABLE IF NOT EXISTS proposals (
+            \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+            \\  repo_path TEXT NOT NULL,
+            \\  title TEXT NOT NULL,
+            \\  description TEXT NOT NULL DEFAULT '',
+            \\  rationale TEXT NOT NULL DEFAULT '',
+            \\  status TEXT NOT NULL DEFAULT 'pending',
+            \\  created_at TEXT DEFAULT (datetime('now'))
+            \\);
+        );
 
         // For fresh installs, mark schema as current so ALTER migrations are skipped.
         try self.initSchemaVersion();
@@ -207,6 +228,7 @@ pub const Db = struct {
             "ALTER TABLE integration_queue ADD COLUMN repo_path TEXT DEFAULT ''",
             "ALTER TABLE integration_queue ADD COLUMN pr_number INTEGER DEFAULT 0",
             "ALTER TABLE task_outputs ADD COLUMN raw_stream TEXT DEFAULT ''",
+            "CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, repo_path TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', rationale TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT (datetime('now')))",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -699,6 +721,73 @@ pub const Db = struct {
             });
         }
         return outputs.toOwnedSlice();
+    }
+
+    // --- Proposals ---
+
+    pub fn createProposal(self: *Db, repo_path: []const u8, title: []const u8, description: []const u8, rationale: []const u8) !i64 {
+        try self.sqlite_db.execute(
+            "INSERT INTO proposals (repo_path, title, description, rationale) VALUES (?1, ?2, ?3, ?4)",
+            .{ repo_path, title, description, rationale },
+        );
+        return self.sqlite_db.lastInsertRowId();
+    }
+
+    pub fn getProposals(self: *Db, allocator: std.mem.Allocator, status_filter: ?[]const u8, limit: i64) ![]Proposal {
+        var rows = if (status_filter) |sf|
+            try self.sqlite_db.query(
+                allocator,
+                "SELECT id, repo_path, title, description, rationale, status, created_at FROM proposals WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
+                .{ sf, limit },
+            )
+        else
+            try self.sqlite_db.query(
+                allocator,
+                "SELECT id, repo_path, title, description, rationale, status, created_at FROM proposals ORDER BY created_at DESC LIMIT ?1",
+                .{limit},
+            );
+        defer rows.deinit();
+
+        var proposals = std.ArrayList(Proposal).init(allocator);
+        for (rows.items) |row| {
+            try proposals.append(Proposal{
+                .id = row.getInt(0) orelse 0,
+                .repo_path = try allocator.dupe(u8, row.get(1) orelse ""),
+                .title = try allocator.dupe(u8, row.get(2) orelse ""),
+                .description = try allocator.dupe(u8, row.get(3) orelse ""),
+                .rationale = try allocator.dupe(u8, row.get(4) orelse ""),
+                .status = try allocator.dupe(u8, row.get(5) orelse "pending"),
+                .created_at = try allocator.dupe(u8, row.get(6) orelse ""),
+            });
+        }
+        return proposals.toOwnedSlice();
+    }
+
+    pub fn updateProposalStatus(self: *Db, proposal_id: i64, status: []const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE proposals SET status = ?1 WHERE id = ?2",
+            .{ status, proposal_id },
+        );
+    }
+
+    pub fn getProposal(self: *Db, allocator: std.mem.Allocator, proposal_id: i64) !?Proposal {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, repo_path, title, description, rationale, status, created_at FROM proposals WHERE id = ?1",
+            .{proposal_id},
+        );
+        defer rows.deinit();
+        if (rows.items.len == 0) return null;
+        const row = rows.items[0];
+        return Proposal{
+            .id = row.getInt(0) orelse 0,
+            .repo_path = try allocator.dupe(u8, row.get(1) orelse ""),
+            .title = try allocator.dupe(u8, row.get(2) orelse ""),
+            .description = try allocator.dupe(u8, row.get(3) orelse ""),
+            .rationale = try allocator.dupe(u8, row.get(4) orelse ""),
+            .status = try allocator.dupe(u8, row.get(5) orelse "pending"),
+            .created_at = try allocator.dupe(u8, row.get(6) orelse ""),
+        };
     }
 };
 

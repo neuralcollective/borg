@@ -305,12 +305,12 @@ pub const Pipeline = struct {
         const pending_integration = try self.db.getQueuedIntegrationCount();
         if (pending_integration > 0) return;
 
-        // Rotate seed mode: 0=refactoring, 1=bug hunting, 2=test coverage
+        // Rotate seed mode: 0=refactoring, 1=bug hunting, 2=test coverage, 3=feature discovery
         const seed_mode = blk: {
             const mode_str = self.db.getState(self.allocator, "seed_mode") catch null;
             const prev: u32 = if (mode_str) |s| std.fmt.parseInt(u32, s, 10) catch 0 else 0;
             if (mode_str) |s| self.allocator.free(s);
-            const next = (prev + 1) % 3;
+            const next = (prev + 1) % 4;
             var next_buf: [4]u8 = undefined;
             const next_str = std.fmt.bufPrint(&next_buf, "{d}", .{next}) catch "0";
             self.db.setState("seed_mode", next_str) catch {};
@@ -321,6 +321,7 @@ pub const Pipeline = struct {
             0 => "refactoring",
             1 => "bug audit",
             2 => "test coverage",
+            3 => "feature discovery",
             else => "refactoring",
         };
         self.last_seed_ts = now;
@@ -372,7 +373,7 @@ pub const Pipeline = struct {
                 \\
                 \\For each real issue found, create a task to fix it. Skip false positives.
             ) catch return 0,
-            else => w.writeAll(
+            2 => w.writeAll(
                 \\Analyze this codebase and identify gaps in test coverage.
                 \\Focus on finding untested code paths that matter for correctness.
                 \\
@@ -384,6 +385,32 @@ pub const Pipeline = struct {
                 \\Create tasks to add specific test cases. Each task should target one
                 \\function or module, not broad "add tests everywhere" tasks.
             ) catch return 0,
+            else => {
+                // Feature discovery mode — creates proposals, not tasks
+                w.writeAll(
+                    \\Analyze this codebase and suggest 1-3 concrete features or capabilities
+                    \\that would meaningfully improve the project. Think about what's missing,
+                    \\what would make it more useful, or what natural next steps are.
+                    \\
+                    \\Good proposals: add a specific API endpoint, support a new integration,
+                    \\add a monitoring capability, improve UX for a specific workflow.
+                    \\
+                    \\Bad proposals: vague improvements, rewrites, adding frameworks/dependencies,
+                    \\things that duplicate existing functionality.
+                    \\
+                    \\For each proposal, output EXACTLY this format:
+                    \\
+                    \\PROPOSAL_START
+                    \\TITLE: <short imperative title, max 80 chars>
+                    \\DESCRIPTION: <2-4 sentences explaining the feature>
+                    \\RATIONALE: <1-2 sentences on why this would be valuable>
+                    \\PROPOSAL_END
+                    \\
+                    \\Output ONLY the proposal blocks above. No other text.
+                ) catch return 0;
+
+                return self.seedRepoProposals(repo_path, prompt_buf.items);
+            },
         }
 
         w.writeAll(
@@ -454,6 +481,57 @@ pub const Pipeline = struct {
         }
 
         return created;
+    }
+
+    fn seedRepoProposals(self: *Pipeline, repo_path: []const u8, prompt: []const u8) u32 {
+        const result = self.spawnAgent(.manager, prompt, repo_path, null, 0) catch |err| {
+            std.log.err("Feature discovery agent failed for {s}: {}", .{ repo_path, err });
+            return 0;
+        };
+        defer self.allocator.free(result.output);
+        defer self.allocator.free(result.raw_stream);
+        defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        self.db.storeTaskOutputFull(0, "feature_discovery", result.output, result.raw_stream, 0) catch {};
+
+        var created: u32 = 0;
+        var remaining = result.output;
+        while (std.mem.indexOf(u8, remaining, "PROPOSAL_START")) |start_pos| {
+            remaining = remaining[start_pos + "PROPOSAL_START".len ..];
+            const end_pos = std.mem.indexOf(u8, remaining, "PROPOSAL_END") orelse break;
+            const block = std.mem.trim(u8, remaining[0..end_pos], &[_]u8{ ' ', '\t', '\n', '\r' });
+            remaining = remaining[end_pos + "PROPOSAL_END".len ..];
+
+            var title: []const u8 = "";
+            var description: []const u8 = "";
+            var rationale: []const u8 = "";
+
+            var lines = std.mem.splitScalar(u8, block, '\n');
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
+                if (std.mem.startsWith(u8, trimmed, "TITLE:")) {
+                    title = std.mem.trim(u8, trimmed["TITLE:".len..], &[_]u8{ ' ', '\t' });
+                } else if (std.mem.startsWith(u8, trimmed, "DESCRIPTION:")) {
+                    description = std.mem.trim(u8, trimmed["DESCRIPTION:".len..], &[_]u8{ ' ', '\t' });
+                } else if (std.mem.startsWith(u8, trimmed, "RATIONALE:")) {
+                    rationale = std.mem.trim(u8, trimmed["RATIONALE:".len..], &[_]u8{ ' ', '\t' });
+                }
+            }
+
+            if (title.len == 0) continue;
+
+            _ = self.db.createProposal(repo_path, title, description, rationale) catch |err| {
+                std.log.err("Failed to create proposal: {}", .{err});
+                continue;
+            };
+            created += 1;
+            std.log.info("Proposal: {s}", .{title});
+        }
+
+        if (created > 0) {
+            std.log.info("Created {d} feature proposal(s) for {s}", .{ created, repo_path });
+        }
+        return 0; // proposals don't count toward task backlog
     }
 
     fn worktreePath(self: *Pipeline, repo_path: []const u8, task_id: i64) ![]const u8 {

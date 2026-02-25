@@ -61,6 +61,16 @@ export function repoName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+export interface Proposal {
+  id: number;
+  repo_path: string;
+  title: string;
+  description: string;
+  rationale: string;
+  status: string;
+  created_at: string;
+}
+
 export interface LogEvent {
   level: string;
   message: string;

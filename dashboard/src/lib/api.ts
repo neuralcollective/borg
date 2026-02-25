@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useCallback, useState } from "react";
-import type { Task, TaskDetail, QueueEntry, Status, LogEvent } from "./types";
+import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -39,6 +39,25 @@ export function useStatus() {
     queryFn: () => fetchJson("/api/status"),
     refetchInterval: 3000,
   });
+}
+
+export function useProposals() {
+  return useQuery<Proposal[]>({
+    queryKey: ["proposals"],
+    queryFn: () => fetchJson("/api/proposals"),
+    refetchInterval: 5000,
+  });
+}
+
+export async function approveProposal(id: number): Promise<{ task_id: number }> {
+  const res = await fetch(`/api/proposals/${id}/approve`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function dismissProposal(id: number): Promise<void> {
+  const res = await fetch(`/api/proposals/${id}/dismiss`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
 }
 
 export function useLogs() {
