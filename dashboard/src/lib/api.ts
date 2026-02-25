@@ -108,7 +108,9 @@ export interface StreamEvent {
 export function useTaskStream(taskId: number | null, active: boolean) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
   const esRef = useRef<EventSource | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!taskId || !active) {
@@ -127,6 +129,9 @@ export function useTaskStream(taskId: number | null, active: boolean) {
         if (obj.type === "stream_end") {
           setStreaming(false);
           es.close();
+          esRef.current = null;
+          // Agent finished — retry in case it restarts
+          retryTimer.current = setTimeout(() => setRetryKey((k) => k + 1), 5000);
           return;
         }
         setEvents((prev) => {
@@ -140,20 +145,18 @@ export function useTaskStream(taskId: number | null, active: boolean) {
 
     es.onerror = () => {
       setStreaming(false);
-      setTimeout(() => {
-        if (active && esRef.current === es) {
-          // reconnect
-          es.close();
-          esRef.current = null;
-        }
-      }, 3000);
+      es.close();
+      esRef.current = null;
+      // Reconnect after 3s
+      retryTimer.current = setTimeout(() => setRetryKey((k) => k + 1), 3000);
     };
 
     return () => {
       es.close();
       esRef.current = null;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
     };
-  }, [taskId, active]);
+  }, [taskId, active, retryKey]);
 
   return { events, streaming };
 }
