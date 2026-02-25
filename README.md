@@ -41,7 +41,10 @@ Dashboard at `http://127.0.0.1:3131`. Send `/register` in a Telegram group, then
 | `CONTINUOUS_MODE` | `false` | Auto-seed tasks when idle |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model for all agents |
 | `RELEASE_INTERVAL_MINS` | `180` | Min interval between integration runs |
+| `AGENT_TIMEOUT_S` | `1000` | Max agent runtime in seconds |
+| `MAX_CONCURRENT_AGENTS` | `4` | Global concurrent agent limit |
 | `MAX_PIPELINE_AGENTS` | `4` | Max concurrent pipeline agents |
+| `PIPELINE_ADMIN_CHAT` | — | Telegram chat ID for pipeline notifications |
 
 ### Merge Modes
 
