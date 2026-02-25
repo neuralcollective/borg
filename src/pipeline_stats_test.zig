@@ -126,11 +126,11 @@ test "AC2: all tasks failed" {
 
 // =============================================================================
 // AC3: Active status list matches — the IN clause must use the same six
-// statuses: 'backlog', 'spec', 'qa', 'impl', 'retry', 'rebase'
+// statuses: 'backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase'
 // =============================================================================
 
-test "AC3: each of the six active statuses is counted as active" {
-    const active_statuses = [_][]const u8{ "backlog", "spec", "qa", "impl", "retry", "rebase" };
+test "AC3: each of the seven active statuses is counted as active" {
+    const active_statuses = [_][]const u8{ "backlog", "spec", "qa", "qa_fix", "impl", "retry", "rebase" };
 
     for (active_statuses) |status| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -435,7 +435,7 @@ test "consistency: stats match individual COUNT queries" {
     defer total_rows.deinit();
     const expected_total = total_rows.items[0].getInt(0) orelse 0;
 
-    var active_rows = try db.sqlite_db.query(alloc, "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')", .{});
+    var active_rows = try db.sqlite_db.query(alloc, "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')", .{});
     defer active_rows.deinit();
     const expected_active = active_rows.items[0].getInt(0) orelse 0;
 
