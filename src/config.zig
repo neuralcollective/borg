@@ -839,6 +839,186 @@ test "parseWatchedRepos: primary auto_merge=false" {
     try std.testing.expect(repos[0].auto_merge == false);
 }
 
+// ── findEnvValue / getEnv new tests ────────────────────────────────────
+
+test "findEnvValue value containing equals sign returns full remainder" {
+    const alloc = std.testing.allocator;
+    const v = findEnvValue(alloc, "TOKEN=abc=def", "TOKEN");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("abc=def", v.?);
+}
+
+test "getEnv basic KEY=VALUE from env content" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "KEY=value", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("value", v.?);
+}
+
+test "getEnv skips hash comment lines" {
+    const alloc = std.testing.allocator;
+    const env = "# this is a comment\nREAL=found";
+
+    const v1 = getEnv(alloc, env, "REAL");
+    defer if (v1) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("found", v1.?);
+
+    // The comment marker itself must not be treated as a key
+    const v2 = getEnv(alloc, env, "#");
+    defer if (v2) |val| alloc.free(val);
+    try std.testing.expect(v2 == null);
+}
+
+test "getEnv skips blank lines" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "\n\nKEY=value", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("value", v.?);
+}
+
+test "getEnv value with embedded equals sign" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "TOKEN=abc=def", "TOKEN");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("abc=def", v.?);
+}
+
+test "getEnv returns null when key absent from content and process env" {
+    const alloc = std.testing.allocator;
+    // Key is absent from content; also guaranteed absent from process env.
+    const v = getEnv(alloc, "OTHER=x", "BORG_TEST_MISSING_KEY_XYZ_11");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expect(v == null);
+}
+
+test "getEnv env file value takes precedence when key exists in content" {
+    const alloc = std.testing.allocator;
+    // Key unlikely to be in process env; verifies the file-content path.
+    const v = getEnv(alloc, "BORG_TEST_KEY_11=from_file", "BORG_TEST_KEY_11");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("from_file", v.?);
+}
+
+// ── findEnvValue / getEnv edge-case tests ──────────────────────────────
+
+test "findEnvValue empty value returns empty string" {
+    const alloc = std.testing.allocator;
+    const v = findEnvValue(alloc, "KEY=", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("", v.?);
+}
+
+test "getEnv empty value returns empty string not null" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "KEY=", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("", v.?);
+}
+
+test "findEnvValue multiple equals returns everything after first" {
+    const alloc = std.testing.allocator;
+    const v = findEnvValue(alloc, "A=x=y=z", "A");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("x=y=z", v.?);
+}
+
+test "getEnv multiple equals returns everything after first" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "A=x=y=z", "A");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("x=y=z", v.?);
+}
+
+test "findEnvValue indented comment line is skipped" {
+    const alloc = std.testing.allocator;
+    const env = "  # indented comment\nKEY=ok";
+    const v = findEnvValue(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("ok", v.?);
+    // The indented comment marker must not be treated as a key
+    try std.testing.expect(findEnvValue(alloc, env, "#") == null);
+}
+
+test "findEnvValue windows line endings strip carriage return" {
+    const alloc = std.testing.allocator;
+    const env = "KEY=hello\r\nOTHER=world";
+    const v = findEnvValue(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    // The \r must be stripped; returned value must be just "hello"
+    try std.testing.expectEqualStrings("hello", v.?);
+}
+
+test "getEnv windows line endings strip carriage return" {
+    const alloc = std.testing.allocator;
+    const env = "KEY=hello\r\nOTHER=world";
+    const v = getEnv(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("hello", v.?);
+}
+
+test "findEnvValue quoted value containing equals sign" {
+    const alloc = std.testing.allocator;
+    const v = findEnvValue(alloc, "KEY=\"a=b\"", "KEY");
+    defer if (v) |val| alloc.free(val);
+    // Quotes are stripped and embedded = is preserved
+    try std.testing.expectEqualStrings("a=b", v.?);
+}
+
+test "getEnv quoted value containing equals sign" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "KEY=\"a=b\"", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("a=b", v.?);
+}
+
+test "findEnvValue key with surrounding whitespace matches trimmed key" {
+    const alloc = std.testing.allocator;
+    const v = findEnvValue(alloc, "KEY =value", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("value", v.?);
+}
+
+test "getEnv key with surrounding whitespace matches trimmed key" {
+    const alloc = std.testing.allocator;
+    const v = getEnv(alloc, "KEY =value", "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("value", v.?);
+}
+
+test "findEnvValue duplicate key returns first match" {
+    const alloc = std.testing.allocator;
+    const env = "KEY=first\nKEY=second";
+    const v = findEnvValue(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("first", v.?);
+}
+
+test "getEnv duplicate key returns first match" {
+    const alloc = std.testing.allocator;
+    const env = "KEY=first\nKEY=second";
+    const v = getEnv(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("first", v.?);
+}
+
+test "findEnvValue line consisting only of equals is skipped" {
+    const alloc = std.testing.allocator;
+    // A line that is just "=" produces an empty key. Real lookups use non-empty
+    // keys, so the "=" line must not interfere with subsequent real-key parsing.
+    const env = "=\nKEY=ok";
+    const v = findEnvValue(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("ok", v.?);
+}
+
+test "getEnv line consisting only of equals is safely skipped" {
+    const alloc = std.testing.allocator;
+    const env = "=\nKEY=ok";
+    const v = getEnv(alloc, env, "KEY");
+    defer if (v) |val| alloc.free(val);
+    try std.testing.expectEqualStrings("ok", v.?);
+}
+
 // ── getTestCmdForRepo tests ────────────────────────────────────────────
 
 fn testMinimalConfig(pipeline_test_cmd: []const u8, watched_repos: []RepoConfig) Config {
