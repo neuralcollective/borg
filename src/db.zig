@@ -1177,8 +1177,8 @@ pub const Db = struct {
             .{},
         ) catch return 0;
         defer rows.deinit();
-        const row = rows.next() orelse return 0;
-        return row.getInt(0) orelse 0;
+        if (rows.items.len == 0) return 0;
+        return rows.items[0].getInt(0) orelse 0;
     }
 
     pub fn updateProposalTriage(self: *Db, proposal_id: i64, score: i64, impact: i64, feasibility: i64, risk: i64, effort: i64, reasoning: []const u8) !void {
