@@ -16,12 +16,12 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
   const pending = (repoFilter
     ? proposals?.filter((p) => p.repo_path === repoFilter)
     : proposals
-  )?.filter((p) => p.status === "pending") ?? [];
+  )?.filter((p) => p.status === "proposed") ?? [];
 
   const handled = (repoFilter
     ? proposals?.filter((p) => p.repo_path === repoFilter)
     : proposals
-  )?.filter((p) => p.status !== "pending") ?? [];
+  )?.filter((p) => p.status !== "proposed") ?? [];
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["proposals"] });
@@ -66,7 +66,7 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
               >
                 <span className="font-mono text-[10px] text-zinc-600">#{p.id}</span>
                 <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20">
-                  pending
+                  proposed
                 </span>
                 {p.repo_path && (
                   <span className="shrink-0 rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium text-zinc-500">

@@ -129,15 +129,6 @@ pub const seed_tests =
 pub const seed_features =
     \\Suggest 1-3 concrete features that would meaningfully improve this project.
     \\
-    \\For each proposal, output EXACTLY this format:
-    \\
-    \\PROPOSAL_START
-    \\TITLE: <short imperative title, max 80 chars>
-    \\DESCRIPTION: <2-4 sentences explaining the feature>
-    \\RATIONALE: <1-2 sentences on why this would be valuable>
-    \\PROPOSAL_END
-    \\
-    \\Output ONLY the proposal blocks above. No other text.
 ;
 
 pub const seed_architecture =
@@ -148,12 +139,27 @@ pub const seed_architecture =
     \\
     \\Each proposal should be a multi-day project, not a quick fix.
     \\
+;
+
+pub const seed_cross_pollinate =
+    \\Study this codebase to understand its patterns, features, and architecture.
+    \\Then suggest 1-3 ideas inspired by what you see here that could be adapted
+    \\or ported to a DIFFERENT project (described below). The ideas don't need to
+    \\be direct copies — they can be inspired by patterns, approaches, or
+    \\capabilities you observe here.
+    \\
+    \\Target project to generate proposals for:
+    \\
+;
+
+pub const seed_proposal_suffix =
+    \\
     \\For each proposal, output EXACTLY this format:
     \\
     \\PROPOSAL_START
     \\TITLE: <short imperative title, max 80 chars>
-    \\DESCRIPTION: <3-6 sentences explaining the change and its scope>
-    \\RATIONALE: <2-3 sentences on why this is worth the effort>
+    \\DESCRIPTION: <2-4 sentences explaining the feature or change>
+    \\RATIONALE: <1-2 sentences on why this would be valuable>
     \\PROPOSAL_END
     \\
     \\Output ONLY the proposal blocks above. No other text.

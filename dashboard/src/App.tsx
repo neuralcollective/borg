@@ -37,7 +37,7 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<"queue" | "proposals">("queue");
+  const [bottomTab, setBottomTab] = useState<"queue" | "proposals">("proposals");
   const [mobileTab, setMobileTab] = useState<MobileTab>("tasks");
   const { logs, connected } = useLogs();
   const isMobile = useIsMobile();
@@ -70,16 +70,6 @@ export default function App() {
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <div className="flex shrink-0 border-b border-white/[0.06]">
                 <button
-                  onClick={() => setBottomTab("queue")}
-                  className={`flex-1 py-2.5 text-[13px] font-medium transition-colors ${
-                    bottomTab === "queue"
-                      ? "text-zinc-200 border-b-2 border-blue-400"
-                      : "text-zinc-500"
-                  }`}
-                >
-                  Queue
-                </button>
-                <button
                   onClick={() => setBottomTab("proposals")}
                   className={`flex-1 py-2.5 text-[13px] font-medium transition-colors ${
                     bottomTab === "proposals"
@@ -88,6 +78,16 @@ export default function App() {
                   }`}
                 >
                   Proposals
+                </button>
+                <button
+                  onClick={() => setBottomTab("queue")}
+                  className={`flex-1 py-2.5 text-[13px] font-medium transition-colors ${
+                    bottomTab === "queue"
+                      ? "text-zinc-200 border-b-2 border-blue-400"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  Queue
                 </button>
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
@@ -156,16 +156,6 @@ export default function App() {
         <div className="flex flex-col overflow-hidden">
           <div className="flex shrink-0 border-b border-white/[0.06]">
             <button
-              onClick={() => setBottomTab("queue")}
-              className={`px-4 py-1.5 text-[11px] font-medium transition-colors ${
-                bottomTab === "queue"
-                  ? "text-zinc-200 border-b border-zinc-200"
-                  : "text-zinc-500 hover:text-zinc-400"
-              }`}
-            >
-              Queue
-            </button>
-            <button
               onClick={() => setBottomTab("proposals")}
               className={`px-4 py-1.5 text-[11px] font-medium transition-colors ${
                 bottomTab === "proposals"
@@ -174,6 +164,16 @@ export default function App() {
               }`}
             >
               Proposals
+            </button>
+            <button
+              onClick={() => setBottomTab("queue")}
+              className={`px-4 py-1.5 text-[11px] font-medium transition-colors ${
+                bottomTab === "queue"
+                  ? "text-zinc-200 border-b border-zinc-200"
+                  : "text-zinc-500 hover:text-zinc-400"
+              }`}
+            >
+              Queue
             </button>
           </div>
           <div className="flex-1 overflow-hidden">

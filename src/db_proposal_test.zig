@@ -70,15 +70,15 @@ test "AC3: getProposal maps all seven fields correctly" {
     try std.testing.expectEqualStrings("T",       p.title);
     try std.testing.expectEqualStrings("D",       p.description);
     try std.testing.expectEqualStrings("R",       p.rationale);
-    try std.testing.expectEqualStrings("pending", p.status);
+    try std.testing.expectEqualStrings("proposed", p.status);
     try std.testing.expect(p.created_at.len > 0);
 }
 
 // =============================================================================
-// AC4 — New proposals default to "pending" status
+// AC4 — New proposals default to "proposed" status
 // =============================================================================
 
-test "AC4: new proposal has status 'pending' by default" {
+test "AC4: new proposal has status 'proposed' by default" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var db = try Db.init(arena.allocator(), ":memory:");
@@ -86,7 +86,7 @@ test "AC4: new proposal has status 'pending' by default" {
 
     const id = try db.createProposal("/repo", "My Proposal", "desc", "why");
     const p = (try db.getProposal(arena.allocator(), id)).?;
-    try std.testing.expectEqualStrings("pending", p.status);
+    try std.testing.expectEqualStrings("proposed", p.status);
 }
 
 // =============================================================================
@@ -137,7 +137,7 @@ test "AC5: getProposals returns empty slice on empty DB" {
 // AC6 — getProposals with status_filter returns only matching rows
 // =============================================================================
 
-test "AC6: getProposals filters by 'pending' status" {
+test "AC6: getProposals filters by 'proposed' status" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var db = try Db.init(arena.allocator(), ":memory:");
@@ -148,10 +148,10 @@ test "AC6: getProposals filters by 'pending' status" {
     const id3 = try db.createProposal("/r", "P3", "d", "r");
     try db.updateProposalStatus(id3, "approved");
 
-    const pending = try db.getProposals(arena.allocator(), "pending", 10);
-    try std.testing.expectEqual(@as(usize, 2), pending.len);
-    for (pending) |p| {
-        try std.testing.expectEqualStrings("pending", p.status);
+    const proposed = try db.getProposals(arena.allocator(), "proposed", 10);
+    try std.testing.expectEqual(@as(usize, 2), proposed.len);
+    for (proposed) |p| {
+        try std.testing.expectEqualStrings("proposed", p.status);
     }
 }
 
@@ -215,10 +215,10 @@ test "AC7: getProposals returns proposals in newest-first order" {
 }
 
 // =============================================================================
-// AC8 — updateProposalStatus: pending → approved
+// AC8 — updateProposalStatus: proposed → approved
 // =============================================================================
 
-test "AC8: updateProposalStatus transitions pending to approved" {
+test "AC8: updateProposalStatus transitions proposed to approved" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var db = try Db.init(arena.allocator(), ":memory:");
@@ -232,10 +232,10 @@ test "AC8: updateProposalStatus transitions pending to approved" {
 }
 
 // =============================================================================
-// AC9 — updateProposalStatus: pending → dismissed
+// AC9 — updateProposalStatus: proposed → dismissed
 // =============================================================================
 
-test "AC9: updateProposalStatus transitions pending to dismissed" {
+test "AC9: updateProposalStatus transitions proposed to dismissed" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var db = try Db.init(arena.allocator(), ":memory:");
@@ -264,7 +264,7 @@ test "AC10: updateProposalStatus only changes the targeted proposal" {
     try db.updateProposalStatus(id_a, "approved");
 
     const b = (try db.getProposal(arena.allocator(), id_b)).?;
-    try std.testing.expectEqualStrings("pending", b.status);
+    try std.testing.expectEqualStrings("proposed", b.status);
 }
 
 // =============================================================================
@@ -289,7 +289,7 @@ test "AC11: updateProposalStatus called twice with same value does not error" {
 // AC12 — Full lifecycle: create → retrieve → transition → re-retrieve
 // =============================================================================
 
-test "AC12: full proposal lifecycle create→pending→approved→dismissed" {
+test "AC12: full proposal lifecycle create→proposed→approved→dismissed" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var db = try Db.init(arena.allocator(), ":memory:");
@@ -301,7 +301,7 @@ test "AC12: full proposal lifecycle create→pending→approved→dismissed" {
     // Verify initial state via getProposal
     {
         const p = (try db.getProposal(arena.allocator(), id)).?;
-        try std.testing.expectEqualStrings("pending", p.status);
+        try std.testing.expectEqualStrings("proposed", p.status);
     }
 
     // Transition to approved
@@ -327,15 +327,15 @@ test "AC12: full proposal lifecycle create→pending→approved→dismissed" {
         try std.testing.expectEqualStrings("dismissed", p.status);
     }
 
-    // Appears in dismissed filter, absent from pending and approved filters
+    // Appears in dismissed filter, absent from proposed and approved filters
     {
         const dismissed_list = try db.getProposals(arena.allocator(), "dismissed", 10);
         try std.testing.expectEqual(@as(usize, 1), dismissed_list.len);
         try std.testing.expectEqual(id, dismissed_list[0].id);
     }
     {
-        const pending_list = try db.getProposals(arena.allocator(), "pending", 10);
-        try std.testing.expectEqual(@as(usize, 0), pending_list.len);
+        const proposed_list = try db.getProposals(arena.allocator(), "proposed", 10);
+        try std.testing.expectEqual(@as(usize, 0), proposed_list.len);
     }
     {
         const approved_list = try db.getProposals(arena.allocator(), "approved", 10);
