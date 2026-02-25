@@ -87,6 +87,7 @@ pub const DirectAgentConfig = struct {
     assistant_name: []const u8,
     workdir: []const u8 = "",
     allowed_tools: ?[]const u8 = null,
+    system_prompt: []const u8 = "",
 };
 
 /// Run claude CLI directly as a subprocess (no Docker container).
@@ -143,8 +144,12 @@ pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt
 
     try child.spawn();
 
-    // Write prompt to stdin
+    // Write prompt to stdin (prepend system prompt if set)
     if (child.stdin) |stdin| {
+        if (config.system_prompt.len > 0) {
+            stdin.writeAll(config.system_prompt) catch {};
+            stdin.writeAll("\n\n---\n\n") catch {};
+        }
         stdin.writeAll(prompt) catch {};
         stdin.close();
         child.stdin = null;

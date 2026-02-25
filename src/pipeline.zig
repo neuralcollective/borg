@@ -1761,6 +1761,9 @@ pub const Pipeline = struct {
     fn spawnAgentHost(self: *Pipeline, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
         self.config.refreshOAuthToken();
 
+        const suffix = self.config.getSystemPromptSuffix(self.allocator);
+        defer if (suffix.len > 0) self.allocator.free(suffix);
+
         // Same session dir as Docker (store/sessions/task-{id}/) so host
         // agents can resume from Docker sessions and vice versa
         const session_home = try std.fmt.allocPrint(self.allocator, "store/sessions/task-{d}", .{task_id});
@@ -1790,6 +1793,7 @@ pub const Pipeline = struct {
             .assistant_name = "",
             .workdir = workdir,
             .allowed_tools = prompts.getAllowedTools(.worker),
+            .system_prompt = suffix,
         }, prompt, cb);
     }
 
