@@ -8,6 +8,7 @@ const main = @import("main.zig");
 const TaskStream = struct {
     clients: std.ArrayList(std.net.Stream),
     line_buf: std.ArrayList(u8),
+    history: std.ArrayList(u8),
 };
 
 const LogEntry = struct {
@@ -152,20 +153,27 @@ pub const WebServer = struct {
 
     /// Broadcast raw NDJSON chunk to SSE clients watching a task.
     /// Buffers partial lines and sends complete NDJSON lines as SSE events.
+    /// Accumulates history so late-joining clients can catch up.
     pub fn broadcastTaskStream(self: *WebServer, task_id: i64, data: []const u8) void {
         self.task_stream_mu.lock();
         defer self.task_stream_mu.unlock();
 
         const entry = self.task_streams.getPtr(task_id) orelse return;
-        if (entry.clients.items.len == 0) return;
 
         entry.line_buf.appendSlice(data) catch return;
 
-        // Send each complete NDJSON line as an SSE event
         var pos: usize = 0;
         while (std.mem.indexOfScalarPos(u8, entry.line_buf.items, pos, '\n')) |nl| {
             const line = entry.line_buf.items[pos..nl];
             if (line.len > 0) {
+                // Accumulate as pre-formatted SSE (cap at 2MB)
+                if (entry.history.items.len < 2 * 1024 * 1024) {
+                    entry.history.appendSlice("data: ") catch {};
+                    entry.history.appendSlice(line) catch {};
+                    entry.history.appendSlice("\n\n") catch {};
+                }
+
+                // Send to live clients
                 var i: usize = 0;
                 while (i < entry.clients.items.len) {
                     const ok = blk: {
@@ -185,7 +193,6 @@ pub const WebServer = struct {
             pos = nl + 1;
         }
 
-        // Keep unconsumed partial line
         if (pos > 0) {
             const remaining = entry.line_buf.items.len - pos;
             if (remaining > 0) {
@@ -202,6 +209,7 @@ pub const WebServer = struct {
         self.task_streams.put(task_id, .{
             .clients = std.ArrayList(std.net.Stream).init(self.allocator),
             .line_buf = std.ArrayList(u8).init(self.allocator),
+            .history = std.ArrayList(u8).init(self.allocator),
         }) catch {};
     }
 
@@ -217,6 +225,7 @@ pub const WebServer = struct {
             var v = kv.value;
             v.clients.deinit();
             v.line_buf.deinit();
+            v.history.deinit();
         }
     }
 
@@ -238,6 +247,15 @@ pub const WebServer = struct {
             stream.close();
             return;
         };
+
+        // Replay history so late-joining clients see past events
+        if (entry.history.items.len > 0) {
+            stream.writeAll(entry.history.items) catch {
+                stream.close();
+                return;
+            };
+        }
+
         entry.clients.append(stream) catch {
             stream.close();
         };
