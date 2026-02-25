@@ -984,7 +984,11 @@ pub const Pipeline = struct {
             }
         }.lt);
 
-        // 4. Push each branch to origin and create PR if one doesn't exist yet
+        // 4. Push each branch to origin and create PR if one doesn't exist yet.
+        // Track which entries were excluded here so step 5 doesn't try to merge them.
+        var excluded_ids = std.AutoHashMap(i64, void).init(self.allocator);
+        defer excluded_ids.deinit();
+
         for (live.items) |entry| {
             // Reject branches that aren't rebased on top of current main
             var rb_check = git.exec(&.{ "merge-base", "--is-ancestor", "origin/main", entry.branch }) catch null;
@@ -994,6 +998,7 @@ pub const Pipeline = struct {
                     std.log.info("Task #{d}: {s} not rebased on main, sending back to rebase", .{ entry.task_id, entry.branch });
                     try self.db.updateQueueStatus(entry.id, "excluded", "branch not rebased on main");
                     try self.db.updateTaskStatus(entry.task_id, "rebase");
+                    excluded_ids.put(entry.id, {}) catch {};
                     continue;
                 }
             }
@@ -1049,6 +1054,7 @@ pub const Pipeline = struct {
         defer merged.deinit();
 
         for (live.items) |entry| {
+            if (excluded_ids.contains(entry.id)) continue;
             // Check PR exists
             const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
             defer self.allocator.free(view_cmd);
