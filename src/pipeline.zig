@@ -808,10 +808,16 @@ pub const Pipeline = struct {
             self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
         } else {
             if (task.attempt + 1 >= task.max_attempts) {
-                const combined = try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{
-                    test_result.stdout[0..@min(test_result.stdout.len, 2000)],
-                    test_result.stderr[0..@min(test_result.stderr.len, 2000)],
-                });
+                const out = test_result.stdout[0..@min(test_result.stdout.len, 2000)];
+                const err = test_result.stderr[0..@min(test_result.stderr.len, 2000)];
+                const combined = if (out.len > 0 and err.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{ out, err })
+                else if (out.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "{s}", .{out})
+                else if (err.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "{s}", .{err})
+                else
+                    try std.fmt.allocPrint(self.allocator, "tests failed (no output)", .{});
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
                 std.log.warn("Task #{d} exhausted {d} attempts, recycling to backlog", .{ task.id, task.max_attempts });
@@ -978,10 +984,16 @@ pub const Pipeline = struct {
         } else {
             // Tests still fail after rebase — retry if attempts remain
             if (task.attempt + 1 >= task.max_attempts) {
-                const combined = try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{
-                    test_result.stdout[0..@min(test_result.stdout.len, 2000)],
-                    test_result.stderr[0..@min(test_result.stderr.len, 2000)],
-                });
+                const out = test_result.stdout[0..@min(test_result.stdout.len, 2000)];
+                const err = test_result.stderr[0..@min(test_result.stderr.len, 2000)];
+                const combined = if (out.len > 0 and err.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{ out, err })
+                else if (out.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "{s}", .{out})
+                else if (err.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "{s}", .{err})
+                else
+                    try std.fmt.allocPrint(self.allocator, "tests failed (no output)", .{});
                 defer self.allocator.free(combined);
                 try self.db.updateTaskError(task.id, combined);
                 std.log.warn("Task #{d} exhausted {d} rebase attempts, recycling to backlog", .{ task.id, task.max_attempts });
@@ -1155,16 +1167,20 @@ pub const Pipeline = struct {
                 }
             }
 
-            // Track that we just force-pushed this branch — GitHub needs time to compute mergeability
-            freshly_pushed.put(entry.id, {}) catch {};
-
             // Check if PR already exists
             const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number 2>/dev/null", .{entry.branch});
             defer self.allocator.free(view_cmd);
             const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
             defer self.allocator.free(view_result.stdout);
             defer self.allocator.free(view_result.stderr);
-            if (view_result.exit_code == 0 and std.mem.trim(u8, view_result.stdout, &[_]u8{ ' ', '\n' }).len > 0) continue;
+            if (view_result.exit_code == 0 and std.mem.trim(u8, view_result.stdout, &[_]u8{ ' ', '\n' }).len > 0) {
+                // PR exists — check if push actually changed something
+                if (std.mem.indexOf(u8, push.stderr, "Everything up-to-date") == null) {
+                    // Branch was updated, give GitHub time to recompute mergeability
+                    freshly_pushed.put(entry.id, {}) catch {};
+                }
+                continue;
+            }
 
             // Get task title for PR (sanitized for shell double-quote context)
             var title_buf = std.ArrayList(u8).init(self.allocator);
@@ -1202,6 +1218,8 @@ pub const Pipeline = struct {
                 std.log.warn("gh pr create {s}: {s}", .{ entry.branch, err_text });
             } else {
                 std.log.info("Created PR for {s}", .{entry.branch});
+                // New PR — GitHub needs time to compute mergeability
+                freshly_pushed.put(entry.id, {}) catch {};
             }
         }
 
