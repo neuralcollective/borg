@@ -520,20 +520,22 @@ pub const Db = struct {
     };
 
     pub fn getPipelineStats(self: *Db) !PipelineStats {
-        var total_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks", .{});
-        defer total_rows.deinit();
-        var active_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase')", .{});
-        defer active_rows.deinit();
-        var merged_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks WHERE status = 'merged'", .{});
-        defer merged_rows.deinit();
-        var failed_rows = try self.sqlite_db.query(self.allocator, "SELECT COUNT(*) FROM pipeline_tasks WHERE status = 'failed'", .{});
-        defer failed_rows.deinit();
-
+        var rows = try self.sqlite_db.query(self.allocator,
+            \\SELECT
+            \\  COUNT(*) AS total,
+            \\  COUNT(CASE WHEN status IN ('backlog', 'spec', 'qa', 'impl', 'retry', 'rebase') THEN 1 END) AS active,
+            \\  COUNT(CASE WHEN status = 'merged' THEN 1 END) AS merged,
+            \\  COUNT(CASE WHEN status = 'failed' THEN 1 END) AS failed
+            \\FROM pipeline_tasks
+        , .{});
+        defer rows.deinit();
+        if (rows.items.len == 0) return .{ .total = 0, .active = 0, .merged = 0, .failed = 0 };
+        const row = rows.items[0];
         return .{
-            .total = if (total_rows.items.len > 0) total_rows.items[0].getInt(0) orelse 0 else 0,
-            .active = if (active_rows.items.len > 0) active_rows.items[0].getInt(0) orelse 0 else 0,
-            .merged = if (merged_rows.items.len > 0) merged_rows.items[0].getInt(0) orelse 0 else 0,
-            .failed = if (failed_rows.items.len > 0) failed_rows.items[0].getInt(0) orelse 0 else 0,
+            .total = row.getInt(0) orelse 0,
+            .active = row.getInt(1) orelse 0,
+            .merged = row.getInt(2) orelse 0,
+            .failed = row.getInt(3) orelse 0,
         };
     }
 
