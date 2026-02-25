@@ -30,8 +30,11 @@ vendor/sqlite/      # Vendored SQLite amalgamation
 ## Build & Test
 
 ```bash
-zig build              # Build to zig-out/bin/borg
-zig build test         # Run all unit tests
+just t                 # Run all unit tests
+just b                 # Build to zig-out/bin/borg
+just r                 # Build and run
+just dash              # Build dashboard
+just setup             # Full setup (image + sidecar + dashboard + build)
 ```
 
 Requires Zig 0.14.1+. SQLite is vendored (no external deps for the core binary).
