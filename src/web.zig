@@ -368,6 +368,8 @@ pub const WebServer = struct {
             self.serveStatusJson(stream);
         } else if (std.mem.startsWith(u8, path, "/api/events")) {
             self.serveEventsJson(stream, path);
+        } else if (std.mem.eql(u8, path, "/api/proposals/triage") and std.mem.eql(u8, method, "POST")) {
+            self.handleTriageProposals(stream);
         } else if (std.mem.startsWith(u8, path, "/api/proposals/") and std.mem.eql(u8, method, "POST")) {
             self.handleProposalAction(stream, path);
         } else if (std.mem.startsWith(u8, path, "/api/proposals")) {
@@ -870,11 +872,13 @@ pub const WebServer = struct {
             var esc_desc: [4096]u8 = undefined;
             var esc_rat: [4096]u8 = undefined;
             var esc_repo: [512]u8 = undefined;
+            var esc_triage: [4096]u8 = undefined;
             const title = jsonEscape(&esc_title, p.title);
             const desc = jsonEscape(&esc_desc, p.description);
             const rat = jsonEscape(&esc_rat, p.rationale);
             const repo = jsonEscape(&esc_repo, p.repo_path);
-            w.print("{{\"id\":{d},\"repo_path\":\"{s}\",\"title\":\"{s}\",\"description\":\"{s}\",\"rationale\":\"{s}\",\"status\":\"{s}\",\"created_at\":\"{s}\"}}", .{
+            const triage_r = jsonEscape(&esc_triage, p.triage_reasoning);
+            w.print("{{\"id\":{d},\"repo_path\":\"{s}\",\"title\":\"{s}\",\"description\":\"{s}\",\"rationale\":\"{s}\",\"status\":\"{s}\",\"created_at\":\"{s}\",\"triage_score\":{d},\"triage_impact\":{d},\"triage_feasibility\":{d},\"triage_risk\":{d},\"triage_effort\":{d},\"triage_reasoning\":\"{s}\"}}", .{
                 p.id,
                 repo,
                 title,
@@ -882,6 +886,12 @@ pub const WebServer = struct {
                 rat,
                 p.status,
                 p.created_at,
+                p.triage_score,
+                p.triage_impact,
+                p.triage_feasibility,
+                p.triage_risk,
+                p.triage_effort,
+                triage_r,
             }) catch return;
         }
 
@@ -946,6 +956,136 @@ pub const WebServer = struct {
         } else {
             self.serveJsonResponse(stream, 400, "{\"error\":\"unknown action\"}");
         }
+    }
+
+    fn handleTriageProposals(self: *WebServer, stream: std.net.Stream) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const proposals = self.db.getProposals(alloc, "proposed", 100) catch {
+            self.serve500(stream);
+            return;
+        };
+        if (proposals.len == 0) {
+            self.serveJsonResponse(stream, 200, "{\"scored\":0}");
+            return;
+        }
+
+        // Build prompt listing all proposals
+        var prompt_buf = std.ArrayList(u8).init(alloc);
+        const pw = prompt_buf.writer();
+        pw.writeAll(
+            \\Rate each proposal on 4 dimensions (1-5 scale).
+            \\
+            \\Dimensions:
+            \\- impact: How much value does this deliver? (5 = critical fix/feature, 1 = cosmetic)
+            \\- feasibility: How likely is an AI agent to implement this correctly without human help? (5 = trivial, 1 = needs human)
+            \\- risk: How likely to break existing functionality? (5 = very risky, 1 = safe)
+            \\- effort: How many agent cycles will this need? (5 = massive multi-file, 1 = simple one-file)
+            \\
+            \\Overall score formula: (impact * 2 + feasibility * 2 - risk - effort) mapped to 1-10 scale.
+            \\
+            \\Reply with ONLY a JSON array, no markdown fences, no commentary:
+            \\[{"id": <number>, "impact": <1-5>, "feasibility": <1-5>, "risk": <1-5>, "effort": <1-5>, "score": <1-10>, "reasoning": "<one sentence>"}]
+            \\
+            \\Proposals:
+            \\
+        ) catch return;
+
+        for (proposals) |p| {
+            pw.print("- ID {d}: {s}\n  Description: {s}\n  Rationale: {s}\n\n", .{
+                p.id,
+                p.title,
+                if (p.description.len > 0) p.description else "(none)",
+                if (p.rationale.len > 0) p.rationale else "(none)",
+            }) catch return;
+        }
+
+        // Spawn claude CLI for scoring
+        self.config.refreshOAuthToken();
+        var argv = std.ArrayList([]const u8).init(alloc);
+        argv.appendSlice(&.{ "claude", "--print", "--model", "haiku", "--permission-mode", "bypassPermissions" }) catch return;
+        var child = std.process.Child.init(argv.items, alloc);
+        child.stdin_behavior = .Pipe;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+
+        var env = std.process.getEnvMap(alloc) catch {
+            self.serve500(stream);
+            return;
+        };
+        env.put("CLAUDE_CODE_OAUTH_TOKEN", self.config.oauth_token) catch return;
+        child.env_map = &env;
+
+        child.spawn() catch {
+            self.serve500(stream);
+            return;
+        };
+
+        if (child.stdin) |stdin| {
+            stdin.writeAll(prompt_buf.items) catch {};
+            stdin.close();
+            child.stdin = null;
+        }
+
+        var stdout_buf = std.ArrayList(u8).init(alloc);
+        if (child.stdout) |stdout| {
+            var read_buf: [8192]u8 = undefined;
+            while (true) {
+                const n = stdout.read(&read_buf) catch break;
+                if (n == 0) break;
+                stdout_buf.appendSlice(read_buf[0..n]) catch break;
+            }
+        }
+        _ = child.wait() catch {};
+
+        // Parse JSON array from output (skip any leading non-[ text)
+        const output = stdout_buf.items;
+        const arr_start = std.mem.indexOf(u8, output, "[") orelse {
+            std.log.warn("Triage: no JSON array in output ({d} bytes)", .{output.len});
+            self.serveJsonResponse(stream, 500, "{\"error\":\"no scores in output\"}");
+            return;
+        };
+        const arr_end_idx = std.mem.lastIndexOf(u8, output, "]") orelse {
+            self.serveJsonResponse(stream, 500, "{\"error\":\"malformed JSON\"}");
+            return;
+        };
+        const json_slice = output[arr_start .. arr_end_idx + 1];
+
+        var parsed = json_mod.parse(alloc, json_slice) catch {
+            std.log.warn("Triage: JSON parse failed", .{});
+            self.serveJsonResponse(stream, 500, "{\"error\":\"JSON parse failed\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        const items = switch (parsed.value) {
+            .array => |a| a.items,
+            else => {
+                self.serveJsonResponse(stream, 500, "{\"error\":\"expected JSON array\"}");
+                return;
+            },
+        };
+
+        var scored: u32 = 0;
+        for (items) |item| {
+            const p_id = json_mod.getInt(item, "id") orelse continue;
+            const impact = json_mod.getInt(item, "impact") orelse continue;
+            const feasibility = json_mod.getInt(item, "feasibility") orelse continue;
+            const risk = json_mod.getInt(item, "risk") orelse continue;
+            const effort = json_mod.getInt(item, "effort") orelse continue;
+            const score = json_mod.getInt(item, "score") orelse continue;
+            const reasoning = json_mod.getString(item, "reasoning") orelse "";
+
+            self.db.updateProposalTriage(p_id, score, impact, feasibility, risk, effort, reasoning) catch continue;
+            scored += 1;
+        }
+
+        std.log.info("Triage: scored {d}/{d} proposals", .{ scored, proposals.len });
+        var resp_buf: [64]u8 = undefined;
+        const resp = std.fmt.bufPrint(&resp_buf, "{{\"scored\":{d}}}", .{scored}) catch return;
+        self.serveJsonResponse(stream, 200, resp);
     }
 
     fn serveEventsJson(self: *WebServer, stream: std.net.Stream, path: []const u8) void {

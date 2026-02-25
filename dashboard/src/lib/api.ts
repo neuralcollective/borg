@@ -60,6 +60,12 @@ export async function dismissProposal(id: number): Promise<void> {
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+export async function triageProposals(): Promise<{ scored: number }> {
+  const res = await fetch("/api/proposals/triage", { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 export function useLogs() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [connected, setConnected] = useState(false);
