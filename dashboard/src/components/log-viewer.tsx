@@ -1,22 +1,44 @@
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import type { LogEvent } from "@/lib/types";
+import type { LogEvent, DbEvent } from "@/lib/types";
 
-const FILTERS = ["all", "info", "warn", "err"] as const;
+const LEVEL_FILTERS = ["all", "info", "warn", "err"] as const;
+const CATEGORY_FILTERS = ["all", "system", "chat", "agent", "pipeline"] as const;
+
+type ViewMode = "live" | "events";
 
 export function LogViewer({ logs }: { logs: LogEvent[] }) {
-  const [filter, setFilter] = useState<string>("all");
+  const [levelFilter, setLevelFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("live");
+  const [events, setEvents] = useState<DbEvent[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  const filtered = filter === "all" ? logs : logs.filter((l) => l.level === filter);
+  // Fetch historical events when switching to events view or changing filters
+  useEffect(() => {
+    if (viewMode !== "events") return;
+    setLoadingEvents(true);
+    const params = new URLSearchParams();
+    if (categoryFilter !== "all") params.set("category", categoryFilter);
+    if (levelFilter !== "all") params.set("level", levelFilter === "warn" ? "warning" : levelFilter);
+    params.set("limit", "500");
+    fetch(`/api/events?${params}`)
+      .then((r) => r.json())
+      .then((data: DbEvent[]) => {
+        setEvents(data.reverse()); // API returns newest-first, we want oldest-first
+        setLoadingEvents(false);
+      })
+      .catch(() => setLoadingEvents(false));
+  }, [viewMode, categoryFilter, levelFilter]);
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: "instant" });
     }
-  }, [filtered.length, autoScroll]);
+  }, [logs.length, events.length, autoScroll]);
 
   function handleScroll() {
     const el = containerRef.current;
@@ -25,36 +47,96 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
     setAutoScroll(atBottom);
   }
 
+  const filteredLogs =
+    viewMode === "live"
+      ? levelFilter === "all"
+        ? logs
+        : logs.filter((l) => l.level === levelFilter)
+      : [];
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
-        <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Logs</span>
-        <div className="flex gap-0.5">
-          {FILTERS.map((f) => (
+      <div className="flex shrink-0 flex-col border-b border-white/[0.06]">
+        {/* Mode toggle + level filter */}
+        <div className="flex h-10 items-center justify-between px-4">
+          <div className="flex gap-1">
             <button
-              key={f}
               className={cn(
-                "rounded-md px-2.5 py-1.5 md:py-1 text-[11px] md:text-[10px] font-medium uppercase tracking-wide transition-colors",
-                filter === f
+                "rounded-md px-2.5 py-1 text-[11px] md:text-[10px] font-medium transition-colors",
+                viewMode === "live"
                   ? "bg-white/[0.08] text-zinc-200"
                   : "text-zinc-600 hover:text-zinc-400"
               )}
-              onClick={() => setFilter(f)}
+              onClick={() => setViewMode("live")}
             >
-              {f}
+              Live
             </button>
-          ))}
+            <button
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[11px] md:text-[10px] font-medium transition-colors",
+                viewMode === "events"
+                  ? "bg-white/[0.08] text-zinc-200"
+                  : "text-zinc-600 hover:text-zinc-400"
+              )}
+              onClick={() => setViewMode("events")}
+            >
+              Events
+            </button>
+          </div>
+          <div className="flex gap-0.5">
+            {LEVEL_FILTERS.map((f) => (
+              <button
+                key={f}
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 md:py-1 text-[11px] md:text-[10px] font-medium uppercase tracking-wide transition-colors",
+                  levelFilter === f
+                    ? "bg-white/[0.08] text-zinc-200"
+                    : "text-zinc-600 hover:text-zinc-400"
+                )}
+                onClick={() => setLevelFilter(f)}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {/* Category filter (events mode only) */}
+        {viewMode === "events" && (
+          <div className="flex items-center gap-0.5 px-4 pb-2">
+            {CATEGORY_FILTERS.map((f) => (
+              <button
+                key={f}
+                className={cn(
+                  "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+                  categoryFilter === f
+                    ? "bg-blue-500/20 text-blue-300"
+                    : "text-zinc-600 hover:text-zinc-400"
+                )}
+                onClick={() => setCategoryFilter(f)}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
       <div
         ref={containerRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto overscroll-contain"
       >
         <div className="p-3">
-          {filtered.map((log, i) => (
-            <LogLine key={i} log={log} />
-          ))}
+          {viewMode === "live" ? (
+            filteredLogs.map((log, i) => <LogLine key={i} log={log} />)
+          ) : loadingEvents ? (
+            <div className="text-[11px] text-zinc-600 py-4 text-center">Loading events...</div>
+          ) : events.length === 0 ? (
+            <div className="text-[11px] text-zinc-600 py-4 text-center">No events found</div>
+          ) : (
+            events.map((ev) => <EventLine key={ev.id} event={ev} />)
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -65,8 +147,17 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
 const levelColors: Record<string, string> = {
   info: "text-blue-400/80",
   warn: "text-amber-400/80",
+  warning: "text-amber-400/80",
   err: "text-red-400/80",
+  error: "text-red-400/80",
   debug: "text-zinc-600",
+};
+
+const categoryColors: Record<string, string> = {
+  system: "text-zinc-500",
+  chat: "text-green-400/70",
+  agent: "text-purple-400/70",
+  pipeline: "text-cyan-400/70",
 };
 
 function LogLine({ log }: { log: LogEvent }) {
@@ -76,6 +167,31 @@ function LogLine({ log }: { log: LogEvent }) {
       <span className="text-zinc-600">{ts}</span>{" "}
       <span className={levelColors[log.level] ?? "text-zinc-500"}>{log.level.padEnd(4)}</span>{" "}
       <span className="text-zinc-300">{log.message}</span>
+    </div>
+  );
+}
+
+function EventLine({ event }: { event: DbEvent }) {
+  const ts = new Date(event.ts * 1000).toLocaleTimeString("en-GB", { hour12: false });
+  const date = new Date(event.ts * 1000).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+  });
+  return (
+    <div className="whitespace-pre-wrap break-all py-px font-mono text-[12px] md:text-[11px] leading-relaxed">
+      <span className="text-zinc-600">
+        {date} {ts}
+      </span>{" "}
+      <span className={levelColors[event.level] ?? "text-zinc-500"}>
+        {event.level.padEnd(5)}
+      </span>{" "}
+      <span className={categoryColors[event.category] ?? "text-zinc-500"}>
+        [{event.category}]
+      </span>{" "}
+      <span className="text-zinc-300">{event.message}</span>
+      {event.metadata && (
+        <span className="text-zinc-600 ml-1">{event.metadata}</span>
+      )}
     </div>
   );
 }
