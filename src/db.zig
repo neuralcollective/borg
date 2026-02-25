@@ -948,6 +948,15 @@ pub const Db = struct {
     // --- Integration Queue ---
 
     pub fn enqueueForIntegration(self: *Db, task_id: i64, branch: []const u8, repo_path: []const u8) !void {
+        // Don't re-enqueue if a merged entry already exists for this task
+        var merged_rows = try self.sqlite_db.query(self.allocator,
+            "SELECT 1 FROM integration_queue WHERE task_id = ?1 AND status = 'merged' LIMIT 1",
+            .{task_id},
+        );
+        const already_merged = merged_rows.items.len > 0;
+        merged_rows.deinit();
+        if (already_merged) return;
+
         try self.sqlite_db.execute(
             "DELETE FROM integration_queue WHERE task_id = ?1 AND status = 'queued'",
             .{task_id},
