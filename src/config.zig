@@ -268,3 +268,158 @@ test "findEnvValue skips comments and blank lines" {
     defer if (v) |val| alloc.free(val);
     try std.testing.expectEqualStrings("value", v.?);
 }
+
+// ── parseWatchedRepos tests ────────────────────────────────────────────
+
+test "parseWatchedRepos empty env no primary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "", "", "");
+    try std.testing.expect(repos.len == 0);
+}
+
+test "parseWatchedRepos empty env with primary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "", "/home/project", "zig build test");
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/home/project", repos[0].path);
+    try std.testing.expectEqualStrings("zig build test", repos[0].test_cmd);
+    try std.testing.expect(repos[0].is_self);
+}
+
+test "parseWatchedRepos single path no cmd" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a", "/primary", "zig test");
+    try std.testing.expect(repos.len == 2);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("make test", repos[1].test_cmd);
+    try std.testing.expect(!repos[1].is_self);
+}
+
+test "parseWatchedRepos single path with cmd" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:npm test", "/primary", "zig test");
+    try std.testing.expect(repos.len == 2);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("npm test", repos[1].test_cmd);
+    try std.testing.expect(!repos[1].is_self);
+}
+
+test "parseWatchedRepos pipe-delimited multiple repos" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:cmd1|/repo/b:cmd2", "/primary", "zig test");
+    try std.testing.expect(repos.len == 3);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("cmd1", repos[1].test_cmd);
+    try std.testing.expect(!repos[1].is_self);
+    try std.testing.expectEqualStrings("/repo/b", repos[2].path);
+    try std.testing.expectEqualStrings("cmd2", repos[2].test_cmd);
+    try std.testing.expect(!repos[2].is_self);
+}
+
+test "parseWatchedRepos duplicate of primary is skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/main:other_cmd|/second:test", "/main", "zig test");
+    try std.testing.expect(repos.len == 2);
+    try std.testing.expectEqualStrings("/main", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+    try std.testing.expectEqualStrings("/second", repos[1].path);
+    try std.testing.expectEqualStrings("test", repos[1].test_cmd);
+    try std.testing.expect(!repos[1].is_self);
+}
+
+test "parseWatchedRepos whitespace trimming" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS= /repo/a : cmd1 | /repo/b ", "/primary", "zig test");
+    try std.testing.expect(repos.len == 3);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("cmd1", repos[1].test_cmd);
+    try std.testing.expect(!repos[1].is_self);
+    try std.testing.expectEqualStrings("/repo/b", repos[2].path);
+    try std.testing.expectEqualStrings("make test", repos[2].test_cmd);
+    try std.testing.expect(!repos[2].is_self);
+}
+
+test "parseWatchedRepos empty entries between pipes skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a||/repo/b", "/primary", "zig test");
+    try std.testing.expect(repos.len == 3);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("/repo/b", repos[2].path);
+}
+
+// ── parseWatchedRepos edge-case tests ──────────────────────────────────
+
+test "parseWatchedRepos only whitespace and pipes with primary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=| | |", "/primary", "zig test");
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+}
+
+test "parseWatchedRepos only whitespace and pipes no primary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=| | |", "", "");
+    try std.testing.expect(repos.len == 0);
+}
+
+test "parseWatchedRepos colon with empty path skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=:some_cmd", "/primary", "zig test");
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+}
+
+test "parseWatchedRepos colon with empty cmd uses default" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:", "/primary", "zig test");
+    try std.testing.expect(repos.len == 2);
+    try std.testing.expectEqualStrings("/repo/a", repos[1].path);
+    try std.testing.expectEqualStrings("make test", repos[1].test_cmd);
+    try std.testing.expect(!repos[1].is_self);
+}
+
+test "parseWatchedRepos path without colon matching primary skipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/primary", "/primary", "zig test");
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expectEqualStrings("/primary", repos[0].path);
+    try std.testing.expect(repos[0].is_self);
+}
