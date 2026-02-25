@@ -64,5 +64,11 @@ else
     FULL_PROMPT="$PROMPT"
 fi
 
-# Run Claude Code
-echo "$FULL_PROMPT" | claude "${CLAUDE_ARGS[@]}" 2>/dev/null || true
+# Run Claude Code — capture stderr for diagnostics
+echo "$FULL_PROMPT" | claude "${CLAUDE_ARGS[@]}" 2>/tmp/claude_stderr.log || true
+
+# If no stdout was produced, dump stderr so the pipeline can see what went wrong
+if [ ! -s /dev/stdout ] && [ -s /tmp/claude_stderr.log ]; then
+    echo '{"type":"error","message":"Claude CLI produced no output. Stderr:"}'
+    cat /tmp/claude_stderr.log >&2
+fi
