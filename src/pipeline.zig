@@ -480,11 +480,11 @@ pub const Pipeline = struct {
         // Clean up stale worktree/branch from a previous attempt
         var rm_wt = try git.exec(&.{ "worktree", "remove", "--force", wt_path });
         defer rm_wt.deinit();
-        if (!rm_wt.success()) {
-            std.fs.deleteTreeAbsolute(wt_path) catch {};
-            var prune = try git.exec(&.{ "worktree", "prune" });
-            defer prune.deinit();
-        }
+        // Always delete the directory and prune to clear corrupted worktree entries
+        // (old Graphite code left full .git dirs instead of .git files)
+        std.fs.deleteTreeAbsolute(wt_path) catch {};
+        var prune = try git.exec(&.{ "worktree", "prune" });
+        defer prune.deinit();
         var del_branch = try git.exec(&.{ "branch", "-D", branch });
         defer del_branch.deinit();
 
@@ -750,6 +750,11 @@ pub const Pipeline = struct {
             defer self.allocator.free(wt_dir);
             std.fs.makeDirAbsolute(wt_dir) catch {};
 
+            // Clear any stale/corrupted worktree entries before creating a new one
+            std.fs.deleteTreeAbsolute(wt_path) catch {};
+            var prune = try repo_git.exec(&.{ "worktree", "prune" });
+            defer prune.deinit();
+
             var wt = try repo_git.addWorktreeExisting(wt_path, task.branch);
             defer wt.deinit();
             if (!wt.success()) {
@@ -821,9 +826,13 @@ pub const Pipeline = struct {
         defer self.allocator.free(test_result.stderr);
 
         if (test_result.exit_code == 0) {
-            // Push the rebased branch and re-queue
-            var push_r = try wt_git.exec(&.{ "push", "--force-with-lease", "origin", task.branch });
+            // Push the rebased branch — use --force since rebase rewrites history
+            var push_r = try wt_git.exec(&.{ "push", "--force", "origin", task.branch });
             defer push_r.deinit();
+            if (!push_r.success()) {
+                std.log.err("Task #{d} rebase push failed: {s}", .{ task.id, push_r.stderr[0..@min(push_r.stderr.len, 200)] });
+                return; // Stay in rebase, retry next tick
+            }
 
             try self.db.updateTaskStatus(task.id, "done");
             try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
@@ -906,9 +915,12 @@ pub const Pipeline = struct {
 
     fn checkIntegration(self: *Pipeline) !void {
         const now = std.time.timestamp();
+        const min_interval: i64 = 60; // never fire more than once per minute
         if (!self.config.continuous_mode) {
             const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
             if (now - self.last_release_ts < interval) return;
+        } else if (now - self.last_release_ts < min_interval) {
+            return;
         }
 
         var ran_any = false;
@@ -966,17 +978,24 @@ pub const Pipeline = struct {
 
         // 4. Push each branch to origin and create PR if one doesn't exist yet
         for (live.items) |entry| {
-            // Push branch — use force-with-lease in case it was rebased
-            var push = try git.exec(&.{ "push", "--force-with-lease", "origin", entry.branch });
-            defer push.deinit();
-            if (!push.success()) {
-                // First push (no upstream yet) — try without force flag
-                var push2 = try git.exec(&.{ "push", "origin", entry.branch });
-                defer push2.deinit();
-                if (!push2.success()) {
-                    std.log.warn("Failed to push {s}: {s}", .{ entry.branch, push2.stderr[0..@min(push2.stderr.len, 200)] });
+            // Reject branches that aren't rebased on top of current main
+            var rb_check = git.exec(&.{ "merge-base", "--is-ancestor", "origin/main", entry.branch }) catch null;
+            if (rb_check) |*r| {
+                defer r.deinit();
+                if (!r.success()) {
+                    std.log.info("Task #{d}: {s} not rebased on main, sending back to rebase", .{ entry.task_id, entry.branch });
+                    try self.db.updateQueueStatus(entry.id, "excluded", "branch not rebased on main");
+                    try self.db.updateTaskStatus(entry.task_id, "rebase");
                     continue;
                 }
+            }
+
+            // Push branch — after rebase, use --force to overwrite the old remote
+            var push = try git.exec(&.{ "push", "--force", "origin", entry.branch });
+            defer push.deinit();
+            if (!push.success()) {
+                std.log.warn("Failed to push {s}: {s}", .{ entry.branch, push.stderr[0..@min(push.stderr.len, 200)] });
+                continue;
             }
 
             // Check if PR already exists
