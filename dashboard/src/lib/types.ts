@@ -71,6 +71,12 @@ export interface Proposal {
   rationale: string;
   status: string;
   created_at: string;
+  triage_score: number;
+  triage_impact: number;
+  triage_feasibility: number;
+  triage_risk: number;
+  triage_effort: number;
+  triage_reasoning: string;
 }
 
 export interface LogEvent {
