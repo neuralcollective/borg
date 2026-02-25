@@ -30,6 +30,7 @@ pub const Config = struct {
     agent_timeout_s: i64,
     max_concurrent_agents: u32,
     rate_limit_per_minute: u32,
+    max_pipeline_agents: u32,
     // Web dashboard
     web_port: u16,
     dashboard_dist_dir: []const u8,
@@ -60,6 +61,7 @@ pub const Config = struct {
         const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "600";
         const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
         const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
+        const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "2";
         const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
 
         var config = Config{
@@ -84,6 +86,7 @@ pub const Config = struct {
             .agent_timeout_s = std.fmt.parseInt(i64, timeout_s_str, 10) catch 600,
             .max_concurrent_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
             .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
+            .max_pipeline_agents = std.fmt.parseInt(u32, max_pipeline_agents_str, 10) catch 2,
             .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
             .dashboard_dist_dir = getEnv(allocator, env_content, "DASHBOARD_DIST_DIR") orelse try std.fmt.allocPrint(allocator, "{s}/dashboard/dist", .{getEnv(allocator, env_content, "PIPELINE_REPO") orelse "."}),
             .watched_repos = &.{},
