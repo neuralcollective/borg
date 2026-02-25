@@ -377,10 +377,37 @@ pub const Pipeline = struct {
         }
     }
 
+    fn appendRepoContext(self: *Pipeline, buf: *std.ArrayList(u8), repo_path: []const u8) void {
+        const w = buf.writer();
+
+        // Read CLAUDE.md for project description
+        const claude_md_path = std.fmt.allocPrint(self.allocator, "{s}/CLAUDE.md", .{repo_path}) catch return;
+        defer self.allocator.free(claude_md_path);
+        if (std.fs.cwd().readFileAlloc(self.allocator, claude_md_path, 32 * 1024)) |content| {
+            defer self.allocator.free(content);
+            w.writeAll("## Project Documentation (CLAUDE.md)\n\n") catch return;
+            w.writeAll(content[0..@min(content.len, 8000)]) catch return;
+            w.writeAll("\n\n---\n\n") catch return;
+        } else |_| {}
+
+        // Include file listing
+        var git = Git.init(self.allocator, repo_path);
+        var ls = git.exec(&.{ "ls-files", "--full-name" }) catch return;
+        defer ls.deinit();
+        if (ls.stdout.len > 0) {
+            w.writeAll("## Repository Files\n\n```\n") catch return;
+            w.writeAll(ls.stdout[0..@min(ls.stdout.len, 4000)]) catch return;
+            w.writeAll("\n```\n\n---\n\n") catch return;
+        }
+    }
+
     fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_mode: u32, current_count: u32) u32 {
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
+
+        // Include CLAUDE.md and file listing so the agent understands the codebase
+        self.appendRepoContext(&prompt_buf, repo_path);
 
         switch (seed_mode) {
             0 => w.writeAll(prompts.seed_refactor) catch return 0,
