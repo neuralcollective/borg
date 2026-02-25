@@ -1,77 +1,54 @@
-# Spec: Add tests for `parseWatchedRepos` in config.zig
+# Spec: Add tests for json.zig escapeString with special and control characters
 
 ## Task Summary
 
-The `parseWatchedRepos` function in `src/config.zig` (lines 121-160) parses the `WATCHED_REPOS` environment variable into a slice of `RepoConfig` structs but has no test coverage. Add tests for pipe-delimited multi-repo input, single-path input, and empty/missing input to prevent regressions where the pipeline watches wrong or no repositories.
+The `escapeString` function in `src/json.zig` (lines 61-80) has minimal test coverage: two existing tests cover a combined special-character string and two control characters (0x01, 0x1f), but miss `\r`, empty string, standalone character cases, multi-byte UTF-8, and the full range of control characters. Add targeted tests that verify each escape path individually, test multi-byte UTF-8 passthrough, and cover the empty-string edge case.
 
 ## Files to Modify
 
-1. **`src/config.zig`** — Add new `test` blocks at the end of the file (after line 270), following the existing pattern used by `findEnvValue` tests.
+1. **`src/json.zig`** — Add new `test` blocks in the existing test section (after line 123) for `escapeString`.
 
 ## Files to Create
 
-None. Tests belong inline in `src/config.zig` since `parseWatchedRepos` is a private (non-`pub`) function and can only be called from within the same file.
+None.
 
 ## Function/Type Signatures
 
-No new functions or types. The tests call the existing private function directly:
+No new functions or types. Only new `test` blocks are added. Each test follows the existing pattern:
 
 ```zig
-fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, primary_repo: []const u8, primary_test_cmd: []const u8) ![]RepoConfig
-```
-
-Each test block follows this pattern:
-
-```zig
-test "parseWatchedRepos <description>" {
+test "escapeString <description>" {
     const alloc = std.testing.allocator;
-    // Construct env_content with WATCHED_REPOS=... as the function reads it via getEnv()
-    const env = "WATCHED_REPOS=<value>";
-    const repos = try parseWatchedRepos(alloc, env, "<primary_repo>", "<primary_test_cmd>");
-    defer alloc.free(repos);
-    // For entries with duped strings, also free them:
-    defer for (repos) |r| {
-        if (!r.is_self) {
-            alloc.free(r.path);
-            // Only free test_cmd if it was duped (not the default "make test" literal)
-        }
-    };
-    // assertions...
+    const result = try escapeString(alloc, <input>);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings(<expected>, result);
 }
 ```
 
 ## Acceptance Criteria
 
-1. **Empty WATCHED_REPOS, no primary repo**: Calling `parseWatchedRepos(alloc, "", "", "")` returns a zero-length slice (`repos.len == 0`).
-
-2. **Empty WATCHED_REPOS, with primary repo**: Calling with `env_content=""`, `primary_repo="/home/project"`, `primary_test_cmd="zig build test"` returns exactly one entry where `repos[0].path` equals `"/home/project"`, `repos[0].test_cmd` equals `"zig build test"`, and `repos[0].is_self == true`.
-
-3. **Single path without test command**: `WATCHED_REPOS=/repo/a` (no colon) returns the primary repo plus one additional entry with `.path == "/repo/a"`, `.test_cmd == "make test"` (the default), and `.is_self == false`.
-
-4. **Single path with test command**: `WATCHED_REPOS=/repo/a:npm test` returns the primary repo plus one entry with `.path == "/repo/a"` and `.test_cmd == "npm test"`.
-
-5. **Pipe-delimited multiple repos**: `WATCHED_REPOS=/repo/a:cmd1|/repo/b:cmd2` returns the primary repo plus two additional entries with correct paths and commands, in order.
-
-6. **Duplicate of primary repo is skipped**: If `primary_repo="/main"` and `WATCHED_REPOS=/main:other_cmd|/second:test`, the result contains only the primary entry and `/second` — the `/main` duplicate from WATCHED_REPOS is excluded.
-
-7. **Whitespace trimming**: Entries with surrounding spaces/tabs (e.g., `WATCHED_REPOS= /repo/a : cmd1 | /repo/b `) are trimmed correctly, producing entries with clean paths and commands.
-
-8. **Empty entries between pipes are skipped**: `WATCHED_REPOS=/repo/a||/repo/b` skips the empty middle entry and returns two watched repos (plus primary if set).
-
-9. **Build succeeds**: `zig build` compiles without errors.
-
-10. **All tests pass**: `zig build test` passes, including all new and existing tests.
+1. **Empty string**: `escapeString(alloc, "")` returns `""` (zero-length slice).
+2. **Double quote**: `escapeString(alloc, "\"")` returns `"\\\""` (the two-byte sequence `\"`).
+3. **Backslash**: `escapeString(alloc, "\\")` returns `"\\\\"` (the two-byte sequence `\\`).
+4. **Newline**: `escapeString(alloc, "\n")` returns `"\\n"`.
+5. **Carriage return**: `escapeString(alloc, "\r")` returns `"\\r"`.
+6. **Tab**: `escapeString(alloc, "\t")` returns `"\\t"`.
+7. **Control characters below 0x20**: Each control character not handled by a dedicated switch arm (e.g., 0x00 null, 0x07 bell, 0x0C form feed) produces `\u` followed by a 4-digit zero-padded hex code. Specifically test:
+   - `0x00` → `\u0000`
+   - `0x07` → `\u0007`
+   - `0x0C` → `\u000c`
+   - `0x1F` → `\u001f`
+8. **Normal ASCII passthrough**: Printable ASCII (e.g., `"hello world 123!@#"`) passes through unchanged — output equals input.
+9. **Multi-byte UTF-8 passthrough**: A string containing multi-byte UTF-8 characters (e.g., `"héllo 世界"`) passes through byte-for-byte unchanged — no bytes are escaped since all bytes ≥ 0x20.
+10. **Mixed content**: A string combining normal text, special characters, and control characters in one input produces the correct combined escaped output.
+11. **All tests pass**: `zig build test` succeeds with all new and existing tests passing.
+12. **No memory leaks**: All tests use `std.testing.allocator` (which detects leaks) and `defer alloc.free(result)`.
 
 ## Edge Cases
 
-1. **Completely empty env_content and no primary repo** — should return `&.{}` (empty slice, length 0), not an error.
-
-2. **WATCHED_REPOS is only whitespace/pipes** (e.g., `WATCHED_REPOS=| | |`) — all entries trim to empty and are skipped, so result contains only the primary repo (if set) or is empty.
-
-3. **Entry with colon but empty path** (e.g., `WATCHED_REPOS=:some_cmd`) — the path is empty after trim, so the entry is skipped (line 141: `if (path.len == 0) continue`).
-
-4. **Entry with colon but empty command** (e.g., `WATCHED_REPOS=/repo/a:`) — the command is empty, so the default `"make test"` is used (line 145: `if (cmd.len > 0) ... else "make test"`).
-
-5. **Path without colon matching primary repo** — entry is skipped (line 149: `if (std.mem.eql(u8, trimmed, primary_repo)) continue`).
-
-6. **Memory cleanup in tests** — tests must free the returned slice via `alloc.free(repos)` and free any allocator-duped strings (`.path` and `.test_cmd` on non-`is_self` entries where `test_cmd` was duped) to satisfy `std.testing.allocator` leak detection.
+1. **Empty string** — `escapeString` must not crash or allocate garbage; it must return an empty slice.
+2. **Null byte (0x00)** — This is a valid control character that must be escaped as `\u0000`, not cause string truncation.
+3. **Boundary control characters** — `0x1F` is the highest control character (should be escaped); `0x20` (space) is the first non-control character (should pass through unchanged). Test both to verify the `ch < 0x20` boundary.
+4. **Multi-byte UTF-8 bytes** — Individual bytes of multi-byte UTF-8 sequences are all ≥ 0x80, so they pass the `ch < 0x20` check and must be appended verbatim. Verify the output length matches the input length for a UTF-8 string.
+5. **All five switch arms** — Ensure each of the five explicit switch cases (`"`, `\`, `\n`, `\r`, `\t`) is tested individually, not only in combination, to avoid masking bugs where one arm's output accidentally satisfies an assertion meant for another.
+6. **Carriage return specifically** — The existing tests cover `\n` and `\t` but not `\r`; this is the primary gap in the current coverage.
