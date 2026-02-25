@@ -38,6 +38,7 @@ pub const Pipeline = struct {
     last_seed_ts: i64,
     last_remote_check_ts: i64,
     last_self_update_ts: i64, // non-zero = a new build is ready to deploy
+    last_health_ts: i64,
     startup_heads: std.StringHashMap([40]u8),
 
     // Pipelining: concurrent phase processing
@@ -72,6 +73,7 @@ pub const Pipeline = struct {
             .last_seed_ts = 0,
             .last_remote_check_ts = 0,
             .last_self_update_ts = 0,
+            .last_health_ts = 0,
             .startup_heads = heads,
             .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
             .inflight_mu = .{},
@@ -94,6 +96,7 @@ pub const Pipeline = struct {
             };
 
             self.checkRemoteUpdates();
+            self.checkHealth();
             self.maybeApplySelfUpdate();
 
             std.time.sleep(TICK_INTERVAL_S * std.time.ns_per_s);
@@ -1162,6 +1165,78 @@ pub const Pipeline = struct {
         }
 
         return buf.toOwnedSlice();
+    }
+
+    // --- Health Check ---
+
+    const HEALTH_INTERVAL_S: i64 = 1800; // 30 minutes
+
+    fn checkHealth(self: *Pipeline) void {
+        const now = std.time.timestamp();
+        if (now - self.last_health_ts < HEALTH_INTERVAL_S) return;
+        self.last_health_ts = now;
+
+        for (self.config.watched_repos) |repo| {
+            // Pull latest main before testing
+            var git = Git.init(self.allocator, repo.path);
+            var co = git.checkout("main") catch continue;
+            defer co.deinit();
+            var pull = git.pull() catch continue;
+            defer pull.deinit();
+
+            // Run build (zig build / make build)
+            const build_cmd = blk: {
+                if (std.mem.indexOf(u8, repo.test_cmd, "zig build")) |_| {
+                    break :blk "zig build";
+                } else if (std.mem.startsWith(u8, repo.test_cmd, "make")) {
+                    break :blk "make";
+                } else {
+                    break :blk repo.test_cmd; // fallback: just run the test cmd
+                }
+            };
+
+            const build_result = self.runTestCommandForRepo(repo.path, build_cmd) catch continue;
+            defer self.allocator.free(build_result.stdout);
+            defer self.allocator.free(build_result.stderr);
+
+            if (build_result.exit_code != 0) {
+                std.log.warn("Health: build failed for {s}", .{repo.path});
+                self.createHealthTask(repo.path, "build", build_result.stderr);
+                continue;
+            }
+
+            // Run tests
+            const test_result = self.runTestCommandForRepo(repo.path, repo.test_cmd) catch continue;
+            defer self.allocator.free(test_result.stdout);
+            defer self.allocator.free(test_result.stderr);
+
+            if (test_result.exit_code != 0) {
+                std.log.warn("Health: tests failed for {s}", .{repo.path});
+                self.createHealthTask(repo.path, "tests", test_result.stderr);
+            } else {
+                std.log.info("Health: {s} OK", .{repo.path});
+            }
+        }
+    }
+
+    fn createHealthTask(self: *Pipeline, repo_path: []const u8, kind: []const u8, stderr: []const u8) void {
+        // Don't create duplicates — check if a health fix task already exists
+        const tasks = self.db.getActivePipelineTasks(self.allocator, 50) catch return;
+        defer self.allocator.free(tasks);
+        for (tasks) |t| {
+            if (std.mem.startsWith(u8, t.title, "Fix failing ") and std.mem.eql(u8, t.repo_path, repo_path)) return;
+        }
+
+        const tail = if (stderr.len > 500) stderr[stderr.len - 500 ..] else stderr;
+        const desc = std.fmt.allocPrint(self.allocator, "Health check detected {s} failure on main branch.\n\nError output:\n```\n{s}\n```", .{ kind, tail }) catch return;
+        defer self.allocator.free(desc);
+
+        const title = std.fmt.allocPrint(self.allocator, "Fix failing {s} on main", .{kind}) catch return;
+        defer self.allocator.free(title);
+
+        _ = self.db.createPipelineTask(title, desc, repo_path, "health-check", "") catch return;
+        std.log.info("Health: created fix task for {s} {s} failure", .{ repo_path, kind });
+        self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Health check: {s} failing for {s}, created fix task", .{ kind, repo_path }) catch return);
     }
 
     // --- Self-Update ---
