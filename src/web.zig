@@ -27,6 +27,7 @@ pub const WebServer = struct {
     db: *Db,
     config: *Config,
     running: std.atomic.Value(bool),
+    bind_addr: []const u8,
     port: u16,
 
     // Log ring buffer
@@ -50,12 +51,13 @@ pub const WebServer = struct {
     start_time: i64,
     force_restart_signal: ?*std.atomic.Value(bool),
 
-    pub fn init(allocator: std.mem.Allocator, db: *Db, config: *Config, port: u16) WebServer {
+    pub fn init(allocator: std.mem.Allocator, db: *Db, config: *Config, port: u16, bind_addr: []const u8) WebServer {
         return .{
             .allocator = allocator,
             .db = db,
             .config = config,
             .running = std.atomic.Value(bool).init(true),
+            .bind_addr = bind_addr,
             .port = port,
             .log_ring = [_]LogEntry{.{ .timestamp = 0, .level = undefined, .level_len = 0, .message = undefined, .message_len = 0, .active = false }} ** LOG_RING_SIZE,
             .log_head = 0,
@@ -150,20 +152,20 @@ pub const WebServer = struct {
     }
 
     pub fn run(self: *WebServer) void {
-        const addr = std.net.Address.parseIp4("127.0.0.1", self.port) catch {
-            std.log.err("Web: invalid address", .{});
+        const addr = std.net.Address.parseIp4(self.bind_addr, self.port) catch {
+            std.log.err("Web: invalid bind address '{s}'", .{self.bind_addr});
             return;
         };
 
         var server = addr.listen(.{
             .reuse_address = true,
         }) catch |err| {
-            std.log.err("Web: listen failed on port {d}: {}", .{ self.port, err });
+            std.log.err("Web: listen failed on {s}:{d}: {}", .{ self.bind_addr, self.port, err });
             return;
         };
         defer server.deinit();
 
-        std.log.info("Web dashboard: http://127.0.0.1:{d}", .{self.port});
+        std.log.info("Web dashboard: http://{s}:{d}", .{ self.bind_addr, self.port });
 
         while (self.running.load(.acquire)) {
             const conn = server.accept() catch |err| {
@@ -695,10 +697,11 @@ pub const WebServer = struct {
             if (i > 0) w.writeAll(",") catch return;
             var esc_path: [512]u8 = undefined;
             var esc_cmd: [512]u8 = undefined;
-            w.print("{{\"path\":\"{s}\",\"test_cmd\":\"{s}\",\"is_self\":{s}}}", .{
+            w.print("{{\"path\":\"{s}\",\"test_cmd\":\"{s}\",\"is_self\":{s},\"auto_merge\":{s}}}", .{
                 jsonEscape(&esc_path, repo.path),
                 jsonEscape(&esc_cmd, repo.test_cmd),
                 if (repo.is_self) "true" else "false",
+                if (repo.auto_merge) "true" else "false",
             }) catch return;
         }
 

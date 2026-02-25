@@ -41,7 +41,15 @@ Requires Zig 0.14.1+. SQLite is vendored (no external deps for the core binary).
 
 ## Configuration
 
-All config is in `.env` (or process environment). See `src/config.zig` for the full list with defaults.
+All config is in `.env` (or process environment). Key variables:
+
+- `PIPELINE_REPO`, `PIPELINE_TEST_CMD` — primary repo path and test command
+- `PIPELINE_AUTO_MERGE=true|false` — auto-merge PRs for primary repo (default: true)
+- `WATCHED_REPOS=path:cmd|path:cmd` — additional repos, append `!manual` to disable auto-merge
+- `WEB_BIND=0.0.0.0` — bind address for dashboard (default: 127.0.0.1)
+- `CONTINUOUS_MODE=true` — auto-seed tasks when pipeline is idle
+
+See `src/config.zig` for the full list with defaults.
 
 ## Key Patterns
 
