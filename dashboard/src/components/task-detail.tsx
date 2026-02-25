@@ -1,7 +1,7 @@
 import { useTaskDetail } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
-import { repoName } from "@/lib/types";
+import { repoName, type TaskOutput } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useState, useMemo } from "react";
 
@@ -90,15 +90,182 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   );
 }
 
-interface OutputEntry {
-  id: number;
-  phase: string;
-  output: string;
-  exit_code: number;
+/** Parse NDJSON raw_stream into structured events for display */
+interface StreamEvent {
+  type: string;
+  subtype?: string;
+  tool?: string;
+  input?: string;
+  output?: string;
+  content?: string;
+  timestamp?: string;
 }
 
-function OutputSelector({ outputs }: { outputs: OutputEntry[] }) {
-  // Label each output: unique phases get plain name, repeated phases get "Phase Attempt #N"
+function parseStream(raw: string): StreamEvent[] {
+  if (!raw) return [];
+  const events: StreamEvent[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      const type = obj.type;
+      if (!type) continue;
+
+      if (type === "assistant") {
+        // Assistant message — extract text content
+        const msg = obj.message;
+        if (msg?.content) {
+          if (typeof msg.content === "string") {
+            events.push({ type: "assistant", content: msg.content });
+          } else if (Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+              if (block.type === "text" && block.text) {
+                events.push({ type: "assistant", content: block.text });
+              } else if (block.type === "tool_use") {
+                events.push({
+                  type: "tool_call",
+                  tool: block.name,
+                  input: typeof block.input === "string"
+                    ? block.input
+                    : JSON.stringify(block.input, null, 2),
+                });
+              }
+            }
+          }
+        }
+      } else if (type === "tool_result" || type === "tool") {
+        // Tool result
+        const content = obj.content ?? obj.result ?? obj.output ?? "";
+        const text = typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content.map((c: { text?: string }) => c.text || "").join("\n")
+            : JSON.stringify(content);
+        if (text) {
+          events.push({
+            type: "tool_result",
+            tool: obj.tool_name || obj.name || "",
+            output: text,
+          });
+        }
+      } else if (type === "result") {
+        events.push({ type: "result", content: obj.result || "" });
+      } else if (type === "system") {
+        if (obj.subtype === "init") {
+          events.push({ type: "system", subtype: "init", content: `Session: ${obj.session_id || "?"}` });
+        }
+      }
+    } catch {
+      // skip unparseable lines
+    }
+  }
+  return events;
+}
+
+function StreamView({ raw }: { raw: string }) {
+  const events = useMemo(() => parseStream(raw), [raw]);
+
+  if (events.length === 0) {
+    return <div className="p-4 text-[11px] text-zinc-600">No stream data</div>;
+  }
+
+  return (
+    <div className="space-y-1 p-3">
+      {events.map((ev, i) => (
+        <StreamEventBlock key={i} event={ev} />
+      ))}
+    </div>
+  );
+}
+
+function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (ev.type === "system") {
+    return (
+      <div className="rounded bg-blue-500/[0.06] px-3 py-1.5 text-[10px] text-blue-400/70">
+        {ev.content}
+      </div>
+    );
+  }
+
+  if (ev.type === "assistant") {
+    return (
+      <div className="rounded bg-white/[0.02] px-3 py-2">
+        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
+          {ev.content}
+        </pre>
+      </div>
+    );
+  }
+
+  if (ev.type === "tool_call") {
+    const preview = ev.input && ev.input.length > 120 ? ev.input.slice(0, 120) + "..." : ev.input;
+    return (
+      <div className="rounded border border-amber-500/10 bg-amber-500/[0.04]">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+        >
+          <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-400">
+            {ev.tool}
+          </span>
+          {!expanded && (
+            <span className="truncate font-mono text-[10px] text-zinc-500">{preview}</span>
+          )}
+          <span className="ml-auto shrink-0 text-[9px] text-zinc-600">{expanded ? "^" : "v"}</span>
+        </button>
+        {expanded && ev.input && (
+          <pre className="max-h-60 overflow-y-auto border-t border-amber-500/10 px-3 py-2 font-mono text-[10px] leading-relaxed text-zinc-400">
+            {ev.input}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
+  if (ev.type === "tool_result") {
+    const preview = ev.output && ev.output.length > 200 ? ev.output.slice(0, 200) + "..." : ev.output;
+    return (
+      <div className="rounded border border-white/[0.04] bg-white/[0.015]">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+        >
+          <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-zinc-400">
+            result{ev.tool ? `: ${ev.tool}` : ""}
+          </span>
+          {!expanded && (
+            <span className="truncate font-mono text-[10px] text-zinc-600">{preview}</span>
+          )}
+          <span className="ml-auto shrink-0 text-[9px] text-zinc-600">{expanded ? "^" : "v"}</span>
+        </button>
+        {expanded && ev.output && (
+          <pre className="max-h-60 overflow-y-auto border-t border-white/[0.04] px-3 py-2 font-mono text-[10px] leading-relaxed text-zinc-500">
+            {ev.output}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
+  if (ev.type === "result") {
+    return (
+      <div className="rounded border border-emerald-500/10 bg-emerald-500/[0.04] px-3 py-2">
+        <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-emerald-500/60">Final Result</div>
+        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-emerald-300/80">
+          {ev.content}
+        </pre>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
+  const [viewMode, setViewMode] = useState<"summary" | "trace" | "diff">("summary");
+
   const labeled = useMemo(() => {
     const phaseCounts: Record<string, number> = {};
     const phaseIndices: Record<string, number> = {};
@@ -116,12 +283,13 @@ function OutputSelector({ outputs }: { outputs: OutputEntry[] }) {
     });
   }, [outputs]);
 
-  // Default to last output (most recent)
   const [selectedKey, setSelectedKey] = useState(
     labeled[labeled.length - 1].phase + "-" + labeled[labeled.length - 1].id
   );
 
   const selected = labeled.find((o) => o.phase + "-" + o.id === selectedKey) ?? labeled[labeled.length - 1];
+  const isDiff = selected.phase.endsWith("_diff");
+  const hasStream = !!selected.raw_stream;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -149,13 +317,64 @@ function OutputSelector({ outputs }: { outputs: OutputEntry[] }) {
         )}>
           {selected.exit_code === 0 ? "passed" : `exit ${selected.exit_code}`}
         </span>
+        {/* View mode toggle — only show when relevant tabs exist */}
+        {!isDiff && (
+          <div className="ml-auto flex rounded-md border border-white/[0.08]">
+            <button
+              onClick={() => setViewMode("summary")}
+              className={cn(
+                "px-2 py-0.5 text-[10px] font-medium transition-colors",
+                viewMode === "summary"
+                  ? "bg-white/[0.08] text-zinc-200"
+                  : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              Summary
+            </button>
+            {hasStream && (
+              <button
+                onClick={() => setViewMode("trace")}
+                className={cn(
+                  "border-l border-white/[0.08] px-2 py-0.5 text-[10px] font-medium transition-colors",
+                  viewMode === "trace"
+                    ? "bg-white/[0.08] text-zinc-200"
+                    : "text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                Full Trace
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto overscroll-contain">
-        <pre className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400">
-          {selected.output}
-        </pre>
+        {isDiff ? (
+          <DiffView diff={selected.output} />
+        ) : viewMode === "trace" && hasStream ? (
+          <StreamView raw={selected.raw_stream} />
+        ) : (
+          <pre className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400">
+            {selected.output || "(empty)"}
+          </pre>
+        )}
       </div>
     </div>
+  );
+}
+
+function DiffView({ diff }: { diff: string }) {
+  if (!diff) return <div className="p-4 text-[11px] text-zinc-600">No diff data</div>;
+  return (
+    <pre className="p-4 font-mono text-[11px] leading-relaxed">
+      {diff.split("\n").map((line, i) => {
+        let color = "text-zinc-500";
+        if (line.startsWith("+") && !line.startsWith("+++")) color = "text-emerald-400/80";
+        else if (line.startsWith("-") && !line.startsWith("---")) color = "text-red-400/80";
+        else if (line.startsWith("@@")) color = "text-blue-400/60";
+        else if (line.startsWith("diff ") || line.startsWith("index ")) color = "text-zinc-600";
+        return <div key={i} className={color}>{line}</div>;
+      })}
+    </pre>
   );
 }
 
