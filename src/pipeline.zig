@@ -1584,6 +1584,15 @@ pub const Pipeline = struct {
         const system_prompt = prompts.getSystemPrompt(persona);
         const allowed_tools = prompts.getAllowedTools(persona);
 
+        // Inject per-repo prompt if configured (via prompt_file or .borg/prompt.md)
+        var effective_prompt = prompt;
+        if (self.config.getRepoPrompt(workdir)) |repo_prompt| {
+            defer self.allocator.free(repo_prompt);
+            var combined = std.ArrayList(u8).init(tmp);
+            try combined.writer().print("## Project Context\n\n{s}\n\n---\n\n{s}", .{ repo_prompt, prompt });
+            effective_prompt = combined.items;
+        }
+
         // Per-task session dir — persists Claude sessions across container runs
         const session_dir = try std.fmt.allocPrint(tmp, "store/sessions/task-{d}/.claude", .{task_id});
         std.fs.cwd().makePath(session_dir) catch |err| {
@@ -1593,7 +1602,7 @@ pub const Pipeline = struct {
 
         // Build JSON input
         var input = std.ArrayList(u8).init(tmp);
-        const esc_prompt = try json_mod.escapeString(tmp, prompt);
+        const esc_prompt = try json_mod.escapeString(tmp, effective_prompt);
         const esc_sys = try json_mod.escapeString(tmp, system_prompt);
         if (resume_session) |sid| {
             if (sid.len > 0) {
