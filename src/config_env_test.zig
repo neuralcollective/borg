@@ -3,7 +3,7 @@
 // These tests verify that the parsing logic inside Config.load() (extracted
 // into Config.initFromContent) correctly handles:
 //   - Boolean fields (PIPELINE_AUTO_MERGE, CONTINUOUS_MODE, WHATSAPP_ENABLED, DISCORD_ENABLED)
-//   - Numeric fields with defaults (MAX_BACKLOG_SIZE, CONTAINER_MEMORY_MB, WEB_PORT, …)
+//   - Numeric fields with defaults (PIPELINE_MAX_BACKLOG, CONTAINER_MEMORY_MB, WEB_PORT, …)
 //   - WATCHED_REPOS pipe/colon parsing end-to-end, including !manual suffix
 //   - Defaults when keys are absent
 //   - Edge cases: case-sensitive booleans, zero values, whitespace, duplicates
@@ -15,7 +15,7 @@
 //   test { _ = @import("config_env_test.zig"); }
 //
 // NOTE: Tests that check "default" values assume the corresponding environment
-// variables (e.g. MAX_BACKLOG_SIZE, TICK_INTERVAL_S) are not set in the process
+// variables (e.g. PIPELINE_MAX_BACKLOG, PIPELINE_TICK_S) are not set in the process
 // environment of the test runner. This is the standard assumption for a
 // development or CI environment that is not actively running borg.
 
@@ -132,24 +132,24 @@ test "AC-B7: DISCORD_ENABLED=true sets discord_enabled true" {
 
 // ── AC-N: Numeric field tests ─────────────────────────────────────────────────
 
-// AC-N1: MAX_BACKLOG_SIZE=10 → config.max_backlog_size == 10
-test "AC-N1: MAX_BACKLOG_SIZE=10 is parsed correctly" {
+// AC-N1: PIPELINE_MAX_BACKLOG=10 → config.pipeline_max_backlog == 10
+test "AC-N1: PIPELINE_MAX_BACKLOG=10 is parsed correctly" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const cfg = try Config.initFromContent(alloc, "MAX_BACKLOG_SIZE=10");
-    try std.testing.expectEqual(@as(u32, 10), cfg.max_backlog_size);
+    const cfg = try Config.initFromContent(alloc, "PIPELINE_MAX_BACKLOG=10");
+    try std.testing.expectEqual(@as(u32, 10), cfg.pipeline_max_backlog);
 }
 
-// AC-N2: MAX_BACKLOG_SIZE absent → config.max_backlog_size == 5 (default)
-test "AC-N2: MAX_BACKLOG_SIZE absent defaults to 5" {
+// AC-N2: PIPELINE_MAX_BACKLOG absent → config.pipeline_max_backlog == 5 (default)
+test "AC-N2: PIPELINE_MAX_BACKLOG absent defaults to 5" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
     const cfg = try Config.initFromContent(alloc, "BORG_UNRELATED=x");
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
 }
 
 // AC-N3: CONTAINER_MEMORY_MB=2048 → config.container_memory_mb == 2048
@@ -182,34 +182,34 @@ test "AC-N5: WEB_PORT absent defaults to 3131" {
     try std.testing.expectEqual(@as(u16, 3131), cfg.web_port);
 }
 
-// AC-N6: TICK_INTERVAL_S=60 → config.tick_interval_s == 60
-test "AC-N6: TICK_INTERVAL_S=60 is parsed correctly" {
+// AC-N6: PIPELINE_TICK_S=60 → config.pipeline_tick_s == 60
+test "AC-N6: PIPELINE_TICK_S=60 is parsed correctly" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const cfg = try Config.initFromContent(alloc, "TICK_INTERVAL_S=60");
-    try std.testing.expectEqual(@as(u64, 60), cfg.tick_interval_s);
+    const cfg = try Config.initFromContent(alloc, "PIPELINE_TICK_S=60");
+    try std.testing.expectEqual(@as(u64, 60), cfg.pipeline_tick_s);
 }
 
-// AC-N7: SEED_COOLDOWN_S=7200 → config.seed_cooldown_s == 7200
-test "AC-N7: SEED_COOLDOWN_S=7200 is parsed correctly" {
+// AC-N7: PIPELINE_SEED_COOLDOWN_S=7200 → config.pipeline_seed_cooldown_s == 7200
+test "AC-N7: PIPELINE_SEED_COOLDOWN_S=7200 is parsed correctly" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const cfg = try Config.initFromContent(alloc, "SEED_COOLDOWN_S=7200");
-    try std.testing.expectEqual(@as(i64, 7200), cfg.seed_cooldown_s);
+    const cfg = try Config.initFromContent(alloc, "PIPELINE_SEED_COOLDOWN_S=7200");
+    try std.testing.expectEqual(@as(i64, 7200), cfg.pipeline_seed_cooldown_s);
 }
 
-// AC-N8: MAX_BACKLOG_SIZE=abc (non-numeric) → falls back to default 5
-test "AC-N8: non-numeric MAX_BACKLOG_SIZE falls back to default 5" {
+// AC-N8: PIPELINE_MAX_BACKLOG=abc (non-numeric) → falls back to default 5
+test "AC-N8: non-numeric PIPELINE_MAX_BACKLOG falls back to default 5" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const cfg = try Config.initFromContent(alloc, "MAX_BACKLOG_SIZE=abc");
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    const cfg = try Config.initFromContent(alloc, "PIPELINE_MAX_BACKLOG=abc");
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
 }
 
 // ── AC-W: WATCHED_REPOS integration tests ────────────────────────────────────
@@ -315,8 +315,8 @@ test "AC-W5: absent PIPELINE_REPO means no primary prepended to watched_repos" {
 // ── AC-D: Default values for missing keys ────────────────────────────────────
 
 // AC-D1: sentinel env (no relevant keys) → documented defaults
-// Assumes MAX_BACKLOG_SIZE, CONTAINER_MEMORY_MB, WEB_PORT, TICK_INTERVAL_S,
-// SEED_COOLDOWN_S, REMOTE_CHECK_INTERVAL_S, CONTINUOUS_MODE, WHATSAPP_ENABLED,
+// Assumes PIPELINE_MAX_BACKLOG, CONTAINER_MEMORY_MB, WEB_PORT, PIPELINE_TICK_S,
+// PIPELINE_SEED_COOLDOWN_S, REMOTE_CHECK_INTERVAL_S, CONTINUOUS_MODE, WHATSAPP_ENABLED,
 // and DISCORD_ENABLED are NOT set in the process environment.
 test "AC-D1: sentinel env_content yields all documented defaults" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -326,11 +326,11 @@ test "AC-D1: sentinel env_content yields all documented defaults" {
     // Sentinel key that cannot match any borg config variable
     const cfg = try Config.initFromContent(alloc, "BORG_TEST_SENTINEL_AC_D1=1");
 
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
     try std.testing.expectEqual(@as(u64, 1024), cfg.container_memory_mb);
     try std.testing.expectEqual(@as(u16, 3131), cfg.web_port);
-    try std.testing.expectEqual(@as(u64, 30), cfg.tick_interval_s);
-    try std.testing.expectEqual(@as(i64, 3600), cfg.seed_cooldown_s);
+    try std.testing.expectEqual(@as(u64, 30), cfg.pipeline_tick_s);
+    try std.testing.expectEqual(@as(i64, 3600), cfg.pipeline_seed_cooldown_s);
     try std.testing.expectEqual(@as(i64, 300), cfg.remote_check_interval_s);
     try std.testing.expect(cfg.continuous_mode == false);
     try std.testing.expect(cfg.whatsapp_enabled == false);
@@ -407,14 +407,14 @@ test "EC-1e: CONTINUOUS_MODE=TRUE all-caps does not activate (requires exact 'tr
     try std.testing.expect(cfg.continuous_mode == false);
 }
 
-// EC-2: MAX_BACKLOG_SIZE=0 is a valid value (zero, not default)
-test "EC-2: MAX_BACKLOG_SIZE=0 is valid and equals zero, not the default 5" {
+// EC-2: PIPELINE_MAX_BACKLOG=0 is a valid value (zero, not default)
+test "EC-2: PIPELINE_MAX_BACKLOG=0 is valid and equals zero, not the default 5" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const cfg = try Config.initFromContent(alloc, "MAX_BACKLOG_SIZE=0");
-    try std.testing.expectEqual(@as(u32, 0), cfg.max_backlog_size);
+    const cfg = try Config.initFromContent(alloc, "PIPELINE_MAX_BACKLOG=0");
+    try std.testing.expectEqual(@as(u32, 0), cfg.pipeline_max_backlog);
 }
 
 // EC-3: WATCHED_REPOS=/repo:!manual → test_cmd defaults to "make test", auto_merge==false
@@ -506,6 +506,6 @@ test "EC-8: env_content value takes precedence and no process env mutation is ne
 
     // Supply an explicit value. Regardless of any process-env setting, the
     // env_content value must win (getEnv checks env_content before process env).
-    const cfg = try Config.initFromContent(alloc, "MAX_BACKLOG_SIZE=77");
-    try std.testing.expectEqual(@as(u32, 77), cfg.max_backlog_size);
+    const cfg = try Config.initFromContent(alloc, "PIPELINE_MAX_BACKLOG=77");
+    try std.testing.expectEqual(@as(u32, 77), cfg.pipeline_max_backlog);
 }

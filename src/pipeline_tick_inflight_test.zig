@@ -2,7 +2,7 @@
 //
 // Two early-exit branches in tick()'s dispatch loop:
 //   (a) Inflight-skip:    inflight_tasks.contains(task.id) → continue
-//   (b) Capacity-break:  active_agents >= max_pipeline_agents → break
+//   (b) Capacity-break:  active_agents >= pipeline_max_agents → break
 //
 // Because tick() is a private method, tests use two complementary strategies:
 //   Strategy A — source inspection via @embedFile("pipeline.zig")
@@ -21,7 +21,7 @@
 //   Edge1 — empty task list: neither branch fires, dispatched == 0
 //   Edge2 — single eligible task: dispatched == 1, inflight updated
 //   Edge3 — stale inflight IDs (not in current tasks): no effect on dispatch
-//   Edge4 — max_pipeline_agents == 0: breaks immediately, dispatched == 0
+//   Edge4 — pipeline_max_agents == 0: breaks immediately, dispatched == 0
 //   Edge5 — capacity-break at last task: N-1 dispatched, last undispatched
 //   E6   — all inflight + at capacity: break fires first, 0 dispatched
 //   E7   — mutex correctness: inflight_mu.lock() wraps contains + put in source
@@ -105,7 +105,7 @@ test "AC1+AC4+AC9: tick() source — inflight-skip and capacity-break branches p
     try std.testing.expect(body.len > 0);
     // Both key patterns must appear in tick()
     try std.testing.expect(std.mem.indexOf(u8, body, "inflight_tasks.contains(task.id)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "max_pipeline_agents") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "pipeline_max_agents") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "break") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "continue") != null);
 }
@@ -160,13 +160,13 @@ test "AC1: inflight_tasks.contains(task.id) appears exactly once in tick()" {
 test "AC4: active_agents capacity check present in tick() body" {
     const body = tickBody();
     try std.testing.expect(
-        std.mem.indexOf(u8, body, "active_agents.load(.acquire) >= self.config.max_pipeline_agents") != null,
+        std.mem.indexOf(u8, body, "active_agents.load(.acquire) >= self.config.pipeline_max_agents") != null,
     );
 }
 
 test "AC4: break appears after capacity check in tick() body" {
     const body = tickBody();
-    const cap_pos = std.mem.indexOf(u8, body, "max_pipeline_agents") orelse {
+    const cap_pos = std.mem.indexOf(u8, body, "pipeline_max_agents") orelse {
         try std.testing.expect(false);
         return;
     };
@@ -185,7 +185,7 @@ test "AC4: tick() for-loop iterates over tasks slice" {
 
 test "AC9: capacity check byte offset < inflight check byte offset in tick()" {
     const body = tickBody();
-    const cap_pos = std.mem.indexOf(u8, body, "active_agents.load(.acquire) >= self.config.max_pipeline_agents") orelse {
+    const cap_pos = std.mem.indexOf(u8, body, "active_agents.load(.acquire) >= self.config.pipeline_max_agents") orelse {
         try std.testing.expect(false); // capacity check missing
         return;
     };
@@ -204,7 +204,7 @@ test "AC9: within the for-loop, capacity check precedes inflight check" {
         return;
     };
     const loop_body = body[for_pos..];
-    const cap_in_loop = std.mem.indexOf(u8, loop_body, "max_pipeline_agents") orelse {
+    const cap_in_loop = std.mem.indexOf(u8, loop_body, "pipeline_max_agents") orelse {
         try std.testing.expect(false);
         return;
     };
@@ -534,10 +534,10 @@ test "AC6: two slots remaining — exactly two tasks dispatched" {
 }
 
 // =============================================================================
-// AC7 — Capacity-break: max_pipeline_agents == 1, active == 1 → 0 dispatched
+// AC7 — Capacity-break: pipeline_max_agents == 1, active == 1 → 0 dispatched
 // =============================================================================
 
-test "AC7: max_pipeline_agents == 1 and active_agents == 1 — no dispatch" {
+test "AC7: pipeline_max_agents == 1 and active_agents == 1 — no dispatch" {
     const alloc = std.testing.allocator;
     var inflight = std.AutoHashMap(i64, void).init(alloc);
     defer inflight.deinit();
@@ -552,7 +552,7 @@ test "AC7: max_pipeline_agents == 1 and active_agents == 1 — no dispatch" {
     try std.testing.expectEqual(@as(u32, 0), inflight.count());
 }
 
-test "AC7: max_pipeline_agents == 1, active == 0 — exactly one dispatched" {
+test "AC7: pipeline_max_agents == 1, active == 0 — exactly one dispatched" {
     const alloc = std.testing.allocator;
     var inflight = std.AutoHashMap(i64, void).init(alloc);
     defer inflight.deinit();
@@ -749,10 +749,10 @@ test "Edge3: stale inflight IDs not in current task list — no effect on dispat
 }
 
 // =============================================================================
-// Edge4 — max_pipeline_agents == 0: breaks immediately on first task
+// Edge4 — pipeline_max_agents == 0: breaks immediately on first task
 // =============================================================================
 
-test "Edge4: max_pipeline_agents == 0 — breaks immediately, dispatched == 0" {
+test "Edge4: pipeline_max_agents == 0 — breaks immediately, dispatched == 0" {
     const alloc = std.testing.allocator;
     var inflight = std.AutoHashMap(i64, void).init(alloc);
     defer inflight.deinit();
