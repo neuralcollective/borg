@@ -8,6 +8,7 @@ const Telegram = tg_mod.Telegram;
 const git_mod = @import("git.zig");
 const Git = git_mod.Git;
 const json_mod = @import("json.zig");
+const prompts = @import("prompts.zig");
 const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
 
@@ -352,79 +353,16 @@ pub const Pipeline = struct {
         const w = prompt_buf.writer();
 
         switch (seed_mode) {
-            0 => w.writeAll(
-                \\Analyze this codebase and identify 1-3 concrete, small improvements.
-                \\Focus on refactoring and quality - NOT new features.
-                \\
-                \\Good tasks: extract duplicated code, improve error handling for a specific
-                \\function, simplify a complex conditional, fix a subtle bug, improve naming.
-                \\
-                \\Bad tasks: add new features, rewrite entire modules, add documentation,
-                \\change the architecture, add dependencies.
-            ) catch return 0,
-            1 => w.writeAll(
-                \\Audit this codebase for bugs, security vulnerabilities, and reliability issues.
-                \\Focus on finding real problems - NOT style preferences.
-                \\
-                \\Look for: race conditions, memory leaks, resource leaks (unclosed files/sockets),
-                \\error handling gaps (ignored errors, missing error paths), integer overflows,
-                \\buffer overruns, SQL injection, command injection, path traversal, unvalidated
-                \\input at system boundaries, deadlock potential, undefined behavior.
-                \\
-                \\For each real issue found, create a task to fix it. Skip false positives.
-            ) catch return 0,
-            2 => w.writeAll(
-                \\Analyze this codebase and identify gaps in test coverage.
-                \\Focus on finding untested code paths that matter for correctness.
-                \\
-                \\Look for: functions with no test coverage, error paths never exercised,
-                \\edge cases not covered (empty input, max values, concurrent access),
-                \\integration points between modules that lack tests,
-                \\complex conditionals where not all branches are tested.
-                \\
-                \\Create tasks to add specific test cases. Each task should target one
-                \\function or module, not broad "add tests everywhere" tasks.
-            ) catch return 0,
+            0 => w.writeAll(prompts.seed_refactor) catch return 0,
+            1 => w.writeAll(prompts.seed_security) catch return 0,
+            2 => w.writeAll(prompts.seed_tests) catch return 0,
             else => {
-                // Feature discovery mode — creates proposals, not tasks
-                w.writeAll(
-                    \\Analyze this codebase and suggest 1-3 concrete features or capabilities
-                    \\that would meaningfully improve the project. Think about what's missing,
-                    \\what would make it more useful, or what natural next steps are.
-                    \\
-                    \\Good proposals: add a specific API endpoint, support a new integration,
-                    \\add a monitoring capability, improve UX for a specific workflow.
-                    \\
-                    \\Bad proposals: vague improvements, rewrites, adding frameworks/dependencies,
-                    \\things that duplicate existing functionality.
-                    \\
-                    \\For each proposal, output EXACTLY this format:
-                    \\
-                    \\PROPOSAL_START
-                    \\TITLE: <short imperative title, max 80 chars>
-                    \\DESCRIPTION: <2-4 sentences explaining the feature>
-                    \\RATIONALE: <1-2 sentences on why this would be valuable>
-                    \\PROPOSAL_END
-                    \\
-                    \\Output ONLY the proposal blocks above. No other text.
-                ) catch return 0;
-
+                w.writeAll(prompts.seed_features) catch return 0;
                 return self.seedRepoProposals(repo_path, prompt_buf.items);
             },
         }
 
-        w.writeAll(
-            \\
-            \\
-            \\For each improvement, output EXACTLY this format (one per task):
-            \\
-            \\TASK_START
-            \\TITLE: <short imperative title, max 80 chars>
-            \\DESCRIPTION: <2-4 sentences explaining what to change and why>
-            \\TASK_END
-            \\
-            \\Output ONLY the task blocks above. No other text.
-        ) catch return 0;
+        w.writeAll(prompts.seed_task_suffix) catch return 0;
 
         const result = self.spawnAgent(.manager, prompt_buf.items, repo_path, null, 0) catch |err| {
             std.log.err("Seed agent failed for {s}: {}", .{ repo_path, err });
@@ -608,22 +546,9 @@ pub const Pipeline = struct {
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
 
-        try w.print("Task #{d}: {s}\n\n", .{ task.id, task.title });
-        try w.print("Description:\n{s}\n\n", .{task.description});
-        try w.writeAll("Repository files:\n");
+        try w.print(prompts.spec_phase, .{ task.id, task.title, task.description });
         try w.writeAll(ls.stdout[0..@min(ls.stdout.len, 4000)]);
-        try w.writeAll(
-            \\
-            \\Write a file called `spec.md` at the repository root containing:
-            \\1. Task summary (2-3 sentences)
-            \\2. Files to modify (exact paths)
-            \\3. Files to create (exact paths)
-            \\4. Function/type signatures for new or changed code
-            \\5. Acceptance criteria (testable assertions)
-            \\6. Edge cases to handle
-            \\
-            \\Do NOT modify any source files. Only write spec.md.
-        );
+        try w.writeAll(prompts.spec_phase_suffix);
 
         const resume_sid = if (task.session_id.len > 0) task.session_id else null;
         const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
@@ -669,17 +594,7 @@ pub const Pipeline = struct {
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
 
-        try w.writeAll(
-            \\Read the spec.md file in the repository root.
-            \\Write test files that verify every acceptance criterion listed in spec.md.
-            \\
-            \\Rules:
-            \\- Only create or modify test files (files matching *_test.* or in a tests/ directory)
-            \\- Tests must be deterministic and self-contained
-            \\- Tests should FAIL initially since the features are not yet implemented
-            \\- Include both happy-path and edge-case tests
-            \\- Do NOT write implementation code
-        );
+        try w.writeAll(prompts.qa_phase);
 
         const resume_sid = if (task.session_id.len > 0) task.session_id else null;
         const result = self.spawnAgent(.qa, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
@@ -739,22 +654,11 @@ pub const Pipeline = struct {
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
 
-        try w.writeAll(
-            \\Read spec.md for the specification and the existing test files.
-            \\Write implementation code that makes all tests pass.
-            \\
-            \\Rules:
-            \\- Only modify files listed in spec.md under "Files to modify" or "Files to create"
-            \\- Do NOT modify test files
-            \\- Follow existing code conventions
-            \\- Keep changes minimal and focused
-        );
+        try w.writeAll(prompts.impl_phase);
 
         if (std.mem.eql(u8, task.status, "retry") and task.last_error.len > 0) {
-            try w.writeAll("\n\nPrevious attempt failed. Test output:\n```\n");
             const err_tail = if (task.last_error.len > 3000) task.last_error[task.last_error.len - 3000 ..] else task.last_error;
-            try w.writeAll(err_tail);
-            try w.writeAll("\n```\nFix the failures.");
+            try w.print(prompts.impl_retry_fmt, .{err_tail});
         }
 
         const resume_sid = if (task.session_id.len > 0) task.session_id else null;
@@ -892,28 +796,17 @@ pub const Pipeline = struct {
             defer prompt_buf.deinit();
             const w = prompt_buf.writer();
 
-            try w.writeAll(
-                \\This branch has merge conflicts with main. Your job:
-                \\1. Run `git fetch origin && git rebase origin/main` to start the rebase
-                \\2. Resolve ALL conflicts in the affected files
-                \\3. `git add` the resolved files and `git rebase --continue`
-                \\4. Repeat until the rebase is complete
-                \\5. Make sure the code compiles and tests pass after resolving
-                \\
-                \\Read spec.md for context on what this branch does.
-            );
+            try w.writeAll(prompts.rebase_phase);
 
             if (task.last_error.len > 0) {
-                try w.writeAll("\n\nPrevious error context:\n```\n");
                 const err_tail = if (task.last_error.len > 2000) task.last_error[task.last_error.len - 2000 ..] else task.last_error;
-                try w.writeAll(err_tail);
-                try w.writeAll("\n```");
+                try w.print(prompts.rebase_error_fmt, .{err_tail});
             }
 
             // Run on host (not Docker) — rebase needs full git repo access
-            // Share session dir with Docker so we can resume from impl phase
-            const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-            const result = self.spawnAgentHost(prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
+            // Don't pass Docker session ID — host agent can't resume Docker sessions
+            // (different HOME and project path hash). It will start fresh.
+            const result = self.spawnAgentHost(prompt_buf.items, wt_path, null, task.id) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
@@ -1407,7 +1300,7 @@ pub const Pipeline = struct {
             .session_dir = abs_session_home,
             .assistant_name = "",
             .workdir = workdir,
-            .allowed_tools = getAllowedTools(.worker),
+            .allowed_tools = prompts.getAllowedTools(.worker),
         }, prompt);
     }
 
@@ -1418,8 +1311,8 @@ pub const Pipeline = struct {
 
         self.config.refreshOAuthToken();
 
-        const system_prompt = getSystemPrompt(persona);
-        const allowed_tools = getAllowedTools(persona);
+        const system_prompt = prompts.getSystemPrompt(persona);
+        const allowed_tools = prompts.getAllowedTools(persona);
 
         // Per-task session dir — persists Claude sessions across container runs
         const session_dir = try std.fmt.allocPrint(tmp, "store/sessions/task-{d}/.claude", .{task_id});
@@ -1554,65 +1447,6 @@ pub const Pipeline = struct {
     }
 };
 
-pub fn getSystemPrompt(persona: AgentPersona) []const u8 {
-    return switch (persona) {
-        .manager =>
-        \\You are the Manager agent in an autonomous engineering pipeline.
-        \\Your job is to read a task description and the codebase, then produce
-        \\a spec.md file at the repository root.
-        \\
-        \\spec.md must contain:
-        \\1. Task summary (2-3 sentences)
-        \\2. Files to modify (exact paths)
-        \\3. Files to create (exact paths)
-        \\4. Function/type signatures for new or changed code
-        \\5. Acceptance criteria (specific, testable assertions)
-        \\6. Edge cases to handle
-        \\
-        \\Rules:
-        \\- You have READ-ONLY access to source code
-        \\- You may ONLY write the file spec.md
-        \\- Be specific about file paths and function names
-        \\- Do NOT write any implementation code
-        ,
-        .qa =>
-        \\You are the QA agent in an autonomous engineering pipeline.
-        \\Your job is to read spec.md and write comprehensive test files.
-        \\
-        \\Rules:
-        \\- Read spec.md for requirements and acceptance criteria
-        \\- Write test files ONLY (files matching *_test.* or in tests/ directories)
-        \\- Tests must be deterministic and runnable with the project's test command
-        \\- Each acceptance criterion must have at least one test
-        \\- Include happy-path AND edge-case tests
-        \\- Tests should FAIL initially (features not yet implemented)
-        \\- Do NOT write implementation code
-        \\- Do NOT modify non-test files
-        ,
-        .worker =>
-        \\You are the Worker agent in an autonomous engineering pipeline.
-        \\Your job is to write implementation code that passes all existing tests.
-        \\
-        \\Rules:
-        \\- Read spec.md for the specification
-        \\- Read test files to understand expected behavior
-        \\- Only modify files listed in spec.md under "Files to modify/create"
-        \\- Do NOT modify test files
-        \\- Do NOT add dependencies without spec approval
-        \\- Follow existing code conventions
-        \\- Write minimal code to pass all tests
-        ,
-    };
-}
-
-pub fn getAllowedTools(persona: AgentPersona) []const u8 {
-    return switch (persona) {
-        .manager => "Read,Glob,Grep,Write",
-        .qa => "Read,Glob,Grep,Write",
-        .worker => "Read,Glob,Grep,Write,Edit,Bash",
-    };
-}
-
 const TestResult = struct {
     stdout: []const u8,
     stderr: []const u8,
@@ -1621,16 +1455,16 @@ const TestResult = struct {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
-test "getSystemPrompt returns non-empty for all personas" {
-    try std.testing.expect(getSystemPrompt(.manager).len > 0);
-    try std.testing.expect(getSystemPrompt(.qa).len > 0);
-    try std.testing.expect(getSystemPrompt(.worker).len > 0);
+test "prompts: system prompts non-empty for all personas" {
+    try std.testing.expect(prompts.getSystemPrompt(.manager).len > 0);
+    try std.testing.expect(prompts.getSystemPrompt(.qa).len > 0);
+    try std.testing.expect(prompts.getSystemPrompt(.worker).len > 0);
 }
 
 test "getAllowedTools restricts manager and qa" {
-    const mgr = getAllowedTools(.manager);
-    const qa = getAllowedTools(.qa);
-    const wrk = getAllowedTools(.worker);
+    const mgr = prompts.getAllowedTools(.manager);
+    const qa = prompts.getAllowedTools(.qa);
+    const wrk = prompts.getAllowedTools(.worker);
 
     // Manager and QA should not have Bash or Edit
     try std.testing.expect(std.mem.indexOf(u8, mgr, "Bash") == null);
@@ -1663,5 +1497,5 @@ test "digest generation formatting" {
 }
 
 test {
-    _ = @import("pipeline_shutdown_test.zig");
+    _ = @import("pipeline_stats_test.zig");
 }
