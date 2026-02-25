@@ -86,23 +86,30 @@ pub const WebServer = struct {
     }
 
     pub fn pushLog(self: *WebServer, level: []const u8, message: []const u8) void {
-        self.log_mu.lock();
-        defer self.log_mu.unlock();
+        {
+            self.log_mu.lock();
+            defer self.log_mu.unlock();
 
-        var entry = &self.log_ring[self.log_head];
-        entry.timestamp = std.time.timestamp();
-        entry.active = true;
+            var entry = &self.log_ring[self.log_head];
+            entry.timestamp = std.time.timestamp();
+            entry.active = true;
 
-        const llen = @min(level.len, entry.level.len);
-        @memcpy(entry.level[0..llen], level[0..llen]);
-        entry.level_len = @intCast(llen);
+            const llen = @min(level.len, entry.level.len);
+            @memcpy(entry.level[0..llen], level[0..llen]);
+            entry.level_len = @intCast(llen);
 
-        const mlen = @min(message.len, entry.message.len);
-        @memcpy(entry.message[0..mlen], message[0..mlen]);
-        entry.message_len = @intCast(mlen);
+            const mlen = @min(message.len, entry.message.len);
+            @memcpy(entry.message[0..mlen], message[0..mlen]);
+            entry.message_len = @intCast(mlen);
 
-        self.log_head = (self.log_head + 1) % LOG_RING_SIZE;
-        if (self.log_count < LOG_RING_SIZE) self.log_count += 1;
+            self.log_head = (self.log_head + 1) % LOG_RING_SIZE;
+            if (self.log_count < LOG_RING_SIZE) self.log_count += 1;
+        }
+
+        // Persist warn/error to DB events table
+        if (std.mem.eql(u8, level, "warning") or std.mem.eql(u8, level, "err")) {
+            self.db.logEvent(level, "system", message, "");
+        }
 
         self.broadcastSse(level, message);
     }
@@ -359,6 +366,8 @@ pub const WebServer = struct {
             self.serveQueueJson(stream);
         } else if (std.mem.eql(u8, path, "/api/status")) {
             self.serveStatusJson(stream);
+        } else if (std.mem.startsWith(u8, path, "/api/events")) {
+            self.serveEventsJson(stream, path);
         } else if (std.mem.startsWith(u8, path, "/api/proposals/") and std.mem.eql(u8, method, "POST")) {
             self.handleProposalAction(stream, path);
         } else if (std.mem.startsWith(u8, path, "/api/proposals")) {
@@ -934,6 +943,62 @@ pub const WebServer = struct {
         } else {
             self.serveJsonResponse(stream, 400, "{\"error\":\"unknown action\"}");
         }
+    }
+
+    fn serveEventsJson(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        // Parse query params: ?category=X&level=Y&since=Z&limit=N
+        var category: ?[]const u8 = null;
+        var level: ?[]const u8 = null;
+        var since_ts: i64 = 0;
+        var limit_n: i64 = 200;
+
+        if (std.mem.indexOf(u8, path, "?")) |q_pos| {
+            const query = path[q_pos + 1 ..];
+            var it = std.mem.splitScalar(u8, query, '&');
+            while (it.next()) |param| {
+                if (std.mem.indexOf(u8, param, "=")) |eq| {
+                    const key = param[0..eq];
+                    const val = param[eq + 1 ..];
+                    if (std.mem.eql(u8, key, "category")) {
+                        category = val;
+                    } else if (std.mem.eql(u8, key, "level")) {
+                        level = val;
+                    } else if (std.mem.eql(u8, key, "since")) {
+                        since_ts = std.fmt.parseInt(i64, val, 10) catch 0;
+                    } else if (std.mem.eql(u8, key, "limit")) {
+                        limit_n = std.fmt.parseInt(i64, val, 10) catch 200;
+                    }
+                }
+            }
+        }
+
+        const events = self.db.getEvents(alloc, category, level, since_ts, limit_n) catch {
+            self.sendJson(stream, "[]");
+            return;
+        };
+
+        var buf = std.ArrayList(u8).init(alloc);
+        const w = buf.writer();
+        w.writeAll("[") catch return;
+        for (events, 0..) |ev, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            var esc_msg: [2048]u8 = undefined;
+            var esc_meta: [2048]u8 = undefined;
+            w.print("{{\"id\":{d},\"ts\":{d},\"level\":\"{s}\",\"category\":\"{s}\",\"message\":\"{s}\",\"metadata\":\"{s}\"}}", .{
+                ev.id,
+                ev.ts,
+                ev.level,
+                ev.category,
+                jsonEscape(&esc_msg, ev.message[0..@min(ev.message.len, 1000)]),
+                jsonEscape(&esc_meta, ev.metadata[0..@min(ev.metadata.len, 1000)]),
+            }) catch return;
+        }
+        w.writeAll("]") catch return;
+        self.sendJson(stream, buf.items);
     }
 
     fn serveStatusJson(self: *WebServer, stream: std.net.Stream) void {
