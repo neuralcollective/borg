@@ -406,8 +406,9 @@ pub const Pipeline = struct {
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
 
-        // Include CLAUDE.md and file listing so the agent understands the codebase
+        // Include CLAUDE.md, file listing, and exploration instructions
         self.appendRepoContext(&prompt_buf, repo_path);
+        w.writeAll(prompts.seed_explore_preamble) catch return 0;
 
         switch (seed_mode) {
             0 => w.writeAll(prompts.seed_refactor) catch return 0,

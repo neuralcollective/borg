@@ -124,13 +124,23 @@ pub const rebase_fix_error_fmt =
 
 // ── Seed prompts ───────────────────────────────────────────────────────
 
+pub const seed_explore_preamble =
+    \\First, thoroughly explore the codebase before making any suggestions.
+    \\Use Read to examine key source files, Grep to search for patterns,
+    \\and Glob to discover the project structure. Understand the architecture,
+    \\existing patterns, and current state of the code.
+    \\
+    \\Then, based on your exploration:
+    \\
+;
+
 pub const seed_refactor =
-    \\Analyze this codebase and identify 1-3 concrete, small improvements.
+    \\Identify 1-3 concrete, small improvements.
     \\Focus on refactoring, code quality, and bug fixes — not new features.
 ;
 
 pub const seed_security =
-    \\Audit this codebase for bugs, security vulnerabilities, and reliability issues.
+    \\Audit for bugs, security vulnerabilities, and reliability issues.
     \\Look for: race conditions, resource leaks, error handling gaps,
     \\integer overflows, injection vulnerabilities, undefined behavior.
     \\Create a task for each real issue. Skip false positives.
@@ -143,17 +153,16 @@ pub const seed_tests =
 
 pub const seed_features =
     \\Suggest 1-3 concrete features that would meaningfully improve this project.
-    \\
+    \\Base your suggestions on actual gaps you found while exploring the code.
 ;
 
 pub const seed_architecture =
-    \\Analyze this codebase's architecture and identify 1-2 significant structural
-    \\improvements. Think big: module reorganization, API redesigns, performance
-    \\overhauls, major refactors that span multiple files, or replacing approaches
-    \\that have outgrown their original design.
+    \\Identify 1-2 significant structural improvements. Think big: module
+    \\reorganization, API redesigns, performance overhauls, major refactors
+    \\that span multiple files, or replacing approaches that have outgrown
+    \\their original design.
     \\
     \\Each proposal should be a multi-day project, not a quick fix.
-    \\
 ;
 
 pub const seed_cross_pollinate =
