@@ -1170,6 +1170,17 @@ pub const Db = struct {
         return tasks.toOwnedSlice();
     }
 
+    pub fn countUnscoredProposals(self: *Db) i64 {
+        var rows = self.sqlite_db.query(
+            self.allocator,
+            "SELECT COUNT(*) FROM proposals WHERE status = 'proposed' AND triage_score = 0",
+            .{},
+        ) catch return 0;
+        defer rows.deinit();
+        const row = rows.next() orelse return 0;
+        return row.getInt(0) orelse 0;
+    }
+
     pub fn updateProposalTriage(self: *Db, proposal_id: i64, score: i64, impact: i64, feasibility: i64, risk: i64, effort: i64, reasoning: []const u8) !void {
         try self.sqlite_db.execute(
             "UPDATE proposals SET triage_score = ?1, triage_impact = ?2, triage_feasibility = ?3, triage_risk = ?4, triage_effort = ?5, triage_reasoning = ?6 WHERE id = ?7",

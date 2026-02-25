@@ -35,6 +35,7 @@ pub const Pipeline = struct {
     last_remote_check_ts: i64,
     last_self_update_ts: i64, // non-zero = a new build is ready to deploy
     last_health_ts: i64,
+    last_triage_ts: i64,
     startup_heads: std.StringHashMap([40]u8),
 
     // Pipelining: concurrent phase processing
@@ -71,6 +72,7 @@ pub const Pipeline = struct {
             .last_remote_check_ts = 0,
             .last_self_update_ts = 0,
             .last_health_ts = 0,
+            .last_triage_ts = 0,
             .startup_heads = heads,
             .active_agents = std.atomic.Value(u32).init(0),
         };
@@ -96,6 +98,7 @@ pub const Pipeline = struct {
 
             self.checkRemoteUpdates();
             self.checkHealth();
+            self.maybeAutoTriage();
             self.maybeApplySelfUpdate();
 
             std.time.sleep(self.config.pipeline_tick_s * std.time.ns_per_s);
@@ -1364,6 +1367,146 @@ pub const Pipeline = struct {
     }
 
     // --- Health Check ---
+
+    const TRIAGE_INTERVAL_S: i64 = 6 * 3600; // 6 hours
+
+    fn maybeAutoTriage(self: *Pipeline) void {
+        const now = std.time.timestamp();
+        if (now - self.last_triage_ts < TRIAGE_INTERVAL_S) return;
+
+        // Only run if there are unscored proposals
+        const unscored = self.db.countUnscoredProposals();
+        if (unscored == 0) return;
+
+        self.last_triage_ts = now;
+        std.log.info("Auto-triage: {d} unscored proposals, running triage", .{unscored});
+
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const proposals = self.db.getProposals(alloc, "proposed", 100) catch return;
+        if (proposals.len == 0) return;
+
+        const merged_tasks = self.db.getRecentMergedTasks(alloc, 50) catch &[0]db_mod.PipelineTask{};
+
+        var prompt_buf = std.ArrayList(u8).init(alloc);
+        const pw = prompt_buf.writer();
+        pw.writeAll(
+            \\Rate each proposal on 4 dimensions (1-5 scale), and flag proposals
+            \\that should be auto-dismissed.
+            \\
+            \\Dimensions:
+            \\- impact: How much value does this deliver? (5 = critical fix/feature, 1 = cosmetic)
+            \\- feasibility: How likely is an AI agent to implement this correctly without human help? (5 = trivial, 1 = needs human)
+            \\- risk: How likely to break existing functionality? (5 = very risky, 1 = safe)
+            \\- effort: How many agent cycles will this need? (5 = massive multi-file, 1 = simple one-file)
+            \\
+            \\Overall score formula: (impact * 2 + feasibility * 2 - risk - effort) mapped to 1-10 scale.
+            \\
+            \\Set "dismiss": true if the proposal should be auto-closed for any of these reasons:
+            \\- Already implemented (covered by a recently merged task)
+            \\- Duplicate of another proposal in this list
+            \\- Nonsensical, vague, or not actionable
+            \\- Irrelevant to the project
+            \\
+            \\Reply with ONLY a JSON array, no markdown fences, no commentary:
+            \\[{"id": <number>, "impact": <1-5>, "feasibility": <1-5>, "risk": <1-5>, "effort": <1-5>, "score": <1-10>, "reasoning": "<one sentence>", "dismiss": <true|false>}]
+            \\
+        ) catch return;
+
+        if (merged_tasks.len > 0) {
+            pw.writeAll("Recently merged tasks (for duplicate detection):\n") catch return;
+            for (merged_tasks) |t| {
+                pw.print("- {s}\n", .{t.title}) catch return;
+            }
+            pw.writeAll("\n") catch return;
+        }
+
+        pw.writeAll("Proposals to evaluate:\n\n") catch return;
+        for (proposals) |p| {
+            pw.print("- ID {d}: {s}\n  Description: {s}\n  Rationale: {s}\n\n", .{
+                p.id,
+                p.title,
+                if (p.description.len > 0) p.description else "(none)",
+                if (p.rationale.len > 0) p.rationale else "(none)",
+            }) catch return;
+        }
+
+        self.config.refreshOAuthToken();
+        var argv = std.ArrayList([]const u8).init(alloc);
+        argv.appendSlice(&.{ "claude", "--print", "--model", "haiku", "--permission-mode", "bypassPermissions" }) catch return;
+        var child = std.process.Child.init(argv.items, alloc);
+        child.stdin_behavior = .Pipe;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+
+        var env = std.process.getEnvMap(alloc) catch return;
+        env.put("CLAUDE_CODE_OAUTH_TOKEN", self.config.oauth_token) catch return;
+        child.env_map = &env;
+
+        child.spawn() catch return;
+
+        if (child.stdin) |stdin| {
+            stdin.writeAll(prompt_buf.items) catch {};
+            stdin.close();
+            child.stdin = null;
+        }
+
+        var stdout_buf = std.ArrayList(u8).init(alloc);
+        if (child.stdout) |stdout| {
+            var read_buf: [8192]u8 = undefined;
+            while (true) {
+                const n = stdout.read(&read_buf) catch break;
+                if (n == 0) break;
+                stdout_buf.appendSlice(read_buf[0..n]) catch break;
+            }
+        }
+        _ = child.wait() catch {};
+
+        const output = stdout_buf.items;
+        const arr_start = std.mem.indexOf(u8, output, "[") orelse {
+            std.log.warn("Auto-triage: no JSON array in output ({d} bytes)", .{output.len});
+            return;
+        };
+        const arr_end_idx = std.mem.lastIndexOf(u8, output, "]") orelse return;
+        const json_slice = output[arr_start .. arr_end_idx + 1];
+
+        var parsed = json_mod.parse(alloc, json_slice) catch {
+            std.log.warn("Auto-triage: JSON parse failed", .{});
+            return;
+        };
+        defer parsed.deinit();
+
+        const items = switch (parsed.value) {
+            .array => |a| a.items,
+            else => return,
+        };
+
+        var scored: u32 = 0;
+        var dismissed: u32 = 0;
+        for (items) |item| {
+            const p_id = json_mod.getInt(item, "id") orelse continue;
+            const impact = json_mod.getInt(item, "impact") orelse continue;
+            const feasibility = json_mod.getInt(item, "feasibility") orelse continue;
+            const risk = json_mod.getInt(item, "risk") orelse continue;
+            const effort = json_mod.getInt(item, "effort") orelse continue;
+            const score = json_mod.getInt(item, "score") orelse continue;
+            const reasoning = json_mod.getString(item, "reasoning") orelse "";
+            const should_dismiss = json_mod.getBool(item, "dismiss") orelse false;
+
+            self.db.updateProposalTriage(p_id, score, impact, feasibility, risk, effort, reasoning) catch continue;
+            scored += 1;
+
+            if (should_dismiss) {
+                self.db.updateProposalStatus(p_id, "auto_dismissed") catch continue;
+                dismissed += 1;
+                std.log.info("Auto-triage: auto-dismissed proposal #{d}: {s}", .{ p_id, reasoning });
+            }
+        }
+
+        std.log.info("Auto-triage: scored {d}/{d} proposals, auto-dismissed {d}", .{ scored, proposals.len, dismissed });
+    }
 
     const HEALTH_INTERVAL_S: i64 = 1800; // 30 minutes
 
