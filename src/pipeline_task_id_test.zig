@@ -290,3 +290,7 @@ test "Edge4: log format string still references container_name" {
 // AC2: Tests pass — implicit
 // If all tests in this file and existing tests pass, AC2 is satisfied.
 // =============================================================================
+
+test {
+    _ = @import("pipeline_container_seq_test.zig");
+}

@@ -1,115 +1,83 @@
-# Task #11 — Add tests for `getEnv` / `findEnvValue` `.env` parsing in config.zig
+# Task #8: Fix Docker Container Name Collision for Concurrent Agents
 
 ## 1. Task Summary
 
-`getEnv` in `src/config.zig` drives all application configuration by reading key-value
-pairs from `.env` file content via the private helper `findEnvValue`.  Existing tests
-cover `findEnvValue` for basic `KEY=VALUE`, whitespace-trimmed values, quote-stripping,
-and comment/blank-line skipping, but the case of a **value that itself contains `=`**
-(e.g. `TOKEN=abc=def`) is not covered and the public entry-point `getEnv` has no direct
-tests at all.  Silent mis-parsing of such values would misconfigure the entire
-application with no error.
+Container names in `Pipeline.spawnAgent` are generated using `std.time.timestamp()` (second granularity), which causes Docker to reject a second container creation if two agents are spawned within the same second. A function-local anonymous-struct atomic counter (`const seq = struct { var counter = ...; };`) was added as a partial fix, but the counter is an implicit file-scoped static rather than an explicit `Pipeline` field, making ownership and initialization non-obvious. The clean fix is to promote the counter to an explicit `container_seq: std.atomic.Value(u32)` field on `Pipeline` and drop the redundant timestamp from the name format.
 
 ## 2. Files to Modify
 
 | File | Reason |
 |------|--------|
-| `src/config.zig` | Add new `test` blocks inside the existing `// ── Tests ──` section at the bottom of the file. Both `getEnv` and `findEnvValue` are `fn`-private; tests must live in the same file to access them. |
+| `src/pipeline.zig` | Add `container_seq` field to `Pipeline` struct, initialize it in `init`, update `spawnAgent` to use it, remove function-local `seq` anonymous struct and `std.time.timestamp()` from the name format. |
 
 ## 3. Files to Create
 
-None.  All new tests belong in the existing test section of `src/config.zig`.
+None.
 
-## 4. Function / Type Signatures for New or Changed Code
+## 4. Function/Type Signatures for New or Changed Code
 
-No new functions or types are introduced.  The additions are pure test blocks that call
-the existing private functions:
+### `Pipeline` struct — add field
 
 ```zig
-// Existing private targets under test (no signature change):
-fn findEnvValue(allocator: std.mem.Allocator, content: []const u8, key: []const u8) ?[]const u8
-fn getEnv(allocator: std.mem.Allocator, env_content: []const u8, key: []const u8) ?[]const u8
-
-// New test blocks to add (names are requirements, not suggestions):
-test "findEnvValue value containing equals sign returns full remainder"
-test "getEnv basic KEY=VALUE from env content"
-test "getEnv skips hash comment lines"
-test "getEnv skips blank lines"
-test "getEnv value with embedded equals sign"
-test "getEnv returns null when key absent from content and process env"
-test "getEnv env file value takes precedence when key exists in content"
+pub const Pipeline = struct {
+    // ... existing fields ...
+    active_agents: std.atomic.Value(u32),
+    container_seq: std.atomic.Value(u32),  // monotonic counter for unique container names
+};
 ```
 
-Each test block must follow the project's existing style:
-- allocator: `std.testing.allocator`
-- `defer` every allocation returned by the function under test
-- assertions via `std.testing.expectEqualStrings` and `std.testing.expect`
+### `Pipeline.init` — initialize new field
+
+```zig
+return .{
+    // ... existing fields ...
+    .active_agents = std.atomic.Value(u32).init(0),
+    .container_seq = std.atomic.Value(u32).init(0),
+};
+```
+
+### `Pipeline.spawnAgent` — replace function-local counter with struct field
+
+Remove the current block (lines ~1362–1370):
+
+```zig
+var name_buf: [128]u8 = undefined;
+const seq = struct {
+    var counter = std.atomic.Value(u32).init(0);
+};
+const n = seq.counter.fetchAdd(1, .monotonic);
+const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}-{d}", .{
+    @tagName(persona), std.time.timestamp(), n,
+});
+```
+
+Replace with:
+
+```zig
+var name_buf: [128]u8 = undefined;
+const n = self.container_seq.fetchAdd(1, .monotonic);
+const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}", .{
+    @tagName(persona), n,
+});
+```
 
 ## 5. Acceptance Criteria
 
-All criteria must pass under `zig build test` (`just t`) with zero regressions.
-
-**AC-1 — `findEnvValue`: value containing `=`**
-```
-env_content = "TOKEN=abc=def"
-findEnvValue(alloc, env_content, "TOKEN") == "abc=def"
-```
-Parsing must split on the *first* `=` only; everything after it is the value.
-
-**AC-2 — `getEnv`: basic `KEY=VALUE`**
-```
-env_content = "KEY=value"
-getEnv(alloc, env_content, "KEY") == "value"
-```
-
-**AC-3 — `getEnv`: comment lines are skipped**
-```
-env_content = "# this is a comment\nREAL=found"
-getEnv(alloc, env_content, "REAL") == "found"
-getEnv(alloc, env_content, "#")    == null   // comment marker is not a key
-```
-
-**AC-4 — `getEnv`: blank lines are skipped**
-```
-env_content = "\n\nKEY=value"
-getEnv(alloc, env_content, "KEY") == "value"
-```
-
-**AC-5 — `getEnv`: value with embedded `=`**
-```
-env_content = "TOKEN=abc=def"
-getEnv(alloc, env_content, "TOKEN") == "abc=def"
-```
-
-**AC-6 — `getEnv`: returns null when key is absent**
-```
-env_content = "OTHER=x"
-// Key must also be absent from the real process environment.
-// Use a key guaranteed not to be set, e.g. "BORG_TEST_MISSING_KEY_XYZ_11".
-getEnv(alloc, env_content, "BORG_TEST_MISSING_KEY_XYZ_11") == null
-```
-
-**AC-7 — `getEnv`: env file value is returned when key is present in content**
-```
-env_content = "BORG_TEST_KEY_11=from_file"
-getEnv(alloc, env_content, "BORG_TEST_KEY_11") == "from_file"
-```
-(This key is not expected to be set in the process environment; the test verifies the
-file-read path returns the correct value without requiring environment mutation.)
-
-**AC-8 — all new tests are leak-free**
-Every allocation returned by `getEnv` / `findEnvValue` is freed with `defer`.
-Running under `std.testing.allocator` reports zero leaked bytes for each test.
+1. `Pipeline` struct declares `container_seq: std.atomic.Value(u32)`.
+2. `Pipeline.init` initializes `container_seq` to `0`.
+3. `spawnAgent` uses `self.container_seq.fetchAdd(1, .monotonic)` — no function-local `seq` struct remains.
+4. `std.time.timestamp()` is no longer part of the container name format string inside `spawnAgent`.
+5. Generated container names match the pattern `borg-{persona}-{n}` where `n` is the u32 counter value.
+6. Two successive calls to the name-generation logic within the same second produce distinct names (counter increments from `n` to `n+1`).
+7. A unit test asserts that two container name strings produced by incrementing `container_seq` are not equal.
+8. `just t` passes with no regressions.
 
 ## 6. Edge Cases to Handle
 
 | Edge case | Expected behaviour |
 |-----------|-------------------|
-| Value is the empty string: `KEY=` | `getEnv` returns `""` (empty slice, not null) |
-| Value contains multiple `=`: `A=x=y=z` | Returns `"x=y=z"` — split on first `=` only |
-| Indented comment `  # comment` | Still treated as a comment; the line is skipped |
-| Windows-style line ending `\r\n` | `\r` is stripped by the existing `trim` call; returned value must not include `\r` |
-| Value in double quotes containing `=`: `KEY="a=b"` | Returns `"a=b"` — quotes are stripped and embedded `=` is preserved |
-| Key with surrounding whitespace: `KEY =value` | Key trimmed to `"KEY"`; matches and returns `"value"` |
-| Key appears more than once in content | Returns the value from the **first** matching line (existing behaviour — test documents it, does not change it) |
-| Line consisting only of `=` | Empty key `""` never matches any real key lookup; safely skipped |
+| Counter wrap-around at `u32` max (4 294 967 295) | `fetchAdd` wraps to 0; names remain unique in practice within a process lifetime (no realistic workload spawns 4B containers). No special handling needed; document the wrap in a code comment. |
+| Multiple `Pipeline` instances in tests | Each instance starts its own counter at 0; names are unique per instance. This is acceptable since production runs exactly one `Pipeline`. |
+| `name_buf` overflow | `"borg-worker-4294967295"` is 22 bytes, well within the 128-byte buffer. A `comptime` assertion or comment confirming buffer adequacy should be added. |
+| Watchdog thread uses container name | `name_for_watchdog` is `allocator.dupe(u8, container_name)` taken after the name is formatted; no change to the watchdog code path is required. |
+| Concurrent `spawnAgent` calls | `fetchAdd(.monotonic)` is atomic; two simultaneous callers always receive distinct values. |
