@@ -1,12 +1,12 @@
-# Spec: Add tests for json.zig escapeString with special and control characters
+# Spec: Add tests for db.zig registerGroup/getAllGroups/unregisterGroup
 
 ## Task Summary
 
-The `escapeString` function in `src/json.zig` (lines 61-80) has minimal test coverage: two existing tests cover a combined special-character string and two control characters (0x01, 0x1f), but miss `\r`, empty string, standalone character cases, multi-byte UTF-8, and the full range of control characters. Add targeted tests that verify each escape path individually, test multi-byte UTF-8 passthrough, and cover the empty-string edge case.
+The existing "group registration round trip" test in `src/db.zig` (line 671) verifies `registerGroup` and `getAllGroups` but does not assert all fields — it skips checking `name` and `trigger`. The `unregisterGroup` function (line 255) has zero test coverage. Add tests that verify all five `RegisteredGroup` fields survive a register/read round-trip, and that `unregisterGroup` removes the group from subsequent `getAllGroups` results.
 
 ## Files to Modify
 
-1. **`src/json.zig`** — Add new `test` blocks in the existing test section (after line 123) for `escapeString`.
+1. **`src/db.zig`** — Add new `test` blocks in the existing test section at the bottom of the file (after line 881).
 
 ## Files to Create
 
@@ -14,41 +14,56 @@ None.
 
 ## Function/Type Signatures
 
-No new functions or types. Only new `test` blocks are added. Each test follows the existing pattern:
+No new functions or types. The tests exercise existing public API:
 
 ```zig
-test "escapeString <description>" {
-    const alloc = std.testing.allocator;
-    const result = try escapeString(alloc, <input>);
-    defer alloc.free(result);
-    try std.testing.expectEqualStrings(<expected>, result);
-}
+// src/db.zig — existing signatures (no changes)
+pub fn registerGroup(self: *Db, jid: []const u8, name: []const u8, folder: []const u8, trigger: []const u8, requires_trigger: bool) !void
+pub fn getAllGroups(self: *Db, allocator: std.mem.Allocator) ![]RegisteredGroup
+pub fn unregisterGroup(self: *Db, jid: []const u8) !void
 ```
+
+```zig
+// src/db.zig — existing struct (no changes)
+pub const RegisteredGroup = struct {
+    jid: []const u8,
+    name: []const u8,
+    folder: []const u8,
+    trigger: []const u8,
+    requires_trigger: bool,
+};
+```
+
+### New test blocks to add
+
+1. **`test "registerGroup and getAllGroups round-trip preserves all fields"`** — Registers a single group with non-default values for every field (including a custom trigger like `"!help"` and `requires_trigger = false`), calls `getAllGroups`, and asserts all five fields (`jid`, `name`, `folder`, `trigger`, `requires_trigger`) match exactly.
+
+2. **`test "unregisterGroup removes group from getAllGroups"`** — Registers two groups, calls `unregisterGroup` on the first, then calls `getAllGroups` and asserts only the second group remains (count == 1) and its `jid` matches the non-removed group.
+
+3. **`test "unregisterGroup on nonexistent jid is a no-op"`** — Opens a fresh in-memory DB, calls `unregisterGroup` with a jid that was never registered, and asserts no error is returned (DELETE WHERE on a missing row is not an error in SQLite).
+
+4. **`test "getAllGroups returns empty slice when no groups registered"`** — Opens a fresh in-memory DB with no registrations, calls `getAllGroups`, and asserts the result has length 0.
 
 ## Acceptance Criteria
 
-1. **Empty string**: `escapeString(alloc, "")` returns `""` (zero-length slice).
-2. **Double quote**: `escapeString(alloc, "\"")` returns `"\\\""` (the two-byte sequence `\"`).
-3. **Backslash**: `escapeString(alloc, "\\")` returns `"\\\\"` (the two-byte sequence `\\`).
-4. **Newline**: `escapeString(alloc, "\n")` returns `"\\n"`.
-5. **Carriage return**: `escapeString(alloc, "\r")` returns `"\\r"`.
-6. **Tab**: `escapeString(alloc, "\t")` returns `"\\t"`.
-7. **Control characters below 0x20**: Each control character not handled by a dedicated switch arm (e.g., 0x00 null, 0x07 bell, 0x0C form feed) produces `\u` followed by a 4-digit zero-padded hex code. Specifically test:
-   - `0x00` → `\u0000`
-   - `0x07` → `\u0007`
-   - `0x0C` → `\u000c`
-   - `0x1F` → `\u001f`
-8. **Normal ASCII passthrough**: Printable ASCII (e.g., `"hello world 123!@#"`) passes through unchanged — output equals input.
-9. **Multi-byte UTF-8 passthrough**: A string containing multi-byte UTF-8 characters (e.g., `"héllo 世界"`) passes through byte-for-byte unchanged — no bytes are escaped since all bytes ≥ 0x20.
-10. **Mixed content**: A string combining normal text, special characters, and control characters in one input produces the correct combined escaped output.
-11. **All tests pass**: `zig build test` succeeds with all new and existing tests passing.
-12. **No memory leaks**: All tests use `std.testing.allocator` (which detects leaks) and `defer alloc.free(result)`.
+1. **All-fields round-trip**: Registering a group with `jid="g1"`, `name="Test Group"`, `folder="test-folder"`, `trigger="!help"`, `requires_trigger=false` and reading it back via `getAllGroups` returns exactly one `RegisteredGroup` where `jid`, `name`, `folder`, `trigger`, and `requires_trigger` all match the input values.
+
+2. **Unregister removes group**: After registering groups with jids `"g1"` and `"g2"`, calling `unregisterGroup("g1")` causes `getAllGroups` to return exactly one group with `jid == "g2"`.
+
+3. **Unregister nonexistent is safe**: Calling `unregisterGroup("nonexistent")` on a DB with no matching row does not return an error.
+
+4. **Empty result**: `getAllGroups` on a fresh in-memory DB (no prior `registerGroup` calls) returns a slice of length 0.
+
+5. **Tests compile and pass**: `zig build test` passes with all new tests included.
 
 ## Edge Cases
 
-1. **Empty string** — `escapeString` must not crash or allocate garbage; it must return an empty slice.
-2. **Null byte (0x00)** — This is a valid control character that must be escaped as `\u0000`, not cause string truncation.
-3. **Boundary control characters** — `0x1F` is the highest control character (should be escaped); `0x20` (space) is the first non-control character (should pass through unchanged). Test both to verify the `ch < 0x20` boundary.
-4. **Multi-byte UTF-8 bytes** — Individual bytes of multi-byte UTF-8 sequences are all ≥ 0x80, so they pass the `ch < 0x20` check and must be appended verbatim. Verify the output length matches the input length for a UTF-8 string.
-5. **All five switch arms** — Ensure each of the five explicit switch cases (`"`, `\`, `\n`, `\r`, `\t`) is tested individually, not only in combination, to avoid masking bugs where one arm's output accidentally satisfies an assertion meant for another.
-6. **Carriage return specifically** — The existing tests cover `\n` and `\t` but not `\r`; this is the primary gap in the current coverage.
+1. **Custom trigger pattern**: The `trigger_pattern` column has a default of `'@Borg'` in the schema. The round-trip test must use a non-default trigger (e.g., `"!help"`) to prove the value comes from the insert, not the column default.
+
+2. **`requires_trigger = false`**: The column default is `1` (true). The round-trip test must use `false` to verify the boolean is stored and read correctly, not just falling back to the default.
+
+3. **Unregister nonexistent jid**: SQLite `DELETE WHERE jid = ?` on a non-matching row returns success (0 rows affected). The test confirms `unregisterGroup` does not propagate an error in this case.
+
+4. **Order independence**: `getAllGroups` does not guarantee row ordering (no ORDER BY). Tests that check a specific group after unregister should either register only two groups (so after removal there's exactly one) or search the returned slice by jid rather than assuming positional order.
+
+5. **`INSERT OR REPLACE` semantics**: The existing "registerGroup upserts on conflict" test already covers this case (re-registering the same jid overwrites all fields). The new tests should not duplicate this; they focus on round-trip field fidelity and unregister behavior.
