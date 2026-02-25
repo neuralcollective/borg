@@ -107,7 +107,7 @@ pub const WebServer = struct {
         }
 
         // Persist warn/error to DB events table
-        if (std.mem.eql(u8, level, "warning") or std.mem.eql(u8, level, "err")) {
+        if (std.mem.eql(u8, level, "warn") or std.mem.eql(u8, level, "err")) {
             self.db.logEvent(level, "system", message, "");
         }
 
