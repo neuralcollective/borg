@@ -3,7 +3,8 @@ const std = @import("std");
 pub const RepoConfig = struct {
     path: []const u8,
     test_cmd: []const u8,
-    is_self: bool, // true for primary repo (triggers self-update)
+    is_self: bool = false,
+    auto_merge: bool = true,
 };
 
 pub const Config = struct {
@@ -32,6 +33,7 @@ pub const Config = struct {
     rate_limit_per_minute: u32,
     max_pipeline_agents: u32,
     // Web dashboard
+    web_bind: []const u8,
     web_port: u16,
     dashboard_dist_dir: []const u8,
     // Multi-repo
@@ -62,6 +64,7 @@ pub const Config = struct {
         const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
         const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
         const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "4";
+        const web_bind_val = getEnv(allocator, env_content, "WEB_BIND") orelse "127.0.0.1";
         const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
 
         var config = Config{
@@ -87,6 +90,7 @@ pub const Config = struct {
             .max_concurrent_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
             .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
             .max_pipeline_agents = std.fmt.parseInt(u32, max_pipeline_agents_str, 10) catch 2,
+            .web_bind = web_bind_val,
             .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
             .dashboard_dist_dir = getEnv(allocator, env_content, "DASHBOARD_DIST_DIR") orelse try std.fmt.allocPrint(allocator, "{s}/dashboard/dist", .{getEnv(allocator, env_content, "PIPELINE_REPO") orelse "."}),
             .watched_repos = &.{},
@@ -98,7 +102,8 @@ pub const Config = struct {
         };
 
         // Build watched_repos list
-        config.watched_repos = try parseWatchedRepos(allocator, env_content, config.pipeline_repo, config.pipeline_test_cmd);
+        const primary_auto_merge = !std.mem.eql(u8, getEnv(allocator, env_content, "PIPELINE_AUTO_MERGE") orelse "true", "false");
+        config.watched_repos = try parseWatchedRepos(allocator, env_content, config.pipeline_repo, config.pipeline_test_cmd, primary_auto_merge);
 
         return config;
     }
@@ -118,15 +123,16 @@ pub const Config = struct {
     }
 };
 
-fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, primary_repo: []const u8, primary_test_cmd: []const u8) ![]RepoConfig {
+fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, primary_repo: []const u8, primary_test_cmd: []const u8, primary_auto_merge: bool) ![]RepoConfig {
     var repos = std.ArrayList(RepoConfig).init(allocator);
 
     // Primary repo always first
     if (primary_repo.len > 0) {
-        try repos.append(.{ .path = primary_repo, .test_cmd = primary_test_cmd, .is_self = true });
+        try repos.append(.{ .path = primary_repo, .test_cmd = primary_test_cmd, .is_self = true, .auto_merge = primary_auto_merge });
     }
 
     // Parse WATCHED_REPOS: pipe-delimited, each entry is path:test_cmd
+    // Append !manual to disable auto-merge: /path:cmd!manual
     const watched_opt = getEnv(allocator, env_content, "WATCHED_REPOS");
     defer if (watched_opt) |w| allocator.free(w);
     const watched = watched_opt orelse "";
@@ -139,20 +145,27 @@ fn parseWatchedRepos(allocator: std.mem.Allocator, env_content: []const u8, prim
             // Skip if same as primary
             if (std.mem.indexOf(u8, trimmed, ":")) |colon| {
                 const path = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
-                const cmd = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
+                var cmd = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
                 if (path.len == 0) continue;
                 if (std.mem.eql(u8, path, primary_repo)) continue;
+
+                // Check for !manual suffix
+                var auto_merge = true;
+                if (std.mem.endsWith(u8, cmd, "!manual")) {
+                    auto_merge = false;
+                    cmd = std.mem.trim(u8, cmd[0 .. cmd.len - 7], &[_]u8{ ' ', '\t' });
+                }
+
                 try repos.append(.{
                     .path = try allocator.dupe(u8, path),
                     .test_cmd = if (cmd.len > 0) try allocator.dupe(u8, cmd) else "make test",
-                    .is_self = false,
+                    .auto_merge = auto_merge,
                 });
             } else {
                 if (std.mem.eql(u8, trimmed, primary_repo)) continue;
                 try repos.append(.{
                     .path = try allocator.dupe(u8, trimmed),
                     .test_cmd = "make test",
-                    .is_self = false,
                 });
             }
         }
@@ -277,7 +290,7 @@ test "parseWatchedRepos empty env no primary" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "", "", "");
+    const repos = try parseWatchedRepos(alloc,"", "", "", true);
     try std.testing.expect(repos.len == 0);
 }
 
@@ -285,7 +298,7 @@ test "parseWatchedRepos empty env with primary" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "", "/home/project", "zig build test");
+    const repos = try parseWatchedRepos(alloc,"", "/home/project", "zig build test", true);
     try std.testing.expect(repos.len == 1);
     try std.testing.expectEqualStrings("/home/project", repos[0].path);
     try std.testing.expectEqualStrings("zig build test", repos[0].test_cmd);
@@ -296,7 +309,7 @@ test "parseWatchedRepos single path no cmd" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/repo/a", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 2);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -309,7 +322,7 @@ test "parseWatchedRepos single path with cmd" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:npm test", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/repo/a:npm test", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 2);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -322,7 +335,7 @@ test "parseWatchedRepos pipe-delimited multiple repos" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:cmd1|/repo/b:cmd2", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/repo/a:cmd1|/repo/b:cmd2", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 3);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -338,7 +351,7 @@ test "parseWatchedRepos duplicate of primary is skipped" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/main:other_cmd|/second:test", "/main", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/main:other_cmd|/second:test", "/main", "zig test", true);
     try std.testing.expect(repos.len == 2);
     try std.testing.expectEqualStrings("/main", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -351,7 +364,7 @@ test "parseWatchedRepos whitespace trimming" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS= /repo/a : cmd1 | /repo/b ", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS= /repo/a : cmd1 | /repo/b ", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 3);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -367,7 +380,7 @@ test "parseWatchedRepos empty entries between pipes skipped" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a||/repo/b", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/repo/a||/repo/b", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 3);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -381,7 +394,7 @@ test "parseWatchedRepos only whitespace and pipes with primary" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=| | |", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=| | |", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 1);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -391,7 +404,7 @@ test "parseWatchedRepos only whitespace and pipes no primary" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=| | |", "", "");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=| | |", "", "", true);
     try std.testing.expect(repos.len == 0);
 }
 
@@ -399,7 +412,7 @@ test "parseWatchedRepos colon with empty path skipped" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=:some_cmd", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=:some_cmd", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 1);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -409,7 +422,7 @@ test "parseWatchedRepos colon with empty cmd uses default" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/repo/a:", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/repo/a:", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 2);
     try std.testing.expectEqualStrings("/repo/a", repos[1].path);
     try std.testing.expectEqualStrings("make test", repos[1].test_cmd);
@@ -420,7 +433,7 @@ test "parseWatchedRepos path without colon matching primary skipped" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const repos = try parseWatchedRepos(alloc, "WATCHED_REPOS=/primary", "/primary", "zig test");
+    const repos = try parseWatchedRepos(alloc,"WATCHED_REPOS=/primary", "/primary", "zig test", true);
     try std.testing.expect(repos.len == 1);
     try std.testing.expectEqualStrings("/primary", repos[0].path);
     try std.testing.expect(repos[0].is_self);
@@ -433,7 +446,7 @@ test "parseWatchedRepos: primary repo is first" {
     const env =
         \\WATCHED_REPOS=/other:cmd_other
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "test_cmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "test_cmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -452,7 +465,7 @@ test "parseWatchedRepos: empty primary repo omitted" {
     const env =
         \\WATCHED_REPOS=/a:cmd_a
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -471,7 +484,7 @@ test "parseWatchedRepos: multiple pipe-delimited repos" {
     const env =
         \\WATCHED_REPOS=/a:cmd_a|/b:cmd_b
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -493,7 +506,7 @@ test "parseWatchedRepos: entry without colon uses default cmd" {
     const env =
         \\WATCHED_REPOS=/repo/path
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -511,7 +524,7 @@ test "parseWatchedRepos: entry with colon but empty cmd uses default" {
     const env =
         \\WATCHED_REPOS=/repo/path:
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -529,7 +542,7 @@ test "parseWatchedRepos: duplicate primary is skipped" {
     const env =
         \\WATCHED_REPOS=/primary:other_cmd|/other:cmd
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -549,7 +562,7 @@ test "parseWatchedRepos: empty entries are skipped" {
     const env =
         \\WATCHED_REPOS=||/a:cmd||
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -565,7 +578,7 @@ test "parseWatchedRepos: empty entries are skipped" {
 test "parseWatchedRepos: whitespace-only entries are skipped" {
     const alloc = std.testing.allocator;
     const env = "WATCHED_REPOS=  | \t |/a:cmd";
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -581,7 +594,7 @@ test "parseWatchedRepos: whitespace-only entries are skipped" {
 test "parseWatchedRepos: leading and trailing whitespace is trimmed" {
     const alloc = std.testing.allocator;
     const env = "WATCHED_REPOS=  /path : cmd  ";
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -599,7 +612,7 @@ test "parseWatchedRepos: entry with empty path after colon is skipped" {
     const env =
         \\WATCHED_REPOS=:cmd
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -615,7 +628,7 @@ test "parseWatchedRepos: no WATCHED_REPOS in env" {
     const env =
         \\OTHER_KEY=value
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -634,7 +647,7 @@ test "parseWatchedRepos: watched entries have is_self false" {
     const env =
         \\WATCHED_REPOS=/a:x|/b:y|/c
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -653,7 +666,7 @@ test "parseWatchedRepos: watched entries have is_self false" {
 
 test "parseWatchedRepos: empty env and empty primary" {
     const alloc = std.testing.allocator;
-    const repos = try parseWatchedRepos(alloc, "", "", "");
+    const repos = try parseWatchedRepos(alloc,"", "", "", true);
     defer alloc.free(repos);
     try std.testing.expect(repos.len == 0);
 }
@@ -663,7 +676,7 @@ test "parseWatchedRepos: WATCHED_REPOS is empty string" {
     const env =
         \\WATCHED_REPOS=
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -681,7 +694,7 @@ test "parseWatchedRepos: single entry without delimiter" {
     const env =
         \\WATCHED_REPOS=/single:test
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -699,7 +712,7 @@ test "parseWatchedRepos: duplicate primary without colon" {
     const env =
         \\WATCHED_REPOS=/primary
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -717,7 +730,7 @@ test "parseWatchedRepos: duplicate primary with colon" {
     const env =
         \\WATCHED_REPOS=/primary:other_cmd
     ;
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -734,7 +747,7 @@ test "parseWatchedRepos: duplicate primary with colon" {
 test "parseWatchedRepos: colon in command portion" {
     const alloc = std.testing.allocator;
     const env = "WATCHED_REPOS=/repo:make -C /path test";
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -752,7 +765,7 @@ test "parseWatchedRepos: multiple consecutive pipes" {
     const env =
         \\WATCHED_REPOS=/a:x|||/b:y
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -770,7 +783,7 @@ test "parseWatchedRepos: multiple consecutive pipes" {
 test "parseWatchedRepos: whitespace around path matching primary" {
     const alloc = std.testing.allocator;
     const env = "WATCHED_REPOS=  /primary  ";
-    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd");
+    const repos = try parseWatchedRepos(alloc,env, "/primary", "pcmd", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -788,7 +801,7 @@ test "parseWatchedRepos: entry that is only a colon" {
     const env =
         \\WATCHED_REPOS=:
     ;
-    const repos = try parseWatchedRepos(alloc, env, "", "");
+    const repos = try parseWatchedRepos(alloc,env, "", "", true);
     defer alloc.free(repos);
     defer for (repos) |r| {
         if (!r.is_self) {
@@ -797,6 +810,33 @@ test "parseWatchedRepos: entry that is only a colon" {
         }
     };
     try std.testing.expect(repos.len == 0);
+}
+
+test "parseWatchedRepos: !manual suffix disables auto_merge" {
+    const alloc = std.testing.allocator;
+    const env = "WATCHED_REPOS=/a:cmd_a!manual|/b:cmd_b";
+    const repos = try parseWatchedRepos(alloc, env, "/primary", "pcmd", true);
+    defer alloc.free(repos);
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    try std.testing.expect(repos.len == 3);
+    try std.testing.expect(repos[0].auto_merge == true);
+    try std.testing.expect(repos[1].auto_merge == false);
+    try std.testing.expectEqualStrings("cmd_a", repos[1].test_cmd);
+    try std.testing.expect(repos[2].auto_merge == true);
+    try std.testing.expectEqualStrings("cmd_b", repos[2].test_cmd);
+}
+
+test "parseWatchedRepos: primary auto_merge=false" {
+    const alloc = std.testing.allocator;
+    const repos = try parseWatchedRepos(alloc, "", "/primary", "pcmd", false);
+    defer alloc.free(repos);
+    try std.testing.expect(repos.len == 1);
+    try std.testing.expect(repos[0].auto_merge == false);
 }
 
 // ── getTestCmdForRepo tests ────────────────────────────────────────────
@@ -832,6 +872,7 @@ fn testMinimalConfig(pipeline_test_cmd: []const u8, watched_repos: []RepoConfig)
         .whatsapp_auth_dir = "",
         .discord_enabled = false,
         .discord_token = "",
+        .web_bind = "127.0.0.1",
         .allocator = std.testing.allocator,
     };
 }

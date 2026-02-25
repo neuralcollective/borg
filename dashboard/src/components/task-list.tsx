@@ -6,34 +6,38 @@ import { cn } from "@/lib/utils";
 interface TaskListProps {
   selectedId: number | null;
   onSelect: (id: number) => void;
+  repoFilter: string | null;
 }
 
-export function TaskList({ selectedId, onSelect }: TaskListProps) {
+export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   const { data: tasks } = useTasks();
   const { data: status } = useStatus();
   const multiRepo = (status?.watched_repos?.length ?? 0) > 1;
 
-  const active = tasks?.filter((t) => isActiveStatus(t.status)) ?? [];
-  const done = tasks?.filter((t) => !isActiveStatus(t.status)) ?? [];
+  const filtered = repoFilter
+    ? tasks?.filter((t) => t.repo_path === repoFilter)
+    : tasks;
+  const active = filtered?.filter((t) => isActiveStatus(t.status)) ?? [];
+  const done = filtered?.filter((t) => !isActiveStatus(t.status)) ?? [];
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
         <span className="text-[11px] font-medium text-zinc-400">Pipeline Tasks</span>
-        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-zinc-500">{tasks?.length ?? 0}</span>
+        <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-zinc-500">{filtered?.length ?? 0}</span>
       </div>
       <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="p-1">
           {active.map((t) => (
-            <TaskRow key={t.id} task={t} isActive showRepo={multiRepo} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
+            <TaskRow key={t.id} task={t} isActive showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {done.length > 0 && active.length > 0 && (
             <div className="mx-3 my-1.5 h-px bg-white/[0.04]" />
           )}
           {done.slice(0, 20).map((t) => (
-            <TaskRow key={t.id} task={t} showRepo={multiRepo} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
+            <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
-          {!tasks?.length && <p className="py-12 text-center text-xs text-zinc-600">No tasks yet</p>}
+          {!filtered?.length && <p className="py-12 text-center text-xs text-zinc-600">No tasks yet</p>}
         </div>
       </div>
     </div>

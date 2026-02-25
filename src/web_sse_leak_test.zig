@@ -46,6 +46,7 @@ fn makeTestServer(alloc: std.mem.Allocator) WebServer {
         @ptrFromInt(0x10000), // fake *Db (never dereferenced)
         @ptrFromInt(0x10000), // fake *Config (never dereferenced)
         0, // port 0: stop()'s self-connect will harmlessly fail
+        "127.0.0.1",
     );
 }
 

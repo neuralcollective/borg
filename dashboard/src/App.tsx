@@ -11,12 +11,13 @@ import { ChatPanel } from "@/components/chat-panel";
 export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
+  const [repoFilter, setRepoFilter] = useState<string | null>(null);
   const { logs, connected } = useLogs();
 
   return (
     <div className="flex h-screen flex-col bg-[#0a0a0a] text-foreground antialiased">
       <Header connected={connected} onToggleChat={() => setChatOpen((v) => !v)} chatOpen={chatOpen} />
-      <StatsBar />
+      <StatsBar repoFilter={repoFilter} onRepoFilterChange={setRepoFilter} />
       <div
         className={`grid min-h-0 flex-1 ${
           chatOpen
@@ -34,13 +35,13 @@ export default function App() {
           {selectedTaskId !== null ? (
             <TaskDetail taskId={selectedTaskId} onBack={() => setSelectedTaskId(null)} />
           ) : (
-            <TaskList selectedId={selectedTaskId} onSelect={setSelectedTaskId} />
+            <TaskList selectedId={selectedTaskId} onSelect={setSelectedTaskId} repoFilter={repoFilter} />
           )}
         </div>
 
         {/* Center bottom: Queue */}
         <div className="overflow-hidden">
-          <QueuePanel />
+          <QueuePanel repoFilter={repoFilter} />
         </div>
 
         {/* Right: Chat (when open) */}

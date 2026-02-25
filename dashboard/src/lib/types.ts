@@ -38,6 +38,7 @@ export interface WatchedRepo {
   path: string;
   test_cmd: string;
   is_self: boolean;
+  auto_merge: boolean;
 }
 
 export interface Status {

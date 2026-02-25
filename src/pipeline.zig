@@ -979,7 +979,7 @@ pub const Pipeline = struct {
             if (queued.len == 0) continue;
 
             std.log.info("Integration: {d} branches for {s}", .{ queued.len, repo.path });
-            self.runIntegration(queued, repo.path) catch |err| {
+            self.runIntegration(queued, repo.path, repo.auto_merge) catch |err| {
                 std.log.err("Integration error for {s}: {}", .{ repo.path, err });
             };
             ran_any = true;
@@ -990,7 +990,7 @@ pub const Pipeline = struct {
         }
     }
 
-    fn runIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8) !void {
+    fn runIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, auto_merge: bool) !void {
         var git = Git.init(self.allocator, repo_path);
 
         // 1. Ensure main is checked out and up to date
@@ -1089,69 +1089,77 @@ pub const Pipeline = struct {
             }
         }
 
-        // 5. Merge ready PRs in task_id order
+        // 5. Merge ready PRs in task_id order (skip when manual merge mode)
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
 
-        for (live.items) |entry| {
-            if (excluded_ids.contains(entry.id)) continue;
-            // Check PR exists
-            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
-            defer self.allocator.free(view_cmd);
-            const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
-            defer self.allocator.free(view_result.stdout);
-            defer self.allocator.free(view_result.stderr);
-            if (view_result.exit_code != 0) continue;
-
-            // Check GitHub's async mergeability before attempting merge
-            const mb_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json mergeable --jq .mergeable", .{entry.branch});
-            defer self.allocator.free(mb_cmd);
-            const mb_result = self.runTestCommandForRepo(repo_path, mb_cmd) catch continue;
-            defer self.allocator.free(mb_result.stdout);
-            defer self.allocator.free(mb_result.stderr);
-            const mb_status = std.mem.trim(u8, mb_result.stdout, " \t\r\n");
-            if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
-                // GitHub still computing — skip, retry next tick
-                std.log.info("Task #{d} {s}: mergeability UNKNOWN, retrying next tick", .{ entry.task_id, entry.branch });
-                continue;
+        if (!auto_merge) {
+            // Manual merge mode: PRs are created and kept rebased, but not merged
+            for (live.items) |entry| {
+                if (excluded_ids.contains(entry.id)) continue;
+                try self.db.updateQueueStatus(entry.id, "pending_review", null);
+                std.log.info("Task #{d} {s}: PR ready for manual review", .{ entry.task_id, entry.branch });
             }
-            if (!std.mem.eql(u8, mb_status, "MERGEABLE")) {
-                std.log.info("Task #{d} {s}: mergeable={s}, sending back to rebase", .{ entry.task_id, entry.branch, mb_status });
-                try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict with main");
-                try self.db.updateTaskStatus(entry.task_id, "rebase");
-                continue;
-            }
+        } else {
+            for (live.items) |entry| {
+                if (excluded_ids.contains(entry.id)) continue;
+                // Check PR exists
+                const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
+                defer self.allocator.free(view_cmd);
+                const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
+                defer self.allocator.free(view_result.stdout);
+                defer self.allocator.free(view_result.stderr);
+                if (view_result.exit_code != 0) continue;
 
-            try self.db.updateQueueStatus(entry.id, "merging", null);
-            const merge_cmd = try std.fmt.allocPrint(self.allocator, "gh pr merge {s} --squash --delete-branch", .{entry.branch});
-            defer self.allocator.free(merge_cmd);
-            const merge_result = self.runTestCommandForRepo(repo_path, merge_cmd) catch {
-                try self.db.updateQueueStatus(entry.id, "queued", null);
-                continue;
-            };
-            defer self.allocator.free(merge_result.stdout);
-            defer self.allocator.free(merge_result.stderr);
-
-            if (merge_result.exit_code != 0) {
-                std.log.warn("gh pr merge {s}: {s}", .{ entry.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
-                const needs_rebase = std.mem.indexOf(u8, merge_result.stderr, "not mergeable") != null or
-                    std.mem.indexOf(u8, merge_result.stderr, "cannot be cleanly created") != null;
-                if (needs_rebase) {
+                // Check GitHub's async mergeability before attempting merge
+                const mb_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json mergeable --jq .mergeable", .{entry.branch});
+                defer self.allocator.free(mb_cmd);
+                const mb_result = self.runTestCommandForRepo(repo_path, mb_cmd) catch continue;
+                defer self.allocator.free(mb_result.stdout);
+                defer self.allocator.free(mb_result.stderr);
+                const mb_status = std.mem.trim(u8, mb_result.stdout, " \t\r\n");
+                if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
+                    std.log.info("Task #{d} {s}: mergeability UNKNOWN, retrying next tick", .{ entry.task_id, entry.branch });
+                    continue;
+                }
+                if (!std.mem.eql(u8, mb_status, "MERGEABLE")) {
+                    std.log.info("Task #{d} {s}: mergeable={s}, sending back to rebase", .{ entry.task_id, entry.branch, mb_status });
                     try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict with main");
                     try self.db.updateTaskStatus(entry.task_id, "rebase");
-                    std.log.info("Task #{d} has conflicts with main, sent back to rebase", .{entry.task_id});
-                } else {
-                    try self.db.updateQueueStatus(entry.id, "queued", null);
+                    continue;
                 }
-                continue;
-            }
 
-            try self.db.updateQueueStatus(entry.id, "merged", null);
-            try self.db.updateTaskStatus(entry.task_id, "merged");
-            try merged.append(entry.branch);
+                try self.db.updateQueueStatus(entry.id, "merging", null);
+                const merge_cmd = try std.fmt.allocPrint(self.allocator, "gh pr merge {s} --squash --delete-branch", .{entry.branch});
+                defer self.allocator.free(merge_cmd);
+                const merge_result = self.runTestCommandForRepo(repo_path, merge_cmd) catch {
+                    try self.db.updateQueueStatus(entry.id, "queued", null);
+                    continue;
+                };
+                defer self.allocator.free(merge_result.stdout);
+                defer self.allocator.free(merge_result.stderr);
 
-            if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
+                if (merge_result.exit_code != 0) {
+                    std.log.warn("gh pr merge {s}: {s}", .{ entry.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
+                    const needs_rebase = std.mem.indexOf(u8, merge_result.stderr, "not mergeable") != null or
+                        std.mem.indexOf(u8, merge_result.stderr, "cannot be cleanly created") != null;
+                    if (needs_rebase) {
+                        try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict with main");
+                        try self.db.updateTaskStatus(entry.task_id, "rebase");
+                        std.log.info("Task #{d} has conflicts with main, sent back to rebase", .{entry.task_id});
+                    } else {
+                        try self.db.updateQueueStatus(entry.id, "queued", null);
+                    }
+                    continue;
+                }
+
+                try self.db.updateQueueStatus(entry.id, "merged", null);
+                try self.db.updateTaskStatus(entry.task_id, "merged");
+                try merged.append(entry.branch);
+
+                if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                    self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
+                }
             }
         }
 
