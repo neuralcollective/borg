@@ -107,6 +107,21 @@ pub const rebase_error_fmt =
     \\```
 ;
 
+pub const rebase_fix_phase =
+    \\The branch was rebased onto origin/main successfully, but tests now fail.
+    \\Fix the code so tests pass. Read spec.md for context on what this branch does.
+    \\Run the test command to verify your fix before finishing.
+;
+
+pub const rebase_fix_error_fmt =
+    \\
+    \\
+    \\Test output:
+    \\```
+    \\{s}
+    \\```
+;
+
 // ── Seed prompts ───────────────────────────────────────────────────────
 
 pub const seed_refactor =

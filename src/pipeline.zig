@@ -811,27 +811,16 @@ pub const Pipeline = struct {
             std.log.info("Task #{d} passed tests, queued for integration", .{task.id});
             self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
         } else {
+            const combined = combineTestOutput(self.allocator, test_result.stdout, test_result.stderr, 2000);
+            defer if (combined.len > 0) self.allocator.free(combined);
+            try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
+
             if (task.attempt + 1 >= task.max_attempts) {
-                const out = test_result.stdout[0..@min(test_result.stdout.len, 2000)];
-                const err = test_result.stderr[0..@min(test_result.stderr.len, 2000)];
-                const combined = if (out.len > 0 and err.len > 0)
-                    try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{ out, err })
-                else if (out.len > 0)
-                    try std.fmt.allocPrint(self.allocator, "{s}", .{out})
-                else if (err.len > 0)
-                    try std.fmt.allocPrint(self.allocator, "{s}", .{err})
-                else
-                    try std.fmt.allocPrint(self.allocator, "tests failed (no output)", .{});
-                defer self.allocator.free(combined);
-                try self.db.updateTaskError(task.id, combined);
                 std.log.warn("Task #{d} exhausted {d} impl attempts — marking failed", .{ task.id, task.max_attempts });
                 try self.db.updateTaskStatus(task.id, "failed");
                 self.cleanupWorktree(task);
                 self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} exhausted {d} impl attempts — failed.", .{ task.id, task.max_attempts }));
             } else {
-                const combined = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ test_result.stdout, test_result.stderr });
-                defer self.allocator.free(combined);
-                try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
                 try self.db.incrementTaskAttempt(task.id);
 
                 // After 2+ impl attempts, check if the error is in test files themselves
@@ -989,11 +978,8 @@ pub const Pipeline = struct {
             self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" rebased successfully, re-queued for release.", .{ task.id, task.title }) catch return);
         } else {
             // Tests fail after clean rebase — spawn agent to fix
-            const combined_err = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{
-                test_result.stdout[0..@min(test_result.stdout.len, 2000)],
-                test_result.stderr[0..@min(test_result.stderr.len, 2000)],
-            });
-            defer self.allocator.free(combined_err);
+            const combined_err = combineTestOutput(self.allocator, test_result.stdout, test_result.stderr, 2000);
+            defer if (combined_err.len > 0) self.allocator.free(combined_err);
             try self.db.updateTaskError(task.id, combined_err[0..@min(combined_err.len, 4000)]);
 
             if (task.attempt + 1 >= task.max_attempts) {
@@ -1007,14 +993,9 @@ pub const Pipeline = struct {
                 var fix_prompt = std.ArrayList(u8).init(self.allocator);
                 defer fix_prompt.deinit();
                 const fw = fix_prompt.writer();
-                try fw.writeAll(
-                    \\The branch was rebased onto origin/main successfully, but tests now fail.
-                    \\Fix the code so tests pass. Read spec.md for context on what this branch does.
-                    \\Run the test command to verify your fix before finishing.
-                    \\
-                );
+                try fw.writeAll(prompts.rebase_fix_phase);
                 const err_tail = if (combined_err.len > 3000) combined_err[combined_err.len - 3000 ..] else combined_err;
-                try fw.print("\nTest output:\n```\n{s}\n```\n", .{err_tail});
+                try fw.print(prompts.rebase_fix_error_fmt, .{err_tail});
 
                 const fix_result = self.spawnAgentHost(fix_prompt.items, wt_path, null, task.id) catch |err| {
                     try self.failTask(task, "rebase: fix agent failed", @errorName(err));
@@ -1973,6 +1954,19 @@ pub const Pipeline = struct {
             if (repo.is_self and std.mem.eql(u8, repo.path, repo_path)) return true;
         }
         return false;
+    }
+
+    fn combineTestOutput(allocator: std.mem.Allocator, stdout: []const u8, stderr: []const u8, max: usize) []const u8 {
+        const out = stdout[0..@min(stdout.len, max)];
+        const err = stderr[0..@min(stderr.len, max)];
+        if (out.len > 0 and err.len > 0)
+            return std.fmt.allocPrint(allocator, "stdout:\n{s}\nstderr:\n{s}", .{ out, err }) catch ""
+        else if (err.len > 0)
+            return std.fmt.allocPrint(allocator, "{s}", .{err}) catch ""
+        else if (out.len > 0)
+            return std.fmt.allocPrint(allocator, "{s}", .{out}) catch ""
+        else
+            return "";
     }
 
     fn isTestFileError(stderr: []const u8, stdout: []const u8) bool {
