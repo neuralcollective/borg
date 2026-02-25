@@ -1,12 +1,12 @@
-# Spec: Add task_id parameter to spawnAgent for container naming
+# Spec: Add tests for parseWatchedRepos in config.zig
 
 ## Task Summary
 
-The `spawnAgent` function in `src/pipeline.zig` has no `task_id` parameter, so container names cannot include the task ID for traceability. Add a `task_id: i64` parameter to `spawnAgent` and update all five call sites (`seedRepo`, `runSpecPhase`, `runQaPhase`, `runImplPhase`, `runRebasePhase`) to pass the appropriate task ID, incorporating it into the Docker container name.
+The `parseWatchedRepos` function (`src/config.zig:121`) parses pipe-delimited `WATCHED_REPOS` entries with colon-separated `path:cmd` pairs, handling primary repo prepending, duplicate-primary skipping, empty entry filtering, whitespace trimming, and default test command fallback. Despite this complexity, it has no test coverage. This task adds comprehensive unit tests covering all parsing branches and edge cases.
 
 ## Files to Modify
 
-1. **`src/pipeline.zig`** — Change `spawnAgent` signature to add `task_id: i64`, update container name format to include the task ID, and update all five call sites.
+1. **`src/config.zig`** — Add test blocks after the existing `findEnvValue` tests (after line 270). The tests call the file-private `parseWatchedRepos` function directly, following the same pattern as the existing `findEnvValue` tests.
 
 ## Files to Create
 
@@ -14,75 +14,85 @@ None.
 
 ## Function/Type Signatures
 
-### `src/pipeline.zig`
+No new functions or types are created. The tests call existing private functions:
 
-#### `spawnAgent` — modify signature (line 1233)
-
-Current:
 ```zig
-fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult
+fn parseWatchedRepos(
+    allocator: std.mem.Allocator,
+    env_content: []const u8,
+    primary_repo: []const u8,
+    primary_test_cmd: []const u8,
+) ![]RepoConfig
 ```
 
-New:
+Each test block follows this pattern:
+
 ```zig
-fn spawnAgent(self: *Pipeline, task_id: i64, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult
+test "parseWatchedRepos: <description>" {
+    const alloc = std.testing.allocator;
+    const env = \\WATCHED_REPOS=<value>
+    ;
+    const repos = try parseWatchedRepos(alloc, env, "<primary>", "<cmd>");
+    defer alloc.free(repos);
+    // For entries whose path/test_cmd were duped by the function:
+    defer for (repos) |r| {
+        if (!r.is_self) {
+            alloc.free(r.path);
+            if (!std.mem.eql(u8, r.test_cmd, "make test")) alloc.free(r.test_cmd);
+        }
+    };
+    // assertions...
+}
 ```
 
-#### Container name format — modify (line 1270)
-
-Current:
-```zig
-const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}-{d}", .{
-    @tagName(persona), std.time.timestamp(), n,
-});
-```
-
-New:
-```zig
-const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-t{d}-{d}-{d}", .{
-    @tagName(persona), task_id, std.time.timestamp(), n,
-});
-```
-
-#### Call site updates
-
-1. **`seedRepo`** (line 317) — pass `0` as task_id (no task context):
-   ```zig
-   self.spawnAgent(0, .manager, prompt_buf.items, repo_path, null)
-   ```
-
-2. **`runSpecPhase`** (line 493) — pass `task.id`:
-   ```zig
-   self.spawnAgent(task.id, .manager, prompt_buf.items, wt_path, null)
-   ```
-
-3. **`runQaPhase`** (line 543) — pass `task.id`:
-   ```zig
-   self.spawnAgent(task.id, .qa, prompt_buf.items, wt_path, resume_sid)
-   ```
-
-4. **`runImplPhase`** (line 614) — pass `task.id`:
-   ```zig
-   self.spawnAgent(task.id, .worker, prompt_buf.items, wt_path, resume_sid)
-   ```
-
-5. **`runRebasePhase`** (line 748) — pass `task.id`:
-   ```zig
-   self.spawnAgent(task.id, .worker, prompt_buf.items, wt_path, resume_sid)
-   ```
+Note: Memory management in tests must account for the fact that `parseWatchedRepos` uses `allocator.dupe` for non-primary repo paths and non-default test commands, and returns an owned slice from `toOwnedSlice()`. The primary repo's `.path` and `.test_cmd` are NOT duped (they reference the passed-in slices directly). The default test command `"make test"` is a string literal, not heap-allocated.
 
 ## Acceptance Criteria
 
-1. **Compiles**: `zig build` succeeds with no errors.
-2. **Tests pass**: `zig build test` passes with no regressions.
-3. **Signature updated**: `spawnAgent` has a `task_id: i64` parameter as its second argument (after `self`).
-4. **Container name includes task ID**: The Docker container name format includes the task ID (e.g. `borg-manager-t19-1700000000-0`).
-5. **All call sites updated**: All five call sites pass a task ID — `task.id` for task-scoped phases, `0` for `seedRepo`.
-6. **No other behavioral changes**: Agent spawning, Docker config, timeout watchdog, and result parsing remain unchanged.
+1. **Primary repo first**: When `primary_repo` is non-empty, `repos[0]` has `.path == primary_repo`, `.test_cmd == primary_test_cmd`, and `.is_self == true`.
+
+2. **Empty primary repo**: When `primary_repo` is `""`, the primary repo is not added and the result contains only watched repos.
+
+3. **Multiple pipe-delimited repos**: Input `"/a:cmd_a|/b:cmd_b"` produces two watched entries (plus primary if set) with correct paths and commands.
+
+4. **Entry without colon uses default cmd**: Input `"/repo/path"` (no colon) produces an entry with `.test_cmd == "make test"`.
+
+5. **Entry with colon but empty cmd uses default**: Input `"/repo/path:"` produces an entry with `.test_cmd == "make test"`.
+
+6. **Duplicate primary is skipped**: If a watched entry's path matches `primary_repo`, it is not added a second time.
+
+7. **Empty entries are skipped**: Input `"||"` or `"|/a:cmd|"` does not produce entries for the empty segments.
+
+8. **Whitespace-only entries are skipped**: Input `"  | \t |/a:cmd"` skips the whitespace-only segments.
+
+9. **Leading/trailing whitespace on paths and commands is trimmed**: Input `"  /path : cmd  "` produces `.path == "/path"` and `.test_cmd == "cmd"`.
+
+10. **Entry with empty path after colon is skipped**: Input `":cmd"` (empty path) produces no entry.
+
+11. **No WATCHED_REPOS in env**: When env_content has no `WATCHED_REPOS` line, only the primary repo (if set) is returned.
+
+12. **All watched entries have `.is_self == false`**: Non-primary entries always have `is_self` set to `false`.
+
+13. **Build and tests pass**: `zig build test` passes with all new and existing tests.
 
 ## Edge Cases
 
-1. **`seedRepo` has no task**: `seedRepo` operates without a `PipelineTask`. Pass `0` as the task_id sentinel value. The container name will read `borg-manager-t0-...`, which is unambiguous since real task IDs start at 1.
-2. **Container name length**: Adding `t{task_id}` increases the container name length. With the existing 128-byte `name_buf`, the worst case is roughly `borg-manager-t9999999999-1700000000-4294967295` (46 chars), well within the buffer.
-3. **Negative task IDs**: SQLite `ROWID`/`INTEGER PRIMARY KEY` values are always positive (1+), so negative task_id values should not occur in practice. The `i64` type matches the DB schema; no special handling needed.
-4. **Log message consistency**: The `std.log.info("Spawning {s} agent: {s}", ...)` at line 1293 already logs the container name, so the task ID will automatically appear in logs via the updated container name — no additional logging changes needed.
+1. **Empty env_content and empty primary_repo**: Both are empty strings — result should be an empty slice (`repos.len == 0`).
+
+2. **WATCHED_REPOS is empty string**: `WATCHED_REPOS=` — no watched repos parsed, only primary (if set).
+
+3. **Single entry without delimiter**: `WATCHED_REPOS=/single:test` — one watched repo, no pipe splitting needed.
+
+4. **Duplicate primary without colon**: `WATCHED_REPOS=/primary` where primary_repo is `/primary` — the entry matches and is skipped.
+
+5. **Duplicate primary with colon**: `WATCHED_REPOS=/primary:other_cmd` where primary_repo is `/primary` — the entry matches by path and is skipped (the alternate command is ignored).
+
+6. **Path with colon in command portion**: `WATCHED_REPOS=/repo:make -C /path test` — the split is on the first colon only (`std.mem.indexOf` returns the first match), so path is `/repo` and cmd is `make -C /path test`.
+
+7. **Multiple consecutive pipes**: `WATCHED_REPOS=/a:x|||/b:y` — the empty segments between pipes are skipped.
+
+8. **Whitespace around path with no colon and matching primary**: `WATCHED_REPOS=  /primary  ` where primary_repo is `/primary` — after trimming, matches primary and is skipped.
+
+9. **Entry that is only a colon**: `WATCHED_REPOS=:` — path is empty after split, entry is skipped.
+
+10. **Memory correctness**: Tests use `std.testing.allocator` (which detects leaks) and properly free all heap-allocated strings returned by `parseWatchedRepos` — the owned slice from `toOwnedSlice()`, duped paths, and duped non-default test commands.
