@@ -181,10 +181,19 @@ pub const Config = struct {
                 return std.fs.cwd().readFileAlloc(self.allocator, rc.prompt_file, 64 * 1024) catch null;
             }
         }
-        // Auto-detect .borg/prompt.md in repo root
+        // Auto-detect .borg/prompt.md — check repo_path first, then repo root
         const auto_path = std.fmt.allocPrint(self.allocator, "{s}/.borg/prompt.md", .{repo_path}) catch return null;
         defer self.allocator.free(auto_path);
-        return std.fs.cwd().readFileAlloc(self.allocator, auto_path, 64 * 1024) catch null;
+        if (std.fs.cwd().readFileAlloc(self.allocator, auto_path, 64 * 1024)) |content| return content else |_| {}
+        // repo_path may be a worktree — check the parent repo root
+        for (self.watched_repos) |rc| {
+            if (std.mem.startsWith(u8, repo_path, rc.path) and repo_path.len > rc.path.len) {
+                const root_path = std.fmt.allocPrint(self.allocator, "{s}/.borg/prompt.md", .{rc.path}) catch continue;
+                defer self.allocator.free(root_path);
+                return std.fs.cwd().readFileAlloc(self.allocator, root_path, 64 * 1024) catch continue;
+            }
+        }
+        return null;
     }
 
     /// Re-read OAuth token from credentials file, refreshing via CLI if expired
