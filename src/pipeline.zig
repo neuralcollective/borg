@@ -84,8 +84,8 @@ pub const Pipeline = struct {
                 std.log.err("Pipeline tick error: {}", .{err});
             };
 
-            self.checkReleaseTrain() catch |err| {
-                std.log.err("Release train error: {}", .{err});
+            self.checkIntegration() catch |err| {
+                std.log.err("Integration error: {}", .{err});
             };
 
             self.checkRemoteUpdates();
@@ -897,9 +897,9 @@ pub const Pipeline = struct {
         };
     }
 
-    // --- Macro Loop: Release Train ---
+    // --- Macro Loop: Integration ---
 
-    fn checkReleaseTrain(self: *Pipeline) !void {
+    fn checkIntegration(self: *Pipeline) !void {
         const now = std.time.timestamp();
         if (!self.config.continuous_mode) {
             const interval: i64 = @intCast(@as(u64, self.config.release_interval_mins) * 60);
@@ -1412,24 +1412,17 @@ test "digest generation formatting" {
     defer buf.deinit();
     const w = buf.writer();
 
-    const merged = [_][]const u8{ "feature/task-1", "feature/task-2" };
-    const excluded = [_][]const u8{"feature/task-3"};
+    const merged = [_][]const u8{ "task-1", "task-2" };
 
-    try w.writeAll("*Release Train Complete*\n\n");
-    try w.print("Merged: {d} branch(es)\n", .{merged.len});
+    try w.print("*{d} PR(s) merged*\n", .{merged.len});
     for (merged) |branch| {
         try w.print("  + {s}\n", .{branch});
     }
-    try w.print("\nExcluded: {d} branch(es)\n", .{excluded.len});
-    for (excluded) |branch| {
-        try w.print("  - {s}\n", .{branch});
-    }
 
     const result = buf.items;
-    try std.testing.expect(std.mem.indexOf(u8, result, "Merged: 2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "feature/task-1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "Excluded: 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "feature/task-3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "2 PR(s) merged") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "task-1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "task-2") != null);
 }
 
 test {
