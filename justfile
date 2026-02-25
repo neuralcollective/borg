@@ -27,6 +27,10 @@ sidecar:
 # Full setup: build everything
 setup: image sidecar dash b
 
+# Run tests with AddressSanitizer
+san:
+    zig build test-asan
+
 # Check status via API
 status:
     curl -s http://127.0.0.1:3131/api/status | jq .

@@ -58,4 +58,22 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(exe_unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // Sanitizer test targets
+    const san_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    san_mod.addOptions("build_options", build_options);
+    san_mod.addIncludePath(b.path("vendor/sqlite"));
+    san_mod.linkLibrary(sqlite_lib);
+
+    // AddressSanitizer — detects out-of-bounds, use-after-free, leaks
+    const asan_tests = b.addTest(.{ .root_module = san_mod });
+    asan_tests.linkLibC();
+    asan_tests.root_module.sanitize_c = true;
+    const run_asan = b.addRunArtifact(asan_tests);
+    const asan_step = b.step("test-asan", "Run tests with AddressSanitizer");
+    asan_step.dependOn(&run_asan.step);
 }
