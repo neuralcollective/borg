@@ -301,9 +301,34 @@ pub const WebServer = struct {
             return;
         }
 
-        const request = buf[0..n];
-        const method = parseMethod(request);
-        const path = parsePath(request);
+        const initial = buf[0..n];
+        const method = parseMethod(initial);
+        const path = parsePath(initial);
+
+        // For POST requests, ensure we read the complete body
+        var request_alloc: ?[]u8 = null;
+        defer if (request_alloc) |ra| self.allocator.free(ra);
+        const request = blk: {
+            if (!std.mem.eql(u8, method, "POST")) break :blk initial;
+            const header_end = std.mem.indexOf(u8, initial, "\r\n\r\n") orelse break :blk initial;
+            const headers = initial[0 .. header_end + 4];
+            const content_length = parseContentLength(headers) orelse break :blk initial;
+            const body_received = n - headers.len;
+            if (body_received >= content_length) break :blk initial;
+
+            // Need to read more — allocate buffer for full request
+            const total = headers.len + content_length;
+            var full = self.allocator.alloc(u8, total) catch break :blk initial;
+            @memcpy(full[0..n], initial);
+            var filled: usize = n;
+            while (filled < total) {
+                const r = stream.read(full[filled..total]) catch break;
+                if (r == 0) break;
+                filled += r;
+            }
+            request_alloc = full;
+            break :blk full[0..filled];
+        };
 
         if (std.mem.eql(u8, path, "/api/logs")) {
             self.serveSse(stream);
@@ -359,6 +384,29 @@ pub const WebServer = struct {
             }
         }
         return "/";
+    }
+
+    fn parseContentLength(headers: []const u8) ?usize {
+        var lines = std.mem.splitSequence(u8, headers, "\r\n");
+        while (lines.next()) |line| {
+            if (line.len > 16 and (line[0] == 'C' or line[0] == 'c')) {
+                const lower_prefix = "content-length: ";
+                if (line.len >= lower_prefix.len) {
+                    var match = true;
+                    for (lower_prefix, 0..) |expected, i| {
+                        const actual = if (line[i] >= 'A' and line[i] <= 'Z') line[i] + 32 else line[i];
+                        if (actual != expected) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        return std.fmt.parseInt(usize, std.mem.trim(u8, line[lower_prefix.len..], " \t"), 10) catch null;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     fn parseBody(request: []const u8) []const u8 {
