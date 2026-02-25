@@ -624,10 +624,12 @@ pub const WebServer = struct {
         for (outputs, 0..) |o, i| {
             if (i > 0) w.writeAll(",") catch return;
             const esc_out = jsonEscapeAlloc(alloc, o.output) catch continue;
-            w.print("{{\"id\":{d},\"phase\":\"{s}\",\"output\":\"{s}\",\"exit_code\":{d},\"created_at\":\"{s}\"}}", .{
+            const esc_raw = jsonEscapeAlloc(alloc, o.raw_stream) catch "";
+            w.print("{{\"id\":{d},\"phase\":\"{s}\",\"output\":\"{s}\",\"raw_stream\":\"{s}\",\"exit_code\":{d},\"created_at\":\"{s}\"}}", .{
                 o.id,
                 o.phase,
                 esc_out,
+                esc_raw,
                 o.exit_code,
                 o.created_at,
             }) catch return;

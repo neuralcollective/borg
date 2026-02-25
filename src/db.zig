@@ -53,7 +53,7 @@ pub const QueueEntry = struct {
 };
 
 // Must match the number of entries in runMigrations()
-const SCHEMA_VERSION = "3";
+const SCHEMA_VERSION = "4";
 
 pub const Db = struct {
     sqlite_db: sqlite.Database,
@@ -162,6 +162,7 @@ pub const Db = struct {
             \\  task_id INTEGER NOT NULL,
             \\  phase TEXT NOT NULL,
             \\  output TEXT NOT NULL,
+            \\  raw_stream TEXT DEFAULT '',
             \\  exit_code INTEGER DEFAULT 0,
             \\  created_at TEXT DEFAULT (datetime('now'))
             \\);
@@ -205,6 +206,7 @@ pub const Db = struct {
             "ALTER TABLE pipeline_tasks ADD COLUMN session_id TEXT DEFAULT ''",
             "ALTER TABLE integration_queue ADD COLUMN repo_path TEXT DEFAULT ''",
             "ALTER TABLE integration_queue ADD COLUMN pr_number INTEGER DEFAULT 0",
+            "ALTER TABLE task_outputs ADD COLUMN raw_stream TEXT DEFAULT ''",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -658,10 +660,19 @@ pub const Db = struct {
         );
     }
 
+    pub fn storeTaskOutputFull(self: *Db, task_id: i64, phase: []const u8, output: []const u8, raw_stream: []const u8, exit_code: i64) !void {
+        const truncated = output[0..@min(output.len, 32000)];
+        try self.sqlite_db.execute(
+            "INSERT INTO task_outputs (task_id, phase, output, raw_stream, exit_code) VALUES (?1, ?2, ?3, ?4, ?5)",
+            .{ task_id, phase, truncated, raw_stream, exit_code },
+        );
+    }
+
     pub const TaskOutput = struct {
         id: i64,
         phase: []const u8,
         output: []const u8,
+        raw_stream: []const u8,
         exit_code: i64,
         created_at: []const u8,
     };
@@ -669,7 +680,7 @@ pub const Db = struct {
     pub fn getTaskOutputs(self: *Db, allocator: std.mem.Allocator, task_id: i64) ![]TaskOutput {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, phase, output, exit_code, created_at FROM task_outputs WHERE task_id = ?1 ORDER BY created_at ASC",
+            "SELECT id, phase, output, exit_code, created_at, COALESCE(raw_stream, '') FROM task_outputs WHERE task_id = ?1 ORDER BY created_at ASC",
             .{task_id},
         );
         defer rows.deinit();
@@ -682,6 +693,7 @@ pub const Db = struct {
                 .output = try allocator.dupe(u8, row.get(2) orelse ""),
                 .exit_code = row.getInt(3) orelse 0,
                 .created_at = try allocator.dupe(u8, row.get(4) orelse ""),
+                .raw_stream = try allocator.dupe(u8, row.get(5) orelse ""),
             });
         }
         return outputs.toOwnedSlice();
