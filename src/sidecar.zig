@@ -112,8 +112,8 @@ pub const Sidecar = struct {
                         .message => |msg| try messages.append(msg),
                         .discord_ready => |bot_id| {
                             self.discord_connected = true;
-                            self.discord_bot_id = bot_id;
-                            std.log.info("Discord connected as bot {s}", .{bot_id});
+                            self.discord_bot_id = self.allocator.dupe(u8, bot_id) catch "";
+                            std.log.info("Discord connected as bot {s}", .{self.discord_bot_id});
                         },
                         .wa_connected => |jid| {
                             self.wa_connected = true;
