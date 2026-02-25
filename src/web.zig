@@ -476,7 +476,9 @@ pub const WebServer = struct {
     }
 
     fn handleChatPost(self: *WebServer, stream: std.net.Stream, request: []const u8) void {
+        std.log.info("chatPost: request.len={d}", .{request.len});
         const body = parseBody(request);
+        std.log.info("chatPost: body.len={d} body[0..@min(80,body.len)]=\"{s}\"", .{ body.len, body[0..@min(80, body.len)] });
         if (body.len == 0) {
             self.serveJsonResponse(stream, 400, "{\"error\":\"empty body\"}");
             return;
@@ -487,6 +489,7 @@ pub const WebServer = struct {
         const alloc = arena.allocator();
 
         var parsed = json_mod.parse(alloc, body) catch {
+            std.log.warn("chatPost: JSON parse failed on body.len={d}", .{body.len});
             self.serveJsonResponse(stream, 400, "{\"error\":\"invalid JSON\"}");
             return;
         };
@@ -497,10 +500,16 @@ pub const WebServer = struct {
             return;
         };
         const sender_name = json_mod.getString(parsed.value, "sender") orelse "web-user";
+        std.log.info("chatPost: text.len={d} text=\"{s}\"", .{ text.len, text[0..@min(60, text.len)] });
+        std.log.info("chatPost: sender=\"{s}\"", .{sender_name});
+
+        const duped_sender = self.allocator.dupe(u8, sender_name) catch return;
+        const duped_text = self.allocator.dupe(u8, text) catch return;
+        std.log.info("chatPost: duped_text.len={d} duped=\"{s}\"", .{ duped_text.len, duped_text[0..@min(60, duped_text.len)] });
 
         const msg = WebChatMessage{
-            .sender_name = self.allocator.dupe(u8, sender_name) catch return,
-            .text = self.allocator.dupe(u8, text) catch return,
+            .sender_name = duped_sender,
+            .text = duped_text,
             .timestamp = std.time.timestamp(),
         };
 
