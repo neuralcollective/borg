@@ -331,12 +331,14 @@ pub const Pipeline = struct {
         self.last_seed_ts = now;
         self.config.refreshOAuthToken();
 
-        // Seed each watched repo
+        // Seed each watched repo (non-self repos only get feature discovery → proposals)
         var total_created: u32 = 0;
         const active_u32: u32 = @intCast(@max(active, 0));
         for (self.config.watched_repos) |repo| {
             if (active_u32 + total_created >= MAX_BACKLOG_SIZE) break;
-            const created = self.seedRepo(repo.path, seed_mode, mode_label, active_u32 + total_created);
+            const repo_mode = if (repo.is_self) seed_mode else 3;
+            const repo_label = if (repo.is_self) mode_label else "feature discovery";
+            const created = self.seedRepo(repo.path, repo_mode, repo_label, active_u32 + total_created);
             total_created += created;
         }
 
@@ -1177,6 +1179,7 @@ pub const Pipeline = struct {
         self.last_health_ts = now;
 
         for (self.config.watched_repos) |repo| {
+            if (!repo.is_self) continue;
             // Pull latest main before testing
             var git = Git.init(self.allocator, repo.path);
             var co = git.checkout("main") catch continue;
