@@ -20,27 +20,22 @@ function formatToolInput(tool: string, input: unknown): { label: string; content
 
   const obj = input as Record<string, unknown>;
 
-  // Bash: show description as label, command as content
   if (tool === "Bash") {
     const desc = (obj.description as string) || "";
     const cmd = (obj.command as string) || "";
     return { label: desc, content: cmd };
   }
 
-  // Read: show file path
   if (tool === "Read") {
     const fp = (obj.file_path as string) || "";
-    const parts: string[] = [fp];
-    if (obj.offset) parts.push(`lines ${obj.offset}–${(obj.offset as number) + ((obj.limit as number) || 200)}`);
-    return { label: "", content: parts.join("  ") };
+    const range = obj.offset ? `  lines ${obj.offset}–${(obj.offset as number) + ((obj.limit as number) || 200)}` : "";
+    return { label: fp + range, content: "" };
   }
 
-  // Write: show file path
   if (tool === "Write") {
-    return { label: "", content: (obj.file_path as string) || "" };
+    return { label: (obj.file_path as string) || "", content: "" };
   }
 
-  // Edit: show file path + snippet of old_string
   if (tool === "Edit") {
     const fp = (obj.file_path as string) || "";
     const old = (obj.old_string as string) || "";
@@ -48,21 +43,17 @@ function formatToolInput(tool: string, input: unknown): { label: string; content
     return { label: fp, content: preview ? `replacing: ${preview}` : "" };
   }
 
-  // Glob/Grep: show pattern + path
   if (tool === "Glob" || tool === "Grep") {
     const pat = (obj.pattern as string) || "";
     const path = (obj.path as string) || "";
-    return { label: "", content: path ? `${pat}  in ${path}` : pat };
+    return { label: pat, content: path || "" };
   }
 
-  // WebSearch/WebFetch
-  if (tool === "WebSearch") return { label: "", content: (obj.query as string) || "" };
-  if (tool === "WebFetch") return { label: "", content: (obj.url as string) || "" };
+  if (tool === "WebSearch") return { label: (obj.query as string) || "", content: "" };
+  if (tool === "WebFetch") return { label: (obj.url as string) || "", content: "" };
 
-  // Task: show description
   if (tool === "Task") return { label: (obj.description as string) || "", content: (obj.prompt as string)?.slice(0, 120) || "" };
 
-  // Fallback: compact JSON
   const json = JSON.stringify(input);
   const preview = json.length > 200 ? json.slice(0, 200) + "..." : json;
   return { label: "", content: preview };
