@@ -901,3 +901,66 @@ test "state key-value store" {
     try db.setState("k", "v2");
     try std.testing.expectEqualStrings("v2", (try db.getState(alloc, "k")).?);
 }
+
+test "registerGroup and getAllGroups round-trip preserves all fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("g1", "Test Group", "test-folder", "!help", false);
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("g1", groups[0].jid);
+    try std.testing.expectEqualStrings("Test Group", groups[0].name);
+    try std.testing.expectEqualStrings("test-folder", groups[0].folder);
+    try std.testing.expectEqualStrings("!help", groups[0].trigger);
+    try std.testing.expect(!groups[0].requires_trigger);
+}
+
+test "unregisterGroup removes group from getAllGroups" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.registerGroup("g1", "Group One", "folder1", "@Bot", true);
+    try db.registerGroup("g2", "Group Two", "folder2", "@Bot", true);
+
+    try db.unregisterGroup("g1");
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 1), groups.len);
+    try std.testing.expectEqualStrings("g2", groups[0].jid);
+}
+
+test "unregisterGroup on nonexistent jid is a no-op" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    try db.unregisterGroup("nonexistent");
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 0), groups.len);
+}
+
+test "getAllGroups returns empty slice when no groups registered" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var db = try Db.init(alloc, ":memory:");
+    defer db.deinit();
+
+    const groups = try db.getAllGroups(alloc);
+    try std.testing.expectEqual(@as(usize, 0), groups.len);
+}
