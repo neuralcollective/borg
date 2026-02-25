@@ -229,3 +229,129 @@ test "decodeChunked missing separator between chunks" {
     defer alloc.free(result);
     try std.testing.expectEqualStrings("Wiki", result);
 }
+
+// ── Uppercase / mixed-case hex chunk sizes ─────────────────────────────
+
+test "decodeChunked uppercase hex chunk size" {
+    // 'A' == 10 decimal; payload is exactly 10 bytes
+    const alloc = std.testing.allocator;
+    const chunked = "A\r\n0123456789\r\n0\r\n\r\n";
+    const result = try decodeChunked(alloc, chunked);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("0123456789", result);
+}
+
+test "decodeChunked uppercase hex chunk size F" {
+    // 'F' == 15 decimal; payload is exactly 15 bytes
+    const alloc = std.testing.allocator;
+    const chunked = "F\r\nABCDEFGHIJKLMNO\r\n0\r\n\r\n";
+    const result = try decodeChunked(alloc, chunked);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("ABCDEFGHIJKLMNO", result);
+}
+
+test "decodeChunked uppercase multi-chunk" {
+    // First chunk: 4 bytes ("Wiki"), second chunk: FF (255 bytes)
+    const alloc = std.testing.allocator;
+    var chunked = std.ArrayList(u8).init(alloc);
+    defer chunked.deinit();
+
+    // Build a 255-byte payload of 'x'
+    const payload = "x" ** 255;
+
+    try chunked.appendSlice("4\r\nWiki\r\n");
+    try chunked.appendSlice("FF\r\n");
+    try chunked.appendSlice(payload);
+    try chunked.appendSlice("\r\n0\r\n\r\n");
+
+    const result = try decodeChunked(alloc, chunked.items);
+    defer alloc.free(result);
+
+    try std.testing.expectEqual(@as(usize, 4 + 255), result.len);
+    try std.testing.expectEqualStrings("Wiki", result[0..4]);
+    try std.testing.expectEqualStrings(payload, result[4..]);
+}
+
+test "decodeChunked mixed-case hex chunk size" {
+    // 'aB' == 0xAB == 171 decimal
+    const alloc = std.testing.allocator;
+    const payload = "y" ** 171;
+    var chunked = std.ArrayList(u8).init(alloc);
+    defer chunked.deinit();
+    try chunked.appendSlice("aB\r\n");
+    try chunked.appendSlice(payload);
+    try chunked.appendSlice("\r\n0\r\n\r\n");
+
+    const result = try decodeChunked(alloc, chunked.items);
+    defer alloc.free(result);
+
+    try std.testing.expectEqual(@as(usize, 171), result.len);
+    try std.testing.expectEqualStrings(payload, result);
+}
+
+test "decodeChunked uppercase terminating zero after uppercase chunk" {
+    // Ensure terminating 0\r\n\r\n produces empty result after an uppercase-sized chunk
+    const alloc = std.testing.allocator;
+    // 'B' == 11 bytes
+    const chunked = "B\r\nhello world\r\n0\r\n\r\n";
+    const result = try decodeChunked(alloc, chunked);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("hello world", result);
+    // Confirming termination: nothing after the 11-byte chunk
+    try std.testing.expectEqual(@as(usize, 11), result.len);
+}
+
+test "decodeChunked mixed-case terminating zero" {
+    // 'Ab' == 0xAB == 171; terminating 0\r\n\r\n must produce no extra bytes
+    const alloc = std.testing.allocator;
+    const payload = "z" ** 171;
+    var chunked = std.ArrayList(u8).init(alloc);
+    defer chunked.deinit();
+    try chunked.appendSlice("Ab\r\n");
+    try chunked.appendSlice(payload);
+    try chunked.appendSlice("\r\n0\r\n\r\n");
+
+    const result = try decodeChunked(alloc, chunked.items);
+    defer alloc.free(result);
+
+    // Only the 171-byte payload; the terminating chunk adds nothing
+    try std.testing.expectEqual(@as(usize, 171), result.len);
+    try std.testing.expectEqualStrings(payload, result);
+}
+
+test "decodeChunked uppercase FF equals lowercase ff equals mixed-case Ff" {
+    // All three representations of 255 must yield identical decoded output
+    const alloc = std.testing.allocator;
+    const payload = "q" ** 255;
+
+    const build_input = struct {
+        fn f(a: std.mem.Allocator, size_str: []const u8, p: []const u8) ![]u8 {
+            var buf = std.ArrayList(u8).init(a);
+            try buf.appendSlice(size_str);
+            try buf.appendSlice("\r\n");
+            try buf.appendSlice(p);
+            try buf.appendSlice("\r\n0\r\n\r\n");
+            return buf.toOwnedSlice();
+        }
+    };
+
+    const input_upper = try build_input.f(alloc, "FF", payload);
+    defer alloc.free(input_upper);
+    const input_lower = try build_input.f(alloc, "ff", payload);
+    defer alloc.free(input_lower);
+    const input_mixed = try build_input.f(alloc, "Ff", payload);
+    defer alloc.free(input_mixed);
+
+    const res_upper = try decodeChunked(alloc, input_upper);
+    defer alloc.free(res_upper);
+    const res_lower = try decodeChunked(alloc, input_lower);
+    defer alloc.free(res_lower);
+    const res_mixed = try decodeChunked(alloc, input_mixed);
+    defer alloc.free(res_mixed);
+
+    try std.testing.expectEqualStrings(payload, res_upper);
+    try std.testing.expectEqualStrings(payload, res_lower);
+    try std.testing.expectEqualStrings(payload, res_mixed);
+    try std.testing.expectEqualStrings(res_upper, res_lower);
+    try std.testing.expectEqualStrings(res_upper, res_mixed);
+}
