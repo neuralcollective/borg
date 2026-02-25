@@ -26,10 +26,9 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
     <div className="flex h-full flex-col">
       <DetailHeader onBack={onBack} />
 
-      {/* Task info */}
       <div className="space-y-3 border-b border-white/[0.06] px-4 py-3">
-        <div className="flex items-start justify-between gap-4">
-          <h2 className="text-[13px] font-medium text-zinc-200">
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-[14px] md:text-[13px] font-medium text-zinc-200">
             <span className="text-zinc-600">#{task.id}</span> {task.title}
           </h2>
           <StatusBadge status={task.status} />
@@ -37,7 +36,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
 
         <PhaseTracker status={task.status} />
 
-        <div className="flex flex-wrap gap-3 text-[11px] text-zinc-500">
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
           {task.repo_path && (
             <span title={task.repo_path}>
               <span className="text-zinc-600">repo</span> {repoName(task.repo_path)}
@@ -62,23 +61,20 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         </div>
       </div>
 
-      {/* Description */}
       {task.description && (
-        <div className="max-h-16 overflow-y-auto border-b border-white/[0.06] px-4 py-2 text-[11px] leading-relaxed text-zinc-500">
+        <div className="max-h-20 md:max-h-16 overflow-y-auto border-b border-white/[0.06] px-4 py-2 text-[12px] md:text-[11px] leading-relaxed text-zinc-500">
           {task.description}
         </div>
       )}
 
-      {/* Error */}
       {task.last_error && (
         <div className="mx-3 mt-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] p-3">
-          <pre className="max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
+          <pre className="max-h-24 md:max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
             {task.last_error}
           </pre>
         </div>
       )}
 
-      {/* Agent outputs */}
       {task.outputs && task.outputs.length > 0 ? (
         <OutputSelector outputs={task.outputs} />
       ) : (
@@ -90,7 +86,6 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   );
 }
 
-/** Parse NDJSON raw_stream into structured events for display */
 interface StreamEvent {
   type: string;
   subtype?: string;
@@ -112,7 +107,6 @@ function parseStream(raw: string): StreamEvent[] {
       if (!type) continue;
 
       if (type === "assistant") {
-        // Assistant message — extract text content
         const msg = obj.message;
         if (msg?.content) {
           if (typeof msg.content === "string") {
@@ -134,7 +128,6 @@ function parseStream(raw: string): StreamEvent[] {
           }
         }
       } else if (type === "tool_result" || type === "tool") {
-        // Tool result
         const content = obj.content ?? obj.result ?? obj.output ?? "";
         const text = typeof content === "string"
           ? content
@@ -192,7 +185,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
   if (ev.type === "assistant") {
     return (
       <div className="rounded bg-white/[0.02] px-3 py-2">
-        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
+        <pre className="whitespace-pre-wrap font-mono text-[12px] md:text-[11px] leading-relaxed text-zinc-300">
           {ev.content}
         </pre>
       </div>
@@ -205,7 +198,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
       <div className="rounded border border-amber-500/10 bg-amber-500/[0.04]">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+          className="flex w-full items-center gap-2 px-3 py-2 md:py-1.5 text-left active:bg-amber-500/[0.06]"
         >
           <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-400">
             {ev.tool}
@@ -230,7 +223,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
       <div className="rounded border border-white/[0.04] bg-white/[0.015]">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+          className="flex w-full items-center gap-2 px-3 py-2 md:py-1.5 text-left active:bg-white/[0.03]"
         >
           <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-zinc-400">
             result{ev.tool ? `: ${ev.tool}` : ""}
@@ -253,7 +246,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
     return (
       <div className="rounded border border-emerald-500/10 bg-emerald-500/[0.04] px-3 py-2">
         <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-emerald-500/60">Final Result</div>
-        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-emerald-300/80">
+        <pre className="whitespace-pre-wrap font-mono text-[12px] md:text-[11px] leading-relaxed text-emerald-300/80">
           {ev.content}
         </pre>
       </div>
@@ -293,11 +286,11 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] px-4 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] px-4 py-2">
         <select
           value={selectedKey}
           onChange={(e) => setSelectedKey(e.target.value)}
-          className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
+          className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 md:py-1 text-[12px] md:text-[11px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
         >
           {labeled.map((o) => {
             const key = o.phase + "-" + o.id;
@@ -317,13 +310,12 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
         )}>
           {selected.exit_code === 0 ? "passed" : `exit ${selected.exit_code}`}
         </span>
-        {/* View mode toggle — only show when relevant tabs exist */}
         {!isDiff && (
           <div className="ml-auto flex rounded-md border border-white/[0.08]">
             <button
               onClick={() => setViewMode("summary")}
               className={cn(
-                "px-2 py-0.5 text-[10px] font-medium transition-colors",
+                "px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
                 viewMode === "summary"
                   ? "bg-white/[0.08] text-zinc-200"
                   : "text-zinc-500 hover:text-zinc-300"
@@ -335,7 +327,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
               <button
                 onClick={() => setViewMode("trace")}
                 className={cn(
-                  "border-l border-white/[0.08] px-2 py-0.5 text-[10px] font-medium transition-colors",
+                  "border-l border-white/[0.08] px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
                   viewMode === "trace"
                     ? "bg-white/[0.08] text-zinc-200"
                     : "text-zinc-500 hover:text-zinc-300"
@@ -353,7 +345,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
         ) : viewMode === "trace" && hasStream ? (
           <StreamView raw={selected.raw_stream} />
         ) : (
-          <pre className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400">
+          <pre className="p-4 font-mono text-[12px] md:text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words">
             {selected.output || "(empty)"}
           </pre>
         )}
@@ -365,7 +357,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
 function DiffView({ diff }: { diff: string }) {
   if (!diff) return <div className="p-4 text-[11px] text-zinc-600">No diff data</div>;
   return (
-    <pre className="p-4 font-mono text-[11px] leading-relaxed">
+    <pre className="p-4 font-mono text-[11px] leading-relaxed overflow-x-auto">
       {diff.split("\n").map((line, i) => {
         let color = "text-zinc-500";
         if (line.startsWith("+") && !line.startsWith("+++")) color = "text-emerald-400/80";
@@ -380,14 +372,14 @@ function DiffView({ diff }: { diff: string }) {
 
 function DetailHeader({ onBack }: { onBack: () => void }) {
   return (
-    <div className="flex h-10 shrink-0 items-center gap-3 border-b border-white/[0.06] px-4">
+    <div className="flex h-11 md:h-10 shrink-0 items-center gap-3 border-b border-white/[0.06] px-4">
       <button
         onClick={onBack}
-        className="rounded-md bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-zinc-200"
+        className="rounded-md bg-white/[0.04] px-3 md:px-2.5 py-1.5 md:py-1 text-[12px] md:text-[11px] font-medium text-zinc-400 transition-colors active:bg-white/[0.1] hover:bg-white/[0.08] hover:text-zinc-200"
       >
         &larr; Back
       </button>
-      <span className="text-[11px] font-medium text-zinc-500">Task Detail</span>
+      <span className="text-[12px] md:text-[11px] font-medium text-zinc-500">Task Detail</span>
     </div>
   );
 }
