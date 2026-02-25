@@ -5,7 +5,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    xz-utils \
+    make \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Zig 0.14.1
+RUN curl -fsSL https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz \
+    | tar -xJ -C /opt \
+    && ln -s /opt/zig-x86_64-linux-0.14.1/zig /usr/local/bin/zig
 
 # Install Claude Code CLI
 RUN bun install -g @anthropic-ai/claude-code@latest

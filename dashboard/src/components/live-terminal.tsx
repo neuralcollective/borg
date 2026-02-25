@@ -10,7 +10,62 @@ interface LiveTerminalProps {
 interface TermLine {
   type: "system" | "text" | "tool" | "result" | "tool_result";
   tool?: string;
+  label?: string;
   content: string;
+}
+
+function formatToolInput(tool: string, input: unknown): { label: string; content: string } {
+  if (typeof input === "string") return { label: "", content: input };
+  if (!input || typeof input !== "object") return { label: "", content: "" };
+
+  const obj = input as Record<string, unknown>;
+
+  // Bash: show description as label, command as content
+  if (tool === "Bash") {
+    const desc = (obj.description as string) || "";
+    const cmd = (obj.command as string) || "";
+    return { label: desc, content: cmd };
+  }
+
+  // Read: show file path
+  if (tool === "Read") {
+    const fp = (obj.file_path as string) || "";
+    const parts: string[] = [fp];
+    if (obj.offset) parts.push(`lines ${obj.offset}–${(obj.offset as number) + ((obj.limit as number) || 200)}`);
+    return { label: "", content: parts.join("  ") };
+  }
+
+  // Write: show file path
+  if (tool === "Write") {
+    return { label: "", content: (obj.file_path as string) || "" };
+  }
+
+  // Edit: show file path + snippet of old_string
+  if (tool === "Edit") {
+    const fp = (obj.file_path as string) || "";
+    const old = (obj.old_string as string) || "";
+    const preview = old.length > 60 ? old.slice(0, 60) + "..." : old;
+    return { label: fp, content: preview ? `replacing: ${preview}` : "" };
+  }
+
+  // Glob/Grep: show pattern + path
+  if (tool === "Glob" || tool === "Grep") {
+    const pat = (obj.pattern as string) || "";
+    const path = (obj.path as string) || "";
+    return { label: "", content: path ? `${pat}  in ${path}` : pat };
+  }
+
+  // WebSearch/WebFetch
+  if (tool === "WebSearch") return { label: "", content: (obj.query as string) || "" };
+  if (tool === "WebFetch") return { label: "", content: (obj.url as string) || "" };
+
+  // Task: show description
+  if (tool === "Task") return { label: (obj.description as string) || "", content: (obj.prompt as string)?.slice(0, 120) || "" };
+
+  // Fallback: compact JSON
+  const json = JSON.stringify(input);
+  const preview = json.length > 200 ? json.slice(0, 200) + "..." : json;
+  return { label: "", content: preview };
 }
 
 function parseEvents(events: StreamEvent[]): TermLine[] {
@@ -33,11 +88,9 @@ function parseEvents(events: StreamEvent[]): TermLine[] {
           if (block.type === "text" && block.text?.trim()) {
             lines.push({ type: "text", content: block.text });
           } else if (block.type === "tool_use") {
-            const input = typeof block.input === "string"
-              ? block.input
-              : JSON.stringify(block.input, null, 2);
-            const preview = input.length > 200 ? input.slice(0, 200) + "..." : input;
-            lines.push({ type: "tool", tool: block.name, content: preview });
+            const name = block.name || "";
+            const { label, content } = formatToolInput(name, block.input);
+            lines.push({ type: "tool", tool: name, label, content });
           }
         }
       }
@@ -96,7 +149,7 @@ export function LiveTerminal({ events, streaming }: LiveTerminalProps) {
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto overscroll-contain font-mono text-[11px] leading-relaxed p-3 space-y-0.5"
+        className="flex-1 overflow-y-auto overscroll-contain font-mono text-[11px] leading-relaxed p-3 space-y-1"
       >
         {lines.length === 0 && (
           <div className="flex items-center gap-2 text-zinc-700 py-8 justify-center">
@@ -137,9 +190,18 @@ function TermLineView({ line }: { line: TermLine }) {
 
   if (line.type === "tool") {
     return (
-      <div className="text-amber-400/80">
-        <span className="text-amber-500/60 text-[10px]">{line.tool}</span>{" "}
-        <span className="text-zinc-500 text-[10px] break-all">{line.content}</span>
+      <div className="rounded bg-white/[0.03] px-2 py-1.5">
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-400">
+            {line.tool}
+          </span>
+          {line.label && (
+            <span className="text-zinc-400 text-[10px] truncate">{line.label}</span>
+          )}
+        </div>
+        {line.content && (
+          <div className="mt-1 text-zinc-500 text-[10px] break-all whitespace-pre-wrap">{line.content}</div>
+        )}
       </div>
     );
   }
