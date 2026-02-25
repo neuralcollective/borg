@@ -1568,8 +1568,15 @@ pub const Pipeline = struct {
 
         self.config.refreshOAuthToken();
 
-        const system_prompt = prompts.getSystemPrompt(persona);
+        const base_system_prompt = prompts.getSystemPrompt(persona);
         const allowed_tools = prompts.getAllowedTools(persona);
+
+        // Append config-driven instructions to system prompt
+        const suffix = self.config.getSystemPromptSuffix(tmp);
+        var sys_buf = std.ArrayList(u8).init(tmp);
+        try sys_buf.appendSlice(base_system_prompt);
+        try sys_buf.appendSlice(suffix);
+        const system_prompt = sys_buf.items;
 
         // Inject per-repo prompt if configured (via prompt_file or .borg/prompt.md)
         var effective_prompt = prompt;
@@ -1637,16 +1644,26 @@ pub const Pipeline = struct {
         var git_aemail_buf: [256]u8 = undefined;
         var git_cname_buf: [256]u8 = undefined;
         var git_cemail_buf: [256]u8 = undefined;
-        if (self.config.git_user_name.len > 0 and !std.mem.eql(u8, self.config.git_author_mode, "borg")) {
-            const an = try std.fmt.bufPrint(&git_aname_buf, "GIT_AUTHOR_NAME={s}", .{self.config.git_user_name});
-            const cn = try std.fmt.bufPrint(&git_cname_buf, "GIT_COMMITTER_NAME={s}", .{self.config.git_user_name});
-            try env_list.append(an);
+        if (self.config.git_author_name.len > 0) {
+            const name = if (self.config.git_via_borg)
+                try std.fmt.bufPrint(&git_aname_buf, "GIT_AUTHOR_NAME={s} (via Borg)", .{self.config.git_author_name})
+            else
+                try std.fmt.bufPrint(&git_aname_buf, "GIT_AUTHOR_NAME={s}", .{self.config.git_author_name});
+            try env_list.append(name);
+        }
+        if (self.config.git_author_email.len > 0) {
+            const email = try std.fmt.bufPrint(&git_aemail_buf, "GIT_AUTHOR_EMAIL={s}", .{self.config.git_author_email});
+            try env_list.append(email);
+        }
+        // Committer: use explicit committer fields, or fall back to author fields
+        const cname = if (self.config.git_committer_name.len > 0) self.config.git_committer_name else self.config.git_author_name;
+        const cemail = if (self.config.git_committer_email.len > 0) self.config.git_committer_email else self.config.git_author_email;
+        if (cname.len > 0) {
+            const cn = try std.fmt.bufPrint(&git_cname_buf, "GIT_COMMITTER_NAME={s}", .{cname});
             try env_list.append(cn);
         }
-        if (self.config.git_user_email.len > 0 and !std.mem.eql(u8, self.config.git_author_mode, "borg")) {
-            const ae = try std.fmt.bufPrint(&git_aemail_buf, "GIT_AUTHOR_EMAIL={s}", .{self.config.git_user_email});
-            const ce = try std.fmt.bufPrint(&git_cemail_buf, "GIT_COMMITTER_EMAIL={s}", .{self.config.git_user_email});
-            try env_list.append(ae);
+        if (cemail.len > 0) {
+            const ce = try std.fmt.bufPrint(&git_cemail_buf, "GIT_COMMITTER_EMAIL={s}", .{cemail});
             try env_list.append(ce);
         }
 
