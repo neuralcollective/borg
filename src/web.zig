@@ -25,6 +25,7 @@ pub const WebChatMessage = struct {
     sender_name: []const u8,
     text: []const u8,
     timestamp: i64,
+    thread_id: []const u8,
 };
 
 pub const WebServer = struct {
@@ -122,17 +123,21 @@ pub const WebServer = struct {
     }
 
     /// Broadcast a chat response to all connected chat SSE clients
-    pub fn broadcastChatEvent(self: *WebServer, text: []const u8) void {
+    pub fn broadcastChatEvent(self: *WebServer, text: []const u8, thread_id: []const u8) void {
         self.chat_sse_mu.lock();
         defer self.chat_sse_mu.unlock();
 
         var esc_buf: [8192]u8 = undefined;
         const escaped = jsonEscape(&esc_buf, text[0..@min(text.len, 4000)]);
 
+        var esc_thread: [128]u8 = undefined;
+        const thread_esc = jsonEscape(&esc_thread, thread_id);
+
         var buf: [8192]u8 = undefined;
-        const line = std.fmt.bufPrint(&buf, "data: {{\"role\":\"assistant\",\"text\":\"{s}\",\"ts\":{d}}}\n\n", .{
+        const line = std.fmt.bufPrint(&buf, "data: {{\"role\":\"assistant\",\"text\":\"{s}\",\"ts\":{d},\"thread\":\"{s}\"}}\n\n", .{
             escaped,
             std.time.timestamp(),
+            thread_esc,
         }) catch return;
 
         var i: usize = 0;
@@ -340,11 +345,13 @@ pub const WebServer = struct {
         if (std.mem.eql(u8, path, "/api/logs")) {
             self.serveSse(stream);
             return; // Don't close — SSE keeps connection open
+        } else if (std.mem.eql(u8, path, "/api/chat/threads") and std.mem.eql(u8, method, "GET")) {
+            self.serveChatThreads(stream);
         } else if (std.mem.eql(u8, path, "/api/chat/events")) {
             self.serveChatSse(stream);
             return; // Don't close — SSE keeps connection open
-        } else if (std.mem.eql(u8, path, "/api/chat/messages")) {
-            self.serveChatMessages(stream);
+        } else if (std.mem.startsWith(u8, path, "/api/chat/messages")) {
+            self.serveChatMessages(stream, path);
         } else if (std.mem.eql(u8, path, "/api/chat") and std.mem.eql(u8, method, "POST")) {
             self.handleChatPost(stream, request);
         } else if (std.mem.eql(u8, path, "/api/chat") and std.mem.eql(u8, method, "OPTIONS")) {
@@ -508,11 +515,13 @@ pub const WebServer = struct {
             return;
         };
         const sender_name = json_mod.getString(parsed.value, "sender") orelse "web-user";
+        const thread = json_mod.getString(parsed.value, "thread") orelse "web:dashboard";
 
         const msg = WebChatMessage{
             .sender_name = self.allocator.dupe(u8, sender_name) catch return,
             .text = self.allocator.dupe(u8, text) catch return,
             .timestamp = std.time.timestamp(),
+            .thread_id = self.allocator.dupe(u8, thread) catch return,
         };
 
         self.chat_mu.lock();
@@ -535,11 +544,15 @@ pub const WebServer = struct {
             var esc_name: [128]u8 = undefined;
             const name_esc = jsonEscape(&esc_name, sender_name);
 
+            var esc_thread: [128]u8 = undefined;
+            const thread_esc = jsonEscape(&esc_thread, thread);
+
             var buf: [8192]u8 = undefined;
-            const line = std.fmt.bufPrint(&buf, "data: {{\"role\":\"user\",\"sender\":\"{s}\",\"text\":\"{s}\",\"ts\":{d}}}\n\n", .{
+            const line = std.fmt.bufPrint(&buf, "data: {{\"role\":\"user\",\"sender\":\"{s}\",\"text\":\"{s}\",\"ts\":{d},\"thread\":\"{s}\"}}\n\n", .{
                 name_esc,
                 escaped,
                 std.time.timestamp(),
+                thread_esc,
             }) catch return;
 
             var i: usize = 0;
@@ -555,12 +568,51 @@ pub const WebServer = struct {
         self.serveJsonResponse(stream, 200, "{\"status\":\"sent\"}");
     }
 
-    fn serveChatMessages(self: *WebServer, stream: std.net.Stream) void {
+    fn serveChatThreads(self: *WebServer, stream: std.net.Stream) void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const alloc = arena.allocator();
 
-        const messages = self.db.getMessagesSince(alloc, "web:dashboard", "") catch {
+        var rows = self.db.sqlite_db.query(
+            alloc,
+            "SELECT chat_jid, MAX(timestamp) as last_ts, COUNT(*) as msg_count FROM messages WHERE chat_jid LIKE 'web:%' GROUP BY chat_jid ORDER BY last_ts DESC",
+            .{},
+        ) catch {
+            self.serve500(stream);
+            return;
+        };
+        defer rows.deinit();
+
+        var buf = std.ArrayList(u8).init(alloc);
+        const w = buf.writer();
+        w.writeAll("[") catch return;
+
+        for (rows.items, 0..) |row, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            var esc_jid: [128]u8 = undefined;
+            const jid = jsonEscape(&esc_jid, row.get(0) orelse "");
+            const last_ts = row.get(1) orelse "";
+            const count = row.getInt(2) orelse 0;
+            w.print("{{\"id\":\"{s}\",\"last_ts\":\"{s}\",\"message_count\":{d}}}", .{
+                jid, last_ts, count,
+            }) catch return;
+        }
+
+        w.writeAll("]") catch return;
+        self.sendJson(stream, buf.items);
+    }
+
+    fn serveChatMessages(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const thread_id = if (std.mem.indexOf(u8, path, "?thread=")) |pos|
+            path[pos + "?thread=".len ..]
+        else
+            "web:dashboard";
+
+        const messages = self.db.getMessagesSince(alloc, thread_id, "") catch {
             self.serve500(stream);
             return;
         };

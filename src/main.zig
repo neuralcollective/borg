@@ -179,7 +179,7 @@ const Sender = struct {
                 };
             },
             .web => if (self.web) |ws| {
-                ws.broadcastChatEvent(text);
+                ws.broadcastChatEvent(text, original_id);
             },
         }
     }
@@ -729,15 +729,17 @@ pub fn main() !void {
                 for (web_msgs) |wm| {
                     allocator.free(wm.sender_name);
                     allocator.free(wm.text);
+                    allocator.free(wm.thread_id);
                 }
                 allocator.free(web_msgs);
             }
             for (web_msgs) |wm| {
                 const sender_copy = cycle_alloc.dupe(u8, wm.sender_name) catch continue;
                 const text_copy = cycle_alloc.dupe(u8, wm.text) catch continue;
+                const thread_copy = cycle_alloc.dupe(u8, wm.thread_id) catch continue;
                 all_messages.append(.{
-                    .jid = "web:dashboard",
-                    .original_id = "web:dashboard",
+                    .jid = thread_copy,
+                    .original_id = thread_copy,
                     .message_id = std.fmt.allocPrint(cycle_alloc, "web-{d}", .{wm.timestamp}) catch continue,
                     .sender = sender_copy,
                     .sender_name = sender_copy,
@@ -863,6 +865,25 @@ fn processIncomingMessage(
             std.log.err("Command error: {}", .{err});
         };
         return;
+    }
+
+    // Auto-register new web threads
+    if (std.mem.startsWith(u8, msg.jid, "web:")) {
+        const already = for (groups_list.items) |g| {
+            if (std.mem.eql(u8, g.jid, msg.jid)) break true;
+        } else false;
+        if (!already) {
+            const jid_copy = allocator.dupe(u8, msg.jid) catch return;
+            db.registerGroup(jid_copy, "Web Thread", "web-thread", "@Borg", false) catch {};
+            groups_list.append(.{
+                .jid = jid_copy,
+                .name = "Web Thread",
+                .folder = "web-thread",
+                .trigger = "@Borg",
+                .requires_trigger = false,
+            }) catch return;
+            gm.addGroup(jid_copy);
+        }
     }
 
     // Check if registered
