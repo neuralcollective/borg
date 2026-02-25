@@ -6,20 +6,34 @@ interface ChatMessage {
   sender?: string;
   text: string;
   ts: string | number;
+  thread?: string;
+}
+
+interface ChatThread {
+  id: string;
+  last_ts: string;
+  message_count: number;
+}
+
+function threadLabel(id: string): string {
+  if (id === "web:dashboard") return "Main";
+  return id.replace("web:", "");
 }
 
 export function ChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [thread, setThread] = useState("web:dashboard");
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [showThreads, setShowThreads] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const lastTsRef = useRef<number>(0);
 
-  // Load initial messages and track latest timestamp
-  useEffect(() => {
-    fetch("/api/chat/messages")
+  const fetchMessages = useCallback(() => {
+    fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`)
       .then((r) => r.json())
       .then((msgs: ChatMessage[]) => {
         setMessages(msgs);
@@ -28,7 +42,22 @@ export function ChatPanel() {
         }
       })
       .catch(() => {});
+  }, [thread]);
+
+  const fetchThreads = useCallback(() => {
+    fetch("/api/chat/threads")
+      .then((r) => r.json())
+      .then((t: ChatThread[]) => setThreads(t))
+      .catch(() => {});
   }, []);
+
+  // Load messages when thread changes
+  useEffect(() => {
+    setMessages([]);
+    lastTsRef.current = 0;
+    fetchMessages();
+    fetchThreads();
+  }, [thread, fetchMessages, fetchThreads]);
 
   // SSE for real-time updates
   const connect = useCallback(() => {
@@ -39,7 +68,10 @@ export function ChatPanel() {
     es.onmessage = (e) => {
       try {
         const msg: ChatMessage = JSON.parse(e.data);
-        // Skip user echoes — already added optimistically
+        // Only show messages for the current thread
+        const msgThread = msg.thread || "web:dashboard";
+        if (msgThread !== thread) return;
+        // Skip user echoes
         if (msg.role === "user") return;
         setMessages((prev) => [...prev, msg]);
         lastTsRef.current = Math.max(lastTsRef.current, Number(msg.ts) || 0);
@@ -52,17 +84,17 @@ export function ChatPanel() {
     es.onerror = () => {
       setTimeout(() => connect(), 3000);
     };
-  }, []);
+  }, [thread]);
 
   useEffect(() => {
     connect();
     return () => esRef.current?.close();
   }, [connect]);
 
-  // Poll for new messages as fallback (SSE may not always work)
+  // Poll fallback
   useEffect(() => {
     const interval = setInterval(() => {
-      fetch("/api/chat/messages")
+      fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`)
         .then((r) => r.json())
         .then((msgs: ChatMessage[]) => {
           if (msgs.length === 0) return;
@@ -76,7 +108,7 @@ export function ChatPanel() {
         .catch(() => {});
     }, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [thread]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
@@ -89,12 +121,12 @@ export function ChatPanel() {
     setInput("");
     setSending(true);
 
-    // Optimistic local update
     const userMsg: ChatMessage = {
       role: "user",
       sender: "web-user",
       text,
       ts: Math.floor(Date.now() / 1000),
+      thread,
     };
     setMessages((prev) => [...prev, userMsg]);
     lastTsRef.current = Number(userMsg.ts);
@@ -103,11 +135,17 @@ export function ChatPanel() {
       await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, sender: "web-user" }),
+        body: JSON.stringify({ text, sender: "web-user", thread }),
       });
     } catch {
       setSending(false);
     }
+  }
+
+  function handleNewThread() {
+    const id = `web:thread-${Date.now()}`;
+    setThread(id);
+    setShowThreads(false);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -119,13 +157,49 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 shrink-0 items-center border-b border-white/[0.06] px-4">
-        <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Chat</span>
-        {sending && (
-          <span className="ml-2 text-[11px] md:text-[10px] text-zinc-600 animate-pulse">
-            thinking...
-          </span>
-        )}
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Chat</span>
+          {sending && (
+            <span className="text-[11px] md:text-[10px] text-zinc-600 animate-pulse">
+              thinking...
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="relative">
+            <button
+              onClick={() => setShowThreads(!showThreads)}
+              className="rounded-md bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-zinc-500 ring-1 ring-inset ring-white/[0.06] transition-colors hover:bg-white/[0.08]"
+            >
+              {threadLabel(thread)}
+            </button>
+            {showThreads && (
+              <div className="absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-white/[0.08] bg-zinc-900 py-1 shadow-xl">
+                {threads.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => { setThread(t.id); setShowThreads(false); }}
+                    className={cn(
+                      "flex w-full items-center justify-between px-3 py-1.5 text-left text-[11px] transition-colors hover:bg-white/[0.06]",
+                      t.id === thread ? "text-zinc-200" : "text-zinc-500"
+                    )}
+                  >
+                    <span className="truncate">{threadLabel(t.id)}</span>
+                    <span className="ml-2 text-[9px] tabular-nums text-zinc-600">{t.message_count}</span>
+                  </button>
+                ))}
+                {threads.length > 0 && <div className="mx-2 my-1 h-px bg-white/[0.06]" />}
+                <button
+                  onClick={handleNewThread}
+                  className="flex w-full items-center px-3 py-1.5 text-[11px] text-violet-400 transition-colors hover:bg-white/[0.06]"
+                >
+                  + New Thread
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-2">

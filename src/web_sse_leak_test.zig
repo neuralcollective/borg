@@ -117,7 +117,7 @@ test "AC2: broadcastChatEvent closes FD when writeAll fails (single client)" {
 
     try std.testing.expect(isFdOpen(fd));
 
-    ws.broadcastChatEvent("hello");
+    ws.broadcastChatEvent("hello", "web:dashboard");
 
     try std.testing.expect(!isFdOpen(fd));
     try std.testing.expectEqual(@as(usize, 0), ws.chat_sse_clients.items.len);
@@ -135,7 +135,7 @@ test "AC2: broadcastChatEvent closes all FDs when multiple clients fail" {
         try ws.chat_sse_clients.append(s);
     }
 
-    ws.broadcastChatEvent("test all fail");
+    ws.broadcastChatEvent("test all fail", "web:dashboard");
 
     for (fds) |fd| try std.testing.expect(!isFdOpen(fd));
     try std.testing.expectEqual(@as(usize, 0), ws.chat_sse_clients.items.len);
@@ -314,7 +314,7 @@ test "Edge2: broadcastChatEvent with empty client list is a no-op" {
     var ws = makeTestServer(alloc);
     defer cleanupTestServer(&ws);
 
-    ws.broadcastChatEvent("empty test");
+    ws.broadcastChatEvent("empty test", "web:dashboard");
     try std.testing.expectEqual(@as(usize, 0), ws.chat_sse_clients.items.len);
 }
 
@@ -451,7 +451,7 @@ test "broadcastChatEvent closes only failed clients, keeps working ones" {
     try ws.chat_sse_clients.append(good.stream);
     try ws.chat_sse_clients.append(bad);
 
-    ws.broadcastChatEvent("mixed chat test");
+    ws.broadcastChatEvent("mixed chat test", "web:dashboard");
 
     try std.testing.expect(!isFdOpen(bad_fd));
     try std.testing.expectEqual(@as(usize, 1), ws.chat_sse_clients.items.len);
