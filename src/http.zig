@@ -191,3 +191,41 @@ test "decodeChunked handles single chunk" {
     defer alloc.free(result);
     try std.testing.expectEqualStrings("Hello, World!", result);
 }
+
+test "decodeChunked empty input" {
+    const alloc = std.testing.allocator;
+    const result = try decodeChunked(alloc, "");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "decodeChunked immediate zero-size chunk" {
+    const alloc = std.testing.allocator;
+    const result = try decodeChunked(alloc, "0\r\n\r\n");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "decodeChunked malformed hex chunk size" {
+    const alloc = std.testing.allocator;
+    const result = try decodeChunked(alloc, "xyz\r\ndata\r\n0\r\n\r\n");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "decodeChunked truncated chunk data" {
+    const alloc = std.testing.allocator;
+    // chunk size is 0xa=10 but only 5 bytes of payload follow
+    const result = try decodeChunked(alloc, "a\r\nhello\r\n");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "decodeChunked missing separator between chunks" {
+    const alloc = std.testing.allocator;
+    // "Wiki" (4 bytes) is decoded; the absent \r\n causes pos to land on "pedia"
+    // which is invalid hex, so catch break fires and only "Wiki" is returned
+    const result = try decodeChunked(alloc, "4\r\nWiki5\r\npedia\r\n0\r\n\r\n");
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("Wiki", result);
+}
