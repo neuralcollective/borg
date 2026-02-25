@@ -423,6 +423,19 @@ test "EC-1d: CONTINUOUS_MODE=True (not exact true) keeps continuous_mode=false" 
     try std.testing.expect(cfg.continuous_mode == false);
 }
 
+test "EC-1e: CONTINUOUS_MODE=TRUE (all-caps) does not activate (requires exact 'true')" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const env =
+        \\CONTINUOUS_MODE=TRUE
+    ;
+
+    const cfg = try Config.initFromContent(arena.allocator(), env);
+    // Only lowercase "true" activates continuous_mode
+    try std.testing.expect(cfg.continuous_mode == false);
+}
+
 // EC-2: PIPELINE_MAX_BACKLOG=0 is valid, not a parse error → stored as 0
 test "EC-2: PIPELINE_MAX_BACKLOG=0 is accepted and stored as 0" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
