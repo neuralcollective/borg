@@ -81,6 +81,7 @@ pub const Pipeline = struct {
 
         // Clear stale dispatched_at from previous instance (ACID recovery)
         self.db.clearAllDispatched() catch {};
+        self.killOrphanedContainers();
 
         self.processBacklogFiles();
 
@@ -1843,6 +1844,35 @@ pub const Pipeline = struct {
         self.tg.sendMessage(raw_id, message, null) catch |err| {
             std.log.err("Pipeline notify failed: {}", .{err});
         };
+    }
+
+    /// Kill any borg-* containers left over from a previous instance
+    fn killOrphanedContainers(self: *Pipeline) void {
+        var argv = [_][]const u8{ "docker", "ps", "-q", "--filter", "name=borg-" };
+        var child = std.process.Child.init(&argv, self.allocator);
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch return;
+        const stdout = child.stdout.?.reader().readAllAlloc(self.allocator, 64 * 1024) catch {
+            _ = child.wait() catch {};
+            return;
+        };
+        defer self.allocator.free(stdout);
+        _ = child.wait() catch {};
+
+        const trimmed = std.mem.trim(u8, stdout, " \t\r\n");
+        if (trimmed.len == 0) return;
+
+        var count: u32 = 0;
+        var it = std.mem.splitScalar(u8, trimmed, '\n');
+        while (it.next()) |_| count += 1;
+
+        std.log.warn("Killing {d} orphaned container(s) from previous run", .{count});
+        var it2 = std.mem.splitScalar(u8, trimmed, '\n');
+        while (it2.next()) |id| {
+            if (id.len == 0) continue;
+            self.docker.killContainer(id) catch {};
+        }
     }
 };
 
