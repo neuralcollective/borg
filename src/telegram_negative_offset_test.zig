@@ -319,7 +319,6 @@ test "Edge2: valid offset with negative length skips entity, no partial processi
 
 test "Edge3: both negative offset and length skips entity" {
     const alloc = std.testing.allocator;
-    const text = "@testbot hello";
     const entities =
         \\[{"type":"mention","offset":-5,"length":-3}]
     ;
@@ -333,7 +332,6 @@ test "Edge3: both negative offset and length skips entity" {
 
 test "Edge4: zero offset with valid length processes entity normally" {
     const alloc = std.testing.allocator;
-    const text = "@testbot hello";
     const entities =
         \\[{"type":"mention","offset":0,"length":8}]
     ;
@@ -479,7 +477,6 @@ test "mixed: all negative entities skipped, no mentions detected" {
 
 test "non-mention entity types are ignored regardless of offset/length" {
     const alloc = std.testing.allocator;
-    const text = "@testbot hello";
     // Entity type is "bold", not "mention" — should be ignored entirely
     const entities =
         \\[{"type":"bold","offset":-1,"length":-1}]
