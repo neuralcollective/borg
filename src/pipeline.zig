@@ -546,7 +546,8 @@ pub const Pipeline = struct {
             \\Do NOT modify any source files. Only write spec.md.
         );
 
-        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, null, task.id) catch |err| {
+        const resume_sid = if (task.session_id.len > 0) task.session_id else null;
+        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
             try self.failTask(task, "manager agent spawn failed", @errorName(err));
             return;
         };
@@ -813,8 +814,8 @@ pub const Pipeline = struct {
             }
 
             // Run on host (not Docker) — rebase needs full git repo access via .git dir
-            // Always start fresh (null session) — Docker session IDs don't exist in host session store
-            const result = self.spawnAgentHost(prompt_buf.items, wt_path, null) catch |err| {
+            const resume_sid = if (task.session_id.len > 0) task.session_id else null;
+            const result = self.spawnAgentHost(prompt_buf.items, wt_path, resume_sid) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
