@@ -124,21 +124,21 @@ test "AC-B7: DISCORD_ENABLED=true sets discord_enabled=true" {
 
 // ── Numeric fields ─────────────────────────────────────────────────────────
 
-// AC-N1: MAX_BACKLOG_SIZE=10 → max_backlog_size=10
-test "AC-N1: MAX_BACKLOG_SIZE=10 sets max_backlog_size=10" {
+// AC-N1: PIPELINE_MAX_BACKLOG=10 → pipeline_max_backlog=10
+test "AC-N1: PIPELINE_MAX_BACKLOG=10 sets pipeline_max_backlog=10" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const env =
-        \\MAX_BACKLOG_SIZE=10
+        \\PIPELINE_MAX_BACKLOG=10
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(u32, 10), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 10), cfg.pipeline_max_backlog);
 }
 
-// AC-N2: MAX_BACKLOG_SIZE absent → max_backlog_size=5 (default)
-test "AC-N2: MAX_BACKLOG_SIZE absent defaults to 5" {
+// AC-N2: PIPELINE_MAX_BACKLOG absent → pipeline_max_backlog=5 (default)
+test "AC-N2: PIPELINE_MAX_BACKLOG absent defaults to 5" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -147,7 +147,7 @@ test "AC-N2: MAX_BACKLOG_SIZE absent defaults to 5" {
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
 }
 
 // AC-N3: CONTAINER_MEMORY_MB=2048 → container_memory_mb=2048
@@ -189,43 +189,43 @@ test "AC-N5: WEB_PORT absent defaults to 3131" {
     try std.testing.expectEqual(@as(u16, 3131), cfg.web_port);
 }
 
-// AC-N6: TICK_INTERVAL_S=60 → tick_interval_s=60
-test "AC-N6: TICK_INTERVAL_S=60 sets tick_interval_s=60" {
+// AC-N6: PIPELINE_TICK_S=60 → pipeline_tick_s=60
+test "AC-N6: PIPELINE_TICK_S=60 sets pipeline_tick_s=60" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const env =
-        \\TICK_INTERVAL_S=60
+        \\PIPELINE_TICK_S=60
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(u64, 60), cfg.tick_interval_s);
+    try std.testing.expectEqual(@as(u64, 60), cfg.pipeline_tick_s);
 }
 
-// AC-N7: SEED_COOLDOWN_S=7200 → seed_cooldown_s=7200
-test "AC-N7: SEED_COOLDOWN_S=7200 sets seed_cooldown_s=7200" {
+// AC-N7: PIPELINE_SEED_COOLDOWN_S=7200 → pipeline_seed_cooldown_s=7200
+test "AC-N7: PIPELINE_SEED_COOLDOWN_S=7200 sets pipeline_seed_cooldown_s=7200" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const env =
-        \\SEED_COOLDOWN_S=7200
+        \\PIPELINE_SEED_COOLDOWN_S=7200
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(i64, 7200), cfg.seed_cooldown_s);
+    try std.testing.expectEqual(@as(i64, 7200), cfg.pipeline_seed_cooldown_s);
 }
 
-// AC-N8: Invalid numeric (MAX_BACKLOG_SIZE=abc) falls back to default 5
-test "AC-N8: invalid MAX_BACKLOG_SIZE value falls back to default 5" {
+// AC-N8: Invalid numeric (PIPELINE_MAX_BACKLOG=abc) falls back to default 5
+test "AC-N8: invalid PIPELINE_MAX_BACKLOG value falls back to default 5" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const env =
-        \\MAX_BACKLOG_SIZE=abc
+        \\PIPELINE_MAX_BACKLOG=abc
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
 }
 
 // ── WATCHED_REPOS end-to-end ───────────────────────────────────────────────
@@ -348,11 +348,11 @@ test "AC-D1: empty env-content produces documented default values" {
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
     try std.testing.expectEqual(@as(u64, 1024), cfg.container_memory_mb);
     try std.testing.expectEqual(@as(u16, 3131), cfg.web_port);
-    try std.testing.expectEqual(@as(u64, 30), cfg.tick_interval_s);
-    try std.testing.expectEqual(@as(i64, 3600), cfg.seed_cooldown_s);
+    try std.testing.expectEqual(@as(u64, 30), cfg.pipeline_tick_s);
+    try std.testing.expectEqual(@as(i64, 3600), cfg.pipeline_seed_cooldown_s);
     try std.testing.expectEqual(@as(i64, 300), cfg.remote_check_interval_s);
     try std.testing.expect(cfg.continuous_mode == false);
     try std.testing.expect(cfg.whatsapp_enabled == false);
@@ -423,17 +423,17 @@ test "EC-1d: CONTINUOUS_MODE=True (not exact true) keeps continuous_mode=false" 
     try std.testing.expect(cfg.continuous_mode == false);
 }
 
-// EC-2: MAX_BACKLOG_SIZE=0 is valid, not a parse error → stored as 0
-test "EC-2: MAX_BACKLOG_SIZE=0 is accepted and stored as 0" {
+// EC-2: PIPELINE_MAX_BACKLOG=0 is valid, not a parse error → stored as 0
+test "EC-2: PIPELINE_MAX_BACKLOG=0 is accepted and stored as 0" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const env =
-        \\MAX_BACKLOG_SIZE=0
+        \\PIPELINE_MAX_BACKLOG=0
     ;
 
     const cfg = try Config.initFromContent(arena.allocator(), env);
-    try std.testing.expectEqual(@as(u32, 0), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 0), cfg.pipeline_max_backlog);
 }
 
 // EC-3: !manual-only entry (path:!manual) → test_cmd="make test", auto_merge=false
@@ -529,6 +529,6 @@ test "EC-8: initFromContent with empty string does not crash and returns a Confi
 
     const cfg = try Config.initFromContent(arena.allocator(), "");
     // Spot-check a couple of fields to confirm a valid Config was returned.
-    try std.testing.expectEqual(@as(u32, 5), cfg.max_backlog_size);
+    try std.testing.expectEqual(@as(u32, 5), cfg.pipeline_max_backlog);
     try std.testing.expectEqual(@as(u16, 3131), cfg.web_port);
 }

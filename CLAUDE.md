@@ -50,9 +50,9 @@ All config is in `.env` (or process environment). Key variables:
 - `CONTINUOUS_MODE=true` — auto-seed tasks when pipeline is idle
 - `CONTAINER_SETUP=path/to/setup.sh` — script sourced at container start (e.g. install zig)
 - `CONTAINER_MEMORY_MB=1024` — container memory limit
-- `MAX_BACKLOG_SIZE=5` — max concurrent pipeline tasks
-- `SEED_COOLDOWN_S=3600` — min seconds between seed scans
-- `TICK_INTERVAL_S=30` — pipeline main loop interval
+- `PIPELINE_MAX_BACKLOG=5` — max concurrent pipeline tasks
+- `PIPELINE_SEED_COOLDOWN_S=3600` — min seconds between seed scans
+- `PIPELINE_TICK_S=30` — pipeline main loop interval
 - `REMOTE_CHECK_INTERVAL_S=300` — git fetch interval for self-update
 
 See `src/config.zig` for the full list with defaults.

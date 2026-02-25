@@ -26,12 +26,12 @@ pub const Config = struct {
     release_interval_mins: u32,
     continuous_mode: bool,
     // Agent lifecycle
-    collection_window_ms: i64,
-    cooldown_ms: i64,
+    chat_collection_window_ms: i64,
+    chat_cooldown_ms: i64,
     agent_timeout_s: i64,
-    max_concurrent_agents: u32,
-    rate_limit_per_minute: u32,
-    max_pipeline_agents: u32,
+    max_chat_agents: u32,
+    chat_rate_limit: u32,
+    pipeline_max_agents: u32,
     // Web dashboard
     web_bind: []const u8,
     web_port: u16,
@@ -40,9 +40,9 @@ pub const Config = struct {
     container_setup: []const u8 = "",
     container_memory_mb: u64 = 1024,
     // Pipeline tuning
-    max_backlog_size: u32 = 5,
-    seed_cooldown_s: i64 = 3600,
-    tick_interval_s: u64 = 30,
+    pipeline_max_backlog: u32 = 5,
+    pipeline_seed_cooldown_s: i64 = 3600,
+    pipeline_tick_s: u64 = 30,
     remote_check_interval_s: i64 = 300,
     // Multi-repo
     watched_repos: []RepoConfig,
@@ -66,18 +66,18 @@ pub const Config = struct {
         const release_mins_str = getEnv(allocator, env_content, "RELEASE_INTERVAL_MINS") orelse "180";
         const release_mins = std.fmt.parseInt(u32, release_mins_str, 10) catch 180;
 
-        const collection_ms_str = getEnv(allocator, env_content, "COLLECTION_WINDOW_MS") orelse "3000";
-        const cooldown_ms_str = getEnv(allocator, env_content, "COOLDOWN_MS") orelse "5000";
+        const collection_ms_str = getEnv(allocator, env_content, "CHAT_COLLECTION_WINDOW_MS") orelse "3000";
+        const cooldown_ms_str = getEnv(allocator, env_content, "CHAT_COOLDOWN_MS") orelse "5000";
         const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "1000";
-        const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
-        const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
-        const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "4";
+        const max_agents_str = getEnv(allocator, env_content, "MAX_CHAT_AGENTS") orelse "4";
+        const rate_limit_str = getEnv(allocator, env_content, "CHAT_RATE_LIMIT") orelse "5";
+        const max_pipeline_agents_str = getEnv(allocator, env_content, "PIPELINE_MAX_AGENTS") orelse "4";
         const web_bind_val = getEnv(allocator, env_content, "WEB_BIND") orelse "127.0.0.1";
         const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
         const container_memory_str = getEnv(allocator, env_content, "CONTAINER_MEMORY_MB") orelse "1024";
-        const max_backlog_str = getEnv(allocator, env_content, "MAX_BACKLOG_SIZE") orelse "5";
-        const seed_cooldown_str = getEnv(allocator, env_content, "SEED_COOLDOWN_S") orelse "3600";
-        const tick_interval_str = getEnv(allocator, env_content, "TICK_INTERVAL_S") orelse "30";
+        const max_backlog_str = getEnv(allocator, env_content, "PIPELINE_MAX_BACKLOG") orelse "5";
+        const seed_cooldown_str = getEnv(allocator, env_content, "PIPELINE_SEED_COOLDOWN_S") orelse "3600";
+        const tick_interval_str = getEnv(allocator, env_content, "PIPELINE_TICK_S") orelse "30";
         const remote_check_str = getEnv(allocator, env_content, "REMOTE_CHECK_INTERVAL_S") orelse "300";
 
         var config = Config{
@@ -97,20 +97,20 @@ pub const Config = struct {
             .pipeline_admin_chat = getEnv(allocator, env_content, "PIPELINE_ADMIN_CHAT") orelse "",
             .release_interval_mins = release_mins,
             .continuous_mode = std.mem.eql(u8, getEnv(allocator, env_content, "CONTINUOUS_MODE") orelse "false", "true"),
-            .collection_window_ms = std.fmt.parseInt(i64, collection_ms_str, 10) catch 3000,
-            .cooldown_ms = std.fmt.parseInt(i64, cooldown_ms_str, 10) catch 5000,
+            .chat_collection_window_ms = std.fmt.parseInt(i64, collection_ms_str, 10) catch 3000,
+            .chat_cooldown_ms = std.fmt.parseInt(i64, cooldown_ms_str, 10) catch 5000,
             .agent_timeout_s = std.fmt.parseInt(i64, timeout_s_str, 10) catch 600,
-            .max_concurrent_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
-            .rate_limit_per_minute = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
-            .max_pipeline_agents = std.fmt.parseInt(u32, max_pipeline_agents_str, 10) catch 2,
+            .max_chat_agents = std.fmt.parseInt(u32, max_agents_str, 10) catch 4,
+            .chat_rate_limit = std.fmt.parseInt(u32, rate_limit_str, 10) catch 5,
+            .pipeline_max_agents = std.fmt.parseInt(u32, max_pipeline_agents_str, 10) catch 2,
             .web_bind = web_bind_val,
             .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
             .dashboard_dist_dir = getEnv(allocator, env_content, "DASHBOARD_DIST_DIR") orelse try std.fmt.allocPrint(allocator, "{s}/dashboard/dist", .{getEnv(allocator, env_content, "PIPELINE_REPO") orelse "."}),
             .container_setup = getEnv(allocator, env_content, "CONTAINER_SETUP") orelse "",
             .container_memory_mb = std.fmt.parseInt(u64, container_memory_str, 10) catch 1024,
-            .max_backlog_size = std.fmt.parseInt(u32, max_backlog_str, 10) catch 5,
-            .seed_cooldown_s = std.fmt.parseInt(i64, seed_cooldown_str, 10) catch 3600,
-            .tick_interval_s = std.fmt.parseInt(u64, tick_interval_str, 10) catch 30,
+            .pipeline_max_backlog = std.fmt.parseInt(u32, max_backlog_str, 10) catch 5,
+            .pipeline_seed_cooldown_s = std.fmt.parseInt(i64, seed_cooldown_str, 10) catch 3600,
+            .pipeline_tick_s = std.fmt.parseInt(u64, tick_interval_str, 10) catch 30,
             .remote_check_interval_s = std.fmt.parseInt(i64, remote_check_str, 10) catch 300,
             .watched_repos = &.{},
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
@@ -1058,12 +1058,12 @@ fn testMinimalConfig(pipeline_test_cmd: []const u8, watched_repos: []RepoConfig)
         .pipeline_admin_chat = "",
         .release_interval_mins = 0,
         .continuous_mode = false,
-        .collection_window_ms = 0,
-        .cooldown_ms = 0,
+        .chat_collection_window_ms = 0,
+        .chat_cooldown_ms = 0,
         .agent_timeout_s = 0,
-        .max_concurrent_agents = 0,
-        .rate_limit_per_minute = 0,
-        .max_pipeline_agents = 0,
+        .max_chat_agents = 0,
+        .chat_rate_limit = 0,
+        .pipeline_max_agents = 0,
         .web_port = 0,
         .dashboard_dist_dir = "",
         .watched_repos = watched_repos,

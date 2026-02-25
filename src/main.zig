@@ -263,12 +263,12 @@ const GroupManager = struct {
             state.rate_window_start_ms = now;
             state.trigger_count = 0;
         }
-        if (state.trigger_count >= config.rate_limit_per_minute) return false;
-        if (self.active_agents >= config.max_concurrent_agents) return false;
+        if (state.trigger_count >= config.chat_rate_limit) return false;
+        if (self.active_agents >= config.max_chat_agents) return false;
 
         state.trigger_count += 1;
         state.phase = .collecting;
-        state.collect_deadline_ms = now + config.collection_window_ms;
+        state.collect_deadline_ms = now + config.chat_collection_window_ms;
         state.trigger_msg_id = self.allocator.dupe(u8, msg_id) catch return false;
         state.original_id = self.allocator.dupe(u8, original_id) catch return false;
         state.transport = transport;
@@ -704,7 +704,7 @@ pub fn main() !void {
         // 5. Check completed agents → deliver responses
         {
             var deliveries = std.ArrayList(GroupManager.DeliveryInfo).init(cycle_alloc);
-            gm.getCompletedAgents(&deliveries, groups_list.items, config.cooldown_ms);
+            gm.getCompletedAgents(&deliveries, groups_list.items, config.chat_cooldown_ms);
 
             for (deliveries.items) |d| {
                 d.thread.join();
@@ -1326,12 +1326,12 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .pipeline_admin_chat = "",
         .release_interval_mins = 180,
         .continuous_mode = false,
-        .collection_window_ms = 3000,
-        .cooldown_ms = 5000,
+        .chat_collection_window_ms = 3000,
+        .chat_cooldown_ms = 5000,
         .agent_timeout_s = 600,
-        .max_concurrent_agents = 4,
-        .rate_limit_per_minute = 5,
-        .max_pipeline_agents = 4,
+        .max_chat_agents = 4,
+        .chat_rate_limit = 5,
+        .pipeline_max_agents = 4,
         .web_port = 3131,
         .dashboard_dist_dir = "/tmp/dashboard-test",
         .watched_repos = &.{},
@@ -1405,9 +1405,9 @@ test "GroupManager state machine transitions" {
 
     // Trigger → collecting
     var test_config = testConfig(allocator);
-    test_config.collection_window_ms = 100;
-    test_config.rate_limit_per_minute = 5;
-    test_config.max_concurrent_agents = 4;
+    test_config.chat_collection_window_ms = 100;
+    test_config.chat_rate_limit = 5;
+    test_config.max_chat_agents = 4;
 
     try std.testing.expect(gm.onTrigger(jid, "msg1", "chat1", .telegram, &test_config));
     try std.testing.expectEqual(GroupPhase.collecting, gm.getPhase(jid).?);
@@ -1446,9 +1446,9 @@ test "GroupManager rate limiting" {
     gm.addGroup(jid);
 
     var test_config = testConfig(allocator);
-    test_config.collection_window_ms = 10;
-    test_config.rate_limit_per_minute = 2;
-    test_config.max_concurrent_agents = 10;
+    test_config.chat_collection_window_ms = 10;
+    test_config.chat_rate_limit = 2;
+    test_config.max_chat_agents = 10;
 
     // First trigger accepted
     try std.testing.expect(gm.onTrigger(jid, "m1", "c1", .telegram, &test_config));
@@ -1491,9 +1491,9 @@ test "GroupManager max concurrent agents" {
     gm.addGroup("tg:b");
 
     var test_config = testConfig(allocator);
-    test_config.collection_window_ms = 10;
-    test_config.rate_limit_per_minute = 10;
-    test_config.max_concurrent_agents = 1;
+    test_config.chat_collection_window_ms = 10;
+    test_config.chat_rate_limit = 10;
+    test_config.max_chat_agents = 1;
 
     // First group triggers
     try std.testing.expect(gm.onTrigger("tg:a", "m1", "c1", .telegram, &test_config));

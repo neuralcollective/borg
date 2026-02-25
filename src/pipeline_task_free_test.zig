@@ -219,7 +219,7 @@ test "AC2: tick() calls freePipelineTask near inflight_tasks.contains" {
 // ═════════════════════════════════════════════════════════════════════════════
 // AC3 — Capacity-break path frees trailing tasks
 //
-// When active_agents >= max_pipeline_agents, tick() breaks from the loop.
+// When active_agents >= pipeline_max_agents, tick() breaks from the loop.
 // All tasks from the break index onward must have their string fields freed.
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -263,7 +263,7 @@ test "AC3: capacity-break source check — tasks[i..] freed before break" {
     // The loop that frees remaining tasks before break must contain freePipelineTask
     // and a break statement in the same capacity-check block.
     try std.testing.expect(std.mem.indexOf(u8, tick_body, "freePipelineTask") != null);
-    try std.testing.expect(std.mem.indexOf(u8, tick_body, "max_pipeline_agents") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tick_body, "pipeline_max_agents") != null);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
