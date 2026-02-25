@@ -187,8 +187,20 @@ pub const Config = struct {
         return std.fs.cwd().readFileAlloc(self.allocator, auto_path, 64 * 1024) catch null;
     }
 
-    /// Re-read OAuth token from credentials file (handles token rotation)
+    /// Re-read OAuth token from credentials file, refreshing via CLI if expired
     pub fn refreshOAuthToken(self: *Config) void {
+        const expiry = readOAuthExpiry(self.credentials_path) orelse 0;
+        const now_ms: i64 = std.time.timestamp() * 1000;
+        // Refresh if expired or expiring within 5 minutes
+        if (expiry > 0 and expiry < now_ms + 300_000) {
+            std.log.info("OAuth token expired or near-expiry, refreshing via CLI", .{});
+            var argv = [_][]const u8{ "claude", "auth", "status" };
+            var child = std.process.Child.init(&argv, self.allocator);
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+            child.spawn() catch return;
+            _ = child.wait() catch {};
+        }
         if (readOAuthToken(self.allocator, self.credentials_path)) |new_token| {
             self.oauth_token = new_token;
         }
@@ -277,6 +289,24 @@ fn readOAuthToken(allocator: std.mem.Allocator, path: []const u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+fn readOAuthExpiry(path: []const u8) ?i64 {
+    var buf: [65536]u8 = undefined;
+    const file = std.fs.cwd().openFile(path, .{}) catch return null;
+    defer file.close();
+    const n = file.readAll(&buf) catch return null;
+    // Find "expiresAt": <number> in the JSON
+    const needle = "\"expiresAt\":";
+    const pos = std.mem.indexOf(u8, buf[0..n], needle) orelse return null;
+    const start = pos + needle.len;
+    // Skip whitespace
+    var i = start;
+    while (i < n and (buf[i] == ' ' or buf[i] == '\t')) : (i += 1) {}
+    var end = i;
+    while (end < n and buf[end] >= '0' and buf[end] <= '9') : (end += 1) {}
+    if (end == i) return null;
+    return std.fmt.parseInt(i64, buf[i..end], 10) catch null;
 }
 
 fn findEnvValue(allocator: std.mem.Allocator, content: []const u8, key: []const u8) ?[]const u8 {
