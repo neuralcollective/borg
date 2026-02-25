@@ -1298,7 +1298,7 @@ fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, 
         \\GET    /api/tasks/<id>                Get task detail + agent output
         \\POST   /api/tasks                     Create task: {{"title":"...","description":"...","repo":"..."}}
         \\DELETE /api/tasks/<id>                Cancel/delete a task
-        \\POST   /api/release                   Trigger release train now
+        \\POST   /api/release                   Trigger integration now
         \\GET    /api/queue                      Integration queue
         \\GET    /api/status                     System status
         \\```
@@ -1359,7 +1359,6 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .whatsapp_auth_dir = "",
         .discord_enabled = false,
         .discord_token = "",
-        .graphite_enabled = false,
         .allocator = allocator,
     };
 }

@@ -305,9 +305,9 @@ pub const WebServer = struct {
     }
 
     fn handleTriggerRelease(self: *WebServer, stream: std.net.Stream) void {
-        // TODO: signal pipeline to run release train immediately
+        // TODO: signal pipeline to run integration immediately
         self.serveJsonResponse(stream, 200, "{\"status\":\"release triggered\"}");
-        std.log.info("Director triggered release train", .{});
+        std.log.info("Director triggered integration", .{});
     }
 
     fn handleChatPost(self: *WebServer, stream: std.net.Stream, request: []const u8) void {

@@ -1,7 +1,7 @@
 # Pending Work
 
 Tasks that were completed by agents but not yet merged into main.
-Cleared from integration queue on 2026-02-24 to unblock Graphite stack.
+Cleared from integration queue on 2026-02-24.
 Branch implementations still exist locally — can be cherry-picked or re-run.
 
 ---

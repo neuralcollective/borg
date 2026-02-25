@@ -7,8 +7,6 @@ const tg_mod = @import("telegram.zig");
 const Telegram = tg_mod.Telegram;
 const git_mod = @import("git.zig");
 const Git = git_mod.Git;
-const gt_mod = @import("gt.zig");
-const Gt = gt_mod.Gt;
 const json_mod = @import("json.zig");
 const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
@@ -24,11 +22,6 @@ pub const AgentPersona = enum {
     manager,
     qa,
     worker,
-};
-
-const StackEntry = struct {
-    branch: []const u8,
-    parent: []const u8,
 };
 
 pub const Pipeline = struct {
@@ -48,11 +41,6 @@ pub const Pipeline = struct {
     inflight_tasks: std.AutoHashMap(i64, void),
     inflight_mu: std.Thread.Mutex,
     active_agents: std.atomic.Value(u32),
-    graphite_available: bool,
-
-    // Stack ordering cache — only call LLM when queued branch set changes
-    stack_cache_key: []const u8,  // sorted branch fingerprint ("" = no cache)
-    stack_cache_resp: []const u8, // raw LLM response ("" = used fallback)
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -83,16 +71,12 @@ pub const Pipeline = struct {
             .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
             .inflight_mu = .{},
             .active_agents = std.atomic.Value(u32).init(0),
-            .graphite_available = false,
-            .stack_cache_key = &.{},
-            .stack_cache_resp = &.{},
         };
     }
 
     pub fn run(self: *Pipeline) void {
         std.log.info("Pipeline thread started for {d} repo(s)", .{self.config.watched_repos.len});
 
-        self.initGraphite();
         self.processBacklogFiles();
 
         while (self.running.load(.acquire)) {
@@ -127,34 +111,6 @@ pub const Pipeline = struct {
 
     pub fn getActiveAgentCount(self: *Pipeline) u32 {
         return self.active_agents.load(.acquire);
-    }
-
-    fn initGraphite(self: *Pipeline) void {
-        if (!self.config.graphite_enabled) return;
-
-        // Check if gt CLI is available
-        var child = std.process.Child.init(&.{ "gt", "--version" }, self.allocator);
-        child.stdin_behavior = .Close;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        child.spawn() catch {
-            std.log.warn("Graphite CLI (gt) not found, falling back to legacy release train", .{});
-            return;
-        };
-        _ = child.wait() catch return;
-
-        // Init Graphite for each watched repo
-        for (self.config.watched_repos) |repo| {
-            var gt = Gt.init(self.allocator, repo.path);
-            var r = gt.repoInit("main") catch continue;
-            defer r.deinit();
-            if (r.success()) {
-                std.log.info("Graphite initialized for {s}", .{repo.path});
-            }
-        }
-
-        self.graphite_available = true;
-        std.log.info("Graphite stacking enabled", .{});
     }
 
     fn processBacklogFiles(self: *Pipeline) void {
@@ -527,50 +483,12 @@ pub const Pipeline = struct {
         var del_branch = try git.exec(&.{ "branch", "-D", branch });
         defer del_branch.deinit();
 
-        if (self.graphite_available) {
-            // Graphite: create stacked branch, then attach worktree
-            var co = try git.checkout("main");
-            defer co.deinit();
-
-            const title = try std.fmt.allocPrint(self.allocator, "task-{d}: {s}", .{ task.id, task.title });
-            defer self.allocator.free(title);
-
-            var gt = Gt.init(self.allocator, task.repo_path);
-            var gt_create = try gt.create(branch, title);
-            defer gt_create.deinit();
-
-            // gt create checks out the new branch in the main worktree — switch back to main
-            // BEFORE creating the worktree so git won't reject the duplicate checkout
-            var co_back = try git.checkout("main");
-            defer co_back.deinit();
-
-            if (!gt_create.success()) {
-                // Fallback: create branch with git
-                var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
-                defer wt.deinit();
-                if (!wt.success()) {
-                    std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
-                    try self.db.updateTaskError(task.id, wt.stderr);
-                    return;
-                }
-            } else {
-                // Attach worktree to the gt-created branch
-                var wt = try git.addWorktreeExisting(wt_path, branch);
-                defer wt.deinit();
-                if (!wt.success()) {
-                    std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
-                    try self.db.updateTaskError(task.id, wt.stderr);
-                    return;
-                }
-            }
-        } else {
-            var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
-            defer wt.deinit();
-            if (!wt.success()) {
-                std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
-                try self.db.updateTaskError(task.id, wt.stderr);
-                return;
-            }
+        var wt = try git.exec(&.{ "worktree", "add", wt_path, "-b", branch, "origin/main" });
+        defer wt.deinit();
+        if (!wt.success()) {
+            std.log.err("git worktree add failed for task #{d}: {s}", .{ task.id, wt.stderr });
+            try self.db.updateTaskError(task.id, wt.stderr);
+            return;
         }
 
         try self.db.updateTaskBranch(task.id, branch);
@@ -711,7 +629,7 @@ pub const Pipeline = struct {
                 try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
                 self.cleanupWorktree(task);
                 std.log.info("Task #{d} tests already pass, skipping agent", .{task.id});
-                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for release train.", .{task.id}));
+                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
                 return;
             }
         } else |_| {}
@@ -784,7 +702,7 @@ pub const Pipeline = struct {
             try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
             self.cleanupWorktree(task);
             std.log.info("Task #{d} passed tests, queued for integration", .{task.id});
-            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for release train.", .{task.id}));
+            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
         } else {
             if (task.attempt + 1 >= task.max_attempts) {
                 const combined = try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{
@@ -995,17 +913,10 @@ pub const Pipeline = struct {
             const queued = self.db.getQueuedBranchesForRepo(arena.allocator(), repo.path) catch continue;
             if (queued.len == 0) continue;
 
-            if (self.graphite_available) {
-                std.log.info("Graphite integration for {s}: {d} branches", .{ repo.path, queued.len });
-                self.runGraphiteIntegration(queued, repo.path, repo.is_self) catch |err| {
-                    std.log.err("Graphite integration error for {s}: {}", .{ repo.path, err });
-                };
-            } else {
-                std.log.info("Release train for {s}: {d} branches", .{ repo.path, queued.len });
-                self.runReleaseTrain(queued, repo.path, repo.is_self) catch |err| {
-                    std.log.err("Release train error for {s}: {}", .{ repo.path, err });
-                };
-            }
+            std.log.info("Integration: {d} branches for {s}", .{ queued.len, repo.path });
+            self.runIntegration(queued, repo.path, repo.is_self) catch |err| {
+                std.log.err("Integration error for {s}: {}", .{ repo.path, err });
+            };
             ran_any = true;
         }
 
@@ -1014,165 +925,7 @@ pub const Pipeline = struct {
         }
     }
 
-    fn chronologicalFallback(self: *Pipeline, queued: []db_mod.QueueEntry) ![]StackEntry {
-        const sorted = try self.allocator.alloc(db_mod.QueueEntry, queued.len);
-        defer self.allocator.free(sorted);
-        @memcpy(sorted, queued);
-        std.mem.sort(db_mod.QueueEntry, sorted, {}, struct {
-            fn cmp(_: void, a: db_mod.QueueEntry, b: db_mod.QueueEntry) bool {
-                return a.task_id < b.task_id;
-            }
-        }.cmp);
-        var entries = try self.allocator.alloc(StackEntry, sorted.len);
-        for (sorted, 0..) |entry, i| {
-            entries[i] = .{
-                .branch = entry.branch,
-                .parent = if (i == 0) "main" else sorted[i - 1].branch,
-            };
-        }
-        return entries;
-    }
-
-    // Parse "branch:parent" lines from an LLM response into StackEntry slice.
-    // Uses queued entries for stable branch name pointers. Returns null if output is unusable.
-    fn parseStackResponse(self: *Pipeline, response: []const u8, queued: []db_mod.QueueEntry) ?[]StackEntry {
-        var valid_branches = std.StringHashMap(void).init(self.allocator);
-        defer valid_branches.deinit();
-        for (queued) |entry| {
-            valid_branches.put(entry.branch, {}) catch return null;
-        }
-
-        var entries = std.ArrayList(StackEntry).init(self.allocator);
-        var lines = std.mem.splitScalar(u8, response, '\n');
-        while (lines.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\r' });
-            if (trimmed.len == 0) continue;
-            const colon = std.mem.indexOf(u8, trimmed, ":") orelse continue;
-            const branch = std.mem.trim(u8, trimmed[0..colon], &[_]u8{ ' ', '\t' });
-            const parent = std.mem.trim(u8, trimmed[colon + 1 ..], &[_]u8{ ' ', '\t' });
-            if (branch.len == 0 or parent.len == 0) continue;
-            if (!valid_branches.contains(branch)) continue;
-            if (!std.mem.eql(u8, parent, "main") and !valid_branches.contains(parent)) continue;
-
-            var branch_ptr: []const u8 = branch;
-            var parent_ptr: []const u8 = if (std.mem.eql(u8, parent, "main")) "main" else parent;
-            for (queued) |entry| {
-                if (std.mem.eql(u8, entry.branch, branch)) branch_ptr = entry.branch;
-                if (std.mem.eql(u8, entry.branch, parent)) parent_ptr = entry.branch;
-            }
-            entries.append(.{ .branch = branch_ptr, .parent = parent_ptr }) catch {
-                entries.deinit();
-                return null;
-            };
-        }
-
-        if (entries.items.len != queued.len) {
-            entries.deinit();
-            return null;
-        }
-        return entries.toOwnedSlice() catch {
-            entries.deinit();
-            return null;
-        };
-    }
-
-    fn determineStackOrder(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8) ![]StackEntry {
-        if (queued.len <= 1) {
-            var entries = try self.allocator.alloc(StackEntry, queued.len);
-            if (queued.len == 1) entries[0] = .{ .branch = queued[0].branch, .parent = "main" };
-            return entries;
-        }
-
-        // Build fingerprint: sorted branch names joined with ","
-        const branch_names = try self.allocator.alloc([]const u8, queued.len);
-        defer self.allocator.free(branch_names);
-        for (queued, 0..) |entry, i| branch_names[i] = entry.branch;
-        std.mem.sort([]const u8, branch_names, {}, struct {
-            fn cmp(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.order(u8, a, b) == .lt;
-            }
-        }.cmp);
-        const key = try std.mem.join(self.allocator, ",", branch_names);
-        defer self.allocator.free(key);
-
-        // Return cached result if branch set is unchanged
-        if (self.stack_cache_key.len > 0 and std.mem.eql(u8, key, self.stack_cache_key)) {
-            if (self.stack_cache_resp.len > 0) {
-                if (self.parseStackResponse(self.stack_cache_resp, queued)) |cached| {
-                    return cached;
-                }
-            }
-            return self.chronologicalFallback(queued);
-        }
-
-        // Call LLM to determine stack order
-        var prompt_buf = std.ArrayList(u8).init(self.allocator);
-        defer prompt_buf.deinit();
-        try prompt_buf.appendSlice(
-            \\You are organizing a Graphite branch stack for merging into main.
-            \\
-            \\Branches ready to merge (all tests passed):
-            \\
-        );
-        for (queued) |entry| {
-            const task = self.db.getPipelineTask(self.allocator, entry.task_id) catch null;
-            const title = if (task) |t| t.title else "unknown";
-            try prompt_buf.writer().print("- {s}: \"{s}\"\n", .{ entry.branch, title });
-        }
-        try prompt_buf.appendSlice(
-            \\
-            \\Rules:
-            \\- Stack chronologically (lowest task ID at bottom, closest to main) as default
-            \\- Deviate ONLY if a task clearly depends on another's changes
-            \\- Bottom of stack merges first into main
-            \\- Output ONLY lines in format: branch:parent (one per line, bottom-up)
-            \\- First line's parent must be "main"
-            \\
-        );
-
-        var escaped = std.ArrayList(u8).init(self.allocator);
-        defer escaped.deinit();
-        for (prompt_buf.items) |c| {
-            if (c == '\'') try escaped.appendSlice("'\\''") else try escaped.append(c);
-        }
-
-        const cmd = try std.fmt.allocPrint(self.allocator, "claude --print --model claude-haiku-4-5-20251001 -p '{s}'", .{escaped.items});
-        defer self.allocator.free(cmd);
-
-        const result = self.runTestCommandForRepo(repo_path, cmd) catch {
-            std.log.warn("Stack ordering LLM call failed, using chronological fallback", .{});
-            return self.chronologicalFallback(queued);
-        };
-        defer self.allocator.free(result.stdout);
-        defer self.allocator.free(result.stderr);
-
-        const entries = blk: {
-            if (result.exit_code == 0) {
-                if (self.parseStackResponse(result.stdout, queued)) |parsed| {
-                    // Update cache
-                    if (self.stack_cache_key.len > 0) self.allocator.free(self.stack_cache_key);
-                    if (self.stack_cache_resp.len > 0) self.allocator.free(self.stack_cache_resp);
-                    self.stack_cache_key = self.allocator.dupe(u8, key) catch key;
-                    self.stack_cache_resp = self.allocator.dupe(u8, result.stdout) catch &.{};
-                    break :blk parsed;
-                }
-            }
-            std.log.warn("Stack ordering: LLM output unusable, using chronological fallback", .{});
-            // Cache the fallback (empty resp = use fallback)
-            if (self.stack_cache_key.len > 0) self.allocator.free(self.stack_cache_key);
-            if (self.stack_cache_resp.len > 0) self.allocator.free(self.stack_cache_resp);
-            self.stack_cache_key = self.allocator.dupe(u8, key) catch key;
-            self.stack_cache_resp = &.{};
-            break :blk try self.chronologicalFallback(queued);
-        };
-
-        std.log.info("Stack order ({s}):", .{if (result.exit_code == 0) "LLM" else "fallback"});
-        for (entries) |entry| std.log.info("  {s} -> {s}", .{ entry.branch, entry.parent });
-
-        return entries;
-    }
-
-    fn runGraphiteIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
+    fn runIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
         var git = Git.init(self.allocator, repo_path);
 
         // 1. Ensure main is checked out and up to date
@@ -1193,37 +946,36 @@ pub const Pipeline = struct {
             if (!check.success()) {
                 std.log.warn("Excluding {s} from integration: branch not found", .{entry.branch});
                 try self.db.updateQueueStatus(entry.id, "excluded", "branch not found");
-                if (self.stack_cache_key.len > 0) {
-                    self.allocator.free(self.stack_cache_key);
-                    self.stack_cache_key = &.{};
-                }
                 continue;
             }
             try live.append(entry);
         }
         if (live.items.len == 0) return;
 
-        // 3. Determine merge order via LLM (cached)
-        const stack_order = try self.determineStackOrder(live.items, repo_path);
-        defer self.allocator.free(stack_order);
+        // 3. Sort by task_id ascending (oldest first)
+        std.mem.sort(db_mod.QueueEntry, live.items, {}, struct {
+            fn lt(_: void, a: db_mod.QueueEntry, b: db_mod.QueueEntry) bool {
+                return a.task_id < b.task_id;
+            }
+        }.lt);
 
         // 4. Push each branch to origin and create PR if one doesn't exist yet
-        for (stack_order) |se| {
+        for (live.items) |entry| {
             // Push branch — use force-with-lease in case it was rebased
-            var push = try git.exec(&.{ "push", "--force-with-lease", "origin", se.branch });
+            var push = try git.exec(&.{ "push", "--force-with-lease", "origin", entry.branch });
             defer push.deinit();
             if (!push.success()) {
                 // First push (no upstream yet) — try without force flag
-                var push2 = try git.exec(&.{ "push", "origin", se.branch });
+                var push2 = try git.exec(&.{ "push", "origin", entry.branch });
                 defer push2.deinit();
                 if (!push2.success()) {
-                    std.log.warn("Failed to push {s}: {s}", .{ se.branch, push2.stderr[0..@min(push2.stderr.len, 200)] });
+                    std.log.warn("Failed to push {s}: {s}", .{ entry.branch, push2.stderr[0..@min(push2.stderr.len, 200)] });
                     continue;
                 }
             }
 
             // Check if PR already exists
-            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number 2>/dev/null", .{se.branch});
+            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number 2>/dev/null", .{entry.branch});
             defer self.allocator.free(view_cmd);
             const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
             defer self.allocator.free(view_result.stdout);
@@ -1233,56 +985,40 @@ pub const Pipeline = struct {
             // Get task title for PR (sanitized for shell double-quote context)
             var title_buf = std.ArrayList(u8).init(self.allocator);
             defer title_buf.deinit();
-            try title_buf.appendSlice(se.branch);
-            for (live.items) |entry| {
-                if (std.mem.eql(u8, entry.branch, se.branch)) {
-                    if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                        title_buf.clearRetainingCapacity();
-                        for (task.title[0..@min(task.title.len, 100)]) |c| {
-                            // Strip chars that need escaping inside double quotes
-                            switch (c) {
-                                '"', '\\', '$', '`' => try title_buf.append(' '),
-                                else => try title_buf.append(c),
-                            }
-                        }
+            try title_buf.appendSlice(entry.branch);
+            if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                title_buf.clearRetainingCapacity();
+                for (task.title[0..@min(task.title.len, 100)]) |c| {
+                    switch (c) {
+                        '"', '\\', '$', '`' => try title_buf.append(' '),
+                        else => try title_buf.append(c),
                     }
-                    break;
                 }
             }
 
             const create_cmd = try std.fmt.allocPrint(
                 self.allocator,
                 "gh pr create --base main --head {s} --title \"{s}\" --body \"Automated implementation.\"",
-                .{ se.branch, title_buf.items },
+                .{ entry.branch, title_buf.items },
             );
             defer self.allocator.free(create_cmd);
             const create_result = self.runTestCommandForRepo(repo_path, create_cmd) catch continue;
             defer self.allocator.free(create_result.stdout);
             defer self.allocator.free(create_result.stderr);
             if (create_result.exit_code != 0) {
-                std.log.warn("gh pr create {s}: {s}", .{ se.branch, create_result.stderr[0..@min(create_result.stderr.len, 200)] });
+                std.log.warn("gh pr create {s}: {s}", .{ entry.branch, create_result.stderr[0..@min(create_result.stderr.len, 200)] });
             } else {
-                std.log.info("Created PR for {s}", .{se.branch});
+                std.log.info("Created PR for {s}", .{entry.branch});
             }
         }
 
-        // 5. Merge ready PRs in stack order
+        // 5. Merge ready PRs in task_id order
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
 
-        for (stack_order) |se| {
-            // Find the queue entry for this branch
-            var q_entry: ?db_mod.QueueEntry = null;
-            for (live.items) |entry| {
-                if (std.mem.eql(u8, entry.branch, se.branch)) {
-                    q_entry = entry;
-                    break;
-                }
-            }
-            const entry = q_entry orelse continue;
-
+        for (live.items) |entry| {
             // Check PR exists
-            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{se.branch});
+            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
             defer self.allocator.free(view_cmd);
             const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
             defer self.allocator.free(view_result.stdout);
@@ -1290,7 +1026,7 @@ pub const Pipeline = struct {
             if (view_result.exit_code != 0) continue;
 
             try self.db.updateQueueStatus(entry.id, "merging", null);
-            const merge_cmd = try std.fmt.allocPrint(self.allocator, "gh pr merge {s} --squash --delete-branch", .{se.branch});
+            const merge_cmd = try std.fmt.allocPrint(self.allocator, "gh pr merge {s} --squash --delete-branch", .{entry.branch});
             defer self.allocator.free(merge_cmd);
             const merge_result = self.runTestCommandForRepo(repo_path, merge_cmd) catch {
                 try self.db.updateQueueStatus(entry.id, "queued", null);
@@ -1300,14 +1036,14 @@ pub const Pipeline = struct {
             defer self.allocator.free(merge_result.stderr);
 
             if (merge_result.exit_code != 0) {
-                std.log.warn("gh pr merge {s}: {s}", .{ se.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
+                std.log.warn("gh pr merge {s}: {s}", .{ entry.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
                 try self.db.updateQueueStatus(entry.id, "queued", null);
                 continue;
             }
 
             try self.db.updateQueueStatus(entry.id, "merged", null);
             try self.db.updateTaskStatus(entry.task_id, "merged");
-            try merged.append(se.branch);
+            try merged.append(entry.branch);
 
             if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
                 self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
@@ -1318,179 +1054,27 @@ pub const Pipeline = struct {
         if (merged.items.len > 0) {
             var pull2 = try git.pull();
             defer pull2.deinit();
-            if (self.stack_cache_key.len > 0) {
-                self.allocator.free(self.stack_cache_key);
-                self.stack_cache_key = &.{};
-            }
         }
 
-        // 8. Check if backlog is fully done
+        // 7. Check if backlog is fully done
         if (merged.items.len > 0) self.maybeCleanupBacklog(repo_path);
 
-        // 9. Self-update and notify
+        // 8. Self-update and notify
         if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
         if (merged.items.len > 0) {
-            const digest = try self.generateDigest(merged.items, &.{});
+            const digest = try self.generateDigest(merged.items);
             self.notify(self.config.pipeline_admin_chat, digest);
-            std.log.info("Graphite integration complete: {d} merged", .{merged.items.len});
+            std.log.info("Integration complete: {d} merged", .{merged.items.len});
         }
     }
 
-    fn runReleaseTrain(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
-        var git = Git.init(self.allocator, repo_path);
-
-        self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Release train starting..."));
-
-        // 1. Go to main
-        var co = try git.checkout("main");
-        defer co.deinit();
-        var pull = try git.pull();
-        defer pull.deinit();
-
-        // 2. Create release-candidate branch
-        const rc_name = "release-candidate";
-        var rc = try git.createBranch(rc_name, "main");
-        defer rc.deinit();
-        if (!rc.success()) {
-            // RC branch might already exist, delete and retry
-            var del = try git.deleteBranch(rc_name);
-            defer del.deinit();
-            var rc2 = try git.createBranch(rc_name, "main");
-            defer rc2.deinit();
-        }
-
-        var co_rc = try git.checkout(rc_name);
-        defer co_rc.deinit();
-
-        // 3. Merge branches one by one, test after each
-        var merged = std.ArrayList([]const u8).init(self.allocator);
-        defer merged.deinit();
-        var excluded = std.ArrayList([]const u8).init(self.allocator);
-        defer excluded.deinit();
-
-        for (queued) |entry| {
-            try self.db.updateQueueStatus(entry.id, "merging", null);
-
-            var merge = try git.merge(entry.branch);
-            defer merge.deinit();
-
-            if (!merge.success()) {
-                // Merge conflict — abort, send back for rebase
-                var abort = try git.abortMerge();
-                defer abort.deinit();
-                try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict");
-                try self.db.updateTaskError(entry.task_id, "Excluded from release: merge conflict — rebasing");
-                try self.db.incrementTaskAttempt(entry.task_id);
-                try excluded.append(entry.branch);
-                if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                    if (task.attempt + 1 >= task.max_attempts) {
-                        std.log.warn("Task #{d} exhausted merge attempts, recycling to backlog", .{task.id});
-                        self.recycleTask(task) catch {};
-                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" exhausted merge attempts — recycling to backlog.", .{ task.id, task.title }) catch continue);
-                    } else {
-                        try self.db.updateTaskStatus(entry.task_id, "rebase");
-                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" has merge conflicts — rebasing (attempt {d}/{d}).", .{ task.id, task.title, task.attempt + 1, task.max_attempts }) catch continue);
-                    }
-                } else {
-                    try self.db.updateTaskStatus(entry.task_id, "rebase");
-                }
-                continue;
-            }
-
-            // Run global tests on the release-candidate
-            const rt_test_cmd = self.config.getTestCmdForRepo(repo_path);
-            const test_result = self.runTestCommandForRepo(repo_path, rt_test_cmd) catch {
-                try excluded.append(entry.branch);
-                continue;
-            };
-            defer self.allocator.free(test_result.stdout);
-            defer self.allocator.free(test_result.stderr);
-
-            if (test_result.exit_code != 0) {
-                // Tests failed after merge — revert, send back for rebase
-                var reset = try git.resetHard("HEAD~1");
-                defer reset.deinit();
-                try self.db.updateQueueStatus(entry.id, "excluded", "tests failed after merge");
-                try self.db.updateTaskError(entry.task_id, test_result.stderr[0..@min(test_result.stderr.len, 4000)]);
-                try self.db.incrementTaskAttempt(entry.task_id);
-                try excluded.append(entry.branch);
-                if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                    if (task.attempt + 1 >= task.max_attempts) {
-                        std.log.warn("Task #{d} exhausted integration test attempts, recycling to backlog", .{task.id});
-                        self.recycleTask(task) catch {};
-                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" exhausted integration test attempts — recycling to backlog.", .{ task.id, task.title }) catch continue);
-                    } else {
-                        try self.db.updateTaskStatus(entry.task_id, "rebase");
-                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" failed integration tests — rebasing (attempt {d}/{d}).", .{ task.id, task.title, task.attempt + 1, task.max_attempts }) catch continue);
-                    }
-                } else {
-                    try self.db.updateTaskStatus(entry.task_id, "rebase");
-                }
-                continue;
-            }
-
-            // Success!
-            try self.db.updateQueueStatus(entry.id, "merged", null);
-            try self.db.updateTaskStatus(entry.task_id, "merged");
-            try merged.append(entry.branch);
-
-            // Notify the task's originating chat
-            if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
-                self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged to main.", .{ task.id, task.title }) catch continue);
-            }
-        }
-
-        if (merged.items.len == 0) {
-            // Nothing merged, clean up
-            var co_main = try git.checkout("main");
-            defer co_main.deinit();
-            var del = try git.deleteBranch(rc_name);
-            defer del.deinit();
-            self.notify(self.config.pipeline_admin_chat, try self.allocator.dupe(u8, "Release train: no branches merged."));
-            return;
-        }
-
-        // 4. Fast-forward main
-        var co_main = try git.checkout("main");
-        defer co_main.deinit();
-        var ff = try git.merge(rc_name);
-        defer ff.deinit();
-        var push = try git.push("origin", "main");
-        defer push.deinit();
-
-        // 5. Cleanup
-        var del_rc = try git.deleteBranch(rc_name);
-        defer del_rc.deinit();
-        for (merged.items) |branch| {
-            var del = try git.deleteBranch(branch);
-            defer del.deinit();
-        }
-
-        // 5b. Self-update: only for the primary (self) repo
-        if (is_self) self.checkSelfUpdate(repo_path);
-
-        // 6. Generate and send digest
-        const digest = try self.generateDigest(merged.items, excluded.items);
-        self.notify(self.config.pipeline_admin_chat, digest);
-        std.log.info("Release train complete: {d} merged, {d} excluded", .{ merged.items.len, excluded.items.len });
-    }
-
-    fn generateDigest(self: *Pipeline, merged: [][]const u8, excluded_branches: [][]const u8) ![]const u8 {
+    fn generateDigest(self: *Pipeline, merged: [][]const u8) ![]const u8 {
         var buf = std.ArrayList(u8).init(self.allocator);
         const w = buf.writer();
 
-        try w.writeAll("*Release Train Complete*\n\n");
-        try w.print("Merged: {d} branch(es)\n", .{merged.len});
-
+        try w.print("*{d} PR(s) merged*\n", .{merged.len});
         for (merged) |branch| {
             try w.print("  + {s}\n", .{branch});
-        }
-
-        if (excluded_branches.len > 0) {
-            try w.print("\nExcluded: {d} branch(es)\n", .{excluded_branches.len});
-            for (excluded_branches) |branch| {
-                try w.print("  - {s}\n", .{branch});
-            }
         }
 
         return buf.toOwnedSlice();

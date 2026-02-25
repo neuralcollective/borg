@@ -41,8 +41,6 @@ pub const Config = struct {
     // Discord config
     discord_enabled: bool,
     discord_token: []const u8,
-    // Graphite stacking
-    graphite_enabled: bool,
     allocator: std.mem.Allocator,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
@@ -93,7 +91,6 @@ pub const Config = struct {
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .discord_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "DISCORD_ENABLED") orelse "false", "true"),
             .discord_token = getEnv(allocator, env_content, "DISCORD_TOKEN") orelse "",
-            .graphite_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "GRAPHITE_ENABLED") orelse "false", "true"),
             .allocator = allocator,
         };
 
