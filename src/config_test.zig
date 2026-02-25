@@ -39,6 +39,7 @@ fn testConfig(allocator: std.mem.Allocator, credentials_path: []const u8, oauth_
         .agent_timeout_s = 0,
         .max_concurrent_agents = 0,
         .rate_limit_per_minute = 0,
+        .max_pipeline_agents = 0,
         .web_port = 0,
         .dashboard_dist_dir = "",
         .watched_repos = &.{},
