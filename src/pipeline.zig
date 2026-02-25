@@ -241,7 +241,10 @@ pub const Pipeline = struct {
             return;
         }
 
-        for (tasks) |task| {
+        // Track which tasks were handed off to threads (thread takes ownership)
+        var dispatched = [_]bool{false} ** 20;
+
+        for (tasks, 0..) |task, i| {
             if (self.active_agents.load(.acquire) >= self.config.max_pipeline_agents) break;
 
             // Skip if already in-flight
@@ -262,11 +265,18 @@ pub const Pipeline = struct {
                 _ = self.inflight_tasks.remove(task.id);
                 continue;
             };
+            dispatched[i] = true;
+        }
+
+        // Free strings for tasks not dispatched to threads
+        for (tasks, 0..) |task, i| {
+            if (!dispatched[i]) task.deinit(self.allocator);
         }
     }
 
     fn processTaskThread(self: *Pipeline, task: db_mod.PipelineTask) void {
         defer {
+            task.deinit(self.allocator);
             _ = self.active_agents.fetchSub(1, .acq_rel);
             self.inflight_mu.lock();
             defer self.inflight_mu.unlock();
@@ -1125,6 +1135,7 @@ pub const Pipeline = struct {
             defer title_buf.deinit();
             try title_buf.appendSlice(entry.branch);
             if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                defer task.deinit(self.allocator);
                 title_buf.clearRetainingCapacity();
                 for (task.title[0..@min(task.title.len, 100)]) |c| {
                     switch (c) {
@@ -1219,6 +1230,7 @@ pub const Pipeline = struct {
                 try merged.append(entry.branch);
 
                 if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                    defer task.deinit(self.allocator);
                     self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" merged via PR.", .{ task.id, task.title }) catch continue);
                 }
             }
@@ -1309,7 +1321,10 @@ pub const Pipeline = struct {
     fn createHealthTask(self: *Pipeline, repo_path: []const u8, kind: []const u8, stderr: []const u8) void {
         // Don't create duplicates — check if a health fix task already exists
         const tasks = self.db.getActivePipelineTasks(self.allocator, 50) catch return;
-        defer self.allocator.free(tasks);
+        defer {
+            for (tasks) |t| t.deinit(self.allocator);
+            self.allocator.free(tasks);
+        }
         for (tasks) |t| {
             if (std.mem.startsWith(u8, t.title, "Fix failing ") and std.mem.eql(u8, t.repo_path, repo_path)) return;
         }

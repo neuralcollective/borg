@@ -40,6 +40,11 @@ pub const PipelineTask = struct {
     notify_chat: []const u8,
     created_at: []const u8,
     session_id: []const u8,
+
+    pub fn deinit(self: PipelineTask, allocator: std.mem.Allocator) void {
+        const fields = .{ self.title, self.description, self.repo_path, self.branch, self.status, self.last_error, self.created_by, self.notify_chat, self.created_at, self.session_id };
+        inline for (fields) |f| allocator.free(f);
+    }
 };
 
 pub const QueueEntry = struct {
