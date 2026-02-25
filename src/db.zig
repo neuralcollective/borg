@@ -58,12 +58,12 @@ pub const Proposal = struct {
     title: []const u8,
     description: []const u8,
     rationale: []const u8,
-    status: []const u8, // pending, approved, dismissed
+    status: []const u8, // proposed, approved, dismissed
     created_at: []const u8,
 };
 
 // Must match the number of entries in runMigrations()
-const SCHEMA_VERSION = "5";
+const SCHEMA_VERSION = "6";
 
 pub const Db = struct {
     sqlite_db: sqlite.Database,
@@ -187,7 +187,7 @@ pub const Db = struct {
             \\  title TEXT NOT NULL,
             \\  description TEXT NOT NULL DEFAULT '',
             \\  rationale TEXT NOT NULL DEFAULT '',
-            \\  status TEXT NOT NULL DEFAULT 'pending',
+            \\  status TEXT NOT NULL DEFAULT 'proposed',
             \\  created_at TEXT DEFAULT (datetime('now'))
             \\);
         );
@@ -228,7 +228,8 @@ pub const Db = struct {
             "ALTER TABLE integration_queue ADD COLUMN repo_path TEXT DEFAULT ''",
             "ALTER TABLE integration_queue ADD COLUMN pr_number INTEGER DEFAULT 0",
             "ALTER TABLE task_outputs ADD COLUMN raw_stream TEXT DEFAULT ''",
-            "CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, repo_path TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', rationale TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT (datetime('now')))",
+            "CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, repo_path TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', rationale TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'proposed', created_at TEXT DEFAULT (datetime('now')))",
+            "UPDATE proposals SET status = 'proposed' WHERE status = 'pending'",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -765,7 +766,7 @@ pub const Db = struct {
                 .title = try allocator.dupe(u8, row.get(2) orelse ""),
                 .description = try allocator.dupe(u8, row.get(3) orelse ""),
                 .rationale = try allocator.dupe(u8, row.get(4) orelse ""),
-                .status = try allocator.dupe(u8, row.get(5) orelse "pending"),
+                .status = try allocator.dupe(u8, row.get(5) orelse "proposed"),
                 .created_at = try allocator.dupe(u8, row.get(6) orelse ""),
             });
         }
@@ -794,7 +795,7 @@ pub const Db = struct {
             .title = try allocator.dupe(u8, row.get(2) orelse ""),
             .description = try allocator.dupe(u8, row.get(3) orelse ""),
             .rationale = try allocator.dupe(u8, row.get(4) orelse ""),
-            .status = try allocator.dupe(u8, row.get(5) orelse "pending"),
+            .status = try allocator.dupe(u8, row.get(5) orelse "proposed"),
             .created_at = try allocator.dupe(u8, row.get(6) orelse ""),
         };
     }
