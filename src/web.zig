@@ -48,6 +48,7 @@ pub const WebServer = struct {
     chat_sse_mu: std.Thread.Mutex,
 
     start_time: i64,
+    force_restart_signal: ?*std.atomic.Value(bool),
 
     pub fn init(allocator: std.mem.Allocator, db: *Db, config: *Config, port: u16) WebServer {
         return .{
@@ -67,6 +68,7 @@ pub const WebServer = struct {
             .chat_sse_clients = std.ArrayList(std.net.Stream).init(allocator),
             .chat_sse_mu = .{},
             .start_time = std.time.timestamp(),
+            .force_restart_signal = null,
         };
     }
 
@@ -305,9 +307,11 @@ pub const WebServer = struct {
     }
 
     fn handleTriggerRelease(self: *WebServer, stream: std.net.Stream) void {
-        // TODO: signal pipeline to run integration immediately
-        self.serveJsonResponse(stream, 200, "{\"status\":\"release triggered\"}");
-        std.log.info("Director triggered integration", .{});
+        if (self.force_restart_signal) |sig| {
+            sig.store(true, .release);
+            std.log.info("Director triggered self-update restart", .{});
+        }
+        self.serveJsonResponse(stream, 200, "{\"status\":\"restart triggered\"}");
     }
 
     fn handleChatPost(self: *WebServer, stream: std.net.Stream, request: []const u8) void {
