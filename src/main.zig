@@ -1043,7 +1043,7 @@ fn agentThreadInner(ctx: *AgentContext) !*AgentOutcome {
     var child = std.process.Child.init(argv.items, ctx.allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
 
     // Set environment
     var env = try std.process.getEnvMap(ctx.allocator);
@@ -1441,7 +1441,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .max_consecutive_errors = 3,
         .pipeline_repo = "",
         .pipeline_test_cmd = "echo ok",
-        .pipeline_lint_cmd = "",
+
         .pipeline_admin_chat = "",
         .release_interval_mins = 180,
         .continuous_mode = false,

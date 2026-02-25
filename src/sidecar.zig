@@ -54,7 +54,7 @@ pub const Sidecar = struct {
         );
         child.stdin_behavior = .Pipe;
         child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
+        child.stderr_behavior = .Inherit;
 
         var env_map = std.process.EnvMap.init(self.allocator);
         defer env_map.deinit();

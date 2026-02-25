@@ -161,7 +161,7 @@ pub const Docker = struct {
         var child = std.process.Child.init(argv.items, self.allocator);
         child.stdin_behavior = .Pipe;
         child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
 
         try child.spawn();
 
@@ -208,8 +208,8 @@ pub const Docker = struct {
     pub fn killContainer(self: *Docker, name: []const u8) !void {
         var argv = [_][]const u8{ "docker", "kill", name };
         var child = std.process.Child.init(&argv, self.allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
         try child.spawn();
         _ = try child.wait();
     }

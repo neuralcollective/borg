@@ -117,7 +117,7 @@ pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt
     var child = std.process.Child.init(argv.items, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
     if (config.workdir.len > 0) child.cwd = config.workdir;
 
     // Set environment: inherit current env + override OAuth token
