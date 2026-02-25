@@ -1042,7 +1042,15 @@ pub const Pipeline = struct {
 
             if (merge_result.exit_code != 0) {
                 std.log.warn("gh pr merge {s}: {s}", .{ entry.branch, merge_result.stderr[0..@min(merge_result.stderr.len, 200)] });
-                try self.db.updateQueueStatus(entry.id, "queued", null);
+                const needs_rebase = std.mem.indexOf(u8, merge_result.stderr, "not mergeable") != null or
+                    std.mem.indexOf(u8, merge_result.stderr, "cannot be cleanly created") != null;
+                if (needs_rebase) {
+                    try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict with main");
+                    try self.db.updateTaskStatus(entry.task_id, "rebase");
+                    std.log.info("Task #{d} has conflicts with main, sent back to rebase", .{entry.task_id});
+                } else {
+                    try self.db.updateQueueStatus(entry.id, "queued", null);
+                }
                 continue;
             }
 
