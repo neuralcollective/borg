@@ -23,7 +23,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
-        <span className="text-[11px] font-medium text-zinc-400">Pipeline Tasks</span>
+        <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Pipeline Tasks</span>
         <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-zinc-500">{filtered?.length ?? 0}</span>
       </div>
       <div className="flex-1 overflow-y-auto overscroll-contain">
@@ -37,7 +37,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
           {done.slice(0, 20).map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
-          {!filtered?.length && <p className="py-12 text-center text-xs text-zinc-600">No tasks yet</p>}
+          {!filtered?.length && <p className="py-12 text-center text-[13px] md:text-xs text-zinc-600">No tasks yet</p>}
         </div>
       </div>
     </div>
@@ -61,7 +61,7 @@ function TaskRow({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors",
+        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 md:py-2 text-left transition-colors active:bg-white/[0.06]",
         "hover:bg-white/[0.03]",
         isActive && "bg-blue-500/[0.04]",
         selected && "bg-white/[0.06]"
@@ -74,7 +74,7 @@ function TaskRow({
           {repoName(task.repo_path)}
         </span>
       )}
-      <span className="flex-1 truncate text-[12px] text-zinc-300">{task.title}</span>
+      <span className="flex-1 truncate text-[13px] md:text-[12px] text-zinc-300">{task.title}</span>
       {task.attempt > 0 && (
         <span className="font-mono text-[10px] text-zinc-600">
           {task.attempt}/{task.max_attempts}

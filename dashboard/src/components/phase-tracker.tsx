@@ -7,14 +7,14 @@ export function PhaseTracker({ status }: { status: string }) {
   const isFailed = status === "failed";
 
   return (
-    <div className="flex items-center gap-0">
+    <div className="flex items-center gap-0 overflow-x-auto">
       {PHASES.map((phase, i) => {
         const isDone = i < currentIdx;
         const isCurrent = i === currentIdx;
         return (
-          <div key={phase} className="flex items-center">
+          <div key={phase} className="flex shrink-0 items-center">
             {i > 0 && (
-              <div className={cn("h-px w-6", isDone || isCurrent ? "bg-zinc-600" : "bg-white/[0.06]")} />
+              <div className={cn("h-px w-4 md:w-6", isDone || isCurrent ? "bg-zinc-600" : "bg-white/[0.06]")} />
             )}
             <div className="flex flex-col items-center gap-1">
               <div
