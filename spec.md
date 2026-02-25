@@ -1,12 +1,12 @@
-# Spec: Add tests for db.zig registerGroup/getAllGroups/unregisterGroup
+# Spec: Add tests for json.zig safe getter functions
 
 ## Task Summary
 
-The existing "group registration round trip" test in `src/db.zig` (line 671) verifies `registerGroup` and `getAllGroups` but does not assert all fields — it skips checking `name` and `trigger`. The `unregisterGroup` function (line 255) has zero test coverage. Add tests that verify all five `RegisteredGroup` fields survive a register/read round-trip, and that `unregisterGroup` removes the group from subsequent `getAllGroups` results.
+The `getString`, `getInt`, and `getBool` functions in `src/json.zig` lack dedicated tests for missing-key and wrong-type scenarios. The existing test ("parse and access typed fields") only covers the happy path where keys are present with the correct type. Add focused tests that verify each getter returns `null` when the key is absent, when the value is a mismatched type, and when called on a non-object value, and returns the correct value when the key is present.
 
 ## Files to Modify
 
-1. **`src/db.zig`** — Add new `test` blocks in the existing test section at the bottom of the file (after line 881).
+1. **`src/json.zig`** — Add new `test` blocks after the existing tests (after line 134).
 
 ## Files to Create
 
@@ -14,56 +14,49 @@ None.
 
 ## Function/Type Signatures
 
-No new functions or types. The tests exercise existing public API:
+No new functions or types. Only new `test` blocks are added within `src/json.zig`.
+
+### New test blocks
 
 ```zig
-// src/db.zig — existing signatures (no changes)
-pub fn registerGroup(self: *Db, jid: []const u8, name: []const u8, folder: []const u8, trigger: []const u8, requires_trigger: bool) !void
-pub fn getAllGroups(self: *Db, allocator: std.mem.Allocator) ![]RegisteredGroup
-pub fn unregisterGroup(self: *Db, jid: []const u8) !void
+test "getString returns correct value for present key" { ... }
+test "getString returns null for missing key" { ... }
+test "getString returns null for wrong value type" { ... }
+test "getString returns null for non-object value" { ... }
+
+test "getInt returns correct value for present key" { ... }
+test "getInt returns null for missing key" { ... }
+test "getInt returns null for wrong value type" { ... }
+test "getInt coerces float to int" { ... }
+test "getInt returns null for non-object value" { ... }
+
+test "getBool returns correct value for present key" { ... }
+test "getBool returns null for missing key" { ... }
+test "getBool returns null for wrong value type" { ... }
+test "getBool returns null for non-object value" { ... }
 ```
 
-```zig
-// src/db.zig — existing struct (no changes)
-pub const RegisteredGroup = struct {
-    jid: []const u8,
-    name: []const u8,
-    folder: []const u8,
-    trigger: []const u8,
-    requires_trigger: bool,
-};
-```
+Each test block uses `std.testing.allocator`, calls `json.parse` to create a `Parsed(Value)`, defers `.deinit()`, and asserts results with `std.testing.expectEqualStrings`, `std.testing.expectEqual`, or `std.testing.expect`.
 
-### New test blocks to add
-
-1. **`test "registerGroup and getAllGroups round-trip preserves all fields"`** — Registers a single group with non-default values for every field (including a custom trigger like `"!help"` and `requires_trigger = false`), calls `getAllGroups`, and asserts all five fields (`jid`, `name`, `folder`, `trigger`, `requires_trigger`) match exactly.
-
-2. **`test "unregisterGroup removes group from getAllGroups"`** — Registers two groups, calls `unregisterGroup` on the first, then calls `getAllGroups` and asserts only the second group remains (count == 1) and its `jid` matches the non-removed group.
-
-3. **`test "unregisterGroup on nonexistent jid is a no-op"`** — Opens a fresh in-memory DB, calls `unregisterGroup` with a jid that was never registered, and asserts no error is returned (DELETE WHERE on a missing row is not an error in SQLite).
-
-4. **`test "getAllGroups returns empty slice when no groups registered"`** — Opens a fresh in-memory DB with no registrations, calls `getAllGroups`, and asserts the result has length 0.
+Note: Some of these cases are partially covered by the existing `"getString returns null for missing key and wrong type"` test (line 125). The new tests should be more comprehensive and cover `getInt` and `getBool` symmetrically, but the existing test can be left as-is or consolidated at the implementer's discretion.
 
 ## Acceptance Criteria
 
-1. **All-fields round-trip**: Registering a group with `jid="g1"`, `name="Test Group"`, `folder="test-folder"`, `trigger="!help"`, `requires_trigger=false` and reading it back via `getAllGroups` returns exactly one `RegisteredGroup` where `jid`, `name`, `folder`, `trigger`, and `requires_trigger` all match the input values.
-
-2. **Unregister removes group**: After registering groups with jids `"g1"` and `"g2"`, calling `unregisterGroup("g1")` causes `getAllGroups` to return exactly one group with `jid == "g2"`.
-
-3. **Unregister nonexistent is safe**: Calling `unregisterGroup("nonexistent")` on a DB with no matching row does not return an error.
-
-4. **Empty result**: `getAllGroups` on a fresh in-memory DB (no prior `registerGroup` calls) returns a slice of length 0.
-
-5. **Tests compile and pass**: `zig build test` passes with all new tests included.
+1. **Missing key returns null**: For each of `getString`, `getInt`, `getBool`, calling the function with a key not present in the parsed JSON object returns `null`.
+2. **Present key returns correct value**: `getString` returns the string value, `getInt` returns the `i64` value, `getBool` returns the `bool` value when the key exists and has the matching type.
+3. **Wrong type returns null**: `getString` returns `null` when the key maps to an integer or bool. `getInt` returns `null` when the key maps to a string or bool. `getBool` returns `null` when the key maps to a string or integer.
+4. **Non-object input returns null**: Calling each getter on a non-object `Value` (e.g., a `Value` that is `.string` or `.integer`) returns `null`.
+5. **Float-to-int coercion**: `getInt` returns the truncated `i64` when the value is a JSON float (e.g., `3.0` → `3`). This exercises the `.float => |f| @intFromFloat(f)` branch at line 28.
+6. **`getBool` with both true and false**: Tests cover both `true` and `false` boolean values returning correctly.
+7. **Build passes**: `zig build` succeeds with no errors.
+8. **All tests pass**: `zig build test` passes, including both the new tests and all pre-existing tests.
 
 ## Edge Cases
 
-1. **Custom trigger pattern**: The `trigger_pattern` column has a default of `'@Borg'` in the schema. The round-trip test must use a non-default trigger (e.g., `"!help"`) to prove the value comes from the insert, not the column default.
-
-2. **`requires_trigger = false`**: The column default is `1` (true). The round-trip test must use `false` to verify the boolean is stored and read correctly, not just falling back to the default.
-
-3. **Unregister nonexistent jid**: SQLite `DELETE WHERE jid = ?` on a non-matching row returns success (0 rows affected). The test confirms `unregisterGroup` does not propagate an error in this case.
-
-4. **Order independence**: `getAllGroups` does not guarantee row ordering (no ORDER BY). Tests that check a specific group after unregister should either register only two groups (so after removal there's exactly one) or search the returned slice by jid rather than assuming positional order.
-
-5. **`INSERT OR REPLACE` semantics**: The existing "registerGroup upserts on conflict" test already covers this case (re-registering the same jid overwrites all fields). The new tests should not duplicate this; they focus on round-trip field fidelity and unregister behavior.
+1. **Non-object value as input**: All three getters have a guard `if (obj != .object) return null`. Test by passing a `Value` that is `.string`, `.integer`, or `.null` directly (not wrapped in an object).
+2. **Float coercion in `getInt`**: The `getInt` function coerces `.float` values via `@intFromFloat`. Test with a value like `3.0` to confirm it returns `3`. This is a branch not covered by any existing test.
+3. **Null JSON value for a present key**: A key that maps to JSON `null` (`.null` variant) should return `null` from all three getters since none match on `.null`.
+4. **Empty object**: Parsing `{}` and calling any getter should return `null` for any key.
+5. **Empty string value**: `getString` on a key whose value is `""` should return the empty string, not `null`.
+6. **Negative and zero integers**: `getInt` should correctly return negative values and zero.
+7. **`false` value for `getBool`**: Ensure `getBool` returns `false` (not `null`) for a key mapped to `false` — the optional return type means the test must distinguish `?bool` being `false` from being `null`.
