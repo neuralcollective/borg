@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal } from "./types";
 
@@ -12,7 +12,7 @@ export function useTasks() {
   return useQuery<Task[]>({
     queryKey: ["tasks"],
     queryFn: () => fetchJson("/api/tasks"),
-    refetchInterval: 2000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -21,7 +21,7 @@ export function useTaskDetail(id: number | null) {
     queryKey: ["task", id],
     queryFn: () => fetchJson(`/api/tasks/${id}`),
     enabled: id !== null,
-    refetchInterval: 2000,
+    refetchInterval: 15_000,
   });
 }
 
@@ -29,7 +29,7 @@ export function useQueue() {
   return useQuery<QueueEntry[]>({
     queryKey: ["queue"],
     queryFn: () => fetchJson("/api/queue"),
-    refetchInterval: 3000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -37,7 +37,7 @@ export function useStatus() {
   return useQuery<Status>({
     queryKey: ["status"],
     queryFn: () => fetchJson("/api/status"),
-    refetchInterval: 3000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -45,7 +45,7 @@ export function useProposals() {
   return useQuery<Proposal[]>({
     queryKey: ["proposals"],
     queryFn: () => fetchJson("/api/proposals"),
-    refetchInterval: 5000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -64,6 +64,8 @@ export function useLogs() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const invalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryClient = useQueryClient();
 
   const connect = useCallback(() => {
     if (esRef.current) esRef.current.close();
@@ -79,15 +81,25 @@ export function useLogs() {
           const next = [...prev, d];
           return next.length > 500 ? next.slice(-500) : next;
         });
+        // Debounced cache invalidation — at most once per second
+        if (!invalidateTimer.current) {
+          invalidateTimer.current = setTimeout(() => {
+            queryClient.invalidateQueries();
+            invalidateTimer.current = null;
+          }, 1000);
+        }
       } catch {
         // ignore parse errors
       }
     };
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     connect();
-    return () => esRef.current?.close();
+    return () => {
+      esRef.current?.close();
+      if (invalidateTimer.current) clearTimeout(invalidateTimer.current);
+    };
   }, [connect]);
 
   return { logs, connected };
