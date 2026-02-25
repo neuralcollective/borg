@@ -594,6 +594,9 @@ pub const Pipeline = struct {
 
         self.db.storeTaskOutputFull(task.id, "spec", result.output, result.raw_stream, 0) catch {};
 
+        // Force-add spec.md (gitignored but needed in worktree history)
+        var add_spec = try wt_git.exec(&.{ "add", "-f", "spec.md" });
+        defer add_spec.deinit();
         var add = try wt_git.addAll();
         defer add.deinit();
         var commit = try wt_git.commit("spec: generate spec.md for task");
