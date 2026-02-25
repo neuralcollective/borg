@@ -1,77 +1,138 @@
-# Spec: Add tests for json.stringify in json.zig
+# Task #6: Fix OAuth Token Memory Leak in `refreshOAuthToken`
 
 ## 1. Task Summary
 
-`json.stringify` (src/json.zig:83) converts a `std.json.Value` back to a JSON string and is used for serialization throughout the codebase, but currently has zero test coverage. This task adds four focused test blocks directly in `src/json.zig` covering a simple string value, null, an object with mixed types, and nested objects/arrays with round-trip verification via `parse`.
+`Config.refreshOAuthToken` (src/config.zig:114-118) allocates a new heap string via
+`readOAuthToken` and overwrites `self.oauth_token` without freeing the previous value.
+Because this function is called on every main-loop iteration (~500 ms, src/main.zig:715)
+and also before each pipeline agent spawn (src/pipeline.zig:327, 1303, 1321), the
+process leaks memory continuously at runtime. The fix introduces an `oauth_token_owned`
+boolean flag on `Config` to track whether the current `oauth_token` is heap-allocated,
+and frees the old token before replacing it only when the flag is set.
+
+---
 
 ## 2. Files to Modify
 
-- `src/json.zig` — append four new `test` blocks after the existing tests (after line 134)
+| File | Change |
+|---|---|
+| `src/config.zig` | Add `oauth_token_owned: bool` field to `Config`; update `Config.load` to set it correctly; update `refreshOAuthToken` to free old token when owned and set flag to `true` after successful refresh; add `test { _ = @import("config_test.zig"); }` to wire tests into the build |
+| `src/config_test.zig` | Add missing `.max_pipeline_agents = 0` field to `testConfig` helper (compile error without it, since `Config` has this field) |
+
+---
 
 ## 3. Files to Create
 
-None.
+None. `src/config_test.zig` already exists and contains all required tests.
 
-## 4. Function/Type Signatures for New or Changed Code
+---
 
-No new public functions or types are introduced. The additions are four private `test` blocks within `src/json.zig`:
+## 4. Function / Type Signatures for New or Changed Code
+
+### 4.1 `Config` struct — new field (src/config.zig)
 
 ```zig
-test "stringify simple string value" { ... }
-
-test "stringify null" { ... }
-
-test "stringify object with mixed types round-trips with parse" { ... }
-
-test "stringify nested objects and arrays round-trips with parse" { ... }
+pub const Config = struct {
+    telegram_token: []const u8,
+    oauth_token: []const u8,
+    oauth_token_owned: bool,   // true iff oauth_token was heap-allocated by this Config
+    // ... all remaining existing fields unchanged ...
+};
 ```
 
-Each test follows this pattern:
+`oauth_token_owned` must be placed immediately after `oauth_token` (or anywhere before
+`allocator`) so that every struct literal in tests and in `Config.load` can initialize it.
+
+### 4.2 `Config.load` — initialize `oauth_token_owned` (src/config.zig)
+
+The `oauth` variable is non-empty if and only if it was heap-allocated by `readOAuthToken`
+or `getEnv`. Set the flag accordingly:
+
 ```zig
-const alloc = std.testing.allocator;
-// ... build or parse a Value ...
-const result = try stringify(alloc, value);
-defer alloc.free(result);
-// ... assertions ...
+var config = Config{
+    // ...
+    .oauth_token = oauth,
+    .oauth_token_owned = (oauth.len > 0),
+    // ...
+};
 ```
 
-For tests that use `parse`, the parsed value must be released:
+### 4.3 `Config.refreshOAuthToken` — free old token, set ownership (src/config.zig)
+
 ```zig
-var parsed = try parse(alloc, json_input);
-defer parsed.deinit();
+/// Re-read OAuth token from credentials file (handles token rotation).
+pub fn refreshOAuthToken(self: *Config) void {
+    if (readOAuthToken(self.allocator, self.credentials_path)) |new_token| {
+        if (self.oauth_token_owned) {
+            self.allocator.free(self.oauth_token);
+        }
+        self.oauth_token = new_token;
+        self.oauth_token_owned = true;
+    }
+}
 ```
+
+Signature is unchanged: `pub fn refreshOAuthToken(self: *Config) void`.
+
+### 4.4 `testConfig` helper — add missing field (src/config_test.zig)
+
+Add `.max_pipeline_agents = 0,` after `.rate_limit_per_minute = 0,` in the `testConfig`
+function's struct literal so it matches the current `Config` definition.
+
+### 4.5 Wire `config_test.zig` into the test build (src/config.zig)
+
+Append after the last existing `test` block in `src/config.zig`:
+
+```zig
+test {
+    _ = @import("config_test.zig");
+}
+```
+
+---
 
 ## 5. Acceptance Criteria
 
-1. **Simple string value**: Calling `stringify(alloc, Value{ .string = "hello" })` returns the slice `"\"hello\""` (i.e., the JSON encoding of the string `hello`).
+All criteria are directly verified by tests in `src/config_test.zig`:
 
-2. **Null value**: Calling `stringify(alloc, .null)` (or `Value{ .null = {} }`) returns the slice `"null"`.
+| ID | Assertion |
+|---|---|
+| AC1 | After `refreshOAuthToken` when `readOAuthToken` succeeds, the previous heap-allocated `oauth_token` is freed. `std.testing.allocator` reports no leak. |
+| AC2 | When `oauth_token_owned = false` (initial token is the `""` literal), `refreshOAuthToken` does **not** call `allocator.free` on the old value — no crash or double-free. |
+| AC3 | After a successful refresh, `cfg.oauth_token` equals the new token string (no use-after-free corruption). |
+| AC4 | When `readOAuthToken` returns `null` (file missing or unreadable), `refreshOAuthToken` is a no-op: `oauth_token` and `oauth_token_owned` are unchanged. |
+| AC5 | Multiple consecutive refreshes produce no memory leaks detected by `std.testing.allocator`. |
+| Structural | `Config` compiles with the new `oauth_token_owned: bool` field and `testConfig` in `config_test.zig` compiles without error. |
+| Build | `zig build test` exits 0 with all tests passing (no regressions). |
 
-3. **Object with mixed types — round-trip**: A `std.json.Value` of type `.object` is constructed in-memory with at least the following fields:
-   - `"name"`: string `"borg"`
-   - `"count"`: integer `1`
-   - `"active"`: bool `true`
-
-   After calling `stringify`, the returned JSON string is fed back into `parse`. The re-parsed value must satisfy:
-   - `getString(reparsed.value, "name").?` equals `"borg"`
-   - `getInt(reparsed.value, "count").?` equals `1`
-   - `getBool(reparsed.value, "active").?` equals `true`
-
-4. **Nested objects and arrays — round-trip**: The JSON string `"{\"outer\":{\"inner\":\"val\"},\"list\":[1,2,3]}"` is parsed with `parse`, passed to `stringify`, then re-parsed with `parse`. The final parsed value must satisfy:
-   - `getObject(reparsed.value, "outer")` is non-null
-   - `getString(getObject(reparsed.value, "outer").?, "inner").?` equals `"val"`
-   - `getArray(reparsed.value, "list").?` has length `3`
-
-5. **Memory safety**: All four tests pass under `zig build test` with no memory leaks detected by `std.testing.allocator`.
-
-6. **No regressions**: All pre-existing tests in `src/json.zig` (`parse and access typed fields`, `escapeString handles special characters`, `escapeString handles control characters`, `getString returns null for missing key and wrong type`) continue to pass.
+---
 
 ## 6. Edge Cases to Handle
 
-- **Memory ownership of `stringify` result**: The returned slice is caller-owned. Every test must `defer alloc.free(result)` immediately after the `stringify` call.
-- **Memory ownership of `parse` result**: Every `parse` call in tests must have a matching `defer parsed.deinit()` to free the arena allocator backing the parsed tree.
-- **Object key ordering is not guaranteed**: The object-with-mixed-types test must not assert the exact byte content of the stringified object. Instead, it must re-parse the result and check field values individually, because `std.json.ObjectMap` (backed by `std.StringArrayHashMap`) may serialize keys in insertion order, which can vary across Zig versions.
-- **In-memory `Value` construction for the object test**: Building a `Value{ .object = ... }` requires initializing a `std.json.ObjectMap` with the test allocator, inserting fields, and ensuring the map is freed after the test. Use `defer obj.deinit()` where `obj` is the `ObjectMap`. Alternatively, parse a JSON literal string to obtain the `Value`, which handles memory automatically via the `Parsed` arena.
-- **Float fields**: If a float field is added to future tests, use approximate comparison (`expectApproxEqAbs`) rather than exact equality, since `std.json.stringify` renders floats with finite precision and a subsequent parse may yield a slightly different `f64`.
-- **Integer boundary**: Any integer values used in tests must be representable as `i64` without overflow (the type used by `std.json.Value.integer`).
-- **Non-empty string**: The simple-string test must use a non-empty string to distinguish correct output from an accidental empty or null result.
+1. **Initial token is the empty string literal `""`** — `oauth_token_owned` must be
+   `false` in `Config.load` (set via `oauth.len > 0`). The first `refreshOAuthToken`
+   call must not attempt `allocator.free("")`.
+
+2. **Initial token is heap-allocated (non-empty)** — When `readOAuthToken` or `getEnv`
+   produces a non-empty slice, `oauth_token_owned = true` ensures the first refresh
+   frees it correctly.
+
+3. **Credentials file disappears mid-run** — `readOAuthToken` returns `null`;
+   `refreshOAuthToken` must be a strict no-op, leaving both `oauth_token` and
+   `oauth_token_owned` unchanged.
+
+4. **Credentials file contains invalid JSON or is missing the `accessToken` field** —
+   `readOAuthToken` returns `null`; same no-op behaviour as edge case 3.
+
+5. **Token value is identical across refreshes** — Even if the content is byte-for-byte
+   identical, `readOAuthToken` allocates a new slice each call. The old allocation must
+   still be freed to avoid a leak.
+
+6. **`oauth_token_owned` transitions `false → true` on first successful refresh** — After
+   that point all subsequent refreshes must free the old value before assigning the new
+   one. The test `"oauth_token_owned transitions from false to true on first successful
+   refresh"` in `config_test.zig` covers the full transition sequence.
+
+7. **`testConfig` compile fix** — `src/config_test.zig:testConfig` does not include
+   `.max_pipeline_agents`, which is a required field of `Config`. This must be added to
+   resolve the compile error that would otherwise block all test runs.
