@@ -101,10 +101,42 @@ interface StreamEvent {
   type: string;
   subtype?: string;
   tool?: string;
+  label?: string;
   input?: string;
   output?: string;
   content?: string;
   timestamp?: string;
+}
+
+function formatToolInput(tool: string, input: unknown): { label: string; detail: string } {
+  if (typeof input === "string") return { label: "", detail: input };
+  if (!input || typeof input !== "object") return { label: "", detail: "" };
+  const obj = input as Record<string, unknown>;
+  if (tool === "Bash") {
+    return { label: (obj.description as string) || "", detail: (obj.command as string) || "" };
+  }
+  if (tool === "Read") {
+    const fp = (obj.file_path as string) || "";
+    const suffix = obj.offset ? `  lines ${obj.offset}–${(obj.offset as number) + ((obj.limit as number) || 200)}` : "";
+    return { label: "", detail: fp + suffix };
+  }
+  if (tool === "Write") return { label: "", detail: (obj.file_path as string) || "" };
+  if (tool === "Edit") {
+    const fp = (obj.file_path as string) || "";
+    const old = (obj.old_string as string) || "";
+    const preview = old.length > 80 ? old.slice(0, 80) + "..." : old;
+    return { label: fp, detail: preview ? `replacing: ${preview}` : "" };
+  }
+  if (tool === "Glob" || tool === "Grep") {
+    const pat = (obj.pattern as string) || "";
+    const path = (obj.path as string) || "";
+    return { label: "", detail: path ? `${pat}  in ${path}` : pat };
+  }
+  if (tool === "WebSearch") return { label: "", detail: (obj.query as string) || "" };
+  if (tool === "WebFetch") return { label: "", detail: (obj.url as string) || "" };
+  if (tool === "Task") return { label: (obj.description as string) || "", detail: ((obj.prompt as string) || "").slice(0, 120) };
+  const json = JSON.stringify(input);
+  return { label: "", detail: json.length > 200 ? json.slice(0, 200) + "..." : json };
 }
 
 function parseStream(raw: string): StreamEvent[] {
@@ -127,12 +159,12 @@ function parseStream(raw: string): StreamEvent[] {
               if (block.type === "text" && block.text) {
                 events.push({ type: "assistant", content: block.text });
               } else if (block.type === "tool_use") {
+                const { label, detail } = formatToolInput(block.name, block.input);
                 events.push({
                   type: "tool_call",
                   tool: block.name,
-                  input: typeof block.input === "string"
-                    ? block.input
-                    : JSON.stringify(block.input, null, 2),
+                  label,
+                  input: detail,
                 });
               }
             }
@@ -204,7 +236,6 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
   }
 
   if (ev.type === "tool_call") {
-    const preview = ev.input && ev.input.length > 120 ? ev.input.slice(0, 120) + "..." : ev.input;
     return (
       <div className="rounded border border-amber-500/10 bg-amber-500/[0.04]">
         <button
@@ -214,9 +245,9 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
           <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-400">
             {ev.tool}
           </span>
-          {!expanded && (
-            <span className="truncate font-mono text-[10px] text-zinc-500">{preview}</span>
-          )}
+          <span className="truncate text-[10px] text-zinc-400">
+            {ev.label || (ev.input && ev.input.length > 80 ? ev.input.slice(0, 80) + "..." : ev.input)}
+          </span>
           <span className="ml-auto shrink-0 text-[9px] text-zinc-600">{expanded ? "^" : "v"}</span>
         </button>
         {expanded && ev.input && (
