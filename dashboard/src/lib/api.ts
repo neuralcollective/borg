@@ -66,6 +66,11 @@ export async function triageProposals(): Promise<{ scored: number }> {
   return res.json();
 }
 
+export async function reopenProposal(id: number): Promise<void> {
+  const res = await fetch(`/api/proposals/${id}/reopen`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 export function useLogs() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [connected, setConnected] = useState(false);

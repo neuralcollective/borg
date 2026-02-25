@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useProposals, approveProposal, dismissProposal, triageProposals } from "@/lib/api";
+import { useProposals, approveProposal, dismissProposal, triageProposals, reopenProposal } from "@/lib/api";
 import { repoName, type Proposal } from "@/lib/types";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -101,6 +101,16 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
     setActing(id);
     try {
       await dismissProposal(id);
+      invalidate();
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleReopen = async (id: number) => {
+    setActing(id);
+    try {
+      await reopenProposal(id);
       invalidate();
     } finally {
       setActing(null);
@@ -228,11 +238,22 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset ${
                 p.status === "approved"
                   ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20"
+                  : p.status === "auto_dismissed"
+                  ? "bg-orange-500/10 text-orange-400 ring-orange-500/20"
                   : "bg-zinc-500/10 text-zinc-400 ring-zinc-500/20"
               }`}>
-                {p.status}
+                {p.status === "auto_dismissed" ? "auto-closed" : p.status}
               </span>
               <span className="flex-1 truncate text-zinc-500">{p.title}</span>
+              {p.status === "auto_dismissed" && (
+                <button
+                  onClick={() => handleReopen(p.id)}
+                  disabled={acting === p.id}
+                  className="shrink-0 rounded-md bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
+                >
+                  {acting === p.id ? "..." : "Reopen"}
+                </button>
+              )}
             </div>
           ))}
 
