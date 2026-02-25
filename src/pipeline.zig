@@ -404,9 +404,10 @@ pub const Pipeline = struct {
             return 0;
         };
         defer self.allocator.free(result.output);
+        defer self.allocator.free(result.raw_stream);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
-        self.db.storeTaskOutput(0, "seed", result.output, 0) catch {};
+        self.db.storeTaskOutputFull(0, "seed", result.output, result.raw_stream, 0) catch {};
 
         // Parse TASK_START/TASK_END blocks from output
         var created: u32 = 0;
@@ -552,6 +553,7 @@ pub const Pipeline = struct {
             return;
         };
         defer self.allocator.free(result.output);
+        defer self.allocator.free(result.raw_stream);
 
         // Store session for next phase
         if (result.new_session_id) |sid| {
@@ -559,7 +561,7 @@ pub const Pipeline = struct {
             self.allocator.free(sid);
         }
 
-        self.db.storeTaskOutput(task.id, "spec", result.output, 0) catch {};
+        self.db.storeTaskOutputFull(task.id, "spec", result.output, result.raw_stream, 0) catch {};
 
         var add = try wt_git.addAll();
         defer add.deinit();
@@ -570,6 +572,11 @@ pub const Pipeline = struct {
             try self.failTask(task, "manager produced no output", commit.stderr);
             return;
         }
+
+        // Capture git diff for this phase
+        var spec_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
+        defer spec_diff.deinit();
+        if (spec_diff.success()) self.db.storeTaskOutput(task.id, "spec_diff", spec_diff.stdout, 0) catch {};
 
         try self.db.updateTaskStatus(task.id, "qa");
         self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: spec ready, starting QA", .{task.id}));
@@ -602,13 +609,14 @@ pub const Pipeline = struct {
             return;
         };
         defer self.allocator.free(result.output);
+        defer self.allocator.free(result.raw_stream);
 
         if (result.new_session_id) |sid| {
             self.db.setTaskSessionId(task.id, sid) catch {};
             self.allocator.free(sid);
         }
 
-        self.db.storeTaskOutput(task.id, "qa", result.output, 0) catch {};
+        self.db.storeTaskOutputFull(task.id, "qa", result.output, result.raw_stream, 0) catch {};
 
         var add = try wt_git.addAll();
         defer add.deinit();
@@ -619,6 +627,10 @@ pub const Pipeline = struct {
             try self.failTask(task, "QA produced no test files", commit.stderr);
             return;
         }
+
+        var qa_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
+        defer qa_diff.deinit();
+        if (qa_diff.success()) self.db.storeTaskOutput(task.id, "qa_diff", qa_diff.stdout, 0) catch {};
 
         try self.db.updateTaskStatus(task.id, "impl");
         self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: tests written, starting implementation", .{task.id}));
@@ -673,19 +685,26 @@ pub const Pipeline = struct {
             return;
         };
         defer self.allocator.free(result.output);
+        defer self.allocator.free(result.raw_stream);
 
         if (result.new_session_id) |sid| {
             self.db.setTaskSessionId(task.id, sid) catch {};
             self.allocator.free(sid);
         }
 
-        self.db.storeTaskOutput(task.id, "impl", result.output, 0) catch {};
+        self.db.storeTaskOutputFull(task.id, "impl", result.output, result.raw_stream, 0) catch {};
 
         // Commit implementation in worktree
         var add = try wt_git.addAll();
         defer add.deinit();
         var commit = try wt_git.commit("impl: implementation from worker agent");
         defer commit.deinit();
+
+        if (commit.success()) {
+            var impl_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
+            defer impl_diff.deinit();
+            if (impl_diff.success()) self.db.storeTaskOutput(task.id, "impl_diff", impl_diff.stdout, 0) catch {};
+        }
 
         // Run tests in worktree
         const test_result = self.runTestCommandForRepo(wt_path, test_cmd) catch |err| {
@@ -820,13 +839,14 @@ pub const Pipeline = struct {
                 return;
             };
             defer self.allocator.free(result.output);
+            defer self.allocator.free(result.raw_stream);
 
             if (result.new_session_id) |sid| {
                 self.db.setTaskSessionId(task.id, sid) catch {};
                 self.allocator.free(sid);
             }
 
-            self.db.storeTaskOutput(task.id, "rebase", result.output, 0) catch {};
+            self.db.storeTaskOutputFull(task.id, "rebase", result.output, result.raw_stream, 0) catch {};
         }
 
         // Verify the agent actually completed the rebase before doing anything else.
