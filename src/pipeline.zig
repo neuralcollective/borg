@@ -1174,7 +1174,6 @@ pub const Pipeline = struct {
 
     fn runGraphiteIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
         var git = Git.init(self.allocator, repo_path);
-        var gt = Gt.init(self.allocator, repo_path);
 
         // 1. Ensure main is checked out and up to date
         var co = try git.checkout("main");
@@ -1194,7 +1193,6 @@ pub const Pipeline = struct {
             if (!check.success()) {
                 std.log.warn("Excluding {s} from integration: branch not found", .{entry.branch});
                 try self.db.updateQueueStatus(entry.id, "excluded", "branch not found");
-                // Invalidate stack cache since queued set changed
                 if (self.stack_cache_key.len > 0) {
                     self.allocator.free(self.stack_cache_key);
                     self.stack_cache_key = &.{};
@@ -1205,25 +1203,70 @@ pub const Pipeline = struct {
         }
         if (live.items.len == 0) return;
 
-        // 3. Determine merge order via LLM (cached); each branch targets main independently
+        // 3. Determine merge order via LLM (cached)
         const stack_order = try self.determineStackOrder(live.items, repo_path);
         defer self.allocator.free(stack_order);
 
-        // 4. Submit each branch as an independent PR (no --stack, no restack, no re-parenting)
+        // 4. Push each branch to origin and create PR if one doesn't exist yet
         for (stack_order) |se| {
-            var co_branch = try git.checkout(se.branch);
-            defer co_branch.deinit();
-            if (!co_branch.success()) continue;
-            var submit = try gt.submit();
-            defer submit.deinit();
-            if (!submit.success()) {
-                std.log.warn("gt submit {s}: {s}", .{ se.branch, submit.stderr[0..@min(submit.stderr.len, 200)] });
+            // Push branch — use force-with-lease in case it was rebased
+            var push = try git.exec(&.{ "push", "--force-with-lease", "origin", se.branch });
+            defer push.deinit();
+            if (!push.success()) {
+                // First push (no upstream yet) — try without force flag
+                var push2 = try git.exec(&.{ "push", "origin", se.branch });
+                defer push2.deinit();
+                if (!push2.success()) {
+                    std.log.warn("Failed to push {s}: {s}", .{ se.branch, push2.stderr[0..@min(push2.stderr.len, 200)] });
+                    continue;
+                }
             }
-            var co_main2 = try git.checkout("main");
-            defer co_main2.deinit();
+
+            // Check if PR already exists
+            const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number 2>/dev/null", .{se.branch});
+            defer self.allocator.free(view_cmd);
+            const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
+            defer self.allocator.free(view_result.stdout);
+            defer self.allocator.free(view_result.stderr);
+            if (view_result.exit_code == 0 and std.mem.trim(u8, view_result.stdout, &[_]u8{ ' ', '\n' }).len > 0) continue;
+
+            // Get task title for PR (sanitized for shell double-quote context)
+            var title_buf = std.ArrayList(u8).init(self.allocator);
+            defer title_buf.deinit();
+            try title_buf.appendSlice(se.branch);
+            for (live.items) |entry| {
+                if (std.mem.eql(u8, entry.branch, se.branch)) {
+                    if (self.db.getPipelineTask(self.allocator, entry.task_id) catch null) |task| {
+                        title_buf.clearRetainingCapacity();
+                        for (task.title[0..@min(task.title.len, 100)]) |c| {
+                            // Strip chars that need escaping inside double quotes
+                            switch (c) {
+                                '"', '\\', '$', '`' => try title_buf.append(' '),
+                                else => try title_buf.append(c),
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            const create_cmd = try std.fmt.allocPrint(
+                self.allocator,
+                "gh pr create --base main --head {s} --title \"{s}\" --body \"Automated implementation.\"",
+                .{ se.branch, title_buf.items },
+            );
+            defer self.allocator.free(create_cmd);
+            const create_result = self.runTestCommandForRepo(repo_path, create_cmd) catch continue;
+            defer self.allocator.free(create_result.stdout);
+            defer self.allocator.free(create_result.stderr);
+            if (create_result.exit_code != 0) {
+                std.log.warn("gh pr create {s}: {s}", .{ se.branch, create_result.stderr[0..@min(create_result.stderr.len, 200)] });
+            } else {
+                std.log.info("Created PR for {s}", .{se.branch});
+            }
         }
 
-        // 5. Merge in stack order (LLM-determined); all PRs target main so no dependency ordering needed
+        // 5. Merge ready PRs in stack order
         var merged = std.ArrayList([]const u8).init(self.allocator);
         defer merged.deinit();
 
@@ -1238,7 +1281,7 @@ pub const Pipeline = struct {
             }
             const entry = q_entry orelse continue;
 
-            // Check if a PR exists
+            // Check PR exists
             const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{se.branch});
             defer self.allocator.free(view_cmd);
             const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
@@ -1271,13 +1314,10 @@ pub const Pipeline = struct {
             }
         }
 
-        // 7. Sync after merges
+        // 6. Pull after merges
         if (merged.items.len > 0) {
-            var sync = try gt.repoSync();
-            defer sync.deinit();
             var pull2 = try git.pull();
             defer pull2.deinit();
-            // Invalidate cache so next tick re-orders without the merged branches
             if (self.stack_cache_key.len > 0) {
                 self.allocator.free(self.stack_cache_key);
                 self.stack_cache_key = &.{};
