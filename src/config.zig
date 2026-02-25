@@ -45,10 +45,14 @@ pub const Config = struct {
     pipeline_seed_cooldown_s: i64 = 3600,
     pipeline_tick_s: u64 = 30,
     remote_check_interval_s: i64 = 300,
-    // Git author attribution: "borg" (default), "both", or "user"
-    git_author_mode: []const u8 = "borg",
-    git_user_name: []const u8 = "",
-    git_user_email: []const u8 = "",
+    // Git attribution (individual toggles)
+    git_author_name: []const u8 = "",
+    git_author_email: []const u8 = "",
+    git_committer_name: []const u8 = "",
+    git_committer_email: []const u8 = "",
+    git_via_borg: bool = false,
+    git_claude_coauthor: bool = false,
+    git_agent_prompt: []const u8 = "",
     // Multi-repo
     watched_repos: []RepoConfig,
     // WhatsApp config
@@ -122,9 +126,13 @@ pub const Config = struct {
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .discord_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "DISCORD_ENABLED") orelse "false", "true"),
             .discord_token = getEnv(allocator, env_content, "DISCORD_TOKEN") orelse "",
-            .git_author_mode = getEnv(allocator, env_content, "GIT_AUTHOR_MODE") orelse "borg",
-            .git_user_name = getEnv(allocator, env_content, "GIT_USER_NAME") orelse "",
-            .git_user_email = getEnv(allocator, env_content, "GIT_USER_EMAIL") orelse "",
+            .git_author_name = getEnv(allocator, env_content, "GIT_AUTHOR_NAME") orelse "",
+            .git_author_email = getEnv(allocator, env_content, "GIT_AUTHOR_EMAIL") orelse "",
+            .git_committer_name = getEnv(allocator, env_content, "GIT_COMMITTER_NAME") orelse "",
+            .git_committer_email = getEnv(allocator, env_content, "GIT_COMMITTER_EMAIL") orelse "",
+            .git_via_borg = std.mem.eql(u8, getEnv(allocator, env_content, "GIT_VIA_BORG") orelse "false", "true"),
+            .git_claude_coauthor = std.mem.eql(u8, getEnv(allocator, env_content, "GIT_CLAUDE_COAUTHOR") orelse "false", "true"),
+            .git_agent_prompt = getEnv(allocator, env_content, "GIT_AGENT_PROMPT") orelse "",
             .allocator = allocator,
         };
 
@@ -135,26 +143,29 @@ pub const Config = struct {
         return config;
     }
 
-    /// Returns the --author string for git commits based on GIT_AUTHOR_MODE.
-    /// "borg" (default): Borg <borg@noreply>
-    /// "user": User Name <user@email>
-    /// "both": User Name (via Borg) <user@email>
-    /// Returns null if mode is "borg" (use default git config / no --author needed).
+    /// Returns --author string for git commit, or null to use default git config.
     pub fn getGitAuthor(self: *Config) ?[]const u8 {
-        if (std.mem.eql(u8, self.git_author_mode, "user")) {
-            if (self.git_user_name.len > 0 and self.git_user_email.len > 0) {
-                return std.fmt.allocPrint(self.allocator, "{s} <{s}>", .{ self.git_user_name, self.git_user_email }) catch null;
-            }
-            return null;
+        if (self.git_author_name.len == 0 or self.git_author_email.len == 0) return null;
+        if (self.git_via_borg) {
+            return std.fmt.allocPrint(self.allocator, "{s} (via Borg) <{s}>", .{ self.git_author_name, self.git_author_email }) catch null;
         }
-        if (std.mem.eql(u8, self.git_author_mode, "both")) {
-            if (self.git_user_name.len > 0 and self.git_user_email.len > 0) {
-                return std.fmt.allocPrint(self.allocator, "{s} (via Borg) <{s}>", .{ self.git_user_name, self.git_user_email }) catch null;
-            }
-            return null;
+        return std.fmt.allocPrint(self.allocator, "{s} <{s}>", .{ self.git_author_name, self.git_author_email }) catch null;
+    }
+
+    /// Returns extra system prompt instructions derived from config.
+    /// Call this to append config-driven instructions to any agent system prompt.
+    pub fn getSystemPromptSuffix(self: *Config, allocator: std.mem.Allocator) []const u8 {
+        var buf = std.ArrayList(u8).init(allocator);
+        if (!self.git_claude_coauthor) {
+            buf.appendSlice("\nDo not add Co-Authored-By trailers to commit messages.") catch {};
         }
-        // "borg" or default — no --author flag, use whatever git config is set
-        return null;
+        if (self.git_author_name.len > 0) {
+            buf.appendSlice("\nGit author is configured via environment variables — do not override with --author.") catch {};
+        }
+        if (self.git_agent_prompt.len > 0) {
+            buf.writer().print("\n{s}", .{self.git_agent_prompt}) catch {};
+        }
+        return buf.toOwnedSlice() catch "";
     }
 
     pub fn getTestCmdForRepo(self: *Config, repo_path: []const u8) []const u8 {
