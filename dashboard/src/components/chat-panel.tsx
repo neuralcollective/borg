@@ -39,6 +39,8 @@ export function ChatPanel() {
     es.onmessage = (e) => {
       try {
         const msg: ChatMessage = JSON.parse(e.data);
+        // Skip user echoes — already added optimistically
+        if (msg.role === "user") return;
         setMessages((prev) => [...prev, msg]);
         lastTsRef.current = Math.max(lastTsRef.current, Number(msg.ts) || 0);
         if (msg.role === "assistant") setSending(false);
