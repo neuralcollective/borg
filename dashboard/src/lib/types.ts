@@ -87,7 +87,7 @@ export const PHASE_LABELS: Record<string, string> = {
   merged: "Merged",
 };
 
-export const ACTIVE_STATUSES = ["backlog", "spec", "qa", "impl", "retry", "rebase"];
+export const ACTIVE_STATUSES = ["backlog", "spec", "qa", "qa_fix", "impl", "retry", "rebase"];
 
 export function isActiveStatus(status: string) {
   return ACTIVE_STATUSES.includes(status);
@@ -96,5 +96,6 @@ export function isActiveStatus(status: string) {
 export function effectivePhase(status: string): string {
   if (status === "retry" || status === "rebase") return "impl";
   if (status === "failed") return "impl";
+  if (status === "qa_fix") return "qa";
   return status;
 }

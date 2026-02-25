@@ -75,6 +75,23 @@ pub const impl_retry_fmt =
     \\Fix the failures.
 ;
 
+pub const qa_fix_fmt =
+    \\
+    \\
+    \\Your tests from the previous QA pass have bugs that prevent them from passing.
+    \\The implementation agent tried multiple times but the test code itself is broken.
+    \\
+    \\Test output showing the failures:
+    \\```
+    \\{s}
+    \\```
+    \\
+    \\Fix the test files. Common issues: use-after-free in test setup, wrong allocator
+    \\usage, compile errors, missing defer/errdefer, incorrect test assertions.
+    \\Do NOT weaken tests or remove test cases — fix the test code so it correctly
+    \\validates the behavior described in spec.md.
+;
+
 pub const rebase_phase =
     \\This branch has merge conflicts with main.
     \\Rebase onto origin/main, resolve all conflicts, and ensure tests pass.
