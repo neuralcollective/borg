@@ -20,6 +20,7 @@ export interface TaskOutput {
   id: number;
   phase: string;
   output: string;
+  raw_stream: string;
   exit_code: number;
   created_at: string;
 }
