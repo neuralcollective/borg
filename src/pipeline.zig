@@ -988,31 +988,68 @@ pub const Pipeline = struct {
             std.log.info("Task #{d} rebased and re-queued for integration", .{task.id});
             self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} \"{s}\" rebased successfully, re-queued for release.", .{ task.id, task.title }) catch return);
         } else {
-            // Tests still fail after rebase — retry if attempts remain
+            // Tests fail after clean rebase — spawn agent to fix
+            const combined_err = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{
+                test_result.stdout[0..@min(test_result.stdout.len, 2000)],
+                test_result.stderr[0..@min(test_result.stderr.len, 2000)],
+            });
+            defer self.allocator.free(combined_err);
+            try self.db.updateTaskError(task.id, combined_err[0..@min(combined_err.len, 4000)]);
+
             if (task.attempt + 1 >= task.max_attempts) {
-                const out = test_result.stdout[0..@min(test_result.stdout.len, 2000)];
-                const err = test_result.stderr[0..@min(test_result.stderr.len, 2000)];
-                const combined = if (out.len > 0 and err.len > 0)
-                    try std.fmt.allocPrint(self.allocator, "stdout:\n{s}\nstderr:\n{s}", .{ out, err })
-                else if (out.len > 0)
-                    try std.fmt.allocPrint(self.allocator, "{s}", .{out})
-                else if (err.len > 0)
-                    try std.fmt.allocPrint(self.allocator, "{s}", .{err})
-                else
-                    try std.fmt.allocPrint(self.allocator, "tests failed (no output)", .{});
-                defer self.allocator.free(combined);
-                try self.db.updateTaskError(task.id, combined);
                 std.log.warn("Task #{d} exhausted {d} rebase attempts — marking failed", .{ task.id, task.max_attempts });
                 try self.db.updateTaskStatus(task.id, "failed");
                 self.cleanupWorktree(task);
                 self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} exhausted {d} rebase attempts — failed.", .{ task.id, task.max_attempts }) catch return);
             } else {
-                const combined = try std.fmt.allocPrint(self.allocator, "{s}\n{s}", .{ test_result.stdout, test_result.stderr });
-                defer self.allocator.free(combined);
-                try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
-                try self.db.incrementTaskAttempt(task.id);
-                // Stay in rebase status — will retry next tick
-                std.log.info("Task #{d} rebase tests failed, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+                std.log.info("Task #{d} rebase tests failed, spawning fix agent ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts });
+
+                var fix_prompt = std.ArrayList(u8).init(self.allocator);
+                defer fix_prompt.deinit();
+                const fw = fix_prompt.writer();
+                try fw.writeAll(
+                    \\The branch was rebased onto origin/main successfully, but tests now fail.
+                    \\Fix the code so tests pass. Read spec.md for context on what this branch does.
+                    \\Run the test command to verify your fix before finishing.
+                    \\
+                );
+                const err_tail = if (combined_err.len > 3000) combined_err[combined_err.len - 3000 ..] else combined_err;
+                try fw.print("\nTest output:\n```\n{s}\n```\n", .{err_tail});
+
+                const fix_result = self.spawnAgentHost(fix_prompt.items, wt_path, null, task.id) catch |err| {
+                    try self.failTask(task, "rebase: fix agent failed", @errorName(err));
+                    return;
+                };
+                defer self.allocator.free(fix_result.output);
+                defer self.allocator.free(fix_result.raw_stream);
+                self.db.storeTaskOutputFull(task.id, "rebase_fix", fix_result.output, fix_result.raw_stream, 0) catch {};
+
+                // Re-run tests after fix agent
+                const retest = self.runTestCommandForRepo(wt_path, rebase_test_cmd) catch |err| {
+                    try self.failTask(task, "rebase: retest failed", @errorName(err));
+                    return;
+                };
+                defer self.allocator.free(retest.stdout);
+                defer self.allocator.free(retest.stderr);
+
+                if (retest.exit_code == 0) {
+                    // Fixed! Push and queue
+                    var push_r2 = try wt_git.exec(&.{ "push", "--force", "origin", task.branch });
+                    defer push_r2.deinit();
+                    if (push_r2.success()) {
+                        try self.db.updateTaskStatus(task.id, "done");
+                        try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
+                        self.cleanupWorktree(task);
+                        std.log.info("Task #{d} rebase fix succeeded, re-queued for integration", .{task.id});
+                        self.notify(task.notify_chat, std.fmt.allocPrint(self.allocator, "Task #{d} rebase fix succeeded, re-queued for release.", .{task.id}) catch return);
+                    } else {
+                        try self.db.incrementTaskAttempt(task.id);
+                        std.log.warn("Task #{d} rebase fix: push failed", .{task.id});
+                    }
+                } else {
+                    try self.db.incrementTaskAttempt(task.id);
+                    std.log.info("Task #{d} rebase fix agent didn't fully resolve tests, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+                }
             }
         }
     }
