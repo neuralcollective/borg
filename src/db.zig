@@ -65,6 +65,12 @@ pub const Proposal = struct {
     rationale: []const u8,
     status: []const u8, // proposed, approved, dismissed
     created_at: []const u8,
+    triage_score: i64,
+    triage_impact: i64,
+    triage_feasibility: i64,
+    triage_risk: i64,
+    triage_effort: i64,
+    triage_reasoning: []const u8,
 };
 
 pub const Db = struct {
@@ -274,6 +280,12 @@ pub const Db = struct {
             "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, level TEXT NOT NULL DEFAULT 'info', category TEXT NOT NULL DEFAULT 'system', message TEXT NOT NULL, metadata TEXT DEFAULT '')",
             "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)",
             "CREATE INDEX IF NOT EXISTS idx_events_category ON events(category, ts)",
+            "ALTER TABLE proposals ADD COLUMN triage_score INTEGER DEFAULT 0",
+            "ALTER TABLE proposals ADD COLUMN triage_impact INTEGER DEFAULT 0",
+            "ALTER TABLE proposals ADD COLUMN triage_feasibility INTEGER DEFAULT 0",
+            "ALTER TABLE proposals ADD COLUMN triage_risk INTEGER DEFAULT 0",
+            "ALTER TABLE proposals ADD COLUMN triage_effort INTEGER DEFAULT 0",
+            "ALTER TABLE proposals ADD COLUMN triage_reasoning TEXT DEFAULT ''",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -1094,28 +1106,20 @@ pub const Db = struct {
         var rows = if (status_filter) |sf|
             try self.sqlite_db.query(
                 allocator,
-                "SELECT id, repo_path, title, description, rationale, status, created_at FROM proposals WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
+                "SELECT id, repo_path, title, description, rationale, status, created_at, triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, triage_reasoning FROM proposals WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
                 .{ sf, limit },
             )
         else
             try self.sqlite_db.query(
                 allocator,
-                "SELECT id, repo_path, title, description, rationale, status, created_at FROM proposals ORDER BY created_at DESC LIMIT ?1",
+                "SELECT id, repo_path, title, description, rationale, status, created_at, triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, triage_reasoning FROM proposals ORDER BY created_at DESC LIMIT ?1",
                 .{limit},
             );
         defer rows.deinit();
 
         var proposals = std.ArrayList(Proposal).init(allocator);
         for (rows.items) |row| {
-            try proposals.append(Proposal{
-                .id = row.getInt(0) orelse 0,
-                .repo_path = try allocator.dupe(u8, row.get(1) orelse ""),
-                .title = try allocator.dupe(u8, row.get(2) orelse ""),
-                .description = try allocator.dupe(u8, row.get(3) orelse ""),
-                .rationale = try allocator.dupe(u8, row.get(4) orelse ""),
-                .status = try allocator.dupe(u8, row.get(5) orelse "proposed"),
-                .created_at = try allocator.dupe(u8, row.get(6) orelse ""),
-            });
+            try proposals.append(proposalFromRow(allocator, row));
         }
         return proposals.toOwnedSlice();
     }
@@ -1130,23 +1134,39 @@ pub const Db = struct {
     pub fn getProposal(self: *Db, allocator: std.mem.Allocator, proposal_id: i64) !?Proposal {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, repo_path, title, description, rationale, status, created_at FROM proposals WHERE id = ?1",
+            "SELECT id, repo_path, title, description, rationale, status, created_at, triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, triage_reasoning FROM proposals WHERE id = ?1",
             .{proposal_id},
         );
         defer rows.deinit();
         if (rows.items.len == 0) return null;
-        const row = rows.items[0];
-        return Proposal{
-            .id = row.getInt(0) orelse 0,
-            .repo_path = try allocator.dupe(u8, row.get(1) orelse ""),
-            .title = try allocator.dupe(u8, row.get(2) orelse ""),
-            .description = try allocator.dupe(u8, row.get(3) orelse ""),
-            .rationale = try allocator.dupe(u8, row.get(4) orelse ""),
-            .status = try allocator.dupe(u8, row.get(5) orelse "proposed"),
-            .created_at = try allocator.dupe(u8, row.get(6) orelse ""),
-        };
+        return proposalFromRow(allocator, rows.items[0]);
+    }
+
+    pub fn updateProposalTriage(self: *Db, proposal_id: i64, score: i64, impact: i64, feasibility: i64, risk: i64, effort: i64, reasoning: []const u8) !void {
+        try self.sqlite_db.execute(
+            "UPDATE proposals SET triage_score = ?1, triage_impact = ?2, triage_feasibility = ?3, triage_risk = ?4, triage_effort = ?5, triage_reasoning = ?6 WHERE id = ?7",
+            .{ score, impact, feasibility, risk, effort, reasoning, proposal_id },
+        );
     }
 };
+
+fn proposalFromRow(allocator: std.mem.Allocator, row: sqlite.Row) Proposal {
+    return Proposal{
+        .id = row.getInt(0) orelse 0,
+        .repo_path = allocator.dupe(u8, row.get(1) orelse "") catch "",
+        .title = allocator.dupe(u8, row.get(2) orelse "") catch "",
+        .description = allocator.dupe(u8, row.get(3) orelse "") catch "",
+        .rationale = allocator.dupe(u8, row.get(4) orelse "") catch "",
+        .status = allocator.dupe(u8, row.get(5) orelse "proposed") catch "proposed",
+        .created_at = allocator.dupe(u8, row.get(6) orelse "") catch "",
+        .triage_score = row.getInt(7) orelse 0,
+        .triage_impact = row.getInt(8) orelse 0,
+        .triage_feasibility = row.getInt(9) orelse 0,
+        .triage_risk = row.getInt(10) orelse 0,
+        .triage_effort = row.getInt(11) orelse 0,
+        .triage_reasoning = allocator.dupe(u8, row.get(12) orelse "") catch "",
+    };
+}
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
