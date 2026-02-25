@@ -15,7 +15,7 @@ Step-by-step setup for a fresh machine.
 
 ```bash
 git clone <repo-url> borg && cd borg
-zig build
+just setup    # or: zig build
 ```
 
 ## 2. Build Pipeline Container Image
