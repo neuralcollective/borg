@@ -13,7 +13,7 @@ const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8'));
 const esc = s => s.replace(/'/g, \"'\\\\''\");
 console.log('PROMPT=\'' + esc(d.prompt||'') + '\'');
 console.log('MODEL=\'' + esc(d.model||'claude-sonnet-4-6') + '\'');
-console.log('SESSION_ID=\'' + esc(d.sessionId||'') + '\'');
+console.log('SESSION_ID=\'' + esc(d.resumeSessionId||d.sessionId||'') + '\'');
 console.log('ASSISTANT_NAME=\'' + esc(d.assistantName||'Borg') + '\'');
 console.log('SYSTEM_PROMPT=\'' + esc(d.systemPrompt||'') + '\'');
 console.log('ALLOWED_TOOLS=\'' + esc(d.allowedTools||'') + '\'');
