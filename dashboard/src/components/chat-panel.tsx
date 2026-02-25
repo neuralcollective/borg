@@ -15,14 +15,22 @@ export function ChatPanel() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const esRef = useRef<EventSource | null>(null);
+  const lastTsRef = useRef<number>(0);
 
+  // Load initial messages and track latest timestamp
   useEffect(() => {
     fetch("/api/chat/messages")
       .then((r) => r.json())
-      .then((msgs: ChatMessage[]) => setMessages(msgs))
+      .then((msgs: ChatMessage[]) => {
+        setMessages(msgs);
+        if (msgs.length > 0) {
+          lastTsRef.current = Math.max(...msgs.map((m) => Number(m.ts) || 0));
+        }
+      })
       .catch(() => {});
   }, []);
 
+  // SSE for real-time updates
   const connect = useCallback(() => {
     if (esRef.current) esRef.current.close();
     const es = new EventSource("/api/chat/events");
@@ -32,6 +40,7 @@ export function ChatPanel() {
       try {
         const msg: ChatMessage = JSON.parse(e.data);
         setMessages((prev) => [...prev, msg]);
+        lastTsRef.current = Math.max(lastTsRef.current, Number(msg.ts) || 0);
         if (msg.role === "assistant") setSending(false);
       } catch {
         // ignore
@@ -48,6 +57,25 @@ export function ChatPanel() {
     return () => esRef.current?.close();
   }, [connect]);
 
+  // Poll for new messages as fallback (SSE may not always work)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetch("/api/chat/messages")
+        .then((r) => r.json())
+        .then((msgs: ChatMessage[]) => {
+          if (msgs.length === 0) return;
+          const newTs = Math.max(...msgs.map((m) => Number(m.ts) || 0));
+          if (newTs > lastTsRef.current) {
+            setMessages(msgs);
+            lastTsRef.current = newTs;
+            if (msgs[msgs.length - 1]?.role === "assistant") setSending(false);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [messages.length]);
@@ -58,6 +86,16 @@ export function ChatPanel() {
 
     setInput("");
     setSending(true);
+
+    // Optimistic local update
+    const userMsg: ChatMessage = {
+      role: "user",
+      sender: "web-user",
+      text,
+      ts: Math.floor(Date.now() / 1000),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    lastTsRef.current = Number(userMsg.ts);
 
     try {
       await fetch("/api/chat", {

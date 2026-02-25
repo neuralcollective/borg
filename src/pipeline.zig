@@ -42,6 +42,9 @@ pub const Pipeline = struct {
     inflight_mu: std.Thread.Mutex,
     active_agents: std.atomic.Value(u32),
 
+    // Track per-branch mergeability UNKNOWN retries
+    unknown_retries: std.StringHashMap(u32),
+
     // Web server for live streaming
     web: ?*web_mod.WebServer = null,
 
@@ -77,6 +80,7 @@ pub const Pipeline = struct {
             .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
             .inflight_mu = .{},
             .active_agents = std.atomic.Value(u32).init(0),
+            .unknown_retries = std.StringHashMap(u32).init(allocator),
         };
     }
 
@@ -949,8 +953,23 @@ pub const Pipeline = struct {
             var push_r = try wt_git.exec(&.{ "push", "--force", "origin", task.branch });
             defer push_r.deinit();
             if (!push_r.success()) {
+                // "cannot lock ref" — delete remote branch and retry
+                if (std.mem.indexOf(u8, push_r.stderr, "cannot lock ref") != null) {
+                    std.log.info("Task #{d}: cannot lock ref, deleting remote branch and retrying", .{task.id});
+                    var del = try wt_git.exec(&.{ "push", "origin", "--delete", task.branch });
+                    defer del.deinit();
+                    var push2 = try wt_git.exec(&.{ "push", "--force", "origin", task.branch });
+                    defer push2.deinit();
+                    if (push2.success()) {
+                        try self.db.updateTaskStatus(task.id, "done");
+                        try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
+                        self.cleanupWorktree(task);
+                        std.log.info("Task #{d} rebased and re-queued for integration (after ref fix)", .{task.id});
+                        return;
+                    }
+                }
                 std.log.err("Task #{d} rebase push failed: {s}", .{ task.id, push_r.stderr[0..@min(push_r.stderr.len, 200)] });
-                return; // Stay in rebase, retry next tick
+                return;
             }
 
             try self.db.updateTaskStatus(task.id, "done");
@@ -1118,8 +1137,22 @@ pub const Pipeline = struct {
             var push = try git.exec(&.{ "push", "--force", "origin", entry.branch });
             defer push.deinit();
             if (!push.success()) {
-                std.log.warn("Failed to push {s}: {s}", .{ entry.branch, push.stderr[0..@min(push.stderr.len, 200)] });
-                continue;
+                // "cannot lock ref" — delete remote branch and retry
+                if (std.mem.indexOf(u8, push.stderr, "cannot lock ref") != null) {
+                    var del = try git.exec(&.{ "push", "origin", "--delete", entry.branch });
+                    defer del.deinit();
+                    var push2 = try git.exec(&.{ "push", "--force", "origin", entry.branch });
+                    defer push2.deinit();
+                    if (push2.success()) {
+                        std.log.info("Pushed {s} after deleting stale remote ref", .{entry.branch});
+                    } else {
+                        std.log.warn("Failed to push {s} after ref fix: {s}", .{ entry.branch, push2.stderr[0..@min(push2.stderr.len, 200)] });
+                        continue;
+                    }
+                } else {
+                    std.log.warn("Failed to push {s}: {s}", .{ entry.branch, push.stderr[0..@min(push.stderr.len, 200)] });
+                    continue;
+                }
             }
 
             // Check if PR already exists
@@ -1155,7 +1188,15 @@ pub const Pipeline = struct {
             defer self.allocator.free(create_result.stdout);
             defer self.allocator.free(create_result.stderr);
             if (create_result.exit_code != 0) {
-                std.log.warn("gh pr create {s}: {s}", .{ entry.branch, create_result.stderr[0..@min(create_result.stderr.len, 200)] });
+                const err_text = create_result.stderr[0..@min(create_result.stderr.len, 300)];
+                if (std.mem.indexOf(u8, err_text, "No commits between") != null) {
+                    std.log.info("Task #{d} {s}: no commits vs main, marking as merged", .{ entry.task_id, entry.branch });
+                    self.db.updateQueueStatus(entry.id, "merged", null) catch {};
+                    self.db.updateTaskStatus(entry.task_id, "merged") catch {};
+                    excluded_ids.put(entry.id, {}) catch {};
+                    continue;
+                }
+                std.log.warn("gh pr create {s}: {s}", .{ entry.branch, err_text });
             } else {
                 std.log.info("Created PR for {s}", .{entry.branch});
             }
@@ -1191,7 +1232,16 @@ pub const Pipeline = struct {
                 defer self.allocator.free(mb_result.stderr);
                 const mb_status = std.mem.trim(u8, mb_result.stdout, " \t\r\n");
                 if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
-                    std.log.info("Task #{d} {s}: mergeability UNKNOWN, retrying next tick", .{ entry.task_id, entry.branch });
+                    const retries = self.unknown_retries.get(entry.branch) orelse 0;
+                    if (retries >= 5) {
+                        std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, sending back to rebase", .{ entry.task_id, entry.branch, retries });
+                        _ = self.unknown_retries.remove(entry.branch);
+                        try self.db.updateQueueStatus(entry.id, "excluded", "mergeability unknown after retries");
+                        try self.db.updateTaskStatus(entry.task_id, "rebase");
+                    } else {
+                        self.unknown_retries.put(entry.branch, retries + 1) catch {};
+                        std.log.info("Task #{d} {s}: mergeability UNKNOWN ({d}/5), retrying next tick", .{ entry.task_id, entry.branch, retries + 1 });
+                    }
                     continue;
                 }
                 if (!std.mem.eql(u8, mb_status, "MERGEABLE")) {
