@@ -404,6 +404,32 @@ test "E2: checkout to the current branch is a no-op and exits 0" {
     try std.testing.expect(std.mem.startsWith(u8, cur.stdout, "main"));
 }
 
+// ── E3: rebase of a branch with no new commits onto main is a no-op ──────────
+
+test "E3: rebase of branch with no new commits onto main exits 0" {
+    const alloc = std.testing.allocator;
+
+    const repo_path = try makeTempRepo(alloc);
+    defer alloc.free(repo_path);
+    defer std.fs.deleteTreeAbsolute(repo_path) catch {};
+
+    var git = Git.init(alloc, repo_path);
+
+    // feature branches from main with no additional commits — nothing to replay.
+    var branch_r = try git.createBranch("feature", "main");
+    defer branch_r.deinit();
+    try std.testing.expect(branch_r.success());
+
+    var rebase_r = try git.rebase("main");
+    defer rebase_r.deinit();
+    try std.testing.expectEqual(@as(u8, 0), rebase_r.exit_code);
+    try std.testing.expect(rebase_r.success());
+
+    // Working tree must be clean — no leftover state from a no-op rebase.
+    const clean = try git.statusClean();
+    try std.testing.expect(clean);
+}
+
 // ── E4: failed checkout leaves no partial git state ──────────────────────────
 
 test "E4: failed checkout leaves no .git/MERGE_HEAD or .git/rebase-merge" {
