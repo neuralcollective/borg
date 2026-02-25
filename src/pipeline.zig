@@ -511,10 +511,13 @@ pub const Pipeline = struct {
         if (rm.success()) {
             std.log.info("Cleaned up worktree for task #{d}", .{task.id});
         }
-        // Clean up per-task session dir
+        // Clean up per-task session dirs (Docker + host)
         const sess_path = std.fmt.allocPrint(self.allocator, "store/sessions/task-{d}", .{task.id}) catch return;
         defer self.allocator.free(sess_path);
         std.fs.cwd().deleteTree(sess_path) catch {};
+        const host_sess_path = std.fmt.allocPrint(self.allocator, "store/sessions/task-{d}-host", .{task.id}) catch return;
+        defer self.allocator.free(host_sess_path);
+        std.fs.cwd().deleteTree(host_sess_path) catch {};
     }
 
     fn runSpecPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
@@ -832,9 +835,21 @@ pub const Pipeline = struct {
                 try w.writeAll("\n```");
             }
 
-            // Run on host (not Docker) — rebase needs full git repo access via .git dir
-            // Don't resume: session IDs are from Docker containers and don't exist on the host
-            const result = self.spawnAgentHost(prompt_buf.items, wt_path, null) catch |err| {
+            // Run on host (not Docker) — rebase needs full git repo access
+            // Use host-specific session dir so consecutive rebases can resume.
+            // Only resume if the host session dir already has data (i.e. not
+            // first rebase where session_id is from Docker).
+            var host_resume: ?[]const u8 = null;
+            if (task.session_id.len > 0) {
+                const host_check = try std.fmt.allocPrint(self.allocator, "store/sessions/task-{d}-host/.claude", .{task.id});
+                defer self.allocator.free(host_check);
+                if (std.fs.cwd().openDir(host_check, .{ .iterate = true })) |*dir| {
+                    var iter = dir.iterate();
+                    if (iter.next() catch null) |_| host_resume = task.session_id;
+                    dir.close();
+                } else |_| {}
+            }
+            const result = self.spawnAgentHost(prompt_buf.items, wt_path, host_resume, task.id) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
@@ -1307,14 +1322,27 @@ pub const Pipeline = struct {
     // --- Agent Spawning ---
 
     // Run claude directly on the host (no Docker) — use when the agent needs full git access.
-    fn spawnAgentHost(self: *Pipeline, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult {
+    fn spawnAgentHost(self: *Pipeline, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
         self.config.refreshOAuthToken();
+
+        // Per-task host session dir — separate from Docker sessions because
+        // claude keys sessions by project path (Docker uses /workspace/repo,
+        // host uses the actual worktree path). Consecutive host runs share
+        // the same HOME+workdir so they CAN resume from each other.
+        const session_home = try std.fmt.allocPrint(self.allocator, "store/sessions/task-{d}-host", .{task_id});
+        defer self.allocator.free(session_home);
+        const claude_dir = try std.fmt.allocPrint(self.allocator, "{s}/.claude", .{session_home});
+        defer self.allocator.free(claude_dir);
+        std.fs.cwd().makePath(claude_dir) catch {};
+        const abs_session_home = try std.fs.cwd().realpathAlloc(self.allocator, session_home);
+        defer self.allocator.free(abs_session_home);
+
         std.log.info("Spawning host agent in {s}", .{workdir});
         return agent_mod.runDirect(self.allocator, .{
             .model = self.config.model,
             .oauth_token = self.config.oauth_token,
             .session_id = resume_session,
-            .session_dir = "",
+            .session_dir = abs_session_home,
             .assistant_name = "",
             .workdir = workdir,
             .allowed_tools = getAllowedTools(.worker),

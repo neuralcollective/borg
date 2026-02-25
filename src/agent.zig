@@ -101,6 +101,9 @@ pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt
         try env_map.put(entry.key_ptr.*, entry.value_ptr.*);
     }
     try env_map.put("CLAUDE_CODE_OAUTH_TOKEN", config.oauth_token);
+    if (config.session_dir.len > 0) {
+        try env_map.put("HOME", config.session_dir);
+    }
 
     child.env_map = &env_map;
 
