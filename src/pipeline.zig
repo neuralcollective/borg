@@ -1132,6 +1132,22 @@ pub const Pipeline = struct {
         defer freshly_pushed.deinit();
 
         for (live.items) |entry| {
+            // Check if PR is already merged on GitHub (avoids pointless rebase cycles)
+            const state_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json state --jq .state 2>/dev/null", .{entry.branch});
+            defer self.allocator.free(state_cmd);
+            if (self.runTestCommandForRepo(repo_path, state_cmd) catch null) |state_result| {
+                defer self.allocator.free(state_result.stdout);
+                defer self.allocator.free(state_result.stderr);
+                const state = std.mem.trim(u8, state_result.stdout, " \t\r\n");
+                if (std.mem.eql(u8, state, "MERGED")) {
+                    std.log.info("Task #{d} {s}: PR already merged, cleaning up", .{ entry.task_id, entry.branch });
+                    self.db.updateQueueStatus(entry.id, "merged", null) catch {};
+                    self.db.updateTaskStatus(entry.task_id, "merged") catch {};
+                    excluded_ids.put(entry.id, {}) catch {};
+                    continue;
+                }
+            }
+
             // Reject branches that aren't rebased on top of current main
             var rb_check = git.exec(&.{ "merge-base", "--is-ancestor", "origin/main", entry.branch }) catch null;
             if (rb_check) |*r| {
@@ -1242,15 +1258,25 @@ pub const Pipeline = struct {
                     std.log.info("Task #{d} {s}: skipping merge check (just pushed), will check next tick", .{ entry.task_id, entry.branch });
                     continue;
                 }
-                // Check PR exists
-                const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
+                // Check PR state — detect already-merged PRs
+                const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number,state --jq '.state'", .{entry.branch});
                 defer self.allocator.free(view_cmd);
                 const view_result = self.runTestCommandForRepo(repo_path, view_cmd) catch continue;
                 defer self.allocator.free(view_result.stdout);
                 defer self.allocator.free(view_result.stderr);
                 if (view_result.exit_code != 0) continue;
+                const pr_state = std.mem.trim(u8, view_result.stdout, " \t\r\n");
+
+                if (std.mem.eql(u8, pr_state, "MERGED")) {
+                    std.log.info("Task #{d} {s}: PR already merged on GitHub", .{ entry.task_id, entry.branch });
+                    try self.db.updateQueueStatus(entry.id, "merged", null);
+                    try self.db.updateTaskStatus(entry.task_id, "merged");
+                    try merged.append(entry.branch);
+                    continue;
+                }
 
                 // Check GitHub's async mergeability before attempting merge
+                var force_merge = false;
                 const mb_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json mergeable --jq .mergeable", .{entry.branch});
                 defer self.allocator.free(mb_cmd);
                 const mb_result = self.runTestCommandForRepo(repo_path, mb_cmd) catch continue;
@@ -1260,17 +1286,16 @@ pub const Pipeline = struct {
                 if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
                     const retries = self.db.getUnknownRetries(entry.id);
                     if (retries >= 5) {
-                        // After 5 UNKNOWN retries, just attempt the merge anyway
                         std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, attempting merge anyway", .{ entry.task_id, entry.branch, retries });
                         self.db.resetUnknownRetries(entry.id) catch {};
-                        // Fall through to the merge attempt below
+                        force_merge = true;
                     } else {
                         self.db.incrementUnknownRetries(entry.id) catch {};
                         std.log.info("Task #{d} {s}: mergeability UNKNOWN ({d}/5), retrying next tick", .{ entry.task_id, entry.branch, retries + 1 });
                         continue;
                     }
                 }
-                if (!std.mem.eql(u8, mb_status, "MERGEABLE")) {
+                if (!force_merge and !std.mem.eql(u8, mb_status, "MERGEABLE")) {
                     std.log.info("Task #{d} {s}: mergeable={s}, sending back to rebase", .{ entry.task_id, entry.branch, mb_status });
                     try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict with main");
                     try self.db.updateTaskStatus(entry.task_id, "rebase");
