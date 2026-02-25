@@ -32,9 +32,11 @@ pub const Pipeline = struct {
     config: *Config,
     running: std.atomic.Value(bool),
     update_ready: std.atomic.Value(bool),
+    force_restart: std.atomic.Value(bool),
     last_release_ts: i64,
     last_seed_ts: i64,
     last_remote_check_ts: i64,
+    last_self_update_ts: i64, // non-zero = a new build is ready to deploy
     startup_heads: std.StringHashMap([40]u8),
 
     // Pipelining: concurrent phase processing
@@ -64,9 +66,11 @@ pub const Pipeline = struct {
             .config = config,
             .running = std.atomic.Value(bool).init(true),
             .update_ready = std.atomic.Value(bool).init(false),
+            .force_restart = std.atomic.Value(bool).init(false),
             .last_release_ts = std.time.timestamp(),
             .last_seed_ts = 0,
             .last_remote_check_ts = 0,
+            .last_self_update_ts = 0,
             .startup_heads = heads,
             .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
             .inflight_mu = .{},
@@ -89,6 +93,7 @@ pub const Pipeline = struct {
             };
 
             self.checkRemoteUpdates();
+            self.maybeApplySelfUpdate();
 
             std.time.sleep(TICK_INTERVAL_S * std.time.ns_per_s);
         }
@@ -914,7 +919,7 @@ pub const Pipeline = struct {
             if (queued.len == 0) continue;
 
             std.log.info("Integration: {d} branches for {s}", .{ queued.len, repo.path });
-            self.runIntegration(queued, repo.path, repo.is_self) catch |err| {
+            self.runIntegration(queued, repo.path) catch |err| {
                 std.log.err("Integration error for {s}: {}", .{ repo.path, err });
             };
             ran_any = true;
@@ -925,7 +930,7 @@ pub const Pipeline = struct {
         }
     }
 
-    fn runIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8, is_self: bool) !void {
+    fn runIntegration(self: *Pipeline, queued: []db_mod.QueueEntry, repo_path: []const u8) !void {
         var git = Git.init(self.allocator, repo_path);
 
         // 1. Ensure main is checked out and up to date
@@ -1059,8 +1064,7 @@ pub const Pipeline = struct {
         // 7. Check if backlog is fully done
         if (merged.items.len > 0) self.maybeCleanupBacklog(repo_path);
 
-        // 8. Self-update and notify
-        if (is_self and merged.items.len > 0) self.checkSelfUpdate(repo_path);
+        // 8. Notify
         if (merged.items.len > 0) {
             const digest = try self.generateDigest(merged.items);
             self.notify(self.config.pipeline_admin_chat, digest);
@@ -1175,8 +1179,19 @@ pub const Pipeline = struct {
             return;
         }
 
-        std.log.info("Self-update: build succeeded, scheduling restart", .{});
-        self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: build succeeded, restarting...") catch return);
+        std.log.info("Self-update: build succeeded, restart scheduled (3h or director)", .{});
+        self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: new build ready. Will restart in 3h or on director command.") catch return);
+        self.last_self_update_ts = std.time.timestamp();
+    }
+
+    fn maybeApplySelfUpdate(self: *Pipeline) void {
+        if (self.last_self_update_ts == 0) return;
+        const now = std.time.timestamp();
+        const forced = self.force_restart.load(.acquire);
+        if (!forced and now - self.last_self_update_ts < 3 * 3600) return;
+
+        std.log.info("Self-update: applying restart (forced={}, age={}s)", .{ forced, now - self.last_self_update_ts });
+        self.notify(self.config.pipeline_admin_chat, self.allocator.dupe(u8, "Self-update: restarting now...") catch return);
         self.update_ready.store(true, .release);
         self.running.store(false, .release);
     }
