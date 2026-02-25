@@ -655,21 +655,21 @@ pub fn main() !void {
                 allocator.free(web_msgs);
             }
             for (web_msgs) |wm| {
-                const ts_str = formatTimestamp(cycle_alloc, wm.timestamp) catch continue;
+                const sender_copy = cycle_alloc.dupe(u8, wm.sender_name) catch continue;
+                const text_copy = cycle_alloc.dupe(u8, wm.text) catch continue;
                 all_messages.append(.{
                     .jid = "web:dashboard",
                     .original_id = "web:dashboard",
                     .message_id = std.fmt.allocPrint(cycle_alloc, "web-{d}", .{wm.timestamp}) catch continue,
-                    .sender = wm.sender_name,
-                    .sender_name = wm.sender_name,
-                    .text = wm.text,
+                    .sender = sender_copy,
+                    .sender_name = sender_copy,
+                    .text = text_copy,
                     .timestamp = wm.timestamp,
                     .mentions_bot = true,
                     .transport = .web,
                     .chat_title = "Dashboard",
                     .chat_type = "private",
                 }) catch {};
-                _ = ts_str;
             }
         }
 
