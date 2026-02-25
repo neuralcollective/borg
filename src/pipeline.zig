@@ -1113,9 +1113,11 @@ pub const Pipeline = struct {
         }.lt);
 
         // 4. Push each branch to origin and create PR if one doesn't exist yet.
-        // Track which entries were excluded here so step 5 doesn't try to merge them.
+        // Track which entries were excluded or freshly pushed so step 5 handles them.
         var excluded_ids = std.AutoHashMap(i64, void).init(self.allocator);
         defer excluded_ids.deinit();
+        var freshly_pushed = std.AutoHashMap(i64, void).init(self.allocator);
+        defer freshly_pushed.deinit();
 
         for (live.items) |entry| {
             // Reject branches that aren't rebased on top of current main
@@ -1152,6 +1154,9 @@ pub const Pipeline = struct {
                     continue;
                 }
             }
+
+            // Track that we just force-pushed this branch — GitHub needs time to compute mergeability
+            freshly_pushed.put(entry.id, {}) catch {};
 
             // Check if PR already exists
             const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number 2>/dev/null", .{entry.branch});
@@ -1214,6 +1219,11 @@ pub const Pipeline = struct {
         } else {
             for (live.items) |entry| {
                 if (excluded_ids.contains(entry.id)) continue;
+                // Skip freshly pushed branches — GitHub needs time to compute mergeability
+                if (freshly_pushed.contains(entry.id)) {
+                    std.log.info("Task #{d} {s}: skipping merge check (just pushed), will check next tick", .{ entry.task_id, entry.branch });
+                    continue;
+                }
                 // Check PR exists
                 const view_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json number --jq .number", .{entry.branch});
                 defer self.allocator.free(view_cmd);
@@ -1232,25 +1242,15 @@ pub const Pipeline = struct {
                 if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
                     const retries = self.db.getUnknownRetries(entry.id);
                     if (retries >= 5) {
-                        std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, closing PR and sending to rebase", .{ entry.task_id, entry.branch, retries });
+                        // After 5 UNKNOWN retries, just attempt the merge anyway
+                        std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, attempting merge anyway", .{ entry.task_id, entry.branch, retries });
                         self.db.resetUnknownRetries(entry.id) catch {};
-                        // Close the stuck PR so a fresh one gets created next cycle
-                        const close_cmd = std.fmt.allocPrint(self.allocator, "gh pr close {s} 2>/dev/null", .{entry.branch}) catch null;
-                        if (close_cmd) |cmd| {
-                            defer self.allocator.free(cmd);
-                            const close_r = self.runTestCommandForRepo(repo_path, cmd) catch null;
-                            if (close_r) |r| {
-                                self.allocator.free(r.stdout);
-                                self.allocator.free(r.stderr);
-                            }
-                        }
-                        try self.db.updateQueueStatus(entry.id, "excluded", "mergeability unknown after retries");
-                        try self.db.updateTaskStatus(entry.task_id, "rebase");
+                        // Fall through to the merge attempt below
                     } else {
                         self.db.incrementUnknownRetries(entry.id) catch {};
                         std.log.info("Task #{d} {s}: mergeability UNKNOWN ({d}/5), retrying next tick", .{ entry.task_id, entry.branch, retries + 1 });
+                        continue;
                     }
-                    continue;
                 }
                 if (!std.mem.eql(u8, mb_status, "MERGEABLE")) {
                     std.log.info("Task #{d} {s}: mergeable={s}, sending back to rebase", .{ entry.task_id, entry.branch, mb_status });
