@@ -825,3 +825,7 @@ test "parsePath extracts HTTP path" {
     try std.testing.expectEqualStrings("/api/tasks", WebServer.parsePath("GET /api/tasks HTTP/1.1\r\n"));
     try std.testing.expectEqualStrings("/", WebServer.parsePath("GET / HTTP/1.1\r\n"));
 }
+
+test {
+    _ = @import("web_sse_leak_test.zig");
+}
