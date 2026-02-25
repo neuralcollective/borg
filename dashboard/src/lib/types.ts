@@ -75,6 +75,17 @@ export interface LogEvent {
   level: string;
   message: string;
   ts: number;
+  category?: string;
+  metadata?: string;
+}
+
+export interface DbEvent {
+  id: number;
+  ts: number;
+  level: string;
+  category: string;
+  message: string;
+  metadata: string;
 }
 
 export const PHASES = ["backlog", "spec", "qa", "impl", "done", "merged"] as const;
