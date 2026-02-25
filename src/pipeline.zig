@@ -128,6 +128,7 @@ pub const Pipeline = struct {
 
     fn processBacklogFiles(self: *Pipeline) void {
         for (self.config.watched_repos) |repo| {
+            if (!repo.is_self) continue;
             // Only import once per repo — track via DB state
             const state_key = std.fmt.allocPrint(self.allocator, "backlog_imported:{s}", .{repo.path}) catch continue;
             defer self.allocator.free(state_key);
@@ -275,6 +276,13 @@ pub const Pipeline = struct {
             self.inflight_mu.lock();
             defer self.inflight_mu.unlock();
             _ = self.inflight_tasks.remove(task.id);
+        }
+
+        // Only run tasks for the primary (self) repo — delete stray tasks from other repos
+        if (!self.isSelfRepo(task.repo_path)) {
+            std.log.warn("Task #{d} targets non-primary repo {s}, deleting", .{ task.id, task.repo_path });
+            self.db.deletePipelineTask(task.id) catch {};
+            return;
         }
 
         if (std.mem.eql(u8, task.status, "backlog")) {
@@ -1554,6 +1562,13 @@ pub const Pipeline = struct {
     }
 
     // --- Helpers ---
+
+    fn isSelfRepo(self: *Pipeline, repo_path: []const u8) bool {
+        for (self.config.watched_repos) |repo| {
+            if (repo.is_self and std.mem.eql(u8, repo.path, repo_path)) return true;
+        }
+        return false;
+    }
 
     fn isTestFileError(stderr: []const u8, stdout: []const u8) bool {
         const outputs = [_][]const u8{ stderr, stdout };
