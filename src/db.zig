@@ -153,6 +153,7 @@ pub const Db = struct {
             \\  created_by TEXT DEFAULT '',
             \\  notify_chat TEXT DEFAULT '',
             \\  session_id TEXT DEFAULT '',
+            \\  dispatched_at TEXT DEFAULT '',
             \\  created_at TEXT DEFAULT (datetime('now')),
             \\  updated_at TEXT DEFAULT (datetime('now'))
             \\);
@@ -168,6 +169,7 @@ pub const Db = struct {
             \\  repo_path TEXT DEFAULT '',
             \\  status TEXT DEFAULT 'queued',
             \\  error_msg TEXT DEFAULT '',
+            \\  unknown_retries INTEGER DEFAULT 0,
             \\  queued_at TEXT DEFAULT (datetime('now'))
             \\);
         );
@@ -253,6 +255,8 @@ pub const Db = struct {
             "CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, repo_path TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', rationale TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'proposed', created_at TEXT DEFAULT (datetime('now')))",
             "UPDATE proposals SET status = 'proposed' WHERE status = 'pending'",
             "CREATE TABLE IF NOT EXISTS chat_agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', transport TEXT DEFAULT '', original_id TEXT DEFAULT '', trigger_msg_id TEXT DEFAULT '', folder TEXT DEFAULT '', output TEXT DEFAULT '', new_session_id TEXT DEFAULT '', last_msg_timestamp TEXT DEFAULT '', started_at TEXT DEFAULT (datetime('now')), completed_at TEXT)",
+            "ALTER TABLE pipeline_tasks ADD COLUMN dispatched_at TEXT DEFAULT ''",
+            "ALTER TABLE integration_queue ADD COLUMN unknown_retries INTEGER DEFAULT 0",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -513,6 +517,68 @@ pub const Db = struct {
             });
         }
         return results.toOwnedSlice();
+    }
+
+    // --- Pipeline Task Inflight Tracking ---
+
+    pub fn markTaskDispatched(self: *Db, task_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET dispatched_at = datetime('now') WHERE id = ?1",
+            .{task_id},
+        );
+    }
+
+    pub fn clearTaskDispatched(self: *Db, task_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET dispatched_at = '' WHERE id = ?1",
+            .{task_id},
+        );
+    }
+
+    pub fn isTaskDispatched(self: *Db, task_id: i64) bool {
+        var rows = self.sqlite_db.query(
+            self.allocator,
+            "SELECT dispatched_at FROM pipeline_tasks WHERE id = ?1",
+            .{task_id},
+        ) catch return false;
+        defer rows.deinit();
+        if (rows.items.len == 0) return false;
+        const val = rows.items[0].get(0) orelse "";
+        return val.len > 0;
+    }
+
+    pub fn clearAllDispatched(self: *Db) !void {
+        try self.sqlite_db.execute(
+            "UPDATE pipeline_tasks SET dispatched_at = '' WHERE dispatched_at != ''",
+            .{},
+        );
+    }
+
+    // --- Integration Queue Unknown Retries ---
+
+    pub fn getUnknownRetries(self: *Db, queue_id: i64) u32 {
+        var rows = self.sqlite_db.query(
+            self.allocator,
+            "SELECT unknown_retries FROM integration_queue WHERE id = ?1",
+            .{queue_id},
+        ) catch return 0;
+        defer rows.deinit();
+        if (rows.items.len == 0) return 0;
+        return std.fmt.parseInt(u32, rows.items[0].get(0) orelse "0", 10) catch 0;
+    }
+
+    pub fn incrementUnknownRetries(self: *Db, queue_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE integration_queue SET unknown_retries = unknown_retries + 1 WHERE id = ?1",
+            .{queue_id},
+        );
+    }
+
+    pub fn resetUnknownRetries(self: *Db, queue_id: i64) !void {
+        try self.sqlite_db.execute(
+            "UPDATE integration_queue SET unknown_retries = 0 WHERE id = ?1",
+            .{queue_id},
+        );
     }
 
     // --- Pipeline Tasks ---
