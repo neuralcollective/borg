@@ -11,6 +11,7 @@ const json_mod = @import("json.zig");
 const prompts = @import("prompts.zig");
 const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
+const web_mod = @import("web.zig");
 
 const TICK_INTERVAL_S = 30;
 const REMOTE_CHECK_INTERVAL_S = 300; // Check for remote updates every 5 minutes
@@ -45,6 +46,9 @@ pub const Pipeline = struct {
     inflight_tasks: std.AutoHashMap(i64, void),
     inflight_mu: std.Thread.Mutex,
     active_agents: std.atomic.Value(u32),
+
+    // Web server for live streaming
+    web: ?*web_mod.WebServer = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -1357,6 +1361,18 @@ pub const Pipeline = struct {
     // --- Agent Spawning ---
 
     // Run claude directly on the host (no Docker) — use when the agent needs full git access.
+    const TaskStreamCtx = struct {
+        web: *web_mod.WebServer,
+        task_id: i64,
+    };
+
+    fn taskStreamCallback(ctx: ?*anyopaque, data: []const u8) void {
+        if (ctx) |c| {
+            const tsc: *TaskStreamCtx = @ptrCast(@alignCast(c));
+            tsc.web.broadcastTaskStream(tsc.task_id, data);
+        }
+    }
+
     fn spawnAgentHost(self: *Pipeline, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
         self.config.refreshOAuthToken();
 
@@ -1370,6 +1386,16 @@ pub const Pipeline = struct {
         const abs_session_home = try std.fs.cwd().realpathAlloc(self.allocator, session_home);
         defer self.allocator.free(abs_session_home);
 
+        // Set up live streaming
+        var stream_ctx: TaskStreamCtx = undefined;
+        var cb = agent_mod.StreamCallback{};
+        if (self.web) |web| {
+            stream_ctx = .{ .web = web, .task_id = task_id };
+            cb = .{ .context = @ptrCast(&stream_ctx), .on_data = taskStreamCallback };
+            web.startTaskStream(task_id);
+        }
+        defer if (self.web) |web| web.endTaskStream(task_id);
+
         std.log.info("Spawning host agent in {s}", .{workdir});
         return agent_mod.runDirect(self.allocator, .{
             .model = self.config.model,
@@ -1379,7 +1405,7 @@ pub const Pipeline = struct {
             .assistant_name = "",
             .workdir = workdir,
             .allowed_tools = prompts.getAllowedTools(.worker),
-        }, prompt);
+        }, prompt, cb);
     }
 
     fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
@@ -1453,6 +1479,16 @@ pub const Pipeline = struct {
 
         std.log.info("Spawning {s} agent: {s}", .{ @tagName(persona), container_name });
 
+        // Set up live streaming
+        var stream_ctx: TaskStreamCtx = undefined;
+        var cb = agent_mod.StreamCallback{};
+        if (self.web) |web| {
+            stream_ctx = .{ .web = web, .task_id = task_id };
+            cb = .{ .context = @ptrCast(&stream_ctx), .on_data = taskStreamCallback };
+            web.startTaskStream(task_id);
+        }
+        defer if (self.web) |web| web.endTaskStream(task_id);
+
         // Start timeout watchdog
         var agent_done = std.atomic.Value(bool).init(false);
         const name_for_watchdog = try self.allocator.dupe(u8, container_name);
@@ -1466,7 +1502,7 @@ pub const Pipeline = struct {
             .env = &env,
             .binds = &binds,
             .memory_limit = 1024 * 1024 * 1024, // 1GB for pipeline agents
-        }, input.items);
+        }, input.items, cb);
         defer run_result.deinit();
 
         // Cancel watchdog
