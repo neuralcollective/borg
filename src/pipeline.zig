@@ -1510,7 +1510,7 @@ pub const Pipeline = struct {
         const env = [_][]const u8{
             oauth_env,
             model_env,
-            "HOME=/home/node",
+            "HOME=/home/bun",
             "NODE_OPTIONS=--max-old-space-size=384",
         };
 
@@ -1518,7 +1518,7 @@ pub const Pipeline = struct {
         var bind_buf: [1024]u8 = undefined;
         const repo_bind = try std.fmt.bufPrint(&bind_buf, "{s}:/workspace/repo", .{workdir});
         var sess_bind_buf: [1024]u8 = undefined;
-        const sess_bind = try std.fmt.bufPrint(&sess_bind_buf, "{s}:/home/node/.claude", .{abs_session_dir});
+        const sess_bind = try std.fmt.bufPrint(&sess_bind_buf, "{s}:/home/bun/.claude", .{abs_session_dir});
 
         var binds_list = std.ArrayList([]const u8).init(tmp);
         try binds_list.appendSlice(&.{ repo_bind, sess_bind });
