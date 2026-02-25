@@ -1049,6 +1049,25 @@ pub const Pipeline = struct {
             defer self.allocator.free(view_result.stderr);
             if (view_result.exit_code != 0) continue;
 
+            // Check GitHub's async mergeability before attempting merge
+            const mb_cmd = try std.fmt.allocPrint(self.allocator, "gh pr view {s} --json mergeable --jq .mergeable", .{entry.branch});
+            defer self.allocator.free(mb_cmd);
+            const mb_result = self.runTestCommandForRepo(repo_path, mb_cmd) catch continue;
+            defer self.allocator.free(mb_result.stdout);
+            defer self.allocator.free(mb_result.stderr);
+            const mb_status = std.mem.trim(u8, mb_result.stdout, " \t\r\n");
+            if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
+                // GitHub still computing — skip, retry next tick
+                std.log.info("Task #{d} {s}: mergeability UNKNOWN, retrying next tick", .{ entry.task_id, entry.branch });
+                continue;
+            }
+            if (!std.mem.eql(u8, mb_status, "MERGEABLE")) {
+                std.log.info("Task #{d} {s}: mergeable={s}, sending back to rebase", .{ entry.task_id, entry.branch, mb_status });
+                try self.db.updateQueueStatus(entry.id, "excluded", "merge conflict with main");
+                try self.db.updateTaskStatus(entry.task_id, "rebase");
+                continue;
+            }
+
             try self.db.updateQueueStatus(entry.id, "merging", null);
             const merge_cmd = try std.fmt.allocPrint(self.allocator, "gh pr merge {s} --squash --delete-branch", .{entry.branch});
             defer self.allocator.free(merge_cmd);
