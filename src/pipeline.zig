@@ -734,11 +734,22 @@ pub const Pipeline = struct {
             defer self.allocator.free(pre_test.stdout);
             defer self.allocator.free(pre_test.stderr);
             if (pre_test.exit_code == 0) {
-                try self.db.updateTaskStatus(task.id, "done");
-                try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
-                self.cleanupWorktree(task);
-                std.log.info("Task #{d} tests already pass, skipping agent", .{task.id});
-                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
+                // Check if the branch has any changes vs main
+                var diff_check = try wt_git.exec(&.{ "diff", "--stat", "origin/main..HEAD" });
+                defer diff_check.deinit();
+                const has_changes = diff_check.success() and std.mem.trim(u8, diff_check.stdout, " \t\r\n").len > 0;
+
+                if (has_changes) {
+                    try self.db.updateTaskStatus(task.id, "done");
+                    try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
+                    self.cleanupWorktree(task);
+                    std.log.info("Task #{d} tests already pass, queued for integration", .{task.id});
+                    self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
+                } else {
+                    try self.db.updateTaskStatus(task.id, "merged");
+                    self.cleanupWorktree(task);
+                    std.log.info("Task #{d} tests already pass with no changes, marking as merged", .{task.id});
+                }
                 return;
             }
         } else |_| {}
@@ -1234,8 +1245,18 @@ pub const Pipeline = struct {
                 if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
                     const retries = self.unknown_retries.get(entry.branch) orelse 0;
                     if (retries >= 5) {
-                        std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, sending back to rebase", .{ entry.task_id, entry.branch, retries });
+                        std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, closing PR and sending to rebase", .{ entry.task_id, entry.branch, retries });
                         _ = self.unknown_retries.remove(entry.branch);
+                        // Close the stuck PR so a fresh one gets created next cycle
+                        const close_cmd = std.fmt.allocPrint(self.allocator, "gh pr close {s} 2>/dev/null", .{entry.branch}) catch null;
+                        if (close_cmd) |cmd| {
+                            defer self.allocator.free(cmd);
+                            const close_r = self.runTestCommandForRepo(repo_path, cmd) catch null;
+                            if (close_r) |r| {
+                                self.allocator.free(r.stdout);
+                                self.allocator.free(r.stderr);
+                            }
+                        }
                         try self.db.updateQueueStatus(entry.id, "excluded", "mergeability unknown after retries");
                         try self.db.updateTaskStatus(entry.task_id, "rebase");
                     } else {
