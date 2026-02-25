@@ -60,7 +60,7 @@ pub const Config = struct {
 
         const collection_ms_str = getEnv(allocator, env_content, "COLLECTION_WINDOW_MS") orelse "3000";
         const cooldown_ms_str = getEnv(allocator, env_content, "COOLDOWN_MS") orelse "5000";
-        const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "600";
+        const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "1000";
         const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
         const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
         const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "4";
