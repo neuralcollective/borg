@@ -1,83 +1,66 @@
-# Task #8: Fix Docker Container Name Collision for Concurrent Agents
+# Task #26: Add tests for decodeChunked edge cases in http.zig
 
 ## 1. Task Summary
 
-Container names in `Pipeline.spawnAgent` are generated using `std.time.timestamp()` (second granularity), which causes Docker to reject a second container creation if two agents are spawned within the same second. A function-local anonymous-struct atomic counter (`const seq = struct { var counter = ...; };`) was added as a partial fix, but the counter is an implicit file-scoped static rather than an explicit `Pipeline` field, making ownership and initialization non-obvious. The clean fix is to promote the counter to an explicit `container_seq: std.atomic.Value(u32)` field on `Pipeline` and drop the redundant timestamp from the name format.
+`decodeChunked` (http.zig:155) currently has two happy-path tests covering normal multi-chunk and single-chunk inputs. This task adds five edge-case tests that exercise boundary and error conditions arising from real Docker API responses over Unix sockets, ensuring the function degrades gracefully without panicking or leaking memory.
 
 ## 2. Files to Modify
 
-| File | Reason |
-|------|--------|
-| `src/pipeline.zig` | Add `container_seq` field to `Pipeline` struct, initialize it in `init`, update `spawnAgent` to use it, remove function-local `seq` anonymous struct and `std.time.timestamp()` from the name format. |
+- `src/http.zig` — append five new `test` blocks after the existing tests at line 193
 
 ## 3. Files to Create
 
-None.
+None. Because `decodeChunked` is a private (`fn`, not `pub fn`) function, tests must live in the same file and cannot be placed in a separate `*_test.zig` file without first exporting the function.
 
-## 4. Function/Type Signatures for New or Changed Code
+## 4. Function / Type Signatures for New or Changed Code
 
-### `Pipeline` struct — add field
+No signatures change. The five new test blocks call the existing private function:
 
 ```zig
-pub const Pipeline = struct {
-    // ... existing fields ...
-    active_agents: std.atomic.Value(u32),
-    container_seq: std.atomic.Value(u32),  // monotonic counter for unique container names
-};
+fn decodeChunked(allocator: std.mem.Allocator, data: []const u8) ![]u8
 ```
 
-### `Pipeline.init` — initialize new field
+Each test follows the pattern already established in the file:
 
 ```zig
-return .{
-    // ... existing fields ...
-    .active_agents = std.atomic.Value(u32).init(0),
-    .container_seq = std.atomic.Value(u32).init(0),
-};
-```
-
-### `Pipeline.spawnAgent` — replace function-local counter with struct field
-
-Remove the current block (lines ~1362–1370):
-
-```zig
-var name_buf: [128]u8 = undefined;
-const seq = struct {
-    var counter = std.atomic.Value(u32).init(0);
-};
-const n = seq.counter.fetchAdd(1, .monotonic);
-const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}-{d}", .{
-    @tagName(persona), std.time.timestamp(), n,
-});
-```
-
-Replace with:
-
-```zig
-var name_buf: [128]u8 = undefined;
-const n = self.container_seq.fetchAdd(1, .monotonic);
-const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}", .{
-    @tagName(persona), n,
-});
+test "decodeChunked <description>" {
+    const alloc = std.testing.allocator;
+    const result = try decodeChunked(alloc, <input>);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings(<expected>, result);
+}
 ```
 
 ## 5. Acceptance Criteria
 
-1. `Pipeline` struct declares `container_seq: std.atomic.Value(u32)`.
-2. `Pipeline.init` initializes `container_seq` to `0`.
-3. `spawnAgent` uses `self.container_seq.fetchAdd(1, .monotonic)` — no function-local `seq` struct remains.
-4. `std.time.timestamp()` is no longer part of the container name format string inside `spawnAgent`.
-5. Generated container names match the pattern `borg-{persona}-{n}` where `n` is the u32 counter value.
-6. Two successive calls to the name-generation logic within the same second produce distinct names (counter increments from `n` to `n+1`).
-7. A unit test asserts that two container name strings produced by incrementing `container_seq` are not equal.
-8. `just t` passes with no regressions.
+1. **Empty input** — `decodeChunked(alloc, "")` returns `""` without error.
+   - `pos < data.len` is immediately false; the loop body never executes.
+   - `result.toOwnedSlice()` returns a valid zero-length slice that can be freed without UB.
+
+2. **Immediate zero-size chunk (empty body)** — `decodeChunked(alloc, "0\r\n\r\n")` returns `""` without error.
+   - The function parses hex `"0"`, sees `chunk_size == 0`, and breaks before appending anything.
+
+3. **Malformed hex chunk size** — `decodeChunked(alloc, "xyz\r\ndata\r\n0\r\n\r\n")` returns `""` without error.
+   - `std.fmt.parseInt("xyz", 16)` returns an error; the `catch break` clause exits the loop cleanly.
+   - The function must not propagate the parse error to the caller (i.e. `try decodeChunked(...)` must not fail).
+
+4. **Truncated chunk data** — `decodeChunked(alloc, "a\r\nhello\r\n")` returns `""` without error.
+   - Chunk size is `0xa = 10`; only 5 bytes of payload are present after the size line.
+   - The `pos + chunk_size > data.len` guard fires, the loop breaks before appending, and an empty slice is returned.
+
+5. **Missing `\r\n` between chunks** — `decodeChunked(alloc, "4\r\nWiki5\r\npedia\r\n0\r\n\r\n")` returns `"Wiki"` without error.
+   - The first chunk ("Wiki", 4 bytes) is decoded correctly.
+   - After consuming the first chunk, `pos` advances by `chunk_size + 2` assuming a `\r\n` separator that is absent, landing mid-stream.
+   - The next size-line candidate is `"pedia"`, which is not valid hex, so `catch break` fires.
+   - Result is the partial decode `"Wiki"`, demonstrating graceful truncation rather than a panic or memory fault.
+
+All five tests must pass under `just t` (`zig build test`) with no memory leaks reported by `std.testing.allocator`.
 
 ## 6. Edge Cases to Handle
 
 | Edge case | Expected behaviour |
 |-----------|-------------------|
-| Counter wrap-around at `u32` max (4 294 967 295) | `fetchAdd` wraps to 0; names remain unique in practice within a process lifetime (no realistic workload spawns 4B containers). No special handling needed; document the wrap in a code comment. |
-| Multiple `Pipeline` instances in tests | Each instance starts its own counter at 0; names are unique per instance. This is acceptable since production runs exactly one `Pipeline`. |
-| `name_buf` overflow | `"borg-worker-4294967295"` is 22 bytes, well within the 128-byte buffer. A `comptime` assertion or comment confirming buffer adequacy should be added. |
-| Watchdog thread uses container name | `name_for_watchdog` is `allocator.dupe(u8, container_name)` taken after the name is formatted; no change to the watchdog code path is required. |
-| Concurrent `spawnAgent` calls | `fetchAdd(.monotonic)` is atomic; two simultaneous callers always receive distinct values. |
+| Zero-length `toOwnedSlice` result | `ArrayList.toOwnedSlice()` on an empty list returns a valid (possibly zero-length) slice; `alloc.free(result)` must not fault. Tests 1, 2, 3, and 4 exercise this path. |
+| `catch break` swallows parse error | `decodeChunked` signature is `![]u8` but malformed input must not cause an error return — only a graceful empty result. Tests 3 and 5 confirm this. |
+| Partial decode on missing separator | When the inter-chunk `\r\n` is absent, data successfully decoded before the bad boundary is preserved in the return value (test 5). The function does not discard previously appended chunks. |
+| Allocator leak detection | Every test must `defer alloc.free(result)` immediately after the `try decodeChunked(...)` call so that `std.testing.allocator` reports leaks as test failures. |
