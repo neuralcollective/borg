@@ -594,23 +594,26 @@ pub const Pipeline = struct {
 
         self.db.storeTaskOutputFull(task.id, "spec", result.output, result.raw_stream, 0) catch {};
 
-        // Force-add spec.md (gitignored but needed in worktree history)
-        var add_spec = try wt_git.exec(&.{ "add", "-f", "spec.md" });
-        defer add_spec.deinit();
-        var add = try wt_git.addAll();
-        defer add.deinit();
-        var commit = try wt_git.commit("spec: generate spec.md for task");
-        defer commit.deinit();
-
-        if (!commit.success()) {
-            try self.failTask(task, "manager produced no output", commit.stderr);
+        // Check spec.md was actually written
+        const spec_path = try std.fmt.allocPrint(self.allocator, "{s}/spec.md", .{wt_path});
+        defer self.allocator.free(spec_path);
+        const spec_exists = blk: {
+            std.fs.accessAbsolute(spec_path, .{}) catch break :blk false;
+            break :blk true;
+        };
+        if (!spec_exists and result.output.len == 0) {
+            try self.failTask(task, "manager produced no output", "no spec.md and empty result");
             return;
         }
 
-        // Capture git diff for this phase
-        var spec_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
-        defer spec_diff.deinit();
-        if (spec_diff.success()) self.db.storeTaskOutput(task.id, "spec_diff", spec_diff.stdout, 0) catch {};
+        // Store spec.md content as diff (spec.md stays gitignored, not committed)
+        if (spec_exists) {
+            const spec_content = std.fs.cwd().readFileAlloc(self.allocator, spec_path, 64 * 1024) catch null;
+            if (spec_content) |content| {
+                defer self.allocator.free(content);
+                self.db.storeTaskOutput(task.id, "spec_diff", content, 0) catch {};
+            }
+        }
 
         try self.db.updateTaskStatus(task.id, "qa");
         self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: spec ready, starting QA", .{task.id}));
