@@ -824,6 +824,21 @@ pub const Pipeline = struct {
             self.db.storeTaskOutput(task.id, "rebase", result.output, 0) catch {};
         }
 
+        // Verify the agent actually completed the rebase before doing anything else.
+        // Agents exit 0 even when they fail; without this check we push the old tip.
+        var rb_verify = try wt_git.exec(&.{ "merge-base", "--is-ancestor", "origin/main", task.branch });
+        defer rb_verify.deinit();
+        if (!rb_verify.success()) {
+            std.log.warn("Task #{d}: branch still not rebased after agent ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts });
+            if (task.attempt + 1 >= task.max_attempts) {
+                std.log.warn("Task #{d} exhausted rebase attempts, recycling to backlog", .{task.id});
+                try self.recycleTask(task);
+            } else {
+                try self.db.incrementTaskAttempt(task.id);
+            }
+            return;
+        }
+
         // Run tests on the rebased branch
         const rebase_test_cmd = self.config.getTestCmdForRepo(task.repo_path);
         const test_result = self.runTestCommandForRepo(wt_path, rebase_test_cmd) catch |err| {
