@@ -608,7 +608,7 @@ test "AC10: TaskOutput has exactly 6 fields" {
 test "AC10: TaskOutput field id has type i64" {
     const info = @typeInfo(Db.TaskOutput);
     var found = false;
-    for (info.@"struct".fields) |f| {
+    inline for (info.@"struct".fields) |f| {
         if (std.mem.eql(u8, f.name, "id")) {
             found = true;
             try std.testing.expect(f.type == i64);
@@ -620,7 +620,7 @@ test "AC10: TaskOutput field id has type i64" {
 test "AC10: TaskOutput field exit_code has type i64" {
     const info = @typeInfo(Db.TaskOutput);
     var found = false;
-    for (info.@"struct".fields) |f| {
+    inline for (info.@"struct".fields) |f| {
         if (std.mem.eql(u8, f.name, "exit_code")) {
             found = true;
             try std.testing.expect(f.type == i64);
@@ -634,7 +634,7 @@ test "AC10: TaskOutput string fields have type []const u8" {
     const string_fields = [_][]const u8{ "phase", "output", "raw_stream", "created_at" };
     for (string_fields) |name| {
         var found = false;
-        for (info.@"struct".fields) |f| {
+        inline for (info.@"struct".fields) |f| {
             if (std.mem.eql(u8, f.name, name)) {
                 found = true;
                 try std.testing.expect(f.type == []const u8);

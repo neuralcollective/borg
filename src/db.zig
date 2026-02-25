@@ -999,6 +999,7 @@ test {
     _ = @import("sqlite_bindparams_test.zig");
     _ = @import("pipeline_stats_test.zig");
     _ = @import("db_pipeline_query_test.zig");
+    _ = @import("db_task_output_test.zig");
 }
 
 test "state key-value store" {
