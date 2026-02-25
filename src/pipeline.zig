@@ -38,12 +38,7 @@ pub const Pipeline = struct {
     startup_heads: std.StringHashMap([40]u8),
 
     // Pipelining: concurrent phase processing
-    inflight_tasks: std.AutoHashMap(i64, void),
-    inflight_mu: std.Thread.Mutex,
     active_agents: std.atomic.Value(u32),
-
-    // Track per-task mergeability UNKNOWN retries (keyed by task_id)
-    unknown_retries: std.AutoHashMap(i64, u32),
 
     // Web server for live streaming
     web: ?*web_mod.WebServer = null,
@@ -77,15 +72,15 @@ pub const Pipeline = struct {
             .last_self_update_ts = 0,
             .last_health_ts = 0,
             .startup_heads = heads,
-            .inflight_tasks = std.AutoHashMap(i64, void).init(allocator),
-            .inflight_mu = .{},
             .active_agents = std.atomic.Value(u32).init(0),
-            .unknown_retries = std.AutoHashMap(i64, u32).init(allocator),
         };
     }
 
     pub fn run(self: *Pipeline) void {
         std.log.info("Pipeline thread started for {d} repo(s)", .{self.config.watched_repos.len});
+
+        // Clear stale dispatched_at from previous instance (ACID recovery)
+        self.db.clearAllDispatched() catch {};
 
         self.processBacklogFiles();
 
@@ -251,22 +246,16 @@ pub const Pipeline = struct {
         for (tasks, 0..) |task, i| {
             if (self.active_agents.load(.acquire) >= self.config.pipeline_max_agents) break;
 
-            // Skip if already in-flight
-            {
-                self.inflight_mu.lock();
-                defer self.inflight_mu.unlock();
-                if (self.inflight_tasks.contains(task.id)) continue;
-                self.inflight_tasks.put(task.id, {}) catch continue;
-            }
+            // Skip if already in-flight (persisted in DB)
+            if (self.db.isTaskDispatched(task.id)) continue;
+            self.db.markTaskDispatched(task.id) catch continue;
 
             _ = self.active_agents.fetchAdd(1, .acq_rel);
             std.log.info("Pipeline dispatching task #{d} [{s}] in {s}: {s}", .{ task.id, task.status, task.repo_path, task.title });
 
             _ = std.Thread.spawn(.{}, processTaskThread, .{ self, task }) catch {
                 _ = self.active_agents.fetchSub(1, .acq_rel);
-                self.inflight_mu.lock();
-                defer self.inflight_mu.unlock();
-                _ = self.inflight_tasks.remove(task.id);
+                self.db.clearTaskDispatched(task.id) catch {};
                 continue;
             };
             dispatched[i] = true;
@@ -282,9 +271,7 @@ pub const Pipeline = struct {
         defer {
             task.deinit(self.allocator);
             _ = self.active_agents.fetchSub(1, .acq_rel);
-            self.inflight_mu.lock();
-            defer self.inflight_mu.unlock();
-            _ = self.inflight_tasks.remove(task.id);
+            self.db.clearTaskDispatched(task.id) catch {};
         }
 
         // Only run tasks for the primary (self) repo — delete stray tasks from other repos
@@ -1243,10 +1230,10 @@ pub const Pipeline = struct {
                 defer self.allocator.free(mb_result.stderr);
                 const mb_status = std.mem.trim(u8, mb_result.stdout, " \t\r\n");
                 if (std.mem.eql(u8, mb_status, "UNKNOWN")) {
-                    const retries = self.unknown_retries.get(entry.task_id) orelse 0;
+                    const retries = self.db.getUnknownRetries(entry.id);
                     if (retries >= 5) {
                         std.log.warn("Task #{d} {s}: mergeability UNKNOWN after {d} retries, closing PR and sending to rebase", .{ entry.task_id, entry.branch, retries });
-                        _ = self.unknown_retries.remove(entry.task_id);
+                        self.db.resetUnknownRetries(entry.id) catch {};
                         // Close the stuck PR so a fresh one gets created next cycle
                         const close_cmd = std.fmt.allocPrint(self.allocator, "gh pr close {s} 2>/dev/null", .{entry.branch}) catch null;
                         if (close_cmd) |cmd| {
@@ -1260,7 +1247,7 @@ pub const Pipeline = struct {
                         try self.db.updateQueueStatus(entry.id, "excluded", "mergeability unknown after retries");
                         try self.db.updateTaskStatus(entry.task_id, "rebase");
                     } else {
-                        self.unknown_retries.put(entry.task_id, retries + 1) catch {};
+                        self.db.incrementUnknownRetries(entry.id) catch {};
                         std.log.info("Task #{d} {s}: mergeability UNKNOWN ({d}/5), retrying next tick", .{ entry.task_id, entry.branch, retries + 1 });
                     }
                     continue;
