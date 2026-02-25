@@ -38,7 +38,7 @@ function TriageTooltip({ proposal }: { proposal: Proposal }) {
   ];
 
   return (
-    <div className="absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-white/[0.08] bg-zinc-900 p-3 shadow-xl">
+    <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-white/[0.08] bg-zinc-900 p-3 shadow-xl">
       <div className="space-y-2">
         {dims.map((d) => (
           <div key={d.key} className="flex items-center gap-2">
@@ -79,7 +79,12 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
 
   const hasTriage = pending.some((p) => p.triage_score > 0);
   const sorted = hasTriage
-    ? [...pending].sort((a, b) => b.triage_score - a.triage_score)
+    ? [...pending].sort((a, b) => {
+        // Unscored items first (new arrivals), then by score descending
+        if (a.triage_score === 0 && b.triage_score > 0) return -1;
+        if (b.triage_score === 0 && a.triage_score > 0) return 1;
+        return b.triage_score - a.triage_score;
+      })
     : pending;
 
   const invalidate = () => {
