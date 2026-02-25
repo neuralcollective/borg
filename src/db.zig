@@ -528,8 +528,14 @@ pub const Db = struct {
             const unanswered = bot_ts.len == 0 or std.mem.order(u8, user_ts, bot_ts) == .gt;
             if (!unanswered) continue;
 
-            // Check age — skip messages older than max_age_s
-            _ = max_age_s; // TODO: parse ISO timestamp and compare with now
+            // Skip messages older than max_age_s
+            var age_rows = try self.sqlite_db.query(allocator,
+                "SELECT 1 WHERE datetime(?1) >= datetime('now', printf('-%d seconds', ?2))",
+                .{ user_ts, max_age_s },
+            );
+            const recent = age_rows.items.len > 0;
+            age_rows.deinit();
+            if (!recent) continue;
 
             try results.append(.{
                 .jid = try allocator.dupe(u8, jid),
