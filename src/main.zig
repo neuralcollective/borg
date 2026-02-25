@@ -11,6 +11,7 @@ const Docker = docker_mod.Docker;
 const json_mod = @import("json.zig");
 const agent_mod = @import("agent.zig");
 const pipeline_mod = @import("pipeline.zig");
+const prompts = @import("prompts.zig");
 const sidecar_mod = @import("sidecar.zig");
 const Sidecar = sidecar_mod.Sidecar;
 const web_mod = @import("web.zig");
@@ -1283,33 +1284,7 @@ fn formatPrompt(allocator: std.mem.Allocator, messages: []const db_mod.Message, 
     var buf = std.ArrayList(u8).init(allocator);
     const w = buf.writer();
 
-    // Director system prompt
-    try w.print(
-        \\You are {s}, a director-level AI agent with full administrative control over the borg system.
-        \\You speak using plural pronouns (we/us/our, never I/me/my). You are a collective.
-        \\
-        \\## Capabilities
-        \\
-        \\You can manage the engineering pipeline, monitor system status, and control all aspects of borg
-        \\by calling the local REST API at http://127.0.0.1:{d}. Use curl from your Bash tool.
-        \\
-        \\### API Reference
-        \\```
-        \\GET    /api/tasks                     List all tasks (JSON array)
-        \\GET    /api/tasks/<id>                Get task detail + agent output
-        \\POST   /api/tasks                     Create task: {{"title":"...","description":"...","repo":"..."}}
-        \\DELETE /api/tasks/<id>                Cancel/delete a task
-        \\POST   /api/release                   Trigger integration now
-        \\GET    /api/queue                      Integration queue
-        \\GET    /api/status                     System status
-        \\```
-        \\
-        \\You have full Bash, Read, Write, Edit, Glob, Grep access to the filesystem.
-        \\You can inspect repos, read code, review agent output, and make decisions.
-        \\Be proactive: if something looks wrong, diagnose and fix it.
-        \\Keep responses concise for chat. Use detail only when asked.
-        \\
-    , .{ assistant_name, web_port });
+    try w.print(prompts.director_system, .{ assistant_name, web_port });
 
     // Message history
     try w.writeAll("\n## Recent messages\n");
