@@ -13,12 +13,7 @@ const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
 const web_mod = @import("web.zig");
 
-const TICK_INTERVAL_S = 30;
-const REMOTE_CHECK_INTERVAL_S = 300; // Check for remote updates every 5 minutes
 const AGENT_TIMEOUT_S_FALLBACK = 600;
-const MAX_BACKLOG_SIZE = 5;
-const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
-const MAX_PARALLEL_AGENTS = 4; // fallback; overridden by config.max_pipeline_agents
 
 pub const AgentPersona = enum {
     manager,
@@ -103,7 +98,7 @@ pub const Pipeline = struct {
             self.checkHealth();
             self.maybeApplySelfUpdate();
 
-            std.time.sleep(TICK_INTERVAL_S * std.time.ns_per_s);
+            std.time.sleep(self.config.tick_interval_s * std.time.ns_per_s);
         }
 
         // Wait for running agents to finish (up to 30s)
@@ -310,12 +305,12 @@ pub const Pipeline = struct {
 
     fn seedIfIdle(self: *Pipeline) !void {
         const now = std.time.timestamp();
-        const cooldown: i64 = if (self.config.continuous_mode) 1800 else SEED_COOLDOWN_S;
+        const cooldown: i64 = if (self.config.continuous_mode) 1800 else self.config.seed_cooldown_s;
         if (now - self.last_seed_ts < cooldown) return;
 
         // Don't seed if there are already active tasks
         const active = try self.db.getActivePipelineTaskCount();
-        if (active >= MAX_BACKLOG_SIZE) return;
+        if (active >= self.config.max_backlog_size) return;
 
         // Don't seed while tasks are queued for integration — wait for them to merge first
         const pending_integration = try self.db.getQueuedIntegrationCount();
@@ -347,7 +342,7 @@ pub const Pipeline = struct {
         var total_created: u32 = 0;
         const active_u32: u32 = @intCast(@max(active, 0));
         for (self.config.watched_repos) |repo| {
-            if (active_u32 + total_created >= MAX_BACKLOG_SIZE) break;
+            if (active_u32 + total_created >= self.config.max_backlog_size) break;
             const repo_mode = if (repo.is_self) seed_mode else 3;
             const repo_label = if (repo.is_self) mode_label else "feature discovery";
             const created = self.seedRepo(repo.path, repo_mode, repo_label, active_u32 + total_created);
@@ -432,7 +427,7 @@ pub const Pipeline = struct {
             };
 
             created += 1;
-            if (current_count + created >= MAX_BACKLOG_SIZE) break;
+            if (current_count + created >= self.config.max_backlog_size) break;
         }
 
         return created;
@@ -1285,7 +1280,7 @@ pub const Pipeline = struct {
     /// Periodically fetch origin and pull if the self repo has new commits.
     fn checkRemoteUpdates(self: *Pipeline) void {
         const now = std.time.timestamp();
-        if (now - self.last_remote_check_ts < REMOTE_CHECK_INTERVAL_S) return;
+        if (now - self.last_remote_check_ts < self.config.remote_check_interval_s) return;
         self.last_remote_check_ts = now;
 
         // Only check the primary (self) repo
@@ -1503,13 +1498,25 @@ pub const Pipeline = struct {
             "NODE_OPTIONS=--max-old-space-size=384",
         };
 
-        // Bind mounts: worktree + persistent session dir
+        // Bind mounts: worktree + persistent session dir + optional setup script
         var bind_buf: [1024]u8 = undefined;
         const repo_bind = try std.fmt.bufPrint(&bind_buf, "{s}:/workspace/repo", .{workdir});
         var sess_bind_buf: [1024]u8 = undefined;
         const sess_bind = try std.fmt.bufPrint(&sess_bind_buf, "{s}:/home/node/.claude", .{abs_session_dir});
 
-        const binds = [_][]const u8{ repo_bind, sess_bind };
+        var binds_list = std.ArrayList([]const u8).init(tmp);
+        try binds_list.appendSlice(&.{ repo_bind, sess_bind });
+
+        var setup_bind_buf: [1024]u8 = undefined;
+        if (self.config.container_setup.len > 0) {
+            const abs_setup = std.fs.cwd().realpathAlloc(tmp, self.config.container_setup) catch null;
+            if (abs_setup) |setup_path| {
+                const setup_bind = try std.fmt.bufPrint(&setup_bind_buf, "{s}:/workspace/setup.sh:ro", .{setup_path});
+                try binds_list.append(setup_bind);
+            }
+        }
+
+        const binds = binds_list.items;
 
         std.log.info("Spawning {s} agent: {s}", .{ @tagName(persona), container_name });
 
@@ -1534,8 +1541,8 @@ pub const Pipeline = struct {
             .image = self.config.container_image,
             .name = container_name,
             .env = &env,
-            .binds = &binds,
-            .memory_limit = 1024 * 1024 * 1024, // 1GB for pipeline agents
+            .binds = binds,
+            .memory_limit = self.config.container_memory_mb * 1024 * 1024,
         }, input.items, cb);
         defer run_result.deinit();
 

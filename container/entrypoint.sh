@@ -4,6 +4,11 @@ set -e
 # Cap heap to prevent OOM kills (Claude Code runs on bun/node)
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=384}"
 
+# Run setup script if bind-mounted (sourced so PATH exports persist)
+if [ -f /workspace/setup.sh ]; then
+    source /workspace/setup.sh
+fi
+
 # Read all stdin into a temp file
 cat > /tmp/input.json
 
