@@ -530,7 +530,10 @@ pub fn main() !void {
     // Start web dashboard
     var web_db = try Db.init(allocator, "store/borg.db");
     var web = WebServer.init(allocator, &web_db, &config, config.web_port, config.web_bind);
-    if (pipeline) |*p| web.force_restart_signal = &p.force_restart;
+    if (pipeline) |*p| {
+        web.force_restart_signal = &p.force_restart;
+        p.web = &web;
+    }
     web_server_global = &web;
     const web_thread = try std.Thread.spawn(.{}, WebServer.run, .{&web});
 

@@ -1,7 +1,8 @@
-import { useTaskDetail } from "@/lib/api";
+import { useTaskDetail, useTaskStream } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
-import { repoName, type TaskOutput } from "@/lib/types";
+import { LiveTerminal } from "./live-terminal";
+import { repoName, isActiveStatus, type TaskOutput } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useState, useMemo } from "react";
 
@@ -12,6 +13,8 @@ interface TaskDetailProps {
 
 export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const { data: task, isLoading } = useTaskDetail(taskId);
+  const isActive = task ? isActiveStatus(task.status) : false;
+  const { events, streaming } = useTaskStream(taskId, isActive);
 
   if (isLoading || !task) {
     return (
@@ -75,13 +78,21 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         </div>
       )}
 
-      {task.outputs && task.outputs.length > 0 ? (
+      {/* Live terminal for active tasks */}
+      {(isActive || streaming) && (
+        <div className="mx-3 mt-2 flex-1 min-h-0">
+          <LiveTerminal events={events} streaming={streaming} />
+        </div>
+      )}
+
+      {/* Completed phase outputs */}
+      {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
         <OutputSelector outputs={task.outputs} />
-      ) : (
+      ) : !isActive && !streaming ? (
         <div className="flex flex-1 items-center justify-center text-xs text-zinc-700">
           No agent outputs yet
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

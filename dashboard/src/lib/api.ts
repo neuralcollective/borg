@@ -12,7 +12,7 @@ export function useTasks() {
   return useQuery<Task[]>({
     queryKey: ["tasks"],
     queryFn: () => fetchJson("/api/tasks"),
-    refetchInterval: 3000,
+    refetchInterval: 2000,
   });
 }
 
@@ -21,7 +21,7 @@ export function useTaskDetail(id: number | null) {
     queryKey: ["task", id],
     queryFn: () => fetchJson(`/api/tasks/${id}`),
     enabled: id !== null,
-    refetchInterval: 3000,
+    refetchInterval: 2000,
   });
 }
 
@@ -91,4 +91,69 @@ export function useLogs() {
   }, [connect]);
 
   return { logs, connected };
+}
+
+export interface StreamEvent {
+  type: string;
+  subtype?: string;
+  message?: { content: string | Array<{ type: string; text?: string; name?: string; input?: unknown }> };
+  result?: string;
+  session_id?: string;
+  tool_name?: string;
+  name?: string;
+  content?: unknown;
+  output?: unknown;
+}
+
+export function useTaskStream(taskId: number | null, active: boolean) {
+  const [events, setEvents] = useState<StreamEvent[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    if (!taskId || !active) {
+      setEvents([]);
+      setStreaming(false);
+      return;
+    }
+
+    const es = new EventSource(`/api/tasks/${taskId}/stream`);
+    esRef.current = es;
+    setStreaming(true);
+
+    es.onmessage = (e) => {
+      try {
+        const obj: StreamEvent = JSON.parse(e.data);
+        if (obj.type === "stream_end") {
+          setStreaming(false);
+          es.close();
+          return;
+        }
+        setEvents((prev) => {
+          const next = [...prev, obj];
+          return next.length > 2000 ? next.slice(-2000) : next;
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    es.onerror = () => {
+      setStreaming(false);
+      setTimeout(() => {
+        if (active && esRef.current === es) {
+          // reconnect
+          es.close();
+          esRef.current = null;
+        }
+      }, 3000);
+    };
+
+    return () => {
+      es.close();
+      esRef.current = null;
+    };
+  }, [taskId, active]);
+
+  return { events, streaming };
 }
