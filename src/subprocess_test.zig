@@ -505,6 +505,71 @@ test "AC6: binary data with null bytes is preserved" {
     try std.testing.expectEqual(@as(u8, 0xff), output.stdout[3]);
 }
 
+// ── Edge Case 8: null stdout or stderr pipe ────────────────────────────
+
+test "Edge8: null stdout pipe — collectOutput returns empty stdout, captures stderr" {
+    const allocator = std.testing.allocator;
+
+    // stdout_behavior = .Close means child.stdout will be null after spawn
+    var child = std.process.Child.init(
+        &.{ "/bin/sh", "-c", "echo 'err-only' >&2" },
+        allocator,
+    );
+    child.stdin_behavior = .Close;
+    child.stdout_behavior = .Close; // stdout pipe is null
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
+
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    defer output.deinit();
+    _ = try child.wait();
+
+    // No null-pointer dereference; stdout is treated as zero bytes
+    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
+    try std.testing.expectEqualStrings("err-only\n", output.stderr);
+}
+
+test "Edge8: null stderr pipe — collectOutput captures stdout, returns empty stderr" {
+    const allocator = std.testing.allocator;
+
+    var child = std.process.Child.init(
+        &.{ "/bin/sh", "-c", "echo 'out-only'" },
+        allocator,
+    );
+    child.stdin_behavior = .Close;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Close; // stderr pipe is null
+    try child.spawn();
+
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    defer output.deinit();
+    _ = try child.wait();
+
+    try std.testing.expectEqualStrings("out-only\n", output.stdout);
+    // No null-pointer dereference; stderr is treated as zero bytes
+    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
+}
+
+test "Edge8: both pipes null — collectOutput returns two empty slices without crash" {
+    const allocator = std.testing.allocator;
+
+    var child = std.process.Child.init(
+        &.{ "/bin/sh", "-c", "true" },
+        allocator,
+    );
+    child.stdin_behavior = .Close;
+    child.stdout_behavior = .Close;
+    child.stderr_behavior = .Close;
+    try child.spawn();
+
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    defer output.deinit();
+    _ = try child.wait();
+
+    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
+    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
+}
+
 // ── Interleaved writes on both streams ─────────────────────────────────
 
 test "AC2+AC3: interleaved large writes on both streams complete without deadlock" {
