@@ -833,8 +833,8 @@ pub const Pipeline = struct {
             }
 
             // Run on host (not Docker) — rebase needs full git repo access via .git dir
-            const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-            const result = self.spawnAgentHost(prompt_buf.items, wt_path, resume_sid) catch |err| {
+            // Don't resume: session IDs are from Docker containers and don't exist on the host
+            const result = self.spawnAgentHost(prompt_buf.items, wt_path, null) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
