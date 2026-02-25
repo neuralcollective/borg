@@ -798,3 +798,67 @@ test "parseWatchedRepos: entry that is only a colon" {
     };
     try std.testing.expect(repos.len == 0);
 }
+
+// ── getTestCmdForRepo tests ────────────────────────────────────────────
+
+fn testMinimalConfig(pipeline_test_cmd: []const u8, watched_repos: []RepoConfig) Config {
+    return Config{
+        .telegram_token = "",
+        .oauth_token = "",
+        .assistant_name = "",
+        .trigger_pattern = "",
+        .data_dir = "",
+        .container_image = "",
+        .model = "",
+        .credentials_path = "",
+        .session_max_age_hours = 0,
+        .max_consecutive_errors = 0,
+        .pipeline_repo = "",
+        .pipeline_test_cmd = pipeline_test_cmd,
+        .pipeline_lint_cmd = "",
+        .pipeline_admin_chat = "",
+        .release_interval_mins = 0,
+        .continuous_mode = false,
+        .collection_window_ms = 0,
+        .cooldown_ms = 0,
+        .agent_timeout_s = 0,
+        .max_concurrent_agents = 0,
+        .rate_limit_per_minute = 0,
+        .max_pipeline_agents = 0,
+        .web_port = 0,
+        .dashboard_dist_dir = "",
+        .watched_repos = watched_repos,
+        .whatsapp_enabled = false,
+        .whatsapp_auth_dir = "",
+        .discord_enabled = false,
+        .discord_token = "",
+        .allocator = std.testing.allocator,
+    };
+}
+
+test "getTestCmdForRepo exact match returns repo-specific command" {
+    // Include a non-matching entry before the matching one to verify the loop
+    // does not short-circuit and that the first exact match wins.
+    var repos = [_]RepoConfig{
+        .{ .path = "/repos/other", .test_cmd = "go test ./...", .is_self = false },
+        .{ .path = "/repos/myapp", .test_cmd = "npm test", .is_self = false },
+    };
+    var config = testMinimalConfig("zig build test", &repos);
+    try std.testing.expectEqualStrings("npm test", config.getTestCmdForRepo("/repos/myapp"));
+}
+
+test "getTestCmdForRepo no match returns pipeline_test_cmd default" {
+    // A path that starts with the same prefix as an existing entry must not match
+    // (std.mem.eql is byte-exact, so "/repos/other" != "/repos/myapp").
+    var repos = [_]RepoConfig{
+        .{ .path = "/repos/myapp", .test_cmd = "npm test", .is_self = false },
+    };
+    var config = testMinimalConfig("zig build test", &repos);
+    try std.testing.expectEqualStrings("zig build test", config.getTestCmdForRepo("/repos/other"));
+}
+
+test "getTestCmdForRepo empty watched_repos returns pipeline_test_cmd default" {
+    var repos = [_]RepoConfig{};
+    var config = testMinimalConfig("make test", &repos);
+    try std.testing.expectEqualStrings("make test", config.getTestCmdForRepo("/any/path"));
+}
