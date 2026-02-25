@@ -1,92 +1,77 @@
-# Spec: Add tests for Config.getTestCmdForRepo
+# Spec: Add tests for json.stringify in json.zig
 
-## Task Summary
+## 1. Task Summary
 
-`Config.getTestCmdForRepo` (`src/config.zig:106`) iterates `self.watched_repos` looking for a `RepoConfig` whose `path` exactly matches the given `repo_path`, returning its `test_cmd` on match or falling back to `self.pipeline_test_cmd`. The function has no test coverage. Three test cases must be added: exact match, no match (fallback), and empty `watched_repos`.
+`json.stringify` (src/json.zig:83) converts a `std.json.Value` back to a JSON string and is used for serialization throughout the codebase, but currently has zero test coverage. This task adds four focused test blocks directly in `src/json.zig` covering a simple string value, null, an object with mixed types, and nested objects/arrays with round-trip verification via `parse`.
 
-## Files to Modify
+## 2. Files to Modify
 
-1. **`src/config.zig`** — Append three tests to the existing `// ── Tests ──` section at the bottom of the file (after the last `findEnvValue` test, currently ending at line 270).
+- `src/json.zig` — append four new `test` blocks after the existing tests (after line 134)
 
-## Files to Create
+## 3. Files to Create
 
 None.
 
-## Function/Type Signatures for New or Changed Code
+## 4. Function/Type Signatures for New or Changed Code
 
-No signatures change. The existing function under test is:
-
-```zig
-// src/config.zig:106
-pub fn getTestCmdForRepo(self: *Config, repo_path: []const u8) []const u8
-```
-
-The tests construct a stack-allocated `Config` value with only the two fields that `getTestCmdForRepo` reads — `watched_repos` and `pipeline_test_cmd` — set to meaningful values. All other `Config` fields are set to zero/empty defaults to satisfy the struct literal. A private helper `testMinimalConfig` is added above the tests to avoid repeating the full struct literal in each test:
+No new public functions or types are introduced. The additions are four private `test` blocks within `src/json.zig`:
 
 ```zig
-// Private helper — only used in tests, defined above the test blocks.
-fn testMinimalConfig(pipeline_test_cmd: []const u8, watched_repos: []RepoConfig) Config {
-    return Config{
-        .telegram_token = "",
-        .oauth_token = "",
-        .assistant_name = "",
-        .trigger_pattern = "",
-        .data_dir = "",
-        .container_image = "",
-        .model = "",
-        .credentials_path = "",
-        .session_max_age_hours = 0,
-        .max_consecutive_errors = 0,
-        .pipeline_repo = "",
-        .pipeline_test_cmd = pipeline_test_cmd,
-        .pipeline_lint_cmd = "",
-        .pipeline_admin_chat = "",
-        .release_interval_mins = 0,
-        .continuous_mode = false,
-        .collection_window_ms = 0,
-        .cooldown_ms = 0,
-        .agent_timeout_s = 0,
-        .max_concurrent_agents = 0,
-        .rate_limit_per_minute = 0,
-        .web_port = 0,
-        .dashboard_dist_dir = "",
-        .watched_repos = watched_repos,
-        .whatsapp_enabled = false,
-        .whatsapp_auth_dir = "",
-        .discord_enabled = false,
-        .discord_token = "",
-        .graphite_enabled = false,
-        .allocator = std.testing.allocator,
-    };
-}
+test "stringify simple string value" { ... }
+
+test "stringify null" { ... }
+
+test "stringify object with mixed types round-trips with parse" { ... }
+
+test "stringify nested objects and arrays round-trips with parse" { ... }
 ```
 
-The three new test functions (no signatures beyond the `test "..."` blocks):
-
+Each test follows this pattern:
 ```zig
-test "getTestCmdForRepo exact match returns repo-specific command"
-test "getTestCmdForRepo no match returns pipeline_test_cmd default"
-test "getTestCmdForRepo empty watched_repos returns pipeline_test_cmd default"
+const alloc = std.testing.allocator;
+// ... build or parse a Value ...
+const result = try stringify(alloc, value);
+defer alloc.free(result);
+// ... assertions ...
 ```
 
-## Acceptance Criteria
+For tests that use `parse`, the parsed value must be released:
+```zig
+var parsed = try parse(alloc, json_input);
+defer parsed.deinit();
+```
 
-1. **Exact match**: Given a `Config` with `pipeline_test_cmd = "zig build test"` and `watched_repos = &.{.{ .path = "/repos/myapp", .test_cmd = "npm test", .is_self = false }}`, calling `config.getTestCmdForRepo("/repos/myapp")` returns `"npm test"`.
+## 5. Acceptance Criteria
 
-2. **No match — fallback**: Given the same `Config` above, calling `config.getTestCmdForRepo("/repos/other")` returns `"zig build test"` (the `pipeline_test_cmd` default).
+1. **Simple string value**: Calling `stringify(alloc, Value{ .string = "hello" })` returns the slice `"\"hello\""` (i.e., the JSON encoding of the string `hello`).
 
-3. **Empty `watched_repos` — fallback**: Given a `Config` with `pipeline_test_cmd = "make test"` and `watched_repos = &.{}`, calling `config.getTestCmdForRepo("/any/path")` returns `"make test"`.
+2. **Null value**: Calling `stringify(alloc, .null)` (or `Value{ .null = {} }`) returns the slice `"null"`.
 
-4. **`zig build test` passes**: All three new tests and all pre-existing tests in `src/config.zig` pass without modification to any other file.
+3. **Object with mixed types — round-trip**: A `std.json.Value` of type `.object` is constructed in-memory with at least the following fields:
+   - `"name"`: string `"borg"`
+   - `"count"`: integer `1`
+   - `"active"`: bool `true`
 
-5. **No allocations in tests**: The tests use only stack/comptime-literal data (slice literals via `&.{...}`); no heap allocation or `defer` is required for these three tests.
+   After calling `stringify`, the returned JSON string is fed back into `parse`. The re-parsed value must satisfy:
+   - `getString(reparsed.value, "name").?` equals `"borg"`
+   - `getInt(reparsed.value, "count").?` equals `1`
+   - `getBool(reparsed.value, "active").?` equals `true`
 
-## Edge Cases to Handle
+4. **Nested objects and arrays — round-trip**: The JSON string `"{\"outer\":{\"inner\":\"val\"},\"list\":[1,2,3]}"` is parsed with `parse`, passed to `stringify`, then re-parsed with `parse`. The final parsed value must satisfy:
+   - `getObject(reparsed.value, "outer")` is non-null
+   - `getString(getObject(reparsed.value, "outer").?, "inner").?` equals `"val"`
+   - `getArray(reparsed.value, "list").?` has length `3`
 
-1. **Path prefix must not match**: A `watched_repos` entry with `path = "/repos/app"` must not match a query for `"/repos/application"`. The comparison uses `std.mem.eql` (byte-exact), so this is already correct — the test for "no match" covers this implicitly by querying a different path.
+5. **Memory safety**: All four tests pass under `zig build test` with no memory leaks detected by `std.testing.allocator`.
 
-2. **Multiple repos — first match wins**: If `watched_repos` contains two entries with distinct paths, only the entry whose `path` equals `repo_path` is returned. The function returns on the first match, so order matters; the test for exact match should include at least one non-matching entry before the matching one to verify the loop does not short-circuit incorrectly.
+6. **No regressions**: All pre-existing tests in `src/json.zig` (`parse and access typed fields`, `escapeString handles special characters`, `escapeString handles control characters`, `getString returns null for missing key and wrong type`) continue to pass.
 
-3. **`pipeline_test_cmd` is empty string**: If `pipeline_test_cmd = ""` and there is no match, `getTestCmdForRepo` returns `""`. No special handling is needed; returning an empty string is correct behaviour (the caller decides what to do with it).
+## 6. Edge Cases to Handle
 
-4. **`watched_repos` contains only entries whose paths do not match**: The fallback to `pipeline_test_cmd` must occur even when `watched_repos` is non-empty. The "no match" test covers this case.
+- **Memory ownership of `stringify` result**: The returned slice is caller-owned. Every test must `defer alloc.free(result)` immediately after the `stringify` call.
+- **Memory ownership of `parse` result**: Every `parse` call in tests must have a matching `defer parsed.deinit()` to free the arena allocator backing the parsed tree.
+- **Object key ordering is not guaranteed**: The object-with-mixed-types test must not assert the exact byte content of the stringified object. Instead, it must re-parse the result and check field values individually, because `std.json.ObjectMap` (backed by `std.StringArrayHashMap`) may serialize keys in insertion order, which can vary across Zig versions.
+- **In-memory `Value` construction for the object test**: Building a `Value{ .object = ... }` requires initializing a `std.json.ObjectMap` with the test allocator, inserting fields, and ensuring the map is freed after the test. Use `defer obj.deinit()` where `obj` is the `ObjectMap`. Alternatively, parse a JSON literal string to obtain the `Value`, which handles memory automatically via the `Parsed` arena.
+- **Float fields**: If a float field is added to future tests, use approximate comparison (`expectApproxEqAbs`) rather than exact equality, since `std.json.stringify` renders floats with finite precision and a subsequent parse may yield a slightly different `f64`.
+- **Integer boundary**: Any integer values used in tests must be representable as `i64` without overflow (the type used by `std.json.Value.integer`).
+- **Non-empty string**: The simple-string test must use a non-empty string to distinguish correct output from an accidental empty or null result.
