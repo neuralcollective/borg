@@ -102,7 +102,7 @@ pub const Pipeline = struct {
             self.checkHealth();
             self.maybeApplySelfUpdate();
 
-            std.time.sleep(self.config.tick_interval_s * std.time.ns_per_s);
+            std.time.sleep(self.config.pipeline_tick_s * std.time.ns_per_s);
         }
 
         // Wait for running agents to finish (up to 30s)
@@ -249,7 +249,7 @@ pub const Pipeline = struct {
         var dispatched = [_]bool{false} ** 20;
 
         for (tasks, 0..) |task, i| {
-            if (self.active_agents.load(.acquire) >= self.config.max_pipeline_agents) break;
+            if (self.active_agents.load(.acquire) >= self.config.pipeline_max_agents) break;
 
             // Skip if already in-flight
             {
@@ -319,12 +319,12 @@ pub const Pipeline = struct {
 
     fn seedIfIdle(self: *Pipeline) !void {
         const now = std.time.timestamp();
-        const cooldown: i64 = if (self.config.continuous_mode) 1800 else self.config.seed_cooldown_s;
+        const cooldown: i64 = if (self.config.continuous_mode) 1800 else self.config.pipeline_seed_cooldown_s;
         if (now - self.last_seed_ts < cooldown) return;
 
         // Don't seed if there are already active tasks
         const active = try self.db.getActivePipelineTaskCount();
-        if (active >= self.config.max_backlog_size) return;
+        if (active >= self.config.pipeline_max_backlog) return;
 
         // Don't seed while tasks are queued for integration — wait for them to merge first
         const pending_integration = try self.db.getQueuedIntegrationCount();
@@ -362,7 +362,7 @@ pub const Pipeline = struct {
         for (self.config.watched_repos) |repo| {
             if (repo.is_self) {
                 primary_path = repo.path;
-                if (active_u32 + total_created >= self.config.max_backlog_size) break;
+                if (active_u32 + total_created >= self.config.pipeline_max_backlog) break;
                 const created = self.seedRepo(repo.path, seed_mode, active_u32 + total_created);
                 total_created += created;
                 break;
@@ -372,7 +372,7 @@ pub const Pipeline = struct {
         if (primary_path.len > 0) {
             for (self.config.watched_repos) |repo| {
                 if (repo.is_self) continue;
-                if (active_u32 + total_created >= self.config.max_backlog_size) break;
+                if (active_u32 + total_created >= self.config.pipeline_max_backlog) break;
                 const created = self.seedCrossPollinate(repo.path, primary_path);
                 total_created += created;
             }
@@ -466,7 +466,7 @@ pub const Pipeline = struct {
             };
 
             created += 1;
-            if (current_count + created >= self.config.max_backlog_size) break;
+            if (current_count + created >= self.config.pipeline_max_backlog) break;
         }
 
         return created;
