@@ -129,6 +129,27 @@ test "getString: returns null when value is integer" {
     try std.testing.expect(json.getString(parsed.value, "n") == null);
 }
 
+test "getString: returns null when value is bool" {
+    const alloc = std.testing.allocator;
+    var parsed = try json.parse(alloc, "{\"flag\":true}");
+    defer parsed.deinit();
+    try std.testing.expect(json.getString(parsed.value, "flag") == null);
+}
+
+test "getString: returns null when value is float" {
+    const alloc = std.testing.allocator;
+    var parsed = try json.parse(alloc, "{\"pi\":3.14}");
+    defer parsed.deinit();
+    try std.testing.expect(json.getString(parsed.value, "pi") == null);
+}
+
+test "getString: returns null when value is JSON null" {
+    const alloc = std.testing.allocator;
+    var parsed = try json.parse(alloc, "{\"nothing\":null}");
+    defer parsed.deinit();
+    try std.testing.expect(json.getString(parsed.value, "nothing") == null);
+}
+
 test "getString: returns empty string (non-null) for empty string value" {
     const alloc = std.testing.allocator;
     var parsed = try json.parse(alloc, "{\"e\":\"\"}");
