@@ -14,7 +14,7 @@ const Config = @import("config.zig").Config;
 
 const TICK_INTERVAL_S = 30;
 const REMOTE_CHECK_INTERVAL_S = 300; // Check for remote updates every 5 minutes
-const AGENT_TIMEOUT_S = 600;
+const AGENT_TIMEOUT_S_FALLBACK = 600;
 const MAX_BACKLOG_SIZE = 5;
 const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
 const MAX_PARALLEL_AGENTS = 4; // fallback; overridden by config.max_pipeline_agents
@@ -1454,7 +1454,7 @@ pub const Pipeline = struct {
         var agent_done = std.atomic.Value(bool).init(false);
         const name_for_watchdog = try self.allocator.dupe(u8, container_name);
         const watchdog = std.Thread.spawn(.{}, agentTimeoutWatchdog, .{
-            &agent_done, self.docker, name_for_watchdog, AGENT_TIMEOUT_S,
+            &agent_done, self.docker, name_for_watchdog, self.config.agent_timeout_s,
         }) catch null;
 
         var run_result = try self.docker.runWithStdio(docker_mod.ContainerConfig{
