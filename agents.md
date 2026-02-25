@@ -41,8 +41,12 @@ ASSISTANT_NAME=Borg
 # Pipeline (optional — enables autonomous engineering)
 PIPELINE_REPO=/absolute/path/to/target/repo
 PIPELINE_TEST_CMD=zig build test
-# Additional repos: pipe-delimited path:test_cmd pairs
-# WATCHED_REPOS=/path/to/api:go test ./...|/path/to/web:bun test
+# PIPELINE_AUTO_MERGE=false        # skip auto-merge for primary repo
+# Additional repos (append !manual to disable auto-merge)
+# WATCHED_REPOS=/path/to/api:go test ./...|/path/to/web:bun test!manual
+
+# Remote dashboard access (default: 127.0.0.1)
+# WEB_BIND=0.0.0.0
 
 # Notify this Telegram chat about pipeline events
 # PIPELINE_ADMIN_CHAT=<chat_id>
