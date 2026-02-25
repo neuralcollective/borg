@@ -685,7 +685,7 @@ pub const Pipeline = struct {
         defer add.deinit();
         const is_fix = std.mem.eql(u8, task.status, "qa_fix");
         const commit_msg = if (is_fix) "test: fix tests from QA agent" else "test: add tests from QA agent";
-        var commit = try wt_git.commit(commit_msg);
+        var commit = try wt_git.commitWithAuthor(commit_msg, self.config.getGitAuthor());
         defer commit.deinit();
 
         if (!commit.success()) {
@@ -771,7 +771,7 @@ pub const Pipeline = struct {
         // Commit implementation in worktree
         var add = try wt_git.addAll();
         defer add.deinit();
-        var commit = try wt_git.commit("impl: implementation from worker agent");
+        var commit = try wt_git.commitWithAuthor("impl: implementation from worker agent", self.config.getGitAuthor());
         defer commit.deinit();
 
         if (commit.success()) {
@@ -1624,12 +1624,29 @@ pub const Pipeline = struct {
         var model_buf: [256]u8 = undefined;
         const model_env = try std.fmt.bufPrint(&model_buf, "CLAUDE_MODEL={s}", .{self.config.model});
 
-        const env = [_][]const u8{
+        var env_list = std.ArrayList([]const u8).init(tmp);
+        try env_list.appendSlice(&.{
             oauth_env,
             model_env,
             "HOME=/home/bun",
             "NODE_OPTIONS=--max-old-space-size=384",
-        };
+        });
+
+        // Pass git author env vars to container based on GIT_AUTHOR_MODE
+        var git_name_buf: [256]u8 = undefined;
+        var git_email_buf: [256]u8 = undefined;
+        if (self.config.getGitAuthor()) |_| {
+            if (self.config.git_user_name.len > 0) {
+                const name_env = try std.fmt.bufPrint(&git_name_buf, "GIT_AUTHOR_NAME={s}", .{self.config.git_user_name});
+                try env_list.append(name_env);
+            }
+            if (self.config.git_user_email.len > 0) {
+                const email_env = try std.fmt.bufPrint(&git_email_buf, "GIT_AUTHOR_EMAIL={s}", .{self.config.git_user_email});
+                try env_list.append(email_env);
+            }
+        }
+
+        const env = env_list.items;
 
         // Bind mounts: worktree + persistent session dir + optional setup script
         var bind_buf: [1024]u8 = undefined;
@@ -1673,7 +1690,7 @@ pub const Pipeline = struct {
         var run_result = try self.docker.runWithStdio(docker_mod.ContainerConfig{
             .image = self.config.container_image,
             .name = container_name,
-            .env = &env,
+            .env = env,
             .binds = binds,
             .memory_limit = self.config.container_memory_mb * 1024 * 1024,
         }, input.items, cb);
