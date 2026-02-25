@@ -998,6 +998,7 @@ test {
     _ = @import("is_bot_message_test.zig");
     _ = @import("sqlite_bindparams_test.zig");
     _ = @import("pipeline_stats_test.zig");
+    _ = @import("db_pipeline_query_test.zig");
 }
 
 test "state key-value store" {
