@@ -1,138 +1,107 @@
-# Task #5: Fix subprocess stdout/stderr sequential read deadlock
+# Task #4: Fix WhatsApp stdout blocking the main event loop
 
 ## 1. Task Summary
 
-`git.zig`, `agent.zig`, `docker.zig`, `pipeline.zig`, and `main.zig` all read stdout to completion before reading stderr (or vice versa) in a sequential loop. If a child process fills the OS pipe buffer (~64 KB on Linux) on the stream being ignored while the parent is blocking on the other stream, both sides deadlock permanently. The fix is to drain both streams concurrently using a dedicated stderr-reader thread, exposed via a new `subprocess.zig` module, and to extract the repeated single-pipe drain loop and exit-code switch into a `process.zig` utility module used by all affected call sites.
+`sidecar.zig` (and the legacy `whatsapp.zig`) call `stdout.read()` in a `while (true)` loop
+inside their `poll()` methods. Because the underlying pipe fd is blocking, `read()` hangs
+indefinitely when the bridge process has no output, freezing the entire main event loop at
+`main.zig:624` and preventing Telegram polling, agent dispatch, and cooldown expiry from
+running. Setting `O_NONBLOCK` on the stdout pipe fd immediately after `child.spawn()` makes
+`read()` return `WouldBlock` (EAGAIN) when no data is available; the existing `catch break`
+in both poll loops already handles that error correctly, so the minimal change is confined to
+the two `start()` functions.
 
 ## 2. Files to Modify
 
 | File | Location | What changes |
 |------|----------|--------------|
-| `src/git.zig` | `Git.exec()` lines 23–42 | Replace sequential dual-drain + exit-code switch with `subprocess.collectOutput()` and `process.exitCode()` |
-| `src/agent.zig` | `runDirect()` lines 119–135 | Replace stdout-only sequential drain + exit-code switch with `subprocess.collectOutput()` and `process.exitCode()` |
-| `src/docker.zig` | `Docker.runWithStdio()` lines 174–189 | Replace stdout-only sequential drain + exit-code switch with `subprocess.collectOutput()` and `process.exitCode()` |
-| `src/pipeline.zig` | `runTests()` lines 931–954 | Replace sequential dual-drain + exit-code switch with `subprocess.collectOutput()` and `process.exitCode()` |
-| `src/pipeline.zig` | `checkSelfUpdate()` lines 1258–1283 | Replace reversed sequential dual-drain + exit-code switch with `subprocess.collectOutput()` and `process.exitCode()` |
-| `src/main.zig` | Agent dispatch function lines 947–962 | Replace stdout-only sequential drain + exit-code switch with `subprocess.collectOutput()` and `process.exitCode()` |
+| `src/sidecar.zig` | `Sidecar.start()` lines 78–80 | After `try child.spawn()`, set `O_NONBLOCK` on `child.stdout.?.handle` |
+| `src/whatsapp.zig` | `WhatsApp.start()` lines 53–55 | After `try child.spawn()`, set `O_NONBLOCK` on `child.stdout.?.handle` |
 
-## 3. Files to Create
+No new files are required.
 
-| File | Purpose |
-|------|---------|
-| `src/subprocess.zig` | Concurrent stdout+stderr collector; spawns one thread to drain stderr while calling thread drains stdout |
-| `src/process.zig` | Low-level utilities: `drainPipe` (single-pipe sequential read into owned slice) and `exitCode` (Child.Term → u8) |
+## 3. Function/Type Signatures
 
-Both new files must be reachable from `src/main.zig` (directly or transitively via an existing module) so that `zig build test` picks up their embedded tests. The existing test files `src/subprocess_test.zig` and `src/process_test.zig` already contain the full test suite for these modules; they must be imported (e.g., via `comptime { _ = @import("subprocess_test.zig"); }`) from within one of the new source files or from `main.zig`.
-
-## 4. Function/Type Signatures
-
-### `src/subprocess.zig`
+Neither `start()` signature changes. The internal addition inside each `start()` is:
 
 ```zig
-const std = @import("std");
-
-/// Holds fully-buffered stdout and stderr captured from a child process.
-pub const PipeOutput = struct {
-    stdout: []u8,
-    stderr: []u8,
-    allocator: std.mem.Allocator,
-
-    /// Frees both owned slices.
-    pub fn deinit(self: *PipeOutput) void;
-};
-
-/// Drain child.stdout on the calling thread and child.stderr on a dedicated
-/// thread simultaneously, preventing pipe-buffer deadlocks.
-/// Returns after both streams reach EOF and the stderr thread is joined.
-/// Each stream is capped independently at max_size bytes; bytes beyond that
-/// limit are still read and discarded so the child never blocks.
-/// Streams that are null (not piped) are treated as producing zero bytes.
-/// The caller must call child.wait() after this function returns.
-pub fn collectOutput(
-    allocator: std.mem.Allocator,
-    child: *std.process.Child,
-    max_size: usize,
-) !PipeOutput;
+// In Sidecar.start() and WhatsApp.start(), immediately after `try child.spawn();`:
+if (child.stdout) |f| {
+    const flags = try std.posix.fcntl(f.handle, std.posix.F.GETFL, 0);
+    _ = try std.posix.fcntl(f.handle, std.posix.F.SETFL, flags | @as(u32, std.posix.O.NONBLOCK));
+}
 ```
 
-### `src/process.zig`
+Existing signatures that must remain unchanged:
 
 ```zig
-const std = @import("std");
+// sidecar.zig
+pub fn start(self: *Sidecar, discord_token: []const u8, wa_auth_dir: []const u8, wa_disabled: bool) !void;
+pub fn poll(self: *Sidecar, allocator: std.mem.Allocator) ![]SidecarMessage;
 
-/// Read all bytes from `pipe` into a newly allocated owned slice.
-/// Stops on EOF or a read error (accumulated data is returned, not an error).
-/// Caller owns the returned slice and must free it.
-pub fn drainPipe(allocator: std.mem.Allocator, pipe: std.fs.File) ![]u8;
-
-/// Convert a Child.Term to a u8 exit code.
-/// .Exited => the exit code; all other variants (Signal, Stopped, Unknown) => 1.
-pub fn exitCode(term: std.process.Child.Term) u8;
+// whatsapp.zig
+pub fn start(self: *WhatsApp) !void;
+pub fn poll(self: *WhatsApp, allocator: std.mem.Allocator) ![]WaMessage;
 ```
 
-### Changes to existing signatures
+`Sidecar.start()` and `WhatsApp.start()` already return `!void`, so propagating the
+`fcntl` error union requires no signature change.
 
-All public types remain **unchanged**:
-- `git.ExecResult` — fields `stdout`, `stderr`, `exit_code`, `allocator`; methods `success()`, `deinit()`
-- `docker.RunResult` — fields `stdout`, `exit_code`, `allocator`
-- `agent.AgentResult` — fields `output`, `raw_stream`, `new_session_id`
+## 4. Acceptance Criteria
 
-Only the internal implementation of the functions listed in §2 changes.
+**AC1 – poll() returns promptly when the bridge has no output.**
+A call to `Sidecar.poll()` (or `WhatsApp.poll()`) on a running bridge that has produced no
+NDJSON lines returns within 5 ms with an empty slice.
 
-## 5. Acceptance Criteria
+**AC2 – Main loop is not blocked.**
+After the fix, the `POLL_INTERVAL_MS = 500` sleep at `main.zig:726` drives each iteration;
+Telegram `getUpdates` is called at least once per second even when the sidecar bridge emits
+no data.
 
-**AC1 – Deadlock on large stderr is resolved.**
-`collectOutput` with a child writing 128 KB to stderr and 0 bytes to stdout completes without hanging; `output.stderr.len == 128 * 1024` and `output.stdout.len == 0`.
+**AC3 – Messages already buffered in the pipe are not lost.**
+If the bridge writes N complete NDJSON lines before `poll()` is called, `poll()` returns
+all N parsed messages in the same call.
 
-**AC2 – Deadlock on large stdout is resolved.**
-`collectOutput` with a child writing 128 KB to stdout and 0 bytes to stderr completes; `output.stdout.len == 128 * 1024` and `output.stderr.len == 0`.
+**AC4 – Large bursts are read in full.**
+If the bridge writes more than 4 096 bytes of NDJSON before `poll()` is called, `poll()`
+iterates the read loop until all available data is consumed (loop continues while
+`n == read_buf.len`; stops on `WouldBlock` or `n == 0`).
 
-**AC3 – Deadlock on simultaneous large writes is resolved.**
-A child alternating 2 KB chunks to stdout and stderr for 100 iterations completes; `output.stdout.len == 204800` and `output.stderr.len == 204800`.
+**AC5 – `O_NONBLOCK` is set on both files.**
+`src/sidecar.zig` and `src/whatsapp.zig` each contain a call to `std.posix.fcntl` with
+`std.posix.F.SETFL` after `child.spawn()`.
 
-**AC4 – No inline drain buffer remains in modified files.**
-After refactoring, `git.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig` do not contain the literal string `"read_buf: [8192]u8"`.
+**AC6 – `WouldBlock` is handled silently.**
+Neither `Sidecar.poll()` nor `WhatsApp.poll()` propagates `error.WouldBlock` to callers;
+the existing `catch break` already absorbs it. No new error paths are introduced in `poll()`.
 
-**AC5 – No inline exit-code switch remains in modified files.**
-After refactoring, `git.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig` do not contain the literal string `".Exited => |code| code"`.
+**AC7 – poll() error set is unchanged.**
+`Sidecar.poll()` and `WhatsApp.poll()` return the same error union as before the fix;
+callers in `main.zig` (`catch &[_]...{}`) require no changes.
 
-**AC6 – `process.zig` exports the required symbols with correct signatures.**
-- `process.drainPipe` has type `fn(std.mem.Allocator, std.fs.File) anyerror![]u8`.
-- `process.exitCode` has type `fn(std.process.Child.Term) u8`.
-- `process.exitCode(.{ .Exited = 0 }) == 0`, `process.exitCode(.{ .Exited = 42 }) == 42`, `process.exitCode(.{ .Signal = 9 }) == 1`, `process.exitCode(.{ .Stopped = 19 }) == 1`.
+**AC8 – start() failure when fcntl fails is surfaced.**
+If `std.posix.fcntl` returns an error (e.g., invalid fd), `start()` propagates it to the
+caller rather than silently continuing with a blocking fd.
 
-**AC7 – `process.zig` has no project-internal imports.**
-The source of `process.zig` contains exactly one `@import` call and it is `@import("std")`.
+**AC9 – Existing unit tests continue to pass.**
+`just t` passes with no new test failures. The `WhatsApp init/deinit` and
+`Sidecar init/deinit` tests pass unchanged.
 
-**AC8 – `collectOutput` captures data correctly.**
-- `output.stdout == "hello stdout\n"` for a child running `echo 'hello stdout'`.
-- `output.stderr == "hello stderr\n"` for a child running `echo 'hello stderr' >&2`.
-- Both streams are correct when child writes to both simultaneously.
-- Binary data containing null bytes (`\x00\x01\x02\xff`) is preserved verbatim.
+**AC10 – No change to stdin or stderr fds.**
+Only `child.stdout` receives `O_NONBLOCK`; `child.stdin` and `child.stderr` are left in
+their default blocking mode.
 
-**AC9 – Thread is always joined; no thread leaks.**
-Running `collectOutput` 20 times sequentially with 1 KB output on each stream does not exhaust thread resources or leak memory (verified by `std.testing.allocator`).
-
-**AC10 – `PipeOutput.deinit` frees memory without leaks.**
-`std.testing.allocator` reports no leaks after `output.deinit()`.
-
-**AC11 – Public API of consuming modules is unchanged.**
-`git.ExecResult`, `docker.RunResult`, and `agent.AgentResult` still have the same fields and methods as before; callers require no changes.
-
-**AC12 – Modified files import `process.zig`.**
-`git.zig`, `docker.zig`, `agent.zig`, and `pipeline.zig` each contain `@import("process.zig")`.
-
-## 6. Edge Cases to Handle
+## 5. Edge Cases
 
 | # | Scenario | Expected behaviour |
 |---|----------|--------------------|
-| E1 | Child closes stdout before stderr finishes | Stderr thread continues draining until its own EOF; both slices returned correctly |
-| E2 | Child closes stderr before stdout finishes | Main thread continues draining stdout to EOF; both slices returned correctly |
-| E3 | Child produces zero bytes on one or both streams | Return a valid zero-length owned slice per stream; `deinit()` must not crash or fault |
-| E4 | Child exits before parent reads all pipe data | Pipe buffers remain readable after child exit; all buffered bytes are captured |
-| E5 | Output exceeds `max_size` per stream | Excess bytes are drained and discarded so the child never blocks; `output.stdout.len <= max_size` and `output.stderr.len <= max_size` |
-| E6 | Read error mid-stream (process crash or kill) | The inner loop breaks via `catch break`; accumulated data is returned without propagating an error to the caller |
-| E7 | Child terminated by signal | `process.exitCode` returns `1`; any partial output already in the pipe is still returned |
-| E8 | `child.stdout` or `child.stderr` is `null` | `collectOutput` treats the absent stream as zero bytes; no null-pointer dereference occurs |
-| E9 | `checkSelfUpdate` reverse-order drain (stderr first, then stdout) | After replacing with `collectOutput`, drain order is irrelevant; both streams drain concurrently |
-| E10 | Stderr thread allocation or spawn failure | Error is propagated to caller; if the thread was started it is still joined before returning to prevent resource leaks |
+| E1 | `child.stdout` is `null` (stdout not piped) | The `if (child.stdout) \|f\|` guard skips `fcntl`; `poll()` returns an empty slice as before |
+| E2 | `fcntl(GETFL)` fails | `start()` returns the error to its caller; the process is not used |
+| E3 | `fcntl(SETFL)` fails | Same as E2 |
+| E4 | Bridge writes data between two consecutive `poll()` calls | Data accumulates in the OS pipe buffer; next `poll()` reads it in full |
+| E5 | Bridge writes a partial NDJSON line (no trailing `\n`) | `poll()` buffers the incomplete line in `stdout_buf` and returns zero messages; the line is completed on a future poll |
+| E6 | Bridge writes more than 4 096 bytes in one burst (fills `read_buf`) | Loop re-enters because `n == read_buf.len`; continues until `WouldBlock` or `n == 0`; all data is captured |
+| E7 | Bridge process exits unexpectedly | `read()` returns `n == 0` (EOF); loop breaks; already-buffered complete lines are parsed and returned |
+| E8 | Bridge produces data faster than `poll()` is called (sustained high throughput) | OS pipe buffer absorbs the difference (up to ~64 KB); `poll()` drains all available bytes each call; no data is lost as long as the buffer does not overflow |
+| E9 | `O_NONBLOCK` is set but the bridge immediately sends a connected/QR event | The flag does not suppress data that is already in the pipe; first `poll()` reads and parses it normally |
+| E10 | `start()` is called a second time after a previous crash (child restarted) | A new `child` is created; `O_NONBLOCK` must be set on the new `child.stdout` fd; the old fd is closed in `deinit()` |
