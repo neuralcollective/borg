@@ -6,7 +6,7 @@ Step-by-step setup for a fresh machine.
 
 - Linux (tested on Arch, should work on Ubuntu/Debian)
 - Docker daemon running
-- Zig 0.14.1+ (`curl -fsSL https://ziglang.org/download/0.14.1/zig-linux-x86_64-0.14.1.tar.xz | sudo tar -xJ -C /opt && sudo ln -s /opt/zig-linux-x86_64-0.14.1/zig /usr/local/bin/zig`)
+- Zig 0.14.1+
 - Bun (for Claude Code CLI and messaging sidecar)
 - Claude Code CLI (`bun install -g @anthropic-ai/claude-code`)
 - Claude OAuth credentials at `~/.claude/.credentials.json` (created by `claude` login)
@@ -15,32 +15,12 @@ Step-by-step setup for a fresh machine.
 
 ```bash
 git clone <repo-url> borg && cd borg
-just setup    # or: zig build
+just setup
 ```
 
-## 2. Build Pipeline Container Image
+This builds the binary, Docker agent image, sidecar deps, and dashboard.
 
-```bash
-docker build -t borg-agent:latest -f container/Dockerfile container/
-```
-
-This image has Node.js + Claude Code CLI. Pipeline agents run inside it.
-
-## 3. Install Sidecar Dependencies
-
-```bash
-cd sidecar && bun install && cd ..
-```
-
-This installs Discord.js and Baileys (WhatsApp) in a single process.
-
-## 4. Build Dashboard
-
-```bash
-cd dashboard && bun install && bun run build && cd ..
-```
-
-## 5. Configure
+## 2. Configure
 
 Create `.env` in the project root:
 
@@ -68,36 +48,32 @@ PIPELINE_TEST_CMD=zig build test
 # PIPELINE_ADMIN_CHAT=<chat_id>
 ```
 
-## 6. Run
+## 3. Run
 
 ```bash
-./zig-out/bin/borg
+just r
 ```
 
 Or with systemd:
 
 ```bash
-# Edit borg.service: set WorkingDirectory and PATH
 sudo cp borg.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now borg
 journalctl -u borg -f
 ```
 
-The systemd service must have a PATH including zig, node, docker, and bun. See `borg.service` for an example.
-
-## 7. Register a Chat
+## 4. Register a Chat
 
 In your Telegram group (or Discord channel), send `/register` to the bot. Then mention it by name (e.g. `@Borg`) to trigger a response.
 
-## 8. Create Pipeline Tasks
+## 5. Create Pipeline Tasks
 
 Send `/task Fix the login bug` in a registered chat, or let the auto-seeder discover tasks when the pipeline is idle.
 
 ## Verify It Works
 
-- `curl http://127.0.0.1:3131/api/status` returns JSON with version and uptime
-- `journalctl -u borg -f` shows `Borg X.Y.Z-<hash> online`
+- `just status` returns JSON with version and uptime
 - `/ping` in Telegram responds with `pong`
 - Pipeline tasks appear at `http://127.0.0.1:3131`
 
@@ -106,22 +82,5 @@ Send `/task Fix the login bug` in a registered chat, or let the auto-seeder disc
 1. Go to https://discord.com/developers/applications
 2. Create application → Bot → copy token
 3. Enable **Message Content Intent** under Bot settings
-4. Invite: OAuth2 → URL Generator → scopes: `bot` + `applications.commands` → permissions: Send Messages, Read Message History → copy URL and open in browser
+4. Invite: OAuth2 → URL Generator → scopes: `bot` + `applications.commands` → permissions: Send Messages, Read Message History
 5. Set `DISCORD_ENABLED=true` and `DISCORD_TOKEN=<token>` in `.env`
-
-## Docker Compose (Alternative)
-
-```bash
-# Edit .env, then:
-docker compose up -d
-docker compose logs -f
-```
-
-Mount target repos as volumes in `docker-compose.yml`:
-
-```yaml
-volumes:
-  - /path/to/repo:/repos/my-project
-```
-
-Then set `PIPELINE_REPO=/repos/my-project` in `.env`.
