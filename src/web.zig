@@ -1008,7 +1008,7 @@ pub const WebServer = struct {
         const now = std.time.timestamp();
         const uptime = now - self.start_time;
 
-        const stats = self.db.getPipelineStats() catch db_mod.Db.PipelineStats{ .active = 0, .merged = 0, .failed = 0, .total = 0 };
+        const stats = self.db.getPipelineStats() catch db_mod.Db.PipelineStats{ .active = 0, .merged = 0, .failed = 0, .total = 0, .dispatched = 0 };
 
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
@@ -1036,7 +1036,7 @@ pub const WebServer = struct {
             }) catch return;
         }
 
-        w.print("],\"release_interval_mins\":{d},\"continuous_mode\":{s},\"assistant_name\":\"{s}\",\"active_tasks\":{d},\"merged_tasks\":{d},\"failed_tasks\":{d},\"total_tasks\":{d}}}", .{
+        w.print("],\"release_interval_mins\":{d},\"continuous_mode\":{s},\"assistant_name\":\"{s}\",\"active_tasks\":{d},\"merged_tasks\":{d},\"failed_tasks\":{d},\"total_tasks\":{d},\"dispatched_agents\":{d}}}", .{
             self.config.release_interval_mins,
             if (self.config.continuous_mode) "true" else "false",
             self.config.assistant_name,
@@ -1044,6 +1044,7 @@ pub const WebServer = struct {
             stats.merged,
             stats.failed,
             stats.total,
+            stats.dispatched,
         }) catch return;
 
         self.sendJson(stream, buf.items);
