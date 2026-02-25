@@ -70,6 +70,13 @@ pub const Git = struct {
     }
 
     pub fn commit(self: *Git, message: []const u8) !ExecResult {
+        return self.commitWithAuthor(message, null);
+    }
+
+    pub fn commitWithAuthor(self: *Git, message: []const u8, author: ?[]const u8) !ExecResult {
+        if (author) |a| {
+            return self.exec(&.{ "commit", "-m", message, "--author", a });
+        }
         return self.exec(&.{ "commit", "-m", message });
     }
 

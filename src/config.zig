@@ -45,6 +45,10 @@ pub const Config = struct {
     pipeline_seed_cooldown_s: i64 = 3600,
     pipeline_tick_s: u64 = 30,
     remote_check_interval_s: i64 = 300,
+    // Git author attribution: "borg" (default), "both", or "user"
+    git_author_mode: []const u8 = "borg",
+    git_user_name: []const u8 = "",
+    git_user_email: []const u8 = "",
     // Multi-repo
     watched_repos: []RepoConfig,
     // WhatsApp config
@@ -118,6 +122,9 @@ pub const Config = struct {
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
             .discord_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "DISCORD_ENABLED") orelse "false", "true"),
             .discord_token = getEnv(allocator, env_content, "DISCORD_TOKEN") orelse "",
+            .git_author_mode = getEnv(allocator, env_content, "GIT_AUTHOR_MODE") orelse "borg",
+            .git_user_name = getEnv(allocator, env_content, "GIT_USER_NAME") orelse "",
+            .git_user_email = getEnv(allocator, env_content, "GIT_USER_EMAIL") orelse "",
             .allocator = allocator,
         };
 
@@ -128,6 +135,28 @@ pub const Config = struct {
         return config;
     }
 
+    /// Returns the --author string for git commits based on GIT_AUTHOR_MODE.
+    /// "borg" (default): Borg <borg@noreply>
+    /// "user": User Name <user@email>
+    /// "both": User Name (via Borg) <user@email>
+    /// Returns null if mode is "borg" (use default git config / no --author needed).
+    pub fn getGitAuthor(self: *Config) ?[]const u8 {
+        if (std.mem.eql(u8, self.git_author_mode, "user")) {
+            if (self.git_user_name.len > 0 and self.git_user_email.len > 0) {
+                return std.fmt.allocPrint(self.allocator, "{s} <{s}>", .{ self.git_user_name, self.git_user_email }) catch null;
+            }
+            return null;
+        }
+        if (std.mem.eql(u8, self.git_author_mode, "both")) {
+            if (self.git_user_name.len > 0 and self.git_user_email.len > 0) {
+                return std.fmt.allocPrint(self.allocator, "{s} (via Borg) <{s}>", .{ self.git_user_name, self.git_user_email }) catch null;
+            }
+            return null;
+        }
+        // "borg" or default — no --author flag, use whatever git config is set
+        return null;
+    }
+
     pub fn getTestCmdForRepo(self: *Config, repo_path: []const u8) []const u8 {
         for (self.watched_repos) |rc| {
             if (std.mem.eql(u8, rc.path, repo_path)) return rc.test_cmd;
@@ -136,9 +165,10 @@ pub const Config = struct {
     }
 
     pub fn getRepoPrompt(self: *Config, repo_path: []const u8) ?[]const u8 {
-        // Check explicit prompt_file from config
+        // repo_path may be a worktree under the repo root (e.g. /repo/.worktrees/task-1)
+        // so match by prefix rather than exact equality
         for (self.watched_repos) |rc| {
-            if (std.mem.eql(u8, rc.path, repo_path) and rc.prompt_file.len > 0) {
+            if (rc.prompt_file.len > 0 and std.mem.startsWith(u8, repo_path, rc.path)) {
                 return std.fs.cwd().readFileAlloc(self.allocator, rc.prompt_file, 64 * 1024) catch null;
             }
         }
