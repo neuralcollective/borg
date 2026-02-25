@@ -685,7 +685,7 @@ pub const Pipeline = struct {
         defer add.deinit();
         const is_fix = std.mem.eql(u8, task.status, "qa_fix");
         const commit_msg = if (is_fix) "test: fix tests from QA agent" else "test: add tests from QA agent";
-        var commit = try wt_git.commitWithAuthor(commit_msg, self.config.getGitAuthor());
+        var commit = try wt_git.commitWithAuthor(commit_msg, self.config.git_author);
         defer commit.deinit();
 
         if (!commit.success()) {
@@ -771,7 +771,7 @@ pub const Pipeline = struct {
         // Commit implementation in worktree
         var add = try wt_git.addAll();
         defer add.deinit();
-        var commit = try wt_git.commitWithAuthor("impl: implementation from worker agent", self.config.getGitAuthor());
+        var commit = try wt_git.commitWithAuthor("impl: implementation from worker agent", self.config.git_author);
         defer commit.deinit();
 
         if (commit.success()) {
