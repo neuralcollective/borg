@@ -67,9 +67,6 @@ pub const Proposal = struct {
     created_at: []const u8,
 };
 
-// Must match the number of entries in runMigrations()
-const SCHEMA_VERSION = "6";
-
 pub const Db = struct {
     sqlite_db: sqlite.Database,
     allocator: std.mem.Allocator,
@@ -256,8 +253,8 @@ pub const Db = struct {
         if (count > 0) return; // existing DB, let runMigrations handle it
 
         try self.sqlite_db.execute(
-            "INSERT INTO state (key, value) VALUES ('schema_version', ?1)",
-            .{SCHEMA_VERSION},
+            "INSERT INTO state (key, value) VALUES ('schema_version', '0')",
+            .{},
         );
     }
 

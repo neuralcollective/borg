@@ -30,7 +30,7 @@ fn testConfig(allocator: std.mem.Allocator, credentials_path: []const u8, oauth_
         .max_consecutive_errors = 0,
         .pipeline_repo = "",
         .pipeline_test_cmd = "",
-        .pipeline_lint_cmd = "",
+
         .pipeline_admin_chat = "",
         .release_interval_mins = 0,
         .continuous_mode = false,

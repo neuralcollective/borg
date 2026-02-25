@@ -1011,10 +1011,6 @@ pub const Pipeline = struct {
         }
     }
 
-    fn runTestCommand(self: *Pipeline, cwd: []const u8) !TestResult {
-        return self.runTestCommandForRepo(cwd, self.config.pipeline_test_cmd);
-    }
-
     fn runTestCommandForRepo(self: *Pipeline, cwd: []const u8, test_cmd: []const u8) !TestResult {
         var child = std.process.Child.init(
             &.{ "/bin/sh", "-c", test_cmd },
