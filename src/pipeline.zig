@@ -341,15 +341,27 @@ pub const Pipeline = struct {
         self.config.refreshOAuthToken();
         std.log.info("Seed scan starting ({s} mode)", .{mode_label});
 
-        // Seed each watched repo (non-self repos only get feature/architecture proposals)
+        // Seed primary repo directly, then cross-pollinate from watched repos
         var total_created: u32 = 0;
         const active_u32: u32 = @intCast(@max(active, 0));
+        var primary_path: []const u8 = "";
         for (self.config.watched_repos) |repo| {
-            if (active_u32 + total_created >= self.config.max_backlog_size) break;
-            // Non-self repos only get proposal modes (3 or 4)
-            const repo_mode = if (repo.is_self) seed_mode else if (seed_mode >= 3) seed_mode else 3;
-            const created = self.seedRepo(repo.path, repo_mode, active_u32 + total_created);
-            total_created += created;
+            if (repo.is_self) {
+                primary_path = repo.path;
+                if (active_u32 + total_created >= self.config.max_backlog_size) break;
+                const created = self.seedRepo(repo.path, seed_mode, active_u32 + total_created);
+                total_created += created;
+                break;
+            }
+        }
+        // Cross-pollinate: analyze watched repos for ideas to bring into primary
+        if (primary_path.len > 0) {
+            for (self.config.watched_repos) |repo| {
+                if (repo.is_self) continue;
+                if (active_u32 + total_created >= self.config.max_backlog_size) break;
+                const created = self.seedCrossPollinate(repo.path, primary_path);
+                total_created += created;
+            }
         }
 
         if (total_created > 0) {
@@ -371,11 +383,13 @@ pub const Pipeline = struct {
             2 => w.writeAll(prompts.seed_tests) catch return 0,
             3 => {
                 w.writeAll(prompts.seed_features) catch return 0;
-                return self.seedRepoProposals(repo_path, prompt_buf.items);
+                w.writeAll(prompts.seed_proposal_suffix) catch return 0;
+                return self.seedRepoProposals(repo_path, repo_path, prompt_buf.items);
             },
             4 => {
                 w.writeAll(prompts.seed_architecture) catch return 0;
-                return self.seedRepoProposals(repo_path, prompt_buf.items);
+                w.writeAll(prompts.seed_proposal_suffix) catch return 0;
+                return self.seedRepoProposals(repo_path, repo_path, prompt_buf.items);
             },
             else => w.writeAll(prompts.seed_refactor) catch return 0,
         }
@@ -444,9 +458,9 @@ pub const Pipeline = struct {
         return created;
     }
 
-    fn seedRepoProposals(self: *Pipeline, repo_path: []const u8, prompt: []const u8) u32 {
-        const result = self.spawnAgent(.manager, prompt, repo_path, null, 0) catch |err| {
-            std.log.err("Seed proposal agent failed for {s}: {}", .{ repo_path, err });
+    fn seedRepoProposals(self: *Pipeline, source_repo: []const u8, target_repo: []const u8, prompt: []const u8) u32 {
+        const result = self.spawnAgent(.manager, prompt, source_repo, null, 0) catch |err| {
+            std.log.err("Seed proposal agent failed for {s}: {}", .{ source_repo, err });
             return 0;
         };
         defer self.allocator.free(result.output);
@@ -456,7 +470,7 @@ pub const Pipeline = struct {
         self.db.storeTaskOutputFull(0, "seed_proposals", result.output, result.raw_stream, 0) catch {};
 
         if (result.output.len == 0) {
-            std.log.warn("Seed proposal agent returned empty output for {s} ({d} raw bytes)", .{ repo_path, result.raw_stream.len });
+            std.log.warn("Seed proposal agent returned empty output for {s} ({d} raw bytes)", .{ source_repo, result.raw_stream.len });
             return 0;
         }
 
@@ -486,7 +500,7 @@ pub const Pipeline = struct {
 
             if (title.len == 0) continue;
 
-            _ = self.db.createProposal(repo_path, title, description, rationale) catch |err| {
+            _ = self.db.createProposal(target_repo, title, description, rationale) catch |err| {
                 std.log.err("Failed to create proposal: {}", .{err});
                 continue;
             };
@@ -495,9 +509,24 @@ pub const Pipeline = struct {
         }
 
         if (created > 0) {
-            std.log.info("Created {d} feature proposal(s) for {s}", .{ created, repo_path });
+            std.log.info("Created {d} proposal(s) for {s} (from {s})", .{ created, target_repo, source_repo });
         }
         return 0; // proposals don't count toward task backlog
+    }
+
+    fn seedCrossPollinate(self: *Pipeline, watched_repo: []const u8, primary_repo: []const u8) u32 {
+        var prompt_buf = std.ArrayList(u8).init(self.allocator);
+        defer prompt_buf.deinit();
+        const w = prompt_buf.writer();
+
+        w.writeAll(prompts.seed_cross_pollinate) catch return 0;
+
+        // Describe the target project (primary repo) so the agent knows what to suggest for
+        const primary_name = std.fs.path.basename(primary_repo);
+        w.print("Project: {s} (at {s})\n\n", .{ primary_name, primary_repo }) catch return 0;
+        w.writeAll(prompts.seed_proposal_suffix) catch return 0;
+
+        return self.seedRepoProposals(watched_repo, primary_repo, prompt_buf.items);
     }
 
     fn worktreePath(self: *Pipeline, repo_path: []const u8, task_id: i64) ![]const u8 {
