@@ -5,6 +5,11 @@ const json_mod = @import("json.zig");
 const Config = @import("config.zig").Config;
 const main = @import("main.zig");
 
+const TaskStream = struct {
+    clients: std.ArrayList(std.net.Stream),
+    line_buf: std.ArrayList(u8),
+};
+
 const LogEntry = struct {
     timestamp: i64,
     level: [8]u8,
@@ -48,6 +53,10 @@ pub const WebServer = struct {
     chat_sse_clients: std.ArrayList(std.net.Stream),
     chat_sse_mu: std.Thread.Mutex,
 
+    // Per-task live stream SSE
+    task_streams: std.AutoHashMap(i64, TaskStream),
+    task_stream_mu: std.Thread.Mutex,
+
     start_time: i64,
     force_restart_signal: ?*std.atomic.Value(bool),
 
@@ -69,6 +78,8 @@ pub const WebServer = struct {
             .chat_mu = .{},
             .chat_sse_clients = std.ArrayList(std.net.Stream).init(allocator),
             .chat_sse_mu = .{},
+            .task_streams = std.AutoHashMap(i64, TaskStream).init(allocator),
+            .task_stream_mu = .{},
             .start_time = std.time.timestamp(),
             .force_restart_signal = null,
         };
@@ -125,6 +136,99 @@ pub const WebServer = struct {
             };
             i += 1;
         }
+    }
+
+    /// Broadcast raw NDJSON chunk to SSE clients watching a task.
+    /// Buffers partial lines and sends complete NDJSON lines as SSE events.
+    pub fn broadcastTaskStream(self: *WebServer, task_id: i64, data: []const u8) void {
+        self.task_stream_mu.lock();
+        defer self.task_stream_mu.unlock();
+
+        const entry = self.task_streams.getPtr(task_id) orelse return;
+        if (entry.clients.items.len == 0) return;
+
+        entry.line_buf.appendSlice(data) catch return;
+
+        // Send each complete NDJSON line as an SSE event
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, entry.line_buf.items, pos, '\n')) |nl| {
+            const line = entry.line_buf.items[pos..nl];
+            if (line.len > 0) {
+                var i: usize = 0;
+                while (i < entry.clients.items.len) {
+                    const ok = blk: {
+                        entry.clients.items[i].writeAll("data: ") catch break :blk false;
+                        entry.clients.items[i].writeAll(line) catch break :blk false;
+                        entry.clients.items[i].writeAll("\n\n") catch break :blk false;
+                        break :blk true;
+                    };
+                    if (!ok) {
+                        entry.clients.items[i].close();
+                        _ = entry.clients.swapRemove(i);
+                        continue;
+                    }
+                    i += 1;
+                }
+            }
+            pos = nl + 1;
+        }
+
+        // Keep unconsumed partial line
+        if (pos > 0) {
+            const remaining = entry.line_buf.items.len - pos;
+            if (remaining > 0) {
+                std.mem.copyForwards(u8, entry.line_buf.items[0..remaining], entry.line_buf.items[pos..]);
+            }
+            entry.line_buf.shrinkRetainingCapacity(remaining);
+        }
+    }
+
+    /// Register a task for live streaming (called when agent starts)
+    pub fn startTaskStream(self: *WebServer, task_id: i64) void {
+        self.task_stream_mu.lock();
+        defer self.task_stream_mu.unlock();
+        self.task_streams.put(task_id, .{
+            .clients = std.ArrayList(std.net.Stream).init(self.allocator),
+            .line_buf = std.ArrayList(u8).init(self.allocator),
+        }) catch {};
+    }
+
+    /// Clean up task stream (called when agent finishes)
+    pub fn endTaskStream(self: *WebServer, task_id: i64) void {
+        self.task_stream_mu.lock();
+        defer self.task_stream_mu.unlock();
+        if (self.task_streams.fetchRemove(task_id)) |kv| {
+            for (kv.value.clients.items) |client| {
+                client.writeAll("data: {\"type\":\"stream_end\"}\n\n") catch {};
+                client.close();
+            }
+            var v = kv.value;
+            v.clients.deinit();
+            v.line_buf.deinit();
+        }
+    }
+
+    fn serveTaskStream(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        // Extract task_id from /api/tasks/<id>/stream
+        const rest = path["/api/tasks/".len..];
+        const slash_pos = std.mem.indexOf(u8, rest, "/") orelse return;
+        const id_str = rest[0..slash_pos];
+        const task_id = std.fmt.parseInt(i64, id_str, 10) catch return;
+
+        stream.writeAll("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n") catch return;
+
+        self.task_stream_mu.lock();
+        defer self.task_stream_mu.unlock();
+
+        var entry = self.task_streams.getPtr(task_id) orelse {
+            // No active stream — send end event and close
+            stream.writeAll("data: {\"type\":\"stream_end\"}\n\n") catch {};
+            stream.close();
+            return;
+        };
+        entry.clients.append(stream) catch {
+            stream.close();
+        };
     }
 
     fn broadcastSse(self: *WebServer, level: []const u8, message: []const u8) void {
@@ -215,6 +319,9 @@ pub const WebServer = struct {
             self.serveCorsPreflightChat(stream);
         } else if (std.mem.eql(u8, path, "/api/tasks") and std.mem.eql(u8, method, "POST")) {
             self.handleCreateTask(stream, request);
+        } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.endsWith(u8, path, "/stream")) {
+            self.serveTaskStream(stream, path);
+            return; // SSE keeps connection open
         } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.eql(u8, method, "DELETE")) {
             self.handleDeleteTask(stream, path);
         } else if (std.mem.eql(u8, path, "/api/release") and std.mem.eql(u8, method, "POST")) {

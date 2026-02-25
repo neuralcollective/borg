@@ -1,6 +1,7 @@
 const std = @import("std");
 const http = @import("http.zig");
 const json = @import("json.zig");
+const agent_mod = @import("agent.zig");
 
 pub const ContainerConfig = struct {
     image: []const u8,
@@ -121,7 +122,7 @@ pub const Docker = struct {
 
     /// Run a container with stdin piped and capture stdout.
     /// This shells out to `docker` CLI for reliable stdin/stdout handling.
-    pub fn runWithStdio(self: *Docker, config: ContainerConfig, stdin_data: []const u8) !RunResult {
+    pub fn runWithStdio(self: *Docker, config: ContainerConfig, stdin_data: []const u8, stream_cb: agent_mod.StreamCallback) !RunResult {
         // Validate all bind mounts before creating container
         for (config.binds) |bind| {
             if (!isBindSafe(bind)) {
@@ -171,7 +172,7 @@ pub const Docker = struct {
             child.stdin = null;
         }
 
-        // Read stdout
+        // Read stdout, streaming each chunk via callback
         var stdout_buf = std.ArrayList(u8).init(self.allocator);
         if (child.stdout) |stdout| {
             var read_buf: [8192]u8 = undefined;
@@ -179,6 +180,7 @@ pub const Docker = struct {
                 const n = stdout.read(&read_buf) catch break;
                 if (n == 0) break;
                 try stdout_buf.appendSlice(read_buf[0..n]);
+                stream_cb.call(read_buf[0..n]);
             }
         }
 

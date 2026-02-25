@@ -7,6 +7,15 @@ pub const AgentResult = struct {
     new_session_id: ?[]const u8,
 };
 
+pub const StreamCallback = struct {
+    context: ?*anyopaque = null,
+    on_data: ?*const fn (?*anyopaque, []const u8) void = null,
+
+    pub inline fn call(self: StreamCallback, data: []const u8) void {
+        if (self.on_data) |func| func(self.context, data);
+    }
+};
+
 /// Parse NDJSON stream output from Claude Code CLI.
 /// Extracts the final result text and session_id for resumption.
 pub fn parseNdjson(allocator: std.mem.Allocator, data: []const u8) !AgentResult {
@@ -57,7 +66,7 @@ pub const DirectAgentConfig = struct {
 
 /// Run claude CLI directly as a subprocess (no Docker container).
 /// Returns AgentResult with output text and session_id.
-pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt: []const u8) !AgentResult {
+pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt: []const u8, stream_cb: StreamCallback) !AgentResult {
     var argv = std.ArrayList([]const u8).init(allocator);
     defer argv.deinit();
 
@@ -116,7 +125,7 @@ pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt
         child.stdin = null;
     }
 
-    // Read stdout
+    // Read stdout, streaming each chunk via callback
     var stdout_buf = std.ArrayList(u8).init(allocator);
     defer stdout_buf.deinit();
     if (child.stdout) |stdout| {
@@ -125,6 +134,7 @@ pub fn runDirect(allocator: std.mem.Allocator, config: DirectAgentConfig, prompt
             const n = stdout.read(&read_buf) catch break;
             if (n == 0) break;
             try stdout_buf.appendSlice(read_buf[0..n]);
+            stream_cb.call(read_buf[0..n]);
         }
     }
 
