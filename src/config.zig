@@ -61,7 +61,7 @@ pub const Config = struct {
         const timeout_s_str = getEnv(allocator, env_content, "AGENT_TIMEOUT_S") orelse "600";
         const max_agents_str = getEnv(allocator, env_content, "MAX_CONCURRENT_AGENTS") orelse "4";
         const rate_limit_str = getEnv(allocator, env_content, "RATE_LIMIT_PER_MINUTE") orelse "5";
-        const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "2";
+        const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "4";
         const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
 
         var config = Config{

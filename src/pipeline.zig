@@ -16,7 +16,7 @@ const REMOTE_CHECK_INTERVAL_S = 300; // Check for remote updates every 5 minutes
 const AGENT_TIMEOUT_S = 600;
 const MAX_BACKLOG_SIZE = 5;
 const SEED_COOLDOWN_S = 3600; // Min 1h between seed attempts
-const MAX_PARALLEL_AGENTS = 2; // fallback; overridden by config.max_pipeline_agents
+const MAX_PARALLEL_AGENTS = 4; // fallback; overridden by config.max_pipeline_agents
 
 pub const AgentPersona = enum {
     manager,
@@ -740,11 +740,18 @@ pub const Pipeline = struct {
         const wt_path = try self.worktreePath(task.repo_path, task.id);
         defer self.allocator.free(wt_path);
 
-        const wt_exists = blk: {
+        // Valid worktree has .git as a FILE (gitdir pointer), not a directory.
+        // A .git directory means the agent ran git init and corrupted it.
+        const wt_valid = blk: {
             std.fs.accessAbsolute(wt_path, .{}) catch break :blk false;
-            break :blk true;
+            const git_sub = try std.fmt.allocPrint(self.allocator, "{s}/.git", .{wt_path});
+            defer self.allocator.free(git_sub);
+            var d = std.fs.openDirAbsolute(git_sub, .{}) catch break :blk true; // not a dir = valid
+            d.close();
+            std.log.warn("Task #{d}: worktree {s} has corrupted .git dir, rebuilding", .{ task.id, wt_path });
+            break :blk false;
         };
-        if (!wt_exists) {
+        if (!wt_valid) {
             var repo_git = Git.init(self.allocator, task.repo_path);
             const wt_dir = try std.fmt.allocPrint(self.allocator, "{s}/.worktrees", .{task.repo_path});
             defer self.allocator.free(wt_dir);
@@ -802,7 +809,8 @@ pub const Pipeline = struct {
             }
 
             const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-            const result = self.spawnAgent(.worker, prompt_buf.items, wt_path, resume_sid) catch |err| {
+            // Run on host (not Docker) — rebase needs full git repo access via .git dir
+            const result = self.spawnAgentHost(prompt_buf.items, wt_path, resume_sid) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
@@ -1243,6 +1251,21 @@ pub const Pipeline = struct {
     }
 
     // --- Agent Spawning ---
+
+    // Run claude directly on the host (no Docker) — use when the agent needs full git access.
+    fn spawnAgentHost(self: *Pipeline, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult {
+        self.config.refreshOAuthToken();
+        std.log.info("Spawning host agent in {s}", .{workdir});
+        return agent_mod.runDirect(self.allocator, .{
+            .model = self.config.model,
+            .oauth_token = self.config.oauth_token,
+            .session_id = resume_session,
+            .session_dir = "",
+            .assistant_name = "",
+            .workdir = workdir,
+            .allowed_tools = getAllowedTools(.worker),
+        }, prompt);
+    }
 
     fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8) !agent_mod.AgentResult {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
