@@ -1633,6 +1633,7 @@ pub const Pipeline = struct {
 
     fn recycleTask(self: *Pipeline, task: db_mod.PipelineTask) !void {
         try self.db.updateTaskStatus(task.id, "backlog");
+        self.db.setTaskSessionId(task.id, "") catch {};
         self.cleanupWorktree(task);
     }
 
