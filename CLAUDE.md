@@ -48,6 +48,12 @@ All config is in `.env` (or process environment). Key variables:
 - `WATCHED_REPOS=path:cmd|path:cmd` — additional repos, append `!manual` to disable auto-merge
 - `WEB_BIND=0.0.0.0` — bind address for dashboard (default: 127.0.0.1)
 - `CONTINUOUS_MODE=true` — auto-seed tasks when pipeline is idle
+- `CONTAINER_SETUP=path/to/setup.sh` — script sourced at container start (e.g. install zig)
+- `CONTAINER_MEMORY_MB=1024` — container memory limit
+- `MAX_BACKLOG_SIZE=5` — max concurrent pipeline tasks
+- `SEED_COOLDOWN_S=3600` — min seconds between seed scans
+- `TICK_INTERVAL_S=30` — pipeline main loop interval
+- `REMOTE_CHECK_INTERVAL_S=300` — git fetch interval for self-update
 
 See `src/config.zig` for the full list with defaults.
 
@@ -56,7 +62,7 @@ See `src/config.zig` for the full list with defaults.
 - **Transport-agnostic messaging**: `Transport` enum (`.telegram`, `.whatsapp`, `.discord`, `.web`) + `Sender` struct dispatches to the right backend.
 - **Unified sidecar**: Discord and WhatsApp run in a single bun process (`sidecar/bridge.js`) communicating via multiplexed NDJSON over stdin/stdout.
 - **Per-group state machine**: `IDLE → COLLECTING → RUNNING → COOLDOWN → IDLE`. Collection window batches messages. Rate-limited per group.
-- **Pipeline phases**: `backlog → spec → qa → impl → done → release`. Each task gets a git worktree. Impl agents run in Docker containers, rebase agents run on host.
+- **Pipeline phases**: `backlog → spec → qa → impl → done → release`. Each task gets a git worktree. Impl agents run in Docker containers, rebase agents run on host. On test failure, `qa_fix` routes back to QA when test code itself is buggy.
 - **Session persistence**: Per-task session dirs (`store/sessions/task-{id}/.claude`) are bind-mounted into Docker containers so agents can resume across retries. Full NDJSON streams stored in DB for dashboard replay.
 - **Self-update**: Pipeline detects merges to main on the primary repo, rebuilds, and restarts via `execve`.
 
