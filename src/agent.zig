@@ -3,6 +3,7 @@ const json_mod = @import("json.zig");
 
 pub const AgentResult = struct {
     output: []const u8,
+    raw_stream: []const u8,
     new_session_id: ?[]const u8,
 };
 
@@ -39,6 +40,7 @@ pub fn parseNdjson(allocator: std.mem.Allocator, data: []const u8) !AgentResult 
 
     return AgentResult{
         .output = try output_text.toOwnedSlice(),
+        .raw_stream = try allocator.dupe(u8, data),
         .new_session_id = new_session_id,
     };
 }
@@ -147,6 +149,7 @@ test "parseNdjson extracts result and session_id" {
     ;
     const result = try parseNdjson(alloc, data);
     defer alloc.free(result.output);
+    defer alloc.free(result.raw_stream);
     defer if (result.new_session_id) |sid| alloc.free(sid);
 
     try std.testing.expectEqualStrings("Hello!", result.output);
@@ -158,6 +161,7 @@ test "parseNdjson handles empty and invalid lines" {
     const data = "\n\nnot json at all\n{\"type\":\"result\",\"result\":\"ok\"}\n";
     const result = try parseNdjson(alloc, data);
     defer alloc.free(result.output);
+    defer alloc.free(result.raw_stream);
     defer if (result.new_session_id) |sid| alloc.free(sid);
 
     try std.testing.expectEqualStrings("ok", result.output);
@@ -172,6 +176,7 @@ test "parseNdjson last result wins" {
     ;
     const result = try parseNdjson(alloc, data);
     defer alloc.free(result.output);
+    defer alloc.free(result.raw_stream);
     defer if (result.new_session_id) |sid| alloc.free(sid);
 
     try std.testing.expectEqualStrings("second", result.output);
