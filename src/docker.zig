@@ -300,3 +300,31 @@ test "isBindSafe blocks sensitive paths" {
     try std.testing.expect(!isBindSafe("/home/user/.gnupg:/root/.gnupg"));
     try std.testing.expect(!isBindSafe("no-colon-is-invalid"));
 }
+
+test "isBindSafe uses only first colon as split point" {
+    // Third segment ":ro" must not affect host-path extraction.
+    try std.testing.expect(isBindSafe("/src:/dst:ro"));
+    try std.testing.expect(isBindSafe("/tmp/work:/workspace:rw"));
+    // Sensitive host path is still rejected even when extra colon segments follow.
+    try std.testing.expect(!isBindSafe("/home/user/.ssh:/dst:ro"));
+    try std.testing.expect(!isBindSafe("/home/user/.aws:/root/.aws:ro"));
+}
+
+test "isBindSafe returns false when bind string contains no colon" {
+    try std.testing.expect(!isBindSafe("nodst"));
+    try std.testing.expect(!isBindSafe(""));
+    try std.testing.expect(!isBindSafe("/absolute/path/no/colon"));
+}
+
+test "isBindSafe with leading colon has empty host path" {
+    // host_path == ""; no blocked patterns match, no ".." present.
+    // Current implementation returns true.
+    try std.testing.expect(isBindSafe(":/dst"));
+    try std.testing.expect(isBindSafe(":/workspace:ro"));
+}
+
+test "isBindSafe with trailing colon has non-empty safe host path" {
+    // host_path == "/src"; container path is empty but that is Docker's concern.
+    try std.testing.expect(isBindSafe("/src:"));
+    try std.testing.expect(!isBindSafe("/home/user/.ssh:"));
+}
