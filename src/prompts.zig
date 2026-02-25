@@ -140,6 +140,25 @@ pub const seed_features =
     \\Output ONLY the proposal blocks above. No other text.
 ;
 
+pub const seed_architecture =
+    \\Analyze this codebase's architecture and identify 1-2 significant structural
+    \\improvements. Think big: module reorganization, API redesigns, performance
+    \\overhauls, major refactors that span multiple files, or replacing approaches
+    \\that have outgrown their original design.
+    \\
+    \\Each proposal should be a multi-day project, not a quick fix.
+    \\
+    \\For each proposal, output EXACTLY this format:
+    \\
+    \\PROPOSAL_START
+    \\TITLE: <short imperative title, max 80 chars>
+    \\DESCRIPTION: <3-6 sentences explaining the change and its scope>
+    \\RATIONALE: <2-3 sentences on why this is worth the effort>
+    \\PROPOSAL_END
+    \\
+    \\Output ONLY the proposal blocks above. No other text.
+;
+
 pub const seed_task_suffix =
     \\
     \\

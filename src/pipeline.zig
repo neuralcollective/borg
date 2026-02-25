@@ -316,50 +316,51 @@ pub const Pipeline = struct {
         const pending_integration = try self.db.getQueuedIntegrationCount();
         if (pending_integration > 0) return;
 
-        // Rotate seed mode: 0=refactoring, 1=bug hunting, 2=test coverage, 3=feature discovery
+        // Rotate seed mode: 0=refactoring, 1=bug audit, 2=test coverage, 3=features, 4=architecture
+        // Modes 3-4 produce proposals (require approval); 0-2 produce tasks (auto-execute)
         const seed_mode = blk: {
             const mode_str = self.db.getState(self.allocator, "seed_mode") catch null;
             const prev: u32 = if (mode_str) |s| std.fmt.parseInt(u32, s, 10) catch 0 else 0;
             if (mode_str) |s| self.allocator.free(s);
-            const next = (prev + 1) % 4;
+            const next = (prev + 1) % 5;
             var next_buf: [4]u8 = undefined;
             const next_str = std.fmt.bufPrint(&next_buf, "{d}", .{next}) catch "0";
             self.db.setState("seed_mode", next_str) catch {};
             break :blk next;
         };
 
-        const mode_label = switch (seed_mode) {
+        const mode_label: []const u8 = switch (seed_mode) {
             0 => "refactoring",
             1 => "bug audit",
             2 => "test coverage",
             3 => "feature discovery",
+            4 => "architecture review",
             else => "refactoring",
         };
         self.last_seed_ts = now;
         self.config.refreshOAuthToken();
+        std.log.info("Seed scan starting ({s} mode)", .{mode_label});
 
-        // Seed each watched repo (non-self repos only get feature discovery → proposals)
+        // Seed each watched repo (non-self repos only get feature/architecture proposals)
         var total_created: u32 = 0;
         const active_u32: u32 = @intCast(@max(active, 0));
         for (self.config.watched_repos) |repo| {
             if (active_u32 + total_created >= self.config.max_backlog_size) break;
-            const repo_mode = if (repo.is_self) seed_mode else 3;
-            const repo_label = if (repo.is_self) mode_label else "feature discovery";
-            const created = self.seedRepo(repo.path, repo_mode, repo_label, active_u32 + total_created);
+            // Non-self repos only get proposal modes (3 or 4)
+            const repo_mode = if (repo.is_self) seed_mode else if (seed_mode >= 3) seed_mode else 3;
+            const created = self.seedRepo(repo.path, repo_mode, active_u32 + total_created);
             total_created += created;
         }
 
         if (total_created > 0) {
-            std.log.info("Seeded {d} new task(s) from codebase analysis", .{total_created});
-            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Pipeline seeded {d} new task(s) from codebase analysis", .{total_created}) catch return);
+            std.log.info("Seed scan ({s}): created {d} task(s)/proposal(s)", .{ mode_label, total_created });
+            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Seed scan ({s}): created {d} task(s)/proposal(s)", .{ mode_label, total_created }) catch return);
         } else {
-            std.log.info("Seed scan found no actionable improvements", .{});
+            std.log.info("Seed scan ({s}): no results (agents may have returned empty output)", .{mode_label});
         }
     }
 
-    fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_mode: u32, mode_label: []const u8, current_count: u32) u32 {
-        std.log.info("Scanning {s} ({s} mode)...", .{ repo_path, mode_label });
-
+    fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_mode: u32, current_count: u32) u32 {
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
@@ -368,10 +369,15 @@ pub const Pipeline = struct {
             0 => w.writeAll(prompts.seed_refactor) catch return 0,
             1 => w.writeAll(prompts.seed_security) catch return 0,
             2 => w.writeAll(prompts.seed_tests) catch return 0,
-            else => {
+            3 => {
                 w.writeAll(prompts.seed_features) catch return 0;
                 return self.seedRepoProposals(repo_path, prompt_buf.items);
             },
+            4 => {
+                w.writeAll(prompts.seed_architecture) catch return 0;
+                return self.seedRepoProposals(repo_path, prompt_buf.items);
+            },
+            else => w.writeAll(prompts.seed_refactor) catch return 0,
         }
 
         w.writeAll(prompts.seed_task_suffix) catch return 0;
@@ -383,6 +389,11 @@ pub const Pipeline = struct {
         defer self.allocator.free(result.output);
         defer self.allocator.free(result.raw_stream);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
+
+        if (result.output.len == 0) {
+            std.log.warn("Seed agent returned empty output for {s}", .{repo_path});
+            return 0;
+        }
 
         self.db.storeTaskOutputFull(0, "seed", result.output, result.raw_stream, 0) catch {};
 
@@ -435,14 +446,19 @@ pub const Pipeline = struct {
 
     fn seedRepoProposals(self: *Pipeline, repo_path: []const u8, prompt: []const u8) u32 {
         const result = self.spawnAgent(.manager, prompt, repo_path, null, 0) catch |err| {
-            std.log.err("Feature discovery agent failed for {s}: {}", .{ repo_path, err });
+            std.log.err("Seed proposal agent failed for {s}: {}", .{ repo_path, err });
             return 0;
         };
         defer self.allocator.free(result.output);
         defer self.allocator.free(result.raw_stream);
         defer if (result.new_session_id) |sid| self.allocator.free(sid);
 
-        self.db.storeTaskOutputFull(0, "feature_discovery", result.output, result.raw_stream, 0) catch {};
+        if (result.output.len == 0) {
+            std.log.warn("Seed proposal agent returned empty output for {s}", .{repo_path});
+            return 0;
+        }
+
+        self.db.storeTaskOutputFull(0, "seed_proposals", result.output, result.raw_stream, 0) catch {};
 
         var created: u32 = 0;
         var remaining = result.output;
@@ -1551,7 +1567,11 @@ pub const Pipeline = struct {
         if (watchdog) |w| w.join();
         self.allocator.free(name_for_watchdog);
 
-        std.log.info("{s} agent done (exit={d}, {d} bytes)", .{ @tagName(persona), run_result.exit_code, run_result.stdout.len });
+        if (run_result.stdout.len == 0) {
+            std.log.warn("{s} agent returned empty output (exit={d}) — likely auth or API issue", .{ @tagName(persona), run_result.exit_code });
+        } else {
+            std.log.info("{s} agent done (exit={d}, {d} bytes)", .{ @tagName(persona), run_result.exit_code, run_result.stdout.len });
+        }
 
         return try agent_mod.parseNdjson(self.allocator, run_result.stdout);
     }
