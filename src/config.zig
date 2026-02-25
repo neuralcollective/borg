@@ -53,6 +53,7 @@ pub const Config = struct {
     git_via_borg: bool = false,
     git_claude_coauthor: bool = false,
     git_agent_prompt: []const u8 = "",
+    git_author: ?[]const u8 = null,
     // Multi-repo
     watched_repos: []RepoConfig,
     // WhatsApp config
@@ -140,16 +141,14 @@ pub const Config = struct {
         const primary_auto_merge = !std.mem.eql(u8, getEnv(allocator, env_content, "PIPELINE_AUTO_MERGE") orelse "true", "false");
         config.watched_repos = try parseWatchedRepos(allocator, env_content, config.pipeline_repo, config.pipeline_test_cmd, primary_auto_merge);
 
-        return config;
-    }
-
-    /// Returns --author string for git commit, or null to use default git config.
-    pub fn getGitAuthor(self: *Config) ?[]const u8 {
-        if (self.git_author_name.len == 0 or self.git_author_email.len == 0) return null;
-        if (self.git_via_borg) {
-            return std.fmt.allocPrint(self.allocator, "{s} (via Borg) <{s}>", .{ self.git_author_name, self.git_author_email }) catch null;
+        if (config.git_author_name.len > 0 and config.git_author_email.len > 0) {
+            config.git_author = if (config.git_via_borg)
+                try std.fmt.allocPrint(allocator, "{s} (via Borg) <{s}>", .{ config.git_author_name, config.git_author_email })
+            else
+                try std.fmt.allocPrint(allocator, "{s} <{s}>", .{ config.git_author_name, config.git_author_email });
         }
-        return std.fmt.allocPrint(self.allocator, "{s} <{s}>", .{ self.git_author_name, self.git_author_email }) catch null;
+
+        return config;
     }
 
     /// Returns extra system prompt instructions derived from config.
