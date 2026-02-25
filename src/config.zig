@@ -36,6 +36,14 @@ pub const Config = struct {
     web_bind: []const u8,
     web_port: u16,
     dashboard_dist_dir: []const u8,
+    // Container
+    container_setup: []const u8 = "",
+    container_memory_mb: u64 = 1024,
+    // Pipeline tuning
+    max_backlog_size: u32 = 5,
+    seed_cooldown_s: i64 = 3600,
+    tick_interval_s: u64 = 30,
+    remote_check_interval_s: i64 = 300,
     // Multi-repo
     watched_repos: []RepoConfig,
     // WhatsApp config
@@ -66,6 +74,11 @@ pub const Config = struct {
         const max_pipeline_agents_str = getEnv(allocator, env_content, "MAX_PIPELINE_AGENTS") orelse "4";
         const web_bind_val = getEnv(allocator, env_content, "WEB_BIND") orelse "127.0.0.1";
         const web_port_str = getEnv(allocator, env_content, "WEB_PORT") orelse "3131";
+        const container_memory_str = getEnv(allocator, env_content, "CONTAINER_MEMORY_MB") orelse "1024";
+        const max_backlog_str = getEnv(allocator, env_content, "MAX_BACKLOG_SIZE") orelse "5";
+        const seed_cooldown_str = getEnv(allocator, env_content, "SEED_COOLDOWN_S") orelse "3600";
+        const tick_interval_str = getEnv(allocator, env_content, "TICK_INTERVAL_S") orelse "30";
+        const remote_check_str = getEnv(allocator, env_content, "REMOTE_CHECK_INTERVAL_S") orelse "300";
 
         var config = Config{
             .telegram_token = getEnv(allocator, env_content, "TELEGRAM_BOT_TOKEN") orelse "",
@@ -93,6 +106,12 @@ pub const Config = struct {
             .web_bind = web_bind_val,
             .web_port = std.fmt.parseInt(u16, web_port_str, 10) catch 3131,
             .dashboard_dist_dir = getEnv(allocator, env_content, "DASHBOARD_DIST_DIR") orelse try std.fmt.allocPrint(allocator, "{s}/dashboard/dist", .{getEnv(allocator, env_content, "PIPELINE_REPO") orelse "."}),
+            .container_setup = getEnv(allocator, env_content, "CONTAINER_SETUP") orelse "",
+            .container_memory_mb = std.fmt.parseInt(u64, container_memory_str, 10) catch 1024,
+            .max_backlog_size = std.fmt.parseInt(u32, max_backlog_str, 10) catch 5,
+            .seed_cooldown_s = std.fmt.parseInt(i64, seed_cooldown_str, 10) catch 3600,
+            .tick_interval_s = std.fmt.parseInt(u64, tick_interval_str, 10) catch 30,
+            .remote_check_interval_s = std.fmt.parseInt(i64, remote_check_str, 10) catch 300,
             .watched_repos = &.{},
             .whatsapp_enabled = std.mem.eql(u8, getEnv(allocator, env_content, "WHATSAPP_ENABLED") orelse "false", "true"),
             .whatsapp_auth_dir = getEnv(allocator, env_content, "WHATSAPP_AUTH_DIR") orelse "whatsapp/auth",
