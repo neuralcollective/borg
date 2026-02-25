@@ -212,6 +212,10 @@ test "ExecResult reports success correctly" {
     try std.testing.expect(!fail.success());
 }
 
+test {
+    _ = @import("git_worktree_test.zig");
+}
+
 test "git operations on real temp repo" {
     const alloc = std.testing.allocator;
 
