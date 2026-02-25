@@ -262,6 +262,7 @@ test "ExecResult reports success correctly" {
 
 test {
     _ = @import("git_worktree_test.zig");
+    _ = @import("git_rebase_checkout_test.zig");
 }
 
 test "git operations on real temp repo" {
