@@ -24,6 +24,42 @@ just r   # build and run
 
 Dashboard at `http://127.0.0.1:3131`. Send `/register` in a Telegram group, then mention `@Borg`.
 
+## How It Works
+
+### Chat
+
+Mention the bot by name in a registered group and it responds using Claude Code as a subprocess. Messages are batched in a short collection window, then the agent runs with the full conversation context. Each group has its own state machine (`IDLE → COLLECTING → RUNNING → COOLDOWN`) with rate limiting.
+
+### Pipeline
+
+When `PIPELINE_REPO` is set, Borg runs an autonomous engineering pipeline. Tasks move through phases:
+
+1. **Backlog** — git worktree created on a new branch
+2. **Spec** — manager agent writes `spec.md` (requirements, files, acceptance criteria)
+3. **QA** — QA agent writes failing tests based on the spec
+4. **Impl** — worker agent implements code to pass the tests (Docker-isolated)
+5. **Test** — repo test command runs; failures retry up to 5 times
+6. **Done** — branch queued for integration
+7. **Release** — PR created, rebased on main, merged (or held for manual review)
+
+Each task gets its own git worktree. Impl agents run in Docker containers with `--cap-drop ALL`. Rebase agents run on the host. Sessions persist across retries via per-task session dirs.
+
+When `CONTINUOUS_MODE=true`, the pipeline auto-seeds tasks by scanning repos for refactoring opportunities, bugs, and missing test coverage.
+
+### Self-Update
+
+When a merge lands on the primary repo (`is_self=true`), Borg rebuilds itself and restarts via `execve`.
+
+### Bot Commands
+
+| Command | Description |
+|---|---|
+| `/register` | Register chat for bot responses |
+| `/task <title>` | Create a pipeline task |
+| `/tasks` | List pipeline tasks |
+| `/status` | Version, uptime, config |
+| `/ping` | Health check |
+
 ## Configuration
 
 | Variable | Default | Description |
