@@ -1,6 +1,6 @@
 # Borg
 
-Autonomous AI agent orchestrator — connects to chat (Telegram, Discord, WhatsApp), responds via Claude Code, and runs an engineering pipeline that creates, tests, and merges code changes in Docker-isolated containers.
+Autonomous Software Engineering System — runs an engineering pipeline that writes specs, generates tests, implements code, and merges PRs with zero human intervention. Ships with a real-time web dashboard for monitoring and approval. Also serves as a chat agent across Telegram, Discord, and WhatsApp.
 
 ## Quick Start
 
