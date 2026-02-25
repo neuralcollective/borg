@@ -21,12 +21,12 @@ export function StatsBar({ repoFilter, onRepoFilterChange }: StatsBarProps) {
   const multiRepo = repos.length > 1;
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-6 border-b border-white/[0.06] px-5">
+    <div className="flex h-10 shrink-0 items-center gap-4 md:gap-6 border-b border-white/[0.06] px-4 md:px-5 overflow-x-auto">
       {multiRepo && (
         <select
           value={repoFilter ?? ""}
           onChange={(e) => onRepoFilterChange(e.target.value || null)}
-          className="h-6 rounded border border-white/[0.08] bg-transparent px-1.5 text-[11px] text-zinc-300 outline-none"
+          className="h-7 md:h-6 shrink-0 rounded border border-white/[0.08] bg-transparent px-1.5 text-[12px] md:text-[11px] text-zinc-300 outline-none"
         >
           <option value="">All repos</option>
           {repos.map((r) => (
