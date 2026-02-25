@@ -1353,6 +1353,7 @@ fn testConfig(allocator: std.mem.Allocator) Config {
         .agent_timeout_s = 600,
         .max_concurrent_agents = 4,
         .rate_limit_per_minute = 5,
+        .max_pipeline_agents = 2,
         .web_port = 3131,
         .dashboard_dist_dir = "/tmp/dashboard-test",
         .watched_repos = &.{},
