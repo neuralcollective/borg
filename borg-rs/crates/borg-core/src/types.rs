@@ -265,6 +265,10 @@ pub struct PhaseContext {
     pub model: String,
     /// Pending messages (role, content) to inject into this phase's instruction.
     pub pending_messages: Vec<(String, String)>,
+    /// Extra system prompt appended to every agent run (co-author instructions etc.).
+    pub system_prompt_suffix: String,
+    /// If non-empty, append as Co-Authored-By trailer on git commits.
+    pub user_coauthor: String,
 }
 
 /// Output produced by a phase executor.

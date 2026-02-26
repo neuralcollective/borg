@@ -110,6 +110,8 @@ impl Pipeline {
         session_dir: String,
         pending_messages: Vec<(String, String)>,
     ) -> PhaseContext {
+        let (claude_coauthor, user_coauthor) = self.git_coauthor_settings();
+        let system_prompt_suffix = Self::build_system_prompt_suffix(claude_coauthor, &user_coauthor);
         PhaseContext {
             task: task.clone(),
             repo_config: self.repo_config(task),
@@ -118,6 +120,8 @@ impl Pipeline {
             oauth_token: self.config.oauth_token.clone(),
             model: self.config.model.clone(),
             pending_messages,
+            system_prompt_suffix,
+            user_coauthor,
         }
     }
 
@@ -215,6 +219,40 @@ impl Pipeline {
         }
 
         Ok(())
+    }
+
+    /// Read git co-author settings from DB (runtime-editable), falling back to Config.
+    fn git_coauthor_settings(&self) -> (bool, String) {
+        let claude_coauthor = self.db.get_config("git_claude_coauthor")
+            .ok().flatten()
+            .map(|v| v == "true")
+            .unwrap_or(self.config.git_claude_coauthor);
+        let user_coauthor = self.db.get_config("git_user_coauthor")
+            .ok().flatten()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| self.config.git_user_coauthor.clone());
+        (claude_coauthor, user_coauthor)
+    }
+
+    /// Build system prompt suffix for co-author instructions.
+    fn build_system_prompt_suffix(claude_coauthor: bool, user_coauthor: &str) -> String {
+        let mut s = String::new();
+        if !claude_coauthor {
+            s.push_str("Do not add Co-Authored-By trailers to commit messages.");
+        }
+        if !user_coauthor.is_empty() {
+            if !s.is_empty() { s.push(' '); }
+            s.push_str("Git author is configured via environment variables — do not override with --author.");
+        }
+        s
+    }
+
+    /// Append user co-author trailer to a commit message if configured.
+    fn with_user_coauthor(message: &str, user_coauthor: &str) -> String {
+        if user_coauthor.is_empty() {
+            return message.to_string();
+        }
+        format!("{message}\n\nCo-Authored-By: {user_coauthor}")
     }
 
     // ── Phase handlers ────────────────────────────────────────────────────
@@ -345,7 +383,9 @@ impl Pipeline {
 
         if phase.commits && mode.uses_git_worktrees {
             let git = Git::new(&task.repo_path);
-            match git.commit_all(&wt_path, &phase.commit_message, self.git_author()) {
+            let (_, user_coauthor) = self.git_coauthor_settings();
+            let commit_msg = Self::with_user_coauthor(&phase.commit_message, &user_coauthor);
+            match git.commit_all(&wt_path, &commit_msg, self.git_author()) {
                 Ok(changed) => {
                     if !changed && !phase.allow_no_changes {
                         self.db.update_task_status(task.id, "failed", Some("agent made no changes"))?;
@@ -496,7 +536,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .ok();
 
             let git = Git::new(&task.repo_path);
-            let _ = git.commit_all(&wt_path, "fix: lint errors", self.git_author());
+            let (_, user_coauthor) = self.git_coauthor_settings();
+            let lint_commit_msg = Self::with_user_coauthor("fix: lint errors", &user_coauthor);
+            let _ = git.commit_all(&wt_path, &lint_commit_msg, self.git_author());
 
             lint_out = self.run_test_command(&wt_path, &lint_cmd).await?;
             if lint_out.exit_code == 0 {
@@ -652,15 +694,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             ..Default::default()
         };
 
-        let ctx = PhaseContext {
-            task: task.clone(),
-            repo_config: repo.clone(),
-            session_dir,
-            worktree_path: repo.path.clone(),
-            oauth_token: self.config.oauth_token.clone(),
-            model: self.config.model.clone(),
-            pending_messages: Vec::new(),
-        };
+        let ctx = self.make_context(&task, repo.path.clone(), session_dir, Vec::new());
 
         info!("running seed '{}' for {}", seed_cfg.name, repo.path);
         let result = self.resolve_backend(&task).run_phase(&task, &phase, ctx).await?;

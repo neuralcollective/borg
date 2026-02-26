@@ -187,6 +187,16 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(SCHEMA_SQL)
             .context("failed to apply schema migrations")?;
+        // Idempotent column additions for DBs created before these columns existed.
+        // ALTER TABLE fails if the column already exists; ignore that error.
+        let alters = [
+            "ALTER TABLE pipeline_tasks ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
+            "ALTER TABLE pipeline_tasks ADD COLUMN backend TEXT",
+            "ALTER TABLE proposals ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
+        ];
+        for sql in alters {
+            let _ = conn.execute(sql, []);
+        }
         Ok(())
     }
 
