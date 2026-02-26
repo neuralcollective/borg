@@ -68,6 +68,7 @@ export interface Settings {
   container_memory_mb: number;
   assistant_name: string;
   pipeline_max_agents: number;
+  proposal_promote_threshold: number;
 }
 
 export function useSettings() {

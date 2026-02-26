@@ -1367,8 +1367,6 @@ pub const Pipeline = struct {
         return "sweborg";
     }
 
-    const AUTO_PROMOTE_SCORE: i64 = 7;
-
     fn maybeAutoPromoteProposals(self: *Pipeline) void {
         const active = self.db.getActivePipelineTaskCount() catch return;
         if (active >= self.config.pipeline_max_backlog) return;
@@ -1379,7 +1377,7 @@ pub const Pipeline = struct {
         defer arena.deinit();
         const alloc = arena.allocator();
 
-        const proposals = self.db.getTopScoredProposals(alloc, AUTO_PROMOTE_SCORE, slots) catch return;
+        const proposals = self.db.getTopScoredProposals(alloc, self.config.proposal_promote_threshold, slots) catch return;
         for (proposals) |p| {
             const mode = self.repoMode(p.repo_path);
             const task_id = self.db.createPipelineTask(p.title, p.description, p.repo_path, "proposal", "", mode) catch |e| {

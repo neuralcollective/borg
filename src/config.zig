@@ -43,6 +43,7 @@ pub const Config = struct {
     // Pipeline tuning
     pipeline_max_backlog: u32 = 5,
     pipeline_seed_cooldown_s: i64 = 3600,
+    proposal_promote_threshold: i64 = 7,
     pipeline_tick_s: u64 = 30,
     remote_check_interval_s: i64 = 300,
     // Git attribution (individual toggles)
@@ -90,6 +91,7 @@ pub const Config = struct {
         const container_memory_str = getEnv(allocator, env_content, "CONTAINER_MEMORY_MB") orelse "1024";
         const max_backlog_str = getEnv(allocator, env_content, "PIPELINE_MAX_BACKLOG") orelse "5";
         const seed_cooldown_str = getEnv(allocator, env_content, "PIPELINE_SEED_COOLDOWN_S") orelse "3600";
+        const promote_threshold_str = getEnv(allocator, env_content, "PIPELINE_PROPOSAL_THRESHOLD") orelse "7";
         const tick_interval_str = getEnv(allocator, env_content, "PIPELINE_TICK_S") orelse "30";
         const remote_check_str = getEnv(allocator, env_content, "REMOTE_CHECK_INTERVAL_S") orelse "300";
 
@@ -123,6 +125,7 @@ pub const Config = struct {
             .container_memory_mb = std.fmt.parseInt(u64, container_memory_str, 10) catch 1024,
             .pipeline_max_backlog = std.fmt.parseInt(u32, max_backlog_str, 10) catch 5,
             .pipeline_seed_cooldown_s = std.fmt.parseInt(i64, seed_cooldown_str, 10) catch 3600,
+            .proposal_promote_threshold = std.fmt.parseInt(i64, promote_threshold_str, 10) catch 7,
             .pipeline_tick_s = std.fmt.parseInt(u64, tick_interval_str, 10) catch 30,
             .remote_check_interval_s = std.fmt.parseInt(i64, remote_check_str, 10) catch 300,
             .watched_repos = &.{},
@@ -191,6 +194,10 @@ pub const Config = struct {
         }
         if (db.getState(alloc, "pipeline_max_agents") catch null) |v| {
             self.pipeline_max_agents = std.fmt.parseInt(u32, v, 10) catch self.pipeline_max_agents;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "proposal_promote_threshold") catch null) |v| {
+            self.proposal_promote_threshold = std.fmt.parseInt(i64, v, 10) catch self.proposal_promote_threshold;
             alloc.free(v);
         }
         if (db.getState(alloc, "model") catch null) |v| {
