@@ -13,7 +13,119 @@ pub fn get_mode(name: &str) -> Option<PipelineMode> {
     }
 }
 
+// ── Phase builders ───────────────────────────────────────────────────────
+
+/// Create a backlog/setup phase that transitions immediately to the first agent phase.
+fn setup_phase(next: &str) -> PhaseConfig {
+    PhaseConfig {
+        name: "backlog".into(),
+        label: "Backlog".into(),
+        phase_type: PhaseType::Setup,
+        next: next.into(),
+        ..Default::default()
+    }
+}
+
+/// Create a standard agent phase with the six most common fields.
+/// Callers override additional fields via struct update syntax.
+fn agent_phase(name: &str, label: &str, system: &str, instruction: &str, tools: &str, next: &str) -> PhaseConfig {
+    PhaseConfig {
+        name: name.into(),
+        label: label.into(),
+        system_prompt: system.into(),
+        instruction: instruction.into(),
+        allowed_tools: tools.into(),
+        next: next.into(),
+        ..Default::default()
+    }
+}
+
+/// Create a lint_fix phase.
+fn lint_phase(next: &str) -> PhaseConfig {
+    PhaseConfig {
+        name: "lint_fix".into(),
+        label: "Lint".into(),
+        phase_type: PhaseType::LintFix,
+        allow_no_changes: true,
+        next: next.into(),
+        ..Default::default()
+    }
+}
+
+/// Create a standard rebase phase (shared across sweborg/webborg).
+fn rebase_phase() -> PhaseConfig {
+    PhaseConfig {
+        name: "rebase".into(),
+        label: "Rebase".into(),
+        phase_type: PhaseType::Rebase,
+        system_prompt: SWE_WORKER_SYSTEM.into(),
+        instruction: SWE_REBASE_INSTRUCTION.into(),
+        error_instruction: SWE_REBASE_ERROR.into(),
+        allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
+        fix_instruction: SWE_REBASE_FIX.into(),
+        next: "done".into(),
+        ..Default::default()
+    }
+}
+
+/// Shared seed configs used by sweborg/webborg.
+fn swe_seeds() -> Vec<SeedConfig> {
+    vec![
+        SeedConfig {
+            name: "refactoring".into(),
+            label: "Refactoring".into(),
+            output_type: SeedOutputType::Task,
+            prompt: SEED_REFACTOR.into(),
+            allowed_tools: String::new(),
+            target_primary_repo: false,
+        },
+        SeedConfig {
+            name: "security".into(),
+            label: "Bug Audit".into(),
+            output_type: SeedOutputType::Task,
+            prompt: SEED_SECURITY.into(),
+            allowed_tools: String::new(),
+            target_primary_repo: false,
+        },
+        SeedConfig {
+            name: "tests".into(),
+            label: "Test Coverage".into(),
+            output_type: SeedOutputType::Task,
+            prompt: SEED_TESTS.into(),
+            allowed_tools: String::new(),
+            target_primary_repo: false,
+        },
+        SeedConfig {
+            name: "features".into(),
+            label: "Feature Discovery".into(),
+            output_type: SeedOutputType::Proposal,
+            prompt: SEED_FEATURES.into(),
+            allowed_tools: String::new(),
+            target_primary_repo: false,
+        },
+        SeedConfig {
+            name: "architecture".into(),
+            label: "Architecture Review".into(),
+            output_type: SeedOutputType::Proposal,
+            prompt: SEED_ARCHITECTURE.into(),
+            allowed_tools: String::new(),
+            target_primary_repo: false,
+        },
+        SeedConfig {
+            name: "cross_pollinate".into(),
+            label: "Cross-Pollinate".into(),
+            output_type: SeedOutputType::Proposal,
+            prompt: SEED_CROSS_POLLINATE.into(),
+            allowed_tools: String::new(),
+            target_primary_repo: true,
+        },
+    ]
+}
+
+// ── Mode definitions ─────────────────────────────────────────────────────
+
 pub fn swe_mode() -> PipelineMode {
+    const IMPL_TOOLS: &str = "Read,Glob,Grep,Write,Edit,Bash";
     PipelineMode {
         name: "sweborg".into(),
         label: "Software Engineering".into(),
@@ -24,161 +136,52 @@ pub fn swe_mode() -> PipelineMode {
         integration: IntegrationType::GitPr,
         default_max_attempts: 5,
         phases: vec![
+            setup_phase("spec"),
             PhaseConfig {
-                name: "backlog".into(),
-                label: "Backlog".into(),
-                phase_type: PhaseType::Setup,
-                next: "spec".into(),
-                priority: 60,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "spec".into(),
-                label: "Specification".into(),
-                system_prompt: SWE_SPEC_SYSTEM.into(),
-                instruction: SWE_SPEC_INSTRUCTION.into(),
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("spec.md".into()),
                 use_docker: true,
-                next: "qa".into(),
-                priority: 50,
-                ..default_phase()
+                ..agent_phase("spec", "Specification", SWE_SPEC_SYSTEM, SWE_SPEC_INSTRUCTION, "Read,Glob,Grep,Write", "qa")
             },
             PhaseConfig {
-                name: "qa".into(),
-                label: "Testing".into(),
-                system_prompt: SWE_QA_SYSTEM.into(),
-                instruction: SWE_QA_INSTRUCTION.into(),
                 use_docker: true,
                 commits: true,
                 commit_message: "test: add tests from QA agent".into(),
                 allow_no_changes: true,
-                next: "impl".into(),
-                priority: 30,
-                ..default_phase()
+                ..agent_phase("qa", "Testing", SWE_QA_SYSTEM, SWE_QA_INSTRUCTION, "Read,Glob,Grep,Write", "impl")
             },
             PhaseConfig {
-                name: "qa_fix".into(),
-                label: "Test Fix".into(),
-                system_prompt: SWE_QA_SYSTEM.into(),
-                instruction: SWE_QA_INSTRUCTION.into(),
                 error_instruction: SWE_QA_FIX_ERROR.into(),
                 use_docker: true,
                 commits: true,
                 commit_message: "test: fix tests from QA agent".into(),
                 allow_no_changes: true,
                 fresh_session: true,
-                next: "impl".into(),
-                priority: 25,
-                ..default_phase()
+                ..agent_phase("qa_fix", "Test Fix", SWE_QA_SYSTEM, SWE_QA_INSTRUCTION, "Read,Glob,Grep,Write", "impl")
             },
             PhaseConfig {
-                name: "impl".into(),
-                label: "Implementation".into(),
-                system_prompt: SWE_WORKER_SYSTEM.into(),
-                instruction: SWE_IMPL_INSTRUCTION.into(),
                 error_instruction: SWE_IMPL_RETRY.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
                 use_docker: true,
                 commits: true,
                 commit_message: "impl: implementation from worker agent".into(),
                 runs_tests: true,
                 has_qa_fix_routing: true,
-                next: "lint_fix".into(),
-                priority: 10,
-                ..default_phase()
+                ..agent_phase("impl", "Implementation", SWE_WORKER_SYSTEM, SWE_IMPL_INSTRUCTION, IMPL_TOOLS, "lint_fix")
             },
             PhaseConfig {
-                name: "retry".into(),
-                label: "Retry".into(),
-                system_prompt: SWE_WORKER_SYSTEM.into(),
-                instruction: SWE_IMPL_INSTRUCTION.into(),
                 error_instruction: SWE_IMPL_RETRY.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
                 use_docker: true,
                 commits: true,
                 commit_message: "impl: implementation from worker agent".into(),
                 runs_tests: true,
                 has_qa_fix_routing: true,
-                next: "lint_fix".into(),
-                priority: 8,
-                ..default_phase()
+                ..agent_phase("retry", "Retry", SWE_WORKER_SYSTEM, SWE_IMPL_INSTRUCTION, IMPL_TOOLS, "lint_fix")
             },
-            PhaseConfig {
-                name: "lint_fix".into(),
-                label: "Lint".into(),
-                phase_type: PhaseType::LintFix,
-                next: "rebase".into(),
-                allow_no_changes: true,
-                priority: 7,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "rebase".into(),
-                label: "Rebase".into(),
-                phase_type: PhaseType::Rebase,
-                system_prompt: SWE_WORKER_SYSTEM.into(),
-                instruction: SWE_REBASE_INSTRUCTION.into(),
-                error_instruction: SWE_REBASE_ERROR.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
-                fix_instruction: SWE_REBASE_FIX.into(),
-                fix_error_instruction: SWE_REBASE_FIX_ERROR.into(),
-                next: "done".into(),
-                priority: 5,
-                ..default_phase()
-            },
+            lint_phase("rebase"),
+            rebase_phase(),
         ],
-        seed_modes: vec![
-            SeedConfig {
-                name: "refactoring".into(),
-                label: "Refactoring".into(),
-                output_type: SeedOutputType::Task,
-                prompt: SEED_REFACTOR.into(),
-                allowed_tools: String::new(),
-                target_primary_repo: false,
-            },
-            SeedConfig {
-                name: "security".into(),
-                label: "Bug Audit".into(),
-                output_type: SeedOutputType::Task,
-                prompt: SEED_SECURITY.into(),
-                allowed_tools: String::new(),
-                target_primary_repo: false,
-            },
-            SeedConfig {
-                name: "tests".into(),
-                label: "Test Coverage".into(),
-                output_type: SeedOutputType::Task,
-                prompt: SEED_TESTS.into(),
-                allowed_tools: String::new(),
-                target_primary_repo: false,
-            },
-            SeedConfig {
-                name: "features".into(),
-                label: "Feature Discovery".into(),
-                output_type: SeedOutputType::Proposal,
-                prompt: SEED_FEATURES.into(),
-                allowed_tools: String::new(),
-                target_primary_repo: false,
-            },
-            SeedConfig {
-                name: "architecture".into(),
-                label: "Architecture Review".into(),
-                output_type: SeedOutputType::Proposal,
-                prompt: SEED_ARCHITECTURE.into(),
-                allowed_tools: String::new(),
-                target_primary_repo: false,
-            },
-            SeedConfig {
-                name: "cross_pollinate".into(),
-                label: "Cross-Pollinate".into(),
-                output_type: SeedOutputType::Proposal,
-                prompt: SEED_CROSS_POLLINATE.into(),
-                allowed_tools: String::new(),
-                target_primary_repo: true,
-            },
-        ],
+        seed_modes: swe_seeds(),
     }
 }
 
@@ -193,51 +196,23 @@ pub fn legal_mode() -> PipelineMode {
         integration: IntegrationType::None,
         default_max_attempts: 3,
         phases: vec![
+            setup_phase("research"),
             PhaseConfig {
-                name: "backlog".into(),
-                label: "Backlog".into(),
-                phase_type: PhaseType::Setup,
-                next: "research".into(),
-                priority: 60,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "research".into(),
-                label: "Research".into(),
-                system_prompt: LEGAL_RESEARCH_SYSTEM.into(),
-                instruction: LEGAL_RESEARCH_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,WebSearch,WebFetch".into(),
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("research.md".into()),
-                next: "draft".into(),
-                priority: 40,
-                ..default_phase()
+                ..agent_phase("research", "Research", LEGAL_RESEARCH_SYSTEM, LEGAL_RESEARCH_INSTRUCTION, "Read,Glob,Grep,Write,WebSearch,WebFetch", "draft")
             },
             PhaseConfig {
-                name: "draft".into(),
-                label: "Drafting".into(),
-                system_prompt: LEGAL_DRAFT_SYSTEM.into(),
-                instruction: LEGAL_DRAFT_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
                 commits: true,
                 commit_message: "draft: legal document from drafting agent".into(),
-                next: "review".into(),
-                priority: 30,
-                ..default_phase()
+                ..agent_phase("draft", "Drafting", LEGAL_DRAFT_SYSTEM, LEGAL_DRAFT_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "review")
             },
             PhaseConfig {
-                name: "review".into(),
-                label: "Review".into(),
-                system_prompt: LEGAL_REVIEW_SYSTEM.into(),
-                instruction: LEGAL_REVIEW_INSTRUCTION.into(),
                 error_instruction: LEGAL_REVIEW_RETRY.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
                 commits: true,
                 commit_message: "review: revisions from review agent".into(),
-                next: "done".into(),
-                priority: 10,
-                ..default_phase()
+                ..agent_phase("review", "Review", LEGAL_REVIEW_SYSTEM, LEGAL_REVIEW_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
             },
         ],
         seed_modes: vec![
@@ -288,68 +263,28 @@ pub fn web_mode() -> PipelineMode {
         integration: IntegrationType::GitPr,
         default_max_attempts: 3,
         phases: vec![
+            setup_phase("audit"),
             PhaseConfig {
-                name: "backlog".into(),
-                label: "Backlog".into(),
-                phase_type: PhaseType::Setup,
-                next: "audit".into(),
-                priority: 60,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "audit".into(),
-                label: "Audit".into(),
-                system_prompt: WEB_AUDIT_SYSTEM.into(),
-                instruction: WEB_AUDIT_INSTRUCTION.into(),
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("audit.md".into()),
                 use_docker: true,
-                next: "improve".into(),
-                priority: 50,
-                ..default_phase()
+                ..agent_phase("audit", "Audit", WEB_AUDIT_SYSTEM, WEB_AUDIT_INSTRUCTION, "Read,Glob,Grep,Write", "improve")
             },
             PhaseConfig {
-                name: "improve".into(),
-                label: "Improve".into(),
-                system_prompt: WEB_IMPROVE_SYSTEM.into(),
-                instruction: WEB_IMPROVE_INSTRUCTION.into(),
                 error_instruction: WEB_IMPROVE_RETRY.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
                 use_docker: true,
                 commits: true,
                 commit_message: "improve: frontend improvements from web agent".into(),
                 runs_tests: true,
-                next: "lint_fix".into(),
-                priority: 10,
-                ..default_phase()
+                ..agent_phase("improve", "Improve", WEB_IMPROVE_SYSTEM, WEB_IMPROVE_INSTRUCTION, "Read,Glob,Grep,Write,Edit,Bash", "lint_fix")
             },
-            PhaseConfig {
-                name: "lint_fix".into(),
-                label: "Lint".into(),
-                phase_type: PhaseType::LintFix,
-                next: "rebase".into(),
-                allow_no_changes: true,
-                priority: 7,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "rebase".into(),
-                label: "Rebase".into(),
-                phase_type: PhaseType::Rebase,
-                system_prompt: SWE_WORKER_SYSTEM.into(),
-                instruction: SWE_REBASE_INSTRUCTION.into(),
-                error_instruction: SWE_REBASE_ERROR.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
-                fix_instruction: SWE_REBASE_FIX.into(),
-                fix_error_instruction: SWE_REBASE_FIX_ERROR.into(),
-                next: "done".into(),
-                priority: 5,
-                ..default_phase()
-            },
+            lint_phase("rebase"),
+            rebase_phase(),
         ],
-        seed_modes: vec![
-            SeedConfig {
+        seed_modes: {
+            let mut seeds = swe_seeds();
+            seeds.splice(0..0, [SeedConfig {
                 name: "performance".into(),
                 label: "Performance".into(),
                 output_type: SeedOutputType::Task,
@@ -380,8 +315,9 @@ pub fn web_mode() -> PipelineMode {
                 prompt: "Identify 1-3 user experience improvements that would meaningfully reduce friction.".into(),
                 allowed_tools: String::new(),
                 target_primary_repo: false,
-            },
-        ],
+            }]);
+            seeds
+        },
     }
 }
 
@@ -396,50 +332,22 @@ pub fn crew_mode() -> PipelineMode {
         integration: IntegrationType::None,
         default_max_attempts: 3,
         phases: vec![
+            setup_phase("source"),
             PhaseConfig {
-                name: "backlog".into(),
-                label: "Backlog".into(),
-                phase_type: PhaseType::Setup,
-                next: "source".into(),
-                priority: 60,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "source".into(),
-                label: "Sourcing".into(),
-                system_prompt: CREW_SOURCE_SYSTEM.into(),
-                instruction: CREW_SOURCE_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,WebSearch,WebFetch".into(),
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("candidates.md".into()),
-                next: "evaluate".into(),
-                priority: 50,
-                ..default_phase()
+                ..agent_phase("source", "Sourcing", CREW_SOURCE_SYSTEM, CREW_SOURCE_INSTRUCTION, "Read,Glob,Grep,Write,WebSearch,WebFetch", "evaluate")
             },
             PhaseConfig {
-                name: "evaluate".into(),
-                label: "Evaluation".into(),
-                system_prompt: CREW_EVALUATE_SYSTEM.into(),
-                instruction: CREW_EVALUATE_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch".into(),
                 commits: true,
                 commit_message: "eval: candidate evaluations from crew agent".into(),
-                next: "rank".into(),
-                priority: 30,
-                ..default_phase()
+                ..agent_phase("evaluate", "Evaluation", CREW_EVALUATE_SYSTEM, CREW_EVALUATE_INSTRUCTION, "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch", "rank")
             },
             PhaseConfig {
-                name: "rank".into(),
-                label: "Ranking".into(),
-                system_prompt: CREW_RANK_SYSTEM.into(),
-                instruction: CREW_RANK_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
                 commits: true,
                 commit_message: "rank: prioritized shortlist from crew agent".into(),
-                next: "done".into(),
-                priority: 10,
-                ..default_phase()
+                ..agent_phase("rank", "Ranking", CREW_RANK_SYSTEM, CREW_RANK_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
             },
         ],
         seed_modes: vec![
@@ -482,50 +390,22 @@ pub fn sales_mode() -> PipelineMode {
         integration: IntegrationType::None,
         default_max_attempts: 3,
         phases: vec![
+            setup_phase("research"),
             PhaseConfig {
-                name: "backlog".into(),
-                label: "Backlog".into(),
-                phase_type: PhaseType::Setup,
-                next: "research".into(),
-                priority: 60,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "research".into(),
-                label: "Prospect Research".into(),
-                system_prompt: SALES_RESEARCH_SYSTEM.into(),
-                instruction: SALES_RESEARCH_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,WebSearch,WebFetch".into(),
                 include_task_context: true,
                 check_artifact: Some("prospect.md".into()),
-                next: "draft".into(),
-                priority: 50,
-                ..default_phase()
+                ..agent_phase("research", "Prospect Research", SALES_RESEARCH_SYSTEM, SALES_RESEARCH_INSTRUCTION, "Read,Glob,Grep,Write,WebSearch,WebFetch", "draft")
             },
             PhaseConfig {
-                name: "draft".into(),
-                label: "Outreach Draft".into(),
-                system_prompt: SALES_DRAFT_SYSTEM.into(),
-                instruction: SALES_DRAFT_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
                 commits: true,
                 commit_message: "draft: outreach from sales agent".into(),
-                next: "review".into(),
-                priority: 30,
-                ..default_phase()
+                ..agent_phase("draft", "Outreach Draft", SALES_DRAFT_SYSTEM, SALES_DRAFT_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "review")
             },
             PhaseConfig {
-                name: "review".into(),
-                label: "Review".into(),
-                system_prompt: SALES_REVIEW_SYSTEM.into(),
-                instruction: SALES_REVIEW_INSTRUCTION.into(),
                 error_instruction: SALES_REVIEW_RETRY.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
                 commits: true,
                 commit_message: "review: revisions from sales review agent".into(),
-                next: "done".into(),
-                priority: 10,
-                ..default_phase()
+                ..agent_phase("review", "Review", SALES_REVIEW_SYSTEM, SALES_REVIEW_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
             },
         ],
         seed_modes: vec![
@@ -568,51 +448,23 @@ pub fn data_mode() -> PipelineMode {
         integration: IntegrationType::None,
         default_max_attempts: 3,
         phases: vec![
+            setup_phase("ingest"),
             PhaseConfig {
-                name: "backlog".into(),
-                label: "Backlog".into(),
-                phase_type: PhaseType::Setup,
-                next: "ingest".into(),
-                priority: 60,
-                ..default_phase()
-            },
-            PhaseConfig {
-                name: "ingest".into(),
-                label: "Data Ingestion".into(),
-                system_prompt: DATA_INGEST_SYSTEM.into(),
-                instruction: DATA_INGEST_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Bash,WebSearch,WebFetch".into(),
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("data.md".into()),
-                next: "analyze".into(),
-                priority: 50,
-                ..default_phase()
+                ..agent_phase("ingest", "Data Ingestion", DATA_INGEST_SYSTEM, DATA_INGEST_INSTRUCTION, "Read,Glob,Grep,Write,Bash,WebSearch,WebFetch", "analyze")
             },
             PhaseConfig {
-                name: "analyze".into(),
-                label: "Analysis".into(),
-                system_prompt: DATA_ANALYZE_SYSTEM.into(),
-                instruction: DATA_ANALYZE_INSTRUCTION.into(),
                 error_instruction: DATA_ANALYZE_RETRY.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
                 commits: true,
                 commit_message: "analyze: data analysis from databorg agent".into(),
-                next: "report".into(),
-                priority: 30,
-                ..default_phase()
+                ..agent_phase("analyze", "Analysis", DATA_ANALYZE_SYSTEM, DATA_ANALYZE_INSTRUCTION, "Read,Glob,Grep,Write,Edit,Bash", "report")
             },
             PhaseConfig {
-                name: "report".into(),
-                label: "Report".into(),
-                system_prompt: DATA_REPORT_SYSTEM.into(),
-                instruction: DATA_REPORT_INSTRUCTION.into(),
-                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
                 commits: true,
                 commit_message: "report: findings from databorg agent".into(),
-                next: "done".into(),
-                priority: 10,
-                ..default_phase()
+                ..agent_phase("report", "Report", DATA_REPORT_SYSTEM, DATA_REPORT_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
             },
         ],
         seed_modes: vec![
@@ -642,10 +494,6 @@ pub fn data_mode() -> PipelineMode {
             },
         ],
     }
-}
-
-fn default_phase() -> PhaseConfig {
-    PhaseConfig::default()
 }
 
 // ── Prompt constants ─────────────────────────────────────────────────────

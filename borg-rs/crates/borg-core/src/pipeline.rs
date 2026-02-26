@@ -55,7 +55,8 @@ pub struct Pipeline {
     pub event_tx: broadcast::Sender<PipelineEvent>,
     pub stream_manager: Arc<TaskStreamManager>,
     pub force_restart: Arc<std::sync::atomic::AtomicBool>,
-    last_seed_secs: std::sync::atomic::AtomicI64,
+    /// Per-(repo_path, seed_name) last-run timestamp for independent per-seed cooldowns.
+    seed_cooldowns: Mutex<HashMap<(String, String), i64>>,
     last_self_update_secs: std::sync::atomic::AtomicI64,
     startup_heads: HashMap<String, String>,
     in_flight: Mutex<HashSet<i64>>,
@@ -86,7 +87,7 @@ impl Pipeline {
             event_tx: tx,
             stream_manager: TaskStreamManager::new(),
             force_restart,
-            last_seed_secs: std::sync::atomic::AtomicI64::new(0),
+            seed_cooldowns: Mutex::new(HashMap::new()),
             last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
             startup_heads,
             in_flight: Mutex::new(HashSet::new()),
@@ -765,6 +766,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
     async fn run_integration(&self, queued: Vec<crate::types::QueueEntry>, repo_path: &str, auto_merge: bool) -> Result<()> {
         let git = Git::new(repo_path);
+        // Clean up stale worktree refs before checkout (avoids "cannot change to" errors)
+        let _ = git.exec(repo_path, &["worktree", "prune"]);
         git.checkout("main")?;
         git.pull()?;
 
@@ -978,23 +981,16 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             return Ok(());
         }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        let last = self.last_seed_secs.load(std::sync::atomic::Ordering::Relaxed);
-        if now - last < self.config.pipeline_seed_cooldown_s {
-            return Ok(());
-        }
-
         let active = self.db.list_active_tasks()?.len() as u32;
         if active >= self.config.pipeline_max_backlog {
             return Ok(());
         }
 
-        self.last_seed_secs.store(now, std::sync::atomic::Ordering::Relaxed);
-        info!("seed scan starting (idle pipeline)");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let cooldown = self.config.pipeline_seed_cooldown_s;
 
         for repo in &self.config.watched_repos {
             let mode = match get_mode(&repo.mode).or_else(|| get_mode("sweborg")) {
@@ -1002,6 +998,15 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 None => continue,
             };
             for seed_cfg in mode.seed_modes.clone() {
+                let key = (repo.path.clone(), seed_cfg.name.clone());
+                {
+                    let cooldowns = self.seed_cooldowns.lock().await;
+                    if now - cooldowns.get(&key).copied().unwrap_or(0) < cooldown {
+                        continue;
+                    }
+                }
+                self.seed_cooldowns.lock().await.insert(key, now);
+                info!("seed scan: '{}' for {}", seed_cfg.name, repo.path);
                 if let Err(e) = self.run_seed(repo, &mode.name, &seed_cfg).await {
                     warn!("seed {} for {}: {e}", seed_cfg.name, repo.path);
                 }

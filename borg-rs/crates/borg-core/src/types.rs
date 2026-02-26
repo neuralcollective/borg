@@ -249,8 +249,6 @@ impl Default for PhaseConfig {
             has_qa_fix_routing: false,
             fresh_session: false,
             fix_instruction: String::new(),
-            fix_error_instruction: String::new(),
-            priority: 100,
         }
     }
 }

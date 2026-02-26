@@ -1421,7 +1421,6 @@ async fn get_modes() -> Json<Value> {
                     json!({
                         "name": p.name,
                         "label": p.label,
-                        "priority": p.priority,
                     })
                 })
                 .collect();
