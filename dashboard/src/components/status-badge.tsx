@@ -14,6 +14,10 @@ const statusStyles: Record<string, string> = {
   queued: "bg-blue-500/10 text-blue-400 ring-blue-500/20",
   merging: "bg-amber-500/10 text-amber-400 ring-amber-500/20",
   excluded: "bg-red-500/10 text-red-400 ring-red-500/20",
+  // Legal phases
+  research: "bg-blue-500/10 text-blue-400 ring-blue-500/20",
+  draft: "bg-amber-500/10 text-amber-400 ring-amber-500/20",
+  review: "bg-cyan-500/10 text-cyan-400 ring-cyan-500/20",
 };
 
 export function StatusBadge({ status }: { status: string }) {

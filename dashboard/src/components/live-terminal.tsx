@@ -173,7 +173,7 @@ function TermLineView({ line }: { line: TermLine }) {
 
   if (line.type === "text") {
     return (
-      <div className="text-zinc-300 whitespace-pre-wrap break-words">
+      <div className="border-y border-white/[0.06] py-2 my-1 text-[12px] text-zinc-200 whitespace-pre-wrap break-words">
         {line.content}
       </div>
     );

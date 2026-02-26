@@ -47,7 +47,7 @@ test "AC2: single backlog task counts as total=1 active=1 merged=0 failed=0" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("Task A", "desc", "/repo", "alice", "tg:1");
+    _ = try db.createPipelineTask("Task A", "desc", "/repo", "alice", "tg:1", "swe");
 
     const stats = try db.getPipelineStats();
     try std.testing.expectEqual(@as(i64, 1), stats.total);
@@ -65,11 +65,11 @@ test "AC2: mixed statuses produce correct counts" {
     defer db.deinit();
 
     // Create tasks and set various statuses
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", ""); // backlog (active)
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", ""); // spec (active)
-    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", ""); // merged
-    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", ""); // failed
-    const id5 = try db.createPipelineTask("T5", "d", "/repo", "", ""); // impl (active)
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe"); // backlog (active)
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe"); // spec (active)
+    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe"); // merged
+    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "", "swe"); // failed
+    const id5 = try db.createPipelineTask("T5", "d", "/repo", "", "", "swe"); // impl (active)
 
     try db.updateTaskStatus(id2, "spec");
     try db.updateTaskStatus(id3, "merged");
@@ -92,8 +92,8 @@ test "AC2: all tasks merged" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id1, "merged");
     try db.updateTaskStatus(id2, "merged");
 
@@ -112,8 +112,8 @@ test "AC2: all tasks failed" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id1, "failed");
     try db.updateTaskStatus(id2, "failed");
 
@@ -140,7 +140,7 @@ test "AC3: each of the seven active statuses is counted as active" {
         var db = try Db.init(alloc, ":memory:");
         defer db.deinit();
 
-        const id = try db.createPipelineTask("Task", "d", "/repo", "", "");
+        const id = try db.createPipelineTask("Task", "d", "/repo", "", "", "swe");
         try db.updateTaskStatus(id, status);
 
         const stats = try db.getPipelineStats();
@@ -160,11 +160,11 @@ test "AC3: active count matches getActivePipelineTaskCount" {
     defer db.deinit();
 
     // Create a variety of tasks
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", ""); // backlog
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
-    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "");
-    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "");
-    const id5 = try db.createPipelineTask("T5", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe"); // backlog
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
+    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe");
+    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "", "swe");
+    const id5 = try db.createPipelineTask("T5", "d", "/repo", "", "", "swe");
 
     try db.updateTaskStatus(id2, "qa");
     try db.updateTaskStatus(id3, "merged");
@@ -246,9 +246,9 @@ test "Edge2: all tasks backlog means active equals total" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    _ = try db.createPipelineTask("T2", "d", "/repo", "", "");
-    _ = try db.createPipelineTask("T3", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    _ = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
+    _ = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe");
 
     const stats = try db.getPipelineStats();
     try std.testing.expectEqual(@as(i64, 3), stats.total);
@@ -270,7 +270,7 @@ test "Edge3: done status only contributes to total" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id1, "done");
 
     const stats = try db.getPipelineStats();
@@ -290,7 +290,7 @@ test "Edge3: test status only contributes to total" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id1, "test");
 
     const stats = try db.getPipelineStats();
@@ -308,11 +308,11 @@ test "Edge3: mix of categorized and uncategorized statuses" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", ""); // backlog (active)
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
-    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "");
-    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "");
-    const id5 = try db.createPipelineTask("T5", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe"); // backlog (active)
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
+    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe");
+    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "", "swe");
+    const id5 = try db.createPipelineTask("T5", "d", "/repo", "", "", "swe");
 
     _ = id1; // backlog
     try db.updateTaskStatus(id2, "done"); // uncategorized
@@ -343,7 +343,7 @@ test "Edge5: getPipelineStats returns valid struct even after deleting all tasks
     defer db.deinit();
 
     // Create and then delete tasks
-    _ = try db.createPipelineTask("T1", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
     try db.sqlite_db.execute("DELETE FROM pipeline_tasks", .{});
 
     const stats = try db.getPipelineStats();
@@ -366,23 +366,23 @@ test "comprehensive: all pipeline statuses in one database" {
     defer db.deinit();
 
     // 6 active statuses
-    const id1 = try db.createPipelineTask("T-backlog", "d", "/repo", "", ""); // backlog
-    const id2 = try db.createPipelineTask("T-spec", "d", "/repo", "", "");
-    const id3 = try db.createPipelineTask("T-qa", "d", "/repo", "", "");
-    const id4 = try db.createPipelineTask("T-impl", "d", "/repo", "", "");
-    const id5 = try db.createPipelineTask("T-retry", "d", "/repo", "", "");
-    const id6 = try db.createPipelineTask("T-rebase", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T-backlog", "d", "/repo", "", "", "swe"); // backlog
+    const id2 = try db.createPipelineTask("T-spec", "d", "/repo", "", "", "swe");
+    const id3 = try db.createPipelineTask("T-qa", "d", "/repo", "", "", "swe");
+    const id4 = try db.createPipelineTask("T-impl", "d", "/repo", "", "", "swe");
+    const id5 = try db.createPipelineTask("T-retry", "d", "/repo", "", "", "swe");
+    const id6 = try db.createPipelineTask("T-rebase", "d", "/repo", "", "", "swe");
 
     // 2 merged
-    const id7 = try db.createPipelineTask("T-merged1", "d", "/repo", "", "");
-    const id8 = try db.createPipelineTask("T-merged2", "d", "/repo", "", "");
+    const id7 = try db.createPipelineTask("T-merged1", "d", "/repo", "", "", "swe");
+    const id8 = try db.createPipelineTask("T-merged2", "d", "/repo", "", "", "swe");
 
     // 1 failed
-    const id9 = try db.createPipelineTask("T-failed", "d", "/repo", "", "");
+    const id9 = try db.createPipelineTask("T-failed", "d", "/repo", "", "", "swe");
 
     // 2 uncategorized (done, test)
-    const id10 = try db.createPipelineTask("T-done", "d", "/repo", "", "");
-    const id11 = try db.createPipelineTask("T-test", "d", "/repo", "", "");
+    const id10 = try db.createPipelineTask("T-done", "d", "/repo", "", "", "swe");
+    const id11 = try db.createPipelineTask("T-test", "d", "/repo", "", "", "swe");
 
     _ = id1; // stays backlog
     try db.updateTaskStatus(id2, "spec");
@@ -421,10 +421,10 @@ test "consistency: stats match individual COUNT queries" {
     defer db.deinit();
 
     // Create a mix of tasks
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
-    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "");
-    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
+    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe");
+    const id4 = try db.createPipelineTask("T4", "d", "/repo", "", "", "swe");
     _ = id1;
     try db.updateTaskStatus(id2, "merged");
     try db.updateTaskStatus(id3, "failed");
@@ -467,8 +467,8 @@ test "idempotency: calling getPipelineStats twice returns same results" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id2, "merged");
 
     const stats1 = try db.getPipelineStats();

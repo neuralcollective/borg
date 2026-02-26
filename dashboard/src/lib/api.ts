@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useCallback, useState } from "react";
-import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal } from "./types";
+import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal, PipelineMode } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -49,6 +49,45 @@ export function useProposals() {
   });
 }
 
+export function useModes() {
+  return useQuery<PipelineMode[]>({
+    queryKey: ["modes"],
+    queryFn: () => fetchJson("/api/modes"),
+    staleTime: 300_000,
+  });
+}
+
+export interface Settings {
+  continuous_mode: boolean;
+  release_interval_mins: number;
+  pipeline_max_backlog: number;
+  agent_timeout_s: number;
+  pipeline_seed_cooldown_s: number;
+  pipeline_tick_s: number;
+  model: string;
+  container_memory_mb: number;
+  assistant_name: string;
+  pipeline_max_agents: number;
+}
+
+export function useSettings() {
+  return useQuery<Settings>({
+    queryKey: ["settings"],
+    queryFn: () => fetchJson("/api/settings"),
+    staleTime: 60_000,
+  });
+}
+
+export async function updateSettings(settings: Partial<Settings>): Promise<{ updated: number }> {
+  const res = await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 export async function approveProposal(id: number): Promise<{ task_id: number }> {
   const res = await fetch(`/api/proposals/${id}/approve`, { method: "POST" });
   if (!res.ok) throw new Error(`${res.status}`);
@@ -69,6 +108,21 @@ export async function triageProposals(): Promise<{ scored: number }> {
 export async function reopenProposal(id: number): Promise<void> {
   const res = await fetch(`/api/proposals/${id}/reopen`, { method: "POST" });
   if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function retryTask(id: number): Promise<void> {
+  const res = await fetch(`/api/tasks/${id}/retry`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function createTask(title: string, description: string, mode: string, repo_path?: string): Promise<{ id: number }> {
+  const res = await fetch("/api/tasks/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, description, mode, repo: repo_path }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
 }
 
 export function useLogs() {
@@ -134,6 +188,13 @@ export function useTaskStream(taskId: number | null, active: boolean) {
   const [retryKey, setRetryKey] = useState(0);
   const esRef = useRef<EventSource | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear events immediately when switching tasks
+  useEffect(() => {
+    setEvents([]);
+    setStreaming(false);
+    setRetryKey(0);
+  }, [taskId]);
 
   useEffect(() => {
     if (!taskId || !active) {

@@ -16,6 +16,7 @@ const sidecar_mod = @import("sidecar.zig");
 const Sidecar = sidecar_mod.Sidecar;
 const web_mod = @import("web.zig");
 const WebServer = web_mod.WebServer;
+const observer_mod = @import("observer.zig");
 
 pub const version = "0.1.0-" ++ build_options.git_hash;
 
@@ -482,6 +483,9 @@ pub fn main() !void {
     var db = try Db.init(allocator, "store/borg.db");
     defer db.deinit();
 
+    // Load runtime settings from DB (overrides env defaults)
+    config.loadSettingsFromDb(&db);
+
     // Resume: reset any stuck queue entries and failed tasks from a previous crash/restart
     db.resetStuckQueueEntries() catch {};
     db.recycleFailedTasks() catch {};
@@ -547,6 +551,30 @@ pub fn main() !void {
         web_thread.join();
         web_server_global = null;
         web_db.deinit();
+    }
+
+    // Start observer thread if configured
+    var observer: ?observer_mod.Observer = null;
+    var observer_thread: ?std.Thread = null;
+    defer {
+        if (observer) |*o| {
+            o.stop();
+            if (observer_thread) |t| t.join();
+            o.deinit();
+        }
+    }
+    if (config.observer_config.len > 0) {
+        if (config.anthropic_api_key.len == 0) {
+            std.log.warn("OBSERVER_CONFIG is set but ANTHROPIC_API_KEY is missing — observers disabled", .{});
+        } else {
+            observer = observer_mod.Observer.init(allocator, config.observer_config, config.anthropic_api_key, &tg) catch |err| blk: {
+                std.log.err("Observer init failed: {}", .{err});
+                break :blk null;
+            };
+            if (observer) |*o| {
+                observer_thread = try std.Thread.spawn(.{}, observer_mod.Observer.run, .{o});
+            }
+        }
     }
 
     // Load registered groups
@@ -1286,7 +1314,7 @@ fn handleCommand(
             description = std.mem.trim(u8, rest[nl + 1 ..], &[_]u8{ ' ', '\t', '\r' });
         }
 
-        const task_id = try pdb.createPipelineTask(title, description, config.pipeline_repo, msg.sender_name, msg.jid);
+        const task_id = try pdb.createPipelineTask(title, description, config.pipeline_repo, msg.sender_name, msg.jid, "swe");
 
         var reply_buf: [256]u8 = undefined;
         const text = try std.fmt.bufPrint(&reply_buf, "Task #{d} created: {s}", .{ task_id, title[0..@min(title.len, 100)] });

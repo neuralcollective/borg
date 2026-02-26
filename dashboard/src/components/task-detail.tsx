@@ -1,10 +1,13 @@
-import { useTaskDetail, useTaskStream } from "@/lib/api";
+import { useTaskDetail, useTaskStream, retryTask } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
 import { repoName, isActiveStatus, type TaskOutput } from "@/lib/types";
+import { useUIMode } from "@/lib/ui-mode";
 import { cn } from "@/lib/utils";
 import { useState, useMemo } from "react";
+import { ArrowLeft, RotateCcw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface TaskDetailProps {
   taskId: number;
@@ -15,29 +18,64 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const { data: task, isLoading } = useTaskDetail(taskId);
   const isActive = task ? isActiveStatus(task.status) : false;
   const { events, streaming } = useTaskStream(taskId, isActive);
+  const { mode: uiMode } = useUIMode();
+  const isMinimal = uiMode === "minimal";
+  const queryClient = useQueryClient();
+  const [retrying, setRetrying] = useState(false);
 
   if (isLoading || !task) {
     return (
-      <div className="flex h-full flex-col">
-        <DetailHeader onBack={onBack} />
-        <div className="flex flex-1 items-center justify-center text-xs text-zinc-600">Loading...</div>
-      </div>
+      <div className="flex h-full items-center justify-center text-xs text-zinc-600">Loading...</div>
     );
   }
 
   return (
     <div className="flex h-full flex-col">
-      <DetailHeader onBack={onBack} />
-
-      <div className="space-y-3 border-b border-white/[0.06] px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <h2 className="text-[14px] md:text-[13px] font-medium text-zinc-200">
-            <span className="text-zinc-600">#{task.id}</span> {task.title}
-          </h2>
-          <StatusBadge status={task.status} />
+      {/* Task header */}
+      <div className="space-y-3 border-b border-white/[0.06] px-5 py-4">
+        <div className="flex items-start gap-3">
+          <button
+            onClick={onBack}
+            className="mt-0.5 rounded-md p-1 text-zinc-600 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 md:hidden"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2.5">
+              <span className="font-mono text-[11px] text-zinc-600">#{task.id}</span>
+              <StatusBadge status={task.status} />
+              {task.mode && task.mode !== "swe" && (
+                <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
+                  {task.mode}
+                </span>
+              )}
+              {task.status === "failed" && (
+                <button
+                  onClick={async () => {
+                    setRetrying(true);
+                    try {
+                      await retryTask(task.id);
+                      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+                      await queryClient.invalidateQueries({ queryKey: ["task", task.id] });
+                    } finally {
+                      setRetrying(false);
+                    }
+                  }}
+                  disabled={retrying}
+                  className="ml-auto flex items-center gap-1.5 rounded-md border border-white/[0.08] px-2.5 py-1 text-[11px] font-medium text-zinc-400 hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-50 transition-colors"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  {retrying ? "Retrying…" : "Retry"}
+                </button>
+              )}
+            </div>
+            <h2 className="mt-1 text-[14px] font-medium leading-snug text-zinc-200">
+              {task.title}
+            </h2>
+          </div>
         </div>
 
-        <PhaseTracker status={task.status} />
+        <PhaseTracker status={task.status} mode={task.mode} />
 
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
           {task.repo_path && (
@@ -45,12 +83,12 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
               <span className="text-zinc-600">repo</span> {repoName(task.repo_path)}
             </span>
           )}
-          {task.branch && (
+          {!isMinimal && task.branch && (
             <span>
               <span className="text-zinc-600">branch</span> <span className="font-mono">{task.branch}</span>
             </span>
           )}
-          {task.attempt > 0 && (
+          {!isMinimal && task.attempt > 0 && (
             <span>
               <span className="text-zinc-600">attempt</span> {task.attempt}/{task.max_attempts}
             </span>
@@ -65,14 +103,14 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
       </div>
 
       {task.description && (
-        <div className="max-h-20 md:max-h-16 overflow-y-auto border-b border-white/[0.06] px-4 py-2 text-[12px] md:text-[11px] leading-relaxed text-zinc-500">
+        <div className="max-h-16 overflow-y-auto border-b border-white/[0.06] px-5 py-2.5 text-[11px] leading-relaxed text-zinc-500">
           {task.description}
         </div>
       )}
 
       {task.last_error && (
-        <div className="mx-3 mt-2 rounded-lg border border-red-500/20 bg-red-500/[0.05] p-3">
-          <pre className="max-h-24 md:max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
+        <div className="mx-4 mt-3 rounded-lg border border-red-500/20 bg-red-500/[0.05] p-3">
+          <pre className="max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
             {task.last_error}
           </pre>
         </div>
@@ -80,7 +118,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
 
       {/* Live terminal for active tasks */}
       {(isActive || streaming) && (
-        <div className="mx-3 mt-2 flex-1 min-h-0">
+        <div className="mx-4 mt-3 flex-1 min-h-0">
           <LiveTerminal events={events} streaming={streaming} />
         </div>
       )}
@@ -228,7 +266,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
   if (ev.type === "assistant") {
     return (
       <div className="rounded bg-white/[0.02] px-3 py-2">
-        <pre className="whitespace-pre-wrap font-mono text-[12px] md:text-[11px] leading-relaxed text-zinc-300">
+        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
           {ev.content}
         </pre>
       </div>
@@ -240,7 +278,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
       <div className="rounded border border-amber-500/10 bg-amber-500/[0.04]">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-2 px-3 py-2 md:py-1.5 text-left active:bg-amber-500/[0.06]"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         >
           <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-400">
             {ev.tool}
@@ -265,7 +303,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
       <div className="rounded border border-white/[0.04] bg-white/[0.015]">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-2 px-3 py-2 md:py-1.5 text-left active:bg-white/[0.03]"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         >
           <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-zinc-400">
             result{ev.tool ? `: ${ev.tool}` : ""}
@@ -288,7 +326,7 @@ function StreamEventBlock({ event: ev }: { event: StreamEvent }) {
     return (
       <div className="rounded border border-emerald-500/10 bg-emerald-500/[0.04] px-3 py-2">
         <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-emerald-500/60">Final Result</div>
-        <pre className="whitespace-pre-wrap font-mono text-[12px] md:text-[11px] leading-relaxed text-emerald-300/80">
+        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-emerald-300/80">
           {ev.content}
         </pre>
       </div>
@@ -309,6 +347,7 @@ function downloadText(text: string, filename: string) {
 }
 
 function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
+  const { mode: uiMode } = useUIMode();
   const [viewMode, setViewMode] = useState<"summary" | "trace" | "diff">("summary");
   const [copied, setCopied] = useState(false);
 
@@ -339,11 +378,11 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] px-4 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] px-5 py-2">
         <select
           value={selectedKey}
           onChange={(e) => setSelectedKey(e.target.value)}
-          className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 md:py-1 text-[12px] md:text-[11px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
+          className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
         >
           {labeled.map((o) => {
             const key = o.phase + "-" + o.id;
@@ -369,7 +408,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
               <button
                 onClick={() => setViewMode("summary")}
                 className={cn(
-                  "px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
+                  "px-2 py-0.5 text-[10px] font-medium transition-colors",
                   viewMode === "summary"
                     ? "bg-white/[0.08] text-zinc-200"
                     : "text-zinc-500 hover:text-zinc-300"
@@ -377,11 +416,11 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
               >
                 Summary
               </button>
-              {hasStream && (
+              {hasStream && uiMode === "advanced" && (
                 <button
                   onClick={() => setViewMode("trace")}
                   className={cn(
-                    "border-l border-white/[0.08] px-2.5 md:px-2 py-1 md:py-0.5 text-[11px] md:text-[10px] font-medium transition-colors",
+                    "border-l border-white/[0.08] px-2 py-0.5 text-[10px] font-medium transition-colors",
                     viewMode === "trace"
                       ? "bg-white/[0.08] text-zinc-200"
                       : "text-zinc-500 hover:text-zinc-300"
@@ -399,7 +438,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
                   setTimeout(() => setCopied(false), 1500);
                 });
               }}
-              className="rounded-md px-2 py-1 md:py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
+              className="rounded-md px-2 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
             >
               {copied ? "Copied" : "Copy"}
             </button>
@@ -409,7 +448,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
                 const ext = viewMode === "trace" && hasStream ? "ndjson" : "txt";
                 downloadText(text || "", `task-${selected.id}-${selected.phase}.${ext}`);
               }}
-              className="rounded-md px-2 py-1 md:py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
+              className="rounded-md px-2 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
             >
               Download
             </button>
@@ -422,7 +461,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
         ) : viewMode === "trace" && hasStream ? (
           <StreamView raw={selected.raw_stream} />
         ) : (
-          <pre className="p-4 font-mono text-[12px] md:text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words">
+          <pre className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words">
             {selected.output || "(empty)"}
           </pre>
         )}
@@ -444,19 +483,5 @@ function DiffView({ diff }: { diff: string }) {
         return <div key={i} className={color}>{line}</div>;
       })}
     </pre>
-  );
-}
-
-function DetailHeader({ onBack }: { onBack: () => void }) {
-  return (
-    <div className="flex h-11 md:h-10 shrink-0 items-center gap-3 border-b border-white/[0.06] px-4">
-      <button
-        onClick={onBack}
-        className="rounded-md bg-white/[0.04] px-3 md:px-2.5 py-1.5 md:py-1 text-[12px] md:text-[11px] font-medium text-zinc-400 transition-colors active:bg-white/[0.1] hover:bg-white/[0.08] hover:text-zinc-200"
-      >
-        &larr; Back
-      </button>
-      <span className="text-[12px] md:text-[11px] font-medium text-zinc-500">Task Detail</span>
-    </div>
   );
 }

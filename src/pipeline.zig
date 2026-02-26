@@ -9,17 +9,13 @@ const git_mod = @import("git.zig");
 const Git = git_mod.Git;
 const json_mod = @import("json.zig");
 const prompts = @import("prompts.zig");
+const modes = @import("modes.zig");
 const agent_mod = @import("agent.zig");
 const Config = @import("config.zig").Config;
 const web_mod = @import("web.zig");
 
 const AGENT_TIMEOUT_S_FALLBACK = 600;
 
-pub const AgentPersona = enum {
-    manager,
-    qa,
-    worker,
-};
 
 pub const Pipeline = struct {
     allocator: std.mem.Allocator,
@@ -167,7 +163,7 @@ pub const Pipeline = struct {
                 else
                     title;
 
-                _ = self.db.createPipelineTask(title, description, repo.path, "backlog", self.config.pipeline_admin_chat) catch continue;
+                _ = self.db.createPipelineTask(title, description, repo.path, "backlog", self.config.pipeline_admin_chat, "swe") catch continue;
                 created += 1;
             }
 
@@ -271,6 +267,10 @@ pub const Pipeline = struct {
         }
     }
 
+    fn getModeForTask(_: *Pipeline, task: db_mod.PipelineTask) *const modes.PipelineMode {
+        return modes.getMode(task.mode) orelse &modes.swe_mode;
+    }
+
     fn processTaskThread(self: *Pipeline, task: db_mod.PipelineTask) void {
         defer {
             task.deinit(self.allocator);
@@ -285,26 +285,22 @@ pub const Pipeline = struct {
             return;
         }
 
-        if (std.mem.eql(u8, task.status, "backlog")) {
-            self.setupBranch(task) catch |err| {
-                std.log.err("Task #{d} backlog error: {}", .{ task.id, err });
-            };
-        } else if (std.mem.eql(u8, task.status, "spec")) {
-            self.runSpecPhase(task) catch |err| {
-                std.log.err("Task #{d} spec error: {}", .{ task.id, err });
-            };
-        } else if (std.mem.eql(u8, task.status, "qa") or std.mem.eql(u8, task.status, "qa_fix")) {
-            self.runQaPhase(task) catch |err| {
-                std.log.err("Task #{d} qa error: {}", .{ task.id, err });
-            };
-        } else if (std.mem.eql(u8, task.status, "impl") or std.mem.eql(u8, task.status, "retry")) {
-            self.runImplPhase(task) catch |err| {
-                std.log.err("Task #{d} impl error: {}", .{ task.id, err });
-            };
-        } else if (std.mem.eql(u8, task.status, "rebase")) {
-            self.runRebasePhase(task) catch |err| {
+        const mode = self.getModeForTask(task);
+        const phase = mode.getPhase(task.status) orelse {
+            std.log.err("Task #{d} has unknown phase '{s}' for mode '{s}'", .{ task.id, task.status, mode.name });
+            return;
+        };
+
+        switch (phase.phase_type) {
+            .setup => self.setupBranch(task) catch |err| {
+                std.log.err("Task #{d} setup error: {}", .{ task.id, err });
+            },
+            .agent => self.runAgentPhase(task, phase, mode) catch |err| {
+                std.log.err("Task #{d} {s} error: {}", .{ task.id, phase.name, err });
+            },
+            .rebase => self.runRebasePhase(task, phase) catch |err| {
                 std.log.err("Task #{d} rebase error: {}", .{ task.id, err });
-            };
+            },
         }
     }
 
@@ -321,59 +317,56 @@ pub const Pipeline = struct {
         const pending_integration = try self.db.getQueuedIntegrationCount();
         if (pending_integration > 0) return;
 
-        // Rotate seed mode: 0=refactoring, 1=bug audit, 2=test coverage, 3=features, 4=architecture
-        // Modes 3-4 produce proposals (require approval); 0-2 produce tasks (auto-execute)
-        const seed_mode = blk: {
+        // Find primary repo and its mode
+        var primary_repo: ?@import("config.zig").RepoConfig = null;
+        for (self.config.watched_repos) |repo| {
+            if (repo.is_self) {
+                primary_repo = repo;
+                break;
+            }
+        }
+        const repo = primary_repo orelse return;
+        const mode = modes.getMode(repo.mode) orelse &modes.swe_mode;
+        if (mode.seed_modes.len == 0) return;
+
+        // Rotate seed mode index within this mode's seed_modes
+        const seed_idx = blk: {
             const mode_str = self.db.getState(self.allocator, "seed_mode") catch null;
             const prev: u32 = if (mode_str) |s| std.fmt.parseInt(u32, s, 10) catch 0 else 0;
             if (mode_str) |s| self.allocator.free(s);
-            const next = (prev + 1) % 5;
+            const next = (prev + 1) % @as(u32, @intCast(mode.seed_modes.len));
             var next_buf: [4]u8 = undefined;
             const next_str = std.fmt.bufPrint(&next_buf, "{d}", .{next}) catch "0";
             self.db.setState("seed_mode", next_str) catch {};
             break :blk next;
         };
 
-        const mode_label: []const u8 = switch (seed_mode) {
-            0 => "refactoring",
-            1 => "bug audit",
-            2 => "test coverage",
-            3 => "feature discovery",
-            4 => "architecture review",
-            else => "refactoring",
-        };
+        const seed_config = mode.seed_modes[seed_idx];
         self.last_seed_ts = now;
         self.config.refreshOAuthToken();
-        std.log.info("Seed scan starting ({s} mode)", .{mode_label});
+        std.log.info("Seed scan starting ({s}: {s})", .{ mode.name, seed_config.label });
 
-        // Seed primary repo directly, then cross-pollinate from watched repos
         var total_created: u32 = 0;
         const active_u32: u32 = @intCast(@max(active, 0));
-        var primary_path: []const u8 = "";
-        for (self.config.watched_repos) |repo| {
-            if (repo.is_self) {
-                primary_path = repo.path;
-                if (active_u32 + total_created >= self.config.pipeline_max_backlog) break;
-                const created = self.seedRepo(repo.path, seed_mode, active_u32 + total_created);
-                total_created += created;
-                break;
-            }
+
+        if (active_u32 + total_created < self.config.pipeline_max_backlog) {
+            const created = self.seedRepo(repo.path, seed_config, mode, active_u32 + total_created);
+            total_created += created;
         }
+
         // Cross-pollinate: analyze watched repos for ideas to bring into primary
-        if (primary_path.len > 0) {
-            for (self.config.watched_repos) |repo| {
-                if (repo.is_self) continue;
-                if (active_u32 + total_created >= self.config.pipeline_max_backlog) break;
-                const created = self.seedCrossPollinate(repo.path, primary_path);
-                total_created += created;
-            }
+        for (self.config.watched_repos) |watched| {
+            if (watched.is_self) continue;
+            if (active_u32 + total_created >= self.config.pipeline_max_backlog) break;
+            const created = self.seedCrossPollinate(watched.path, repo.path);
+            total_created += created;
         }
 
         if (total_created > 0) {
-            std.log.info("Seed scan ({s}): created {d} task(s)/proposal(s)", .{ mode_label, total_created });
-            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Seed scan ({s}): created {d} task(s)/proposal(s)", .{ mode_label, total_created }) catch return);
+            std.log.info("Seed scan ({s}: {s}): created {d} task(s)/proposal(s)", .{ mode.name, seed_config.label, total_created });
+            self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Seed scan ({s}: {s}): created {d} task(s)/proposal(s)", .{ mode.name, seed_config.label, total_created }) catch return);
         } else {
-            std.log.info("Seed scan ({s}): no results (agents may have returned empty output)", .{mode_label});
+            std.log.info("Seed scan ({s}: {s}): no results", .{ mode.name, seed_config.label });
         }
     }
 
@@ -401,7 +394,7 @@ pub const Pipeline = struct {
         }
     }
 
-    fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_mode: u32, current_count: u32) u32 {
+    fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_config: modes.SeedConfig, mode: *const modes.PipelineMode, current_count: u32) u32 {
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
         const w = prompt_buf.writer();
@@ -409,27 +402,23 @@ pub const Pipeline = struct {
         // Include CLAUDE.md, file listing, and exploration instructions
         self.appendRepoContext(&prompt_buf, repo_path);
         w.writeAll(prompts.seed_explore_preamble) catch return 0;
+        w.writeAll(seed_config.prompt) catch return 0;
 
-        switch (seed_mode) {
-            0 => w.writeAll(prompts.seed_refactor) catch return 0,
-            1 => w.writeAll(prompts.seed_security) catch return 0,
-            2 => w.writeAll(prompts.seed_tests) catch return 0,
-            3 => {
-                w.writeAll(prompts.seed_features) catch return 0;
-                w.writeAll(prompts.seed_proposal_suffix) catch return 0;
-                return self.seedRepoProposals(repo_path, repo_path, prompt_buf.items);
-            },
-            4 => {
-                w.writeAll(prompts.seed_architecture) catch return 0;
-                w.writeAll(prompts.seed_proposal_suffix) catch return 0;
-                return self.seedRepoProposals(repo_path, repo_path, prompt_buf.items);
-            },
-            else => w.writeAll(prompts.seed_refactor) catch return 0,
+        if (seed_config.output_type == .proposal) {
+            w.writeAll(prompts.seed_proposal_suffix) catch return 0;
+            return self.seedRepoProposals(repo_path, repo_path, prompt_buf.items);
         }
 
         w.writeAll(prompts.seed_task_suffix) catch return 0;
 
-        const result = self.spawnAgent(.manager, prompt_buf.items, repo_path, null, 0) catch |err| {
+        // Use first agent phase's system prompt for seed agents
+        const first_agent = blk: {
+            for (mode.phases) |*p| {
+                if (p.phase_type == .agent) break :blk p;
+            }
+            break :blk &mode.phases[0];
+        };
+        const result = self.spawnAgent(first_agent.system_prompt, first_agent.allowed_tools, prompt_buf.items, repo_path, null, 0) catch |err| {
             std.log.err("Seed agent failed for {s}: {}", .{ repo_path, err });
             return 0;
         };
@@ -479,6 +468,7 @@ pub const Pipeline = struct {
                 repo_path,
                 "seeder",
                 self.config.pipeline_admin_chat,
+                mode.name,
             ) catch |err| {
                 std.log.err("Failed to create seeded task: {}", .{err});
                 continue;
@@ -492,7 +482,8 @@ pub const Pipeline = struct {
     }
 
     fn seedRepoProposals(self: *Pipeline, source_repo: []const u8, target_repo: []const u8, prompt: []const u8) u32 {
-        const result = self.spawnAgent(.manager, prompt, source_repo, null, 0) catch |err| {
+        // Use a generic read-only tool set for proposal generation
+        const result = self.spawnAgent("You are an analyst reviewing a codebase.", "Read,Glob,Grep,Write", prompt, source_repo, null, 0) catch |err| {
             std.log.err("Seed proposal agent failed for {s}: {}", .{ source_repo, err });
             return 0;
         };
@@ -623,249 +614,200 @@ pub const Pipeline = struct {
         std.fs.cwd().deleteTree(sess_path) catch {};
     }
 
-    fn runSpecPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        const wt_path = try self.worktreePath(task.repo_path, task.id);
+    fn runAgentPhase(self: *Pipeline, task: db_mod.PipelineTask, phase: *const modes.PhaseConfig, mode: *const modes.PipelineMode) !void {
+        const wt_path = if (mode.uses_git_worktrees) try self.worktreePath(task.repo_path, task.id) else try self.allocator.dupe(u8, task.repo_path);
         defer self.allocator.free(wt_path);
         var wt_git = Git.init(self.allocator, wt_path);
 
-        // Get file listing for context
-        var ls = try wt_git.exec(&.{ "ls-files", "--full-name" });
-        defer ls.deinit();
+        // Idempotency: if runs_tests and a previous run left passing code, skip the agent
+        if (phase.runs_tests and mode.uses_test_cmd) {
+            const test_cmd = self.config.getTestCmdForRepo(task.repo_path);
+            if (self.runTestCommandForRepo(wt_path, test_cmd)) |pre_test| {
+                defer self.allocator.free(pre_test.stdout);
+                defer self.allocator.free(pre_test.stderr);
+                if (pre_test.exit_code == 0) {
+                    var diff_check = try wt_git.exec(&.{ "diff", "--stat", "origin/main..HEAD" });
+                    defer diff_check.deinit();
+                    const has_changes = diff_check.success() and std.mem.trim(u8, diff_check.stdout, " \t\r\n").len > 0;
 
-        var prompt_buf = std.ArrayList(u8).init(self.allocator);
-        defer prompt_buf.deinit();
-        const w = prompt_buf.writer();
-
-        try w.print(prompts.spec_phase, .{ task.id, task.title, task.description });
-        try w.writeAll(ls.stdout[0..@min(ls.stdout.len, 4000)]);
-        try w.writeAll(prompts.spec_phase_suffix);
-
-        const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-        const result = self.spawnAgent(.manager, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
-            try self.failTask(task, "manager agent spawn failed", @errorName(err));
-            return;
-        };
-        defer self.allocator.free(result.output);
-        defer self.allocator.free(result.raw_stream);
-
-        // Store session for next phase
-        if (result.new_session_id) |sid| {
-            self.db.setTaskSessionId(task.id, sid) catch {};
-            self.allocator.free(sid);
-        }
-
-        self.db.storeTaskOutputFull(task.id, "spec", result.output, result.raw_stream, 0) catch {};
-
-        // Check spec.md was actually written
-        const spec_path = try std.fmt.allocPrint(self.allocator, "{s}/spec.md", .{wt_path});
-        defer self.allocator.free(spec_path);
-        const spec_exists = blk: {
-            std.fs.accessAbsolute(spec_path, .{}) catch break :blk false;
-            break :blk true;
-        };
-        if (!spec_exists and result.output.len == 0) {
-            try self.failTask(task, "manager produced no output", "no spec.md and empty result");
-            return;
-        }
-
-        // Store spec.md content as diff (spec.md stays gitignored, not committed)
-        if (spec_exists) {
-            const spec_content = std.fs.cwd().readFileAlloc(self.allocator, spec_path, 64 * 1024) catch null;
-            if (spec_content) |content| {
-                defer self.allocator.free(content);
-                self.db.storeTaskOutput(task.id, "spec_diff", content, 0) catch {};
-            }
-        }
-
-        try self.db.updateTaskStatus(task.id, "qa");
-        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: spec ready, starting QA", .{task.id}));
-    }
-
-    fn runQaPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        const wt_path = try self.worktreePath(task.repo_path, task.id);
-        defer self.allocator.free(wt_path);
-        var wt_git = Git.init(self.allocator, wt_path);
-
-        var prompt_buf = std.ArrayList(u8).init(self.allocator);
-        defer prompt_buf.deinit();
-        const w = prompt_buf.writer();
-
-        try w.writeAll(prompts.qa_phase);
-
-        if (std.mem.eql(u8, task.status, "qa_fix") and task.last_error.len > 0) {
-            const err_tail = if (task.last_error.len > 3000) task.last_error[task.last_error.len - 3000 ..] else task.last_error;
-            try w.print(prompts.qa_fix_fmt, .{err_tail});
-        }
-
-        // qa_fix gets a fresh session since the impl agent overwrote the QA session
-        const resume_sid = if (std.mem.eql(u8, task.status, "qa_fix")) null else if (task.session_id.len > 0) task.session_id else null;
-        const result = self.spawnAgent(.qa, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
-            try self.failTask(task, "QA agent spawn failed", @errorName(err));
-            return;
-        };
-        defer self.allocator.free(result.output);
-        defer self.allocator.free(result.raw_stream);
-
-        if (result.new_session_id) |sid| {
-            self.db.setTaskSessionId(task.id, sid) catch {};
-            self.allocator.free(sid);
-        }
-
-        self.db.storeTaskOutputFull(task.id, "qa", result.output, result.raw_stream, 0) catch {};
-
-        var add = try wt_git.addAll();
-        defer add.deinit();
-        const is_fix = std.mem.eql(u8, task.status, "qa_fix");
-        const commit_msg = if (is_fix) "test: fix tests from QA agent" else "test: add tests from QA agent";
-        var commit = try wt_git.commitWithAuthor(commit_msg, self.config.git_author);
-        defer commit.deinit();
-
-        if (!commit.success()) {
-            if (is_fix) {
-                try self.failTask(task, "QA fix produced no changes", commit.stderr);
-            } else {
-                try self.failTask(task, "QA produced no test files", commit.stderr);
-            }
-            return;
-        }
-
-        const diff_phase = if (is_fix) "qa_fix_diff" else "qa_diff";
-        var qa_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
-        defer qa_diff.deinit();
-        if (qa_diff.success()) self.db.storeTaskOutput(task.id, diff_phase, qa_diff.stdout, 0) catch {};
-
-        try self.db.updateTaskStatus(task.id, "impl");
-        if (is_fix) {
-            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: QA fixed tests, retrying implementation", .{task.id}));
-        } else {
-            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: tests written, starting implementation", .{task.id}));
-        }
-    }
-
-    fn runImplPhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
-        const wt_path = try self.worktreePath(task.repo_path, task.id);
-        defer self.allocator.free(wt_path);
-        var wt_git = Git.init(self.allocator, wt_path);
-
-        // Idempotency: if a previous run left passing code, skip the agent
-        const test_cmd = self.config.getTestCmdForRepo(task.repo_path);
-        if (self.runTestCommandForRepo(wt_path, test_cmd)) |pre_test| {
-            defer self.allocator.free(pre_test.stdout);
-            defer self.allocator.free(pre_test.stderr);
-            if (pre_test.exit_code == 0) {
-                // Check if the branch has any changes vs main
-                var diff_check = try wt_git.exec(&.{ "diff", "--stat", "origin/main..HEAD" });
-                defer diff_check.deinit();
-                const has_changes = diff_check.success() and std.mem.trim(u8, diff_check.stdout, " \t\r\n").len > 0;
-
-                if (has_changes) {
-                    try self.db.updateTaskStatus(task.id, "done");
-                    try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
-                    self.cleanupWorktree(task);
-                    std.log.info("Task #{d} tests already pass, queued for integration", .{task.id});
-                    self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
-                } else {
-                    try self.db.updateTaskStatus(task.id, "merged");
-                    self.cleanupWorktree(task);
-                    std.log.info("Task #{d} tests already pass with no changes, marking as merged", .{task.id});
+                    if (has_changes) {
+                        try self.db.updateTaskStatus(task.id, "done");
+                        if (mode.integration == .git_pr) {
+                            try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
+                            self.cleanupWorktree(task);
+                        }
+                        std.log.info("Task #{d} tests already pass, queued for integration", .{task.id});
+                        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
+                    } else {
+                        try self.db.updateTaskStatus(task.id, "merged");
+                        if (mode.uses_git_worktrees) self.cleanupWorktree(task);
+                        std.log.info("Task #{d} tests already pass with no changes, marking as merged", .{task.id});
+                    }
+                    return;
                 }
+            } else |_| {}
+        }
+
+        // Build prompt
+        var prompt_buf = std.ArrayList(u8).init(self.allocator);
+        defer prompt_buf.deinit();
+        const w = prompt_buf.writer();
+
+        if (phase.include_task_context) {
+            try w.print("Task #{d}: {s}\n\nDescription:\n{s}\n\n", .{ task.id, task.title, task.description });
+        }
+
+        if (phase.include_file_listing and mode.uses_git_worktrees) {
+            var ls = try wt_git.exec(&.{ "ls-files", "--full-name" });
+            defer ls.deinit();
+            try w.writeAll("## Repository Files\n\n```\n");
+            try w.writeAll(ls.stdout[0..@min(ls.stdout.len, 4000)]);
+            try w.writeAll("\n```\n\n");
+        }
+
+        try w.writeAll(phase.instruction);
+
+        // Append error context if available
+        if (task.last_error.len > 0 and phase.error_instruction.len > 0) {
+            const err_tail = if (task.last_error.len > 3000) task.last_error[task.last_error.len - 3000 ..] else task.last_error;
+            try modes.substituteError(w, phase.error_instruction, err_tail);
+        }
+
+        // Session handling
+        const resume_sid = if (phase.fresh_session) null else if (task.session_id.len > 0) task.session_id else null;
+
+        // Spawn agent (Docker or host)
+        const result = if (phase.use_docker)
+            self.spawnAgent(phase.system_prompt, phase.allowed_tools, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
+                try self.failTask(task, "agent spawn failed", @errorName(err));
                 return;
             }
-        } else |_| {}
-
-        // Build prompt with error context for retries
-        var prompt_buf = std.ArrayList(u8).init(self.allocator);
-        defer prompt_buf.deinit();
-        const w = prompt_buf.writer();
-
-        try w.writeAll(prompts.impl_phase);
-
-        if (std.mem.eql(u8, task.status, "retry") and task.last_error.len > 0) {
-            const err_tail = if (task.last_error.len > 3000) task.last_error[task.last_error.len - 3000 ..] else task.last_error;
-            try w.print(prompts.impl_retry_fmt, .{err_tail});
-        }
-
-        const resume_sid = if (task.session_id.len > 0) task.session_id else null;
-        const result = self.spawnAgent(.worker, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
-            try self.failTask(task, "worker agent spawn failed", @errorName(err));
-            return;
-        };
+        else
+            self.spawnAgentHost(phase.system_prompt, phase.allowed_tools, prompt_buf.items, wt_path, resume_sid, task.id) catch |err| {
+                try self.failTask(task, "agent spawn failed", @errorName(err));
+                return;
+            };
         defer self.allocator.free(result.output);
         defer self.allocator.free(result.raw_stream);
 
+        // Store session
         if (result.new_session_id) |sid| {
             self.db.setTaskSessionId(task.id, sid) catch {};
             self.allocator.free(sid);
         }
 
-        self.db.storeTaskOutputFull(task.id, "impl", result.output, result.raw_stream, 0) catch {};
+        self.db.storeTaskOutputFull(task.id, phase.name, result.output, result.raw_stream, 0) catch {};
 
-        // Commit implementation in worktree
-        var add = try wt_git.addAll();
-        defer add.deinit();
-        var commit = try wt_git.commitWithAuthor("impl: implementation from worker agent", self.config.git_author);
-        defer commit.deinit();
-
-        if (commit.success()) {
-            var impl_diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
-            defer impl_diff.deinit();
-            if (impl_diff.success()) self.db.storeTaskOutput(task.id, "impl_diff", impl_diff.stdout, 0) catch {};
-        }
-
-        // Run tests in worktree
-        const test_result = self.runTestCommandForRepo(wt_path, test_cmd) catch |err| {
-            try self.failTask(task, "test command execution failed", @errorName(err));
-            return;
-        };
-        defer self.allocator.free(test_result.stdout);
-        defer self.allocator.free(test_result.stderr);
-
-        {
-            const test_combined = std.fmt.allocPrint(self.allocator, "EXIT {d}\n--- stdout ---\n{s}\n--- stderr ---\n{s}", .{
-                test_result.exit_code,
-                test_result.stdout[0..@min(test_result.stdout.len, 8000)],
-                test_result.stderr[0..@min(test_result.stderr.len, 8000)],
-            }) catch null;
-            if (test_combined) |tc| {
-                defer self.allocator.free(tc);
-                self.db.storeTaskOutput(task.id, "test", tc, @intCast(test_result.exit_code)) catch {};
-            }
-        }
-
-        if (test_result.exit_code == 0) {
-            try self.db.updateTaskStatus(task.id, "done");
-            try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
-            self.cleanupWorktree(task);
-            std.log.info("Task #{d} passed tests, queued for integration", .{task.id});
-            self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Queued for integration.", .{task.id}));
-        } else {
-            const combined = combineTestOutput(self.allocator, test_result.stdout, test_result.stderr, 2000);
-            defer if (combined.len > 0) self.allocator.free(combined);
-            try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
-
-            if (task.attempt + 1 >= task.max_attempts) {
-                std.log.warn("Task #{d} exhausted {d} impl attempts — marking failed", .{ task.id, task.max_attempts });
-                try self.db.updateTaskStatus(task.id, "failed");
-                self.cleanupWorktree(task);
-                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} exhausted {d} impl attempts — failed.", .{ task.id, task.max_attempts }));
-            } else {
-                try self.db.incrementTaskAttempt(task.id);
-
-                // After 2+ impl attempts, check if the error is in test files themselves
-                if (task.attempt >= 1 and isTestFileError(test_result.stderr, test_result.stdout)) {
-                    try self.db.updateTaskStatus(task.id, "qa_fix");
-                    self.db.setTaskSessionId(task.id, "") catch {};
-                    std.log.info("Task #{d} test error appears to be in test files, routing to QA fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts });
-                    self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} test code has bugs — sending back to QA for fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts }));
-                } else {
-                    try self.db.updateTaskStatus(task.id, "retry");
-                    std.log.info("Task #{d} test failed, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+        // Check artifact if required
+        if (phase.check_artifact) |artifact| {
+            const artifact_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ wt_path, artifact });
+            defer self.allocator.free(artifact_path);
+            const exists = blk: {
+                std.fs.accessAbsolute(artifact_path, .{}) catch break :blk false;
+                break :blk true;
+            };
+            if (exists) {
+                const content = std.fs.cwd().readFileAlloc(self.allocator, artifact_path, 64 * 1024) catch null;
+                if (content) |c| {
+                    defer self.allocator.free(c);
+                    const diff_name = try std.fmt.allocPrint(self.allocator, "{s}_diff", .{phase.name});
+                    defer self.allocator.free(diff_name);
+                    self.db.storeTaskOutput(task.id, diff_name, c, 0) catch {};
                 }
             }
+            if (!exists and result.output.len == 0) {
+                const reason = try std.fmt.allocPrint(self.allocator, "agent produced no output (missing {s})", .{artifact});
+                defer self.allocator.free(reason);
+                try self.failTask(task, reason, "empty result and artifact not found");
+                return;
+            }
         }
+
+        // Commit if configured
+        if (phase.commits and mode.uses_git_worktrees) {
+            var add = try wt_git.addAll();
+            defer add.deinit();
+            var commit = try wt_git.commitWithAuthor(phase.commit_message, self.config.git_author);
+            defer commit.deinit();
+
+            if (commit.success()) {
+                var diff = try wt_git.exec(&.{ "diff", "HEAD~1" });
+                defer diff.deinit();
+                if (diff.success()) {
+                    const diff_name = try std.fmt.allocPrint(self.allocator, "{s}_diff", .{phase.name});
+                    defer self.allocator.free(diff_name);
+                    self.db.storeTaskOutput(task.id, diff_name, diff.stdout, 0) catch {};
+                }
+            } else if (phase.check_artifact == null and !phase.allow_no_changes) {
+                try self.failTask(task, "agent produced no changes", commit.stderr);
+                return;
+            }
+        }
+
+        // Run tests if configured
+        if (phase.runs_tests and mode.uses_test_cmd) {
+            const test_cmd = self.config.getTestCmdForRepo(task.repo_path);
+            const test_result = self.runTestCommandForRepo(wt_path, test_cmd) catch |err| {
+                try self.failTask(task, "test command execution failed", @errorName(err));
+                return;
+            };
+            defer self.allocator.free(test_result.stdout);
+            defer self.allocator.free(test_result.stderr);
+
+            {
+                const test_combined = std.fmt.allocPrint(self.allocator, "EXIT {d}\n--- stdout ---\n{s}\n--- stderr ---\n{s}", .{
+                    test_result.exit_code,
+                    test_result.stdout[0..@min(test_result.stdout.len, 8000)],
+                    test_result.stderr[0..@min(test_result.stderr.len, 8000)],
+                }) catch null;
+                if (test_combined) |tc| {
+                    defer self.allocator.free(tc);
+                    self.db.storeTaskOutput(task.id, "test", tc, @intCast(test_result.exit_code)) catch {};
+                }
+            }
+
+            if (test_result.exit_code == 0) {
+                try self.db.updateTaskStatus(task.id, phase.next);
+                if (mode.integration == .git_pr and std.mem.eql(u8, phase.next, "done")) {
+                    try self.db.enqueueForIntegration(task.id, task.branch, task.repo_path);
+                    self.cleanupWorktree(task);
+                }
+                std.log.info("Task #{d} passed tests, advancing to {s}", .{ task.id, phase.next });
+                self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} passed all tests! Advancing to {s}.", .{ task.id, phase.next }));
+            } else {
+                const combined = combineTestOutput(self.allocator, test_result.stdout, test_result.stderr, 2000);
+                defer if (combined.len > 0) self.allocator.free(combined);
+                try self.db.updateTaskError(task.id, combined[0..@min(combined.len, 4000)]);
+
+                if (task.attempt + 1 >= task.max_attempts) {
+                    std.log.warn("Task #{d} exhausted {d} attempts — marking failed", .{ task.id, task.max_attempts });
+                    try self.db.updateTaskStatus(task.id, "failed");
+                    if (mode.uses_git_worktrees) self.cleanupWorktree(task);
+                    self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} exhausted {d} attempts — failed.", .{ task.id, task.max_attempts }));
+                } else {
+                    try self.db.incrementTaskAttempt(task.id);
+
+                    if (phase.has_qa_fix_routing and task.attempt >= 1 and isTestFileError(test_result.stderr, test_result.stdout)) {
+                        try self.db.updateTaskStatus(task.id, "qa_fix");
+                        self.db.setTaskSessionId(task.id, "") catch {};
+                        std.log.info("Task #{d} test error in test files, routing to QA fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts });
+                        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} test code has bugs — sending back to QA for fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts }));
+                    } else {
+                        // Stay on current phase for retry
+                        std.log.info("Task #{d} test failed, retry {d}/{d}", .{ task.id, task.attempt + 1, task.max_attempts });
+                    }
+                }
+            }
+            return;
+        }
+
+        // No tests — advance to next phase
+        try self.db.updateTaskStatus(task.id, phase.next);
+        std.log.info("Task #{d} {s} complete, advancing to {s}", .{ task.id, phase.name, phase.next });
+        self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d}: {s} complete, advancing to {s}", .{ task.id, phase.label, phase.next }));
     }
 
-    fn runRebasePhase(self: *Pipeline, task: db_mod.PipelineTask) !void {
+    fn runRebasePhase(self: *Pipeline, task: db_mod.PipelineTask, phase: *const modes.PhaseConfig) !void {
         if (task.branch.len == 0) {
             try self.failTask(task, "rebase: no branch set", "");
             return;
@@ -925,17 +867,15 @@ pub const Pipeline = struct {
             defer prompt_buf.deinit();
             const w = prompt_buf.writer();
 
-            try w.writeAll(prompts.rebase_phase);
+            try w.writeAll(phase.instruction);
 
-            if (task.last_error.len > 0) {
+            if (task.last_error.len > 0 and phase.error_instruction.len > 0) {
                 const err_tail = if (task.last_error.len > 2000) task.last_error[task.last_error.len - 2000 ..] else task.last_error;
-                try w.print(prompts.rebase_error_fmt, .{err_tail});
+                try modes.substituteError(w, phase.error_instruction, err_tail);
             }
 
             // Run on host (not Docker) — rebase needs full git repo access
-            // Don't pass Docker session ID — host agent can't resume Docker sessions
-            // (different HOME and project path hash). It will start fresh.
-            const result = self.spawnAgentHost(prompt_buf.items, wt_path, null, task.id) catch |err| {
+            const result = self.spawnAgentHost(phase.system_prompt, phase.allowed_tools, prompt_buf.items, wt_path, null, task.id) catch |err| {
                 try self.failTask(task, "rebase: worker agent failed", @errorName(err));
                 return;
             };
@@ -1021,11 +961,13 @@ pub const Pipeline = struct {
                 var fix_prompt = std.ArrayList(u8).init(self.allocator);
                 defer fix_prompt.deinit();
                 const fw = fix_prompt.writer();
-                try fw.writeAll(prompts.rebase_fix_phase);
+                try fw.writeAll(phase.fix_instruction);
                 const err_tail = if (combined_err.len > 3000) combined_err[combined_err.len - 3000 ..] else combined_err;
-                try fw.print(prompts.rebase_fix_error_fmt, .{err_tail});
+                if (phase.fix_error_instruction.len > 0) {
+                    try modes.substituteError(fw, phase.fix_error_instruction, err_tail);
+                }
 
-                const fix_result = self.spawnAgentHost(fix_prompt.items, wt_path, null, task.id) catch |err| {
+                const fix_result = self.spawnAgentHost(phase.system_prompt, phase.allowed_tools, fix_prompt.items, wt_path, null, task.id) catch |err| {
                     try self.failTask(task, "rebase: fix agent failed", @errorName(err));
                     return;
                 };
@@ -1626,7 +1568,7 @@ pub const Pipeline = struct {
         const title = std.fmt.allocPrint(self.allocator, "Fix failing {s} on main", .{kind}) catch return;
         defer self.allocator.free(title);
 
-        _ = self.db.createPipelineTask(title, desc, repo_path, "health-check", "") catch return;
+        _ = self.db.createPipelineTask(title, desc, repo_path, "health-check", "", "swe") catch return;
         std.log.info("Health: created fix task for {s} {s} failure", .{ repo_path, kind });
         self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Health check: {s} failing for {s}, created fix task", .{ kind, repo_path }) catch return);
     }
@@ -1758,11 +1700,17 @@ pub const Pipeline = struct {
         }
     }
 
-    fn spawnAgentHost(self: *Pipeline, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
+    fn spawnAgentHost(self: *Pipeline, system_prompt: []const u8, allowed_tools: []const u8, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
         self.config.refreshOAuthToken();
 
         const suffix = self.config.getSystemPromptSuffix(self.allocator);
         defer if (suffix.len > 0) self.allocator.free(suffix);
+
+        // Combine phase system prompt with config suffix
+        var sys_buf = std.ArrayList(u8).init(self.allocator);
+        defer sys_buf.deinit();
+        try sys_buf.appendSlice(system_prompt);
+        try sys_buf.appendSlice(suffix);
 
         // Same session dir as Docker (store/sessions/task-{id}/) so host
         // agents can resume from Docker sessions and vice versa
@@ -1792,27 +1740,24 @@ pub const Pipeline = struct {
             .session_dir = abs_session_home,
             .assistant_name = "",
             .workdir = workdir,
-            .allowed_tools = prompts.getAllowedTools(.worker),
-            .system_prompt = suffix,
+            .allowed_tools = allowed_tools,
+            .system_prompt = sys_buf.items,
         }, prompt, cb);
     }
 
-    fn spawnAgent(self: *Pipeline, persona: AgentPersona, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
+    fn spawnAgent(self: *Pipeline, system_prompt: []const u8, allowed_tools: []const u8, prompt: []const u8, workdir: []const u8, resume_session: ?[]const u8, task_id: i64) !agent_mod.AgentResult {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const tmp = arena.allocator();
 
         self.config.refreshOAuthToken();
 
-        const base_system_prompt = prompts.getSystemPrompt(persona);
-        const allowed_tools = prompts.getAllowedTools(persona);
-
         // Append config-driven instructions to system prompt
         const suffix = self.config.getSystemPromptSuffix(tmp);
         var sys_buf = std.ArrayList(u8).init(tmp);
-        try sys_buf.appendSlice(base_system_prompt);
+        try sys_buf.appendSlice(system_prompt);
         try sys_buf.appendSlice(suffix);
-        const system_prompt = sys_buf.items;
+        const full_system_prompt = sys_buf.items;
 
         // Inject per-repo prompt if configured (via prompt_file or .borg/prompt.md)
         var effective_prompt = prompt;
@@ -1833,7 +1778,7 @@ pub const Pipeline = struct {
         // Build JSON input
         var input = std.ArrayList(u8).init(tmp);
         const esc_prompt = try json_mod.escapeString(tmp, effective_prompt);
-        const esc_sys = try json_mod.escapeString(tmp, system_prompt);
+        const esc_sys = try json_mod.escapeString(tmp, full_system_prompt);
         if (resume_session) |sid| {
             if (sid.len > 0) {
                 const esc_sid = try json_mod.escapeString(tmp, sid);
@@ -1857,8 +1802,8 @@ pub const Pipeline = struct {
             var counter = std.atomic.Value(u32).init(0);
         };
         const n = seq.counter.fetchAdd(1, .monotonic);
-        const container_name = try std.fmt.bufPrint(&name_buf, "borg-{s}-{d}-{d}", .{
-            @tagName(persona), std.time.timestamp(), n,
+        const container_name = try std.fmt.bufPrint(&name_buf, "borg-agent-{d}-{d}", .{
+            std.time.timestamp(), n,
         });
 
         // Env vars
@@ -1925,7 +1870,7 @@ pub const Pipeline = struct {
 
         const binds = binds_list.items;
 
-        std.log.info("Spawning {s} agent: {s}", .{ @tagName(persona), container_name });
+        std.log.info("Spawning agent: {s}", .{container_name});
 
         // Set up live streaming
         var stream_ctx: TaskStreamCtx = undefined;
@@ -1959,9 +1904,9 @@ pub const Pipeline = struct {
         self.allocator.free(name_for_watchdog);
 
         if (run_result.stdout.len == 0) {
-            std.log.warn("{s} agent returned empty output (exit={d}) — likely auth or API issue", .{ @tagName(persona), run_result.exit_code });
+            std.log.warn("Agent returned empty output (exit={d}) — likely auth or API issue", .{run_result.exit_code});
         } else {
-            std.log.info("{s} agent done (exit={d}, {d} bytes)", .{ @tagName(persona), run_result.exit_code, run_result.stdout.len });
+            std.log.info("Agent done (exit={d}, {d} bytes)", .{ run_result.exit_code, run_result.stdout.len });
         }
 
         return try agent_mod.parseNdjson(self.allocator, run_result.stdout);
@@ -2082,25 +2027,19 @@ const TestResult = struct {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
-test "prompts: system prompts non-empty for all personas" {
-    try std.testing.expect(prompts.getSystemPrompt(.manager).len > 0);
-    try std.testing.expect(prompts.getSystemPrompt(.qa).len > 0);
-    try std.testing.expect(prompts.getSystemPrompt(.worker).len > 0);
-}
+test "mode phases have correct tools" {
+    const spec = modes.swe_mode.getPhase("spec").?;
+    const qa = modes.swe_mode.getPhase("qa").?;
+    const impl = modes.swe_mode.getPhase("impl").?;
 
-test "getAllowedTools restricts manager and qa" {
-    const mgr = prompts.getAllowedTools(.manager);
-    const qa = prompts.getAllowedTools(.qa);
-    const wrk = prompts.getAllowedTools(.worker);
+    // Spec and QA should not have Bash or Edit
+    try std.testing.expect(std.mem.indexOf(u8, spec.allowed_tools, "Bash") == null);
+    try std.testing.expect(std.mem.indexOf(u8, qa.allowed_tools, "Bash") == null);
+    try std.testing.expect(std.mem.indexOf(u8, qa.allowed_tools, "Edit") == null);
 
-    // Manager and QA should not have Bash or Edit
-    try std.testing.expect(std.mem.indexOf(u8, mgr, "Bash") == null);
-    try std.testing.expect(std.mem.indexOf(u8, qa, "Bash") == null);
-    try std.testing.expect(std.mem.indexOf(u8, qa, "Edit") == null);
-
-    // Worker has Bash and Edit
-    try std.testing.expect(std.mem.indexOf(u8, wrk, "Bash") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wrk, "Edit") != null);
+    // Impl has Bash and Edit
+    try std.testing.expect(std.mem.indexOf(u8, impl.allowed_tools, "Bash") != null);
+    try std.testing.expect(std.mem.indexOf(u8, impl.allowed_tools, "Edit") != null);
 }
 
 test "digest generation formatting" {

@@ -1,126 +1,4 @@
 const std = @import("std");
-const AgentPersona = @import("pipeline.zig").AgentPersona;
-
-// ── System prompts (per-persona) ───────────────────────────────────────
-
-pub fn getSystemPrompt(persona: AgentPersona) []const u8 {
-    return switch (persona) {
-        .manager =>
-        \\You are the spec-writing agent in an autonomous engineering pipeline.
-        \\Read the task and codebase, then write spec.md at the repository root.
-        \\Do not modify source files.
-        ,
-        .qa =>
-        \\You are the test-writing agent in an autonomous engineering pipeline.
-        \\Read spec.md and write test files only.
-        \\Do not write implementation code or modify non-test files.
-        ,
-        .worker =>
-        \\You are the implementation agent in an autonomous engineering pipeline.
-        \\Read spec.md and tests, write code to make all tests pass.
-        \\Do not modify test files.
-        ,
-    };
-}
-
-pub fn getAllowedTools(persona: AgentPersona) []const u8 {
-    return switch (persona) {
-        .manager => "Read,Glob,Grep,Write",
-        .qa => "Read,Glob,Grep,Write",
-        .worker => "Read,Glob,Grep,Write,Edit,Bash",
-    };
-}
-
-// ── Phase prompts ──────────────────────────────────────────────────────
-
-pub const spec_phase =
-    \\Task #{d}: {s}
-    \\
-    \\Description:
-    \\{s}
-    \\
-    \\Repository files:
-    \\
-;
-
-pub const spec_phase_suffix =
-    \\
-    \\Write spec.md containing:
-    \\1. Task summary (2-3 sentences)
-    \\2. Files to modify and create (exact paths)
-    \\3. Function/type signatures for new or changed code
-    \\4. Acceptance criteria (testable assertions)
-    \\5. Edge cases
-;
-
-pub const qa_phase =
-    \\Read spec.md and write test files covering every acceptance criterion.
-    \\Only create/modify test files (*_test.* or tests/ directory).
-    \\Tests should FAIL initially since features are not yet implemented.
-;
-
-pub const impl_phase =
-    \\Read spec.md and the test files.
-    \\Write implementation code that makes all tests pass.
-    \\Only modify files listed in spec.md. Do not modify test files.
-;
-
-pub const impl_retry_fmt =
-    \\
-    \\
-    \\Previous attempt failed. Test output:
-    \\```
-    \\{s}
-    \\```
-    \\Fix the failures.
-;
-
-pub const qa_fix_fmt =
-    \\
-    \\
-    \\Your tests from the previous QA pass have bugs that prevent them from passing.
-    \\The implementation agent tried multiple times but the test code itself is broken.
-    \\
-    \\Test output showing the failures:
-    \\```
-    \\{s}
-    \\```
-    \\
-    \\Fix the test files. Common issues: use-after-free in test setup, wrong allocator
-    \\usage, compile errors, missing defer/errdefer, incorrect test assertions.
-    \\Do NOT weaken tests or remove test cases — fix the test code so it correctly
-    \\validates the behavior described in spec.md.
-;
-
-pub const rebase_phase =
-    \\This branch has merge conflicts with main.
-    \\Rebase onto origin/main, resolve all conflicts, and ensure tests pass.
-    \\Read spec.md for context on what this branch does.
-;
-
-pub const rebase_error_fmt =
-    \\
-    \\
-    \\Previous error context:
-    \\```
-    \\{s}
-    \\```
-;
-
-pub const rebase_fix_phase =
-    \\The branch was rebased onto origin/main successfully, but tests now fail.
-    \\Fix the code so tests pass. Read spec.md for context on what this branch does.
-    \\Run the test command to verify your fix before finishing.
-;
-
-pub const rebase_fix_error_fmt =
-    \\
-    \\
-    \\Test output:
-    \\```
-    \\{s}
-    \\```
-;
 
 // ── Seed prompts ───────────────────────────────────────────────────────
 
@@ -228,8 +106,9 @@ pub const director_system =
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
-test "getSystemPrompt returns non-empty for all personas" {
-    try std.testing.expect(getSystemPrompt(.manager).len > 0);
-    try std.testing.expect(getSystemPrompt(.qa).len > 0);
-    try std.testing.expect(getSystemPrompt(.worker).len > 0);
+test "seed prompts are non-empty" {
+    try std.testing.expect(seed_explore_preamble.len > 0);
+    try std.testing.expect(seed_refactor.len > 0);
+    try std.testing.expect(seed_task_suffix.len > 0);
+    try std.testing.expect(seed_proposal_suffix.len > 0);
 }

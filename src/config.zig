@@ -4,6 +4,7 @@ pub const RepoConfig = struct {
     path: []const u8,
     test_cmd: []const u8,
     prompt_file: []const u8 = "",
+    mode: []const u8 = "swe",
     is_self: bool = false,
     auto_merge: bool = true,
 };
@@ -61,6 +62,9 @@ pub const Config = struct {
     // Discord config
     discord_enabled: bool,
     discord_token: []const u8,
+    // Observer
+    observer_config: []const u8 = "",
+    anthropic_api_key: []const u8 = "",
     allocator: std.mem.Allocator,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
@@ -133,6 +137,8 @@ pub const Config = struct {
             .git_via_borg = std.mem.eql(u8, getEnv(allocator, env_content, "GIT_VIA_BORG") orelse "false", "true"),
             .git_claude_coauthor = std.mem.eql(u8, getEnv(allocator, env_content, "GIT_CLAUDE_COAUTHOR") orelse "false", "true"),
             .git_agent_prompt = getEnv(allocator, env_content, "GIT_AGENT_PROMPT") orelse "",
+            .observer_config = getEnv(allocator, env_content, "OBSERVER_CONFIG") orelse "",
+            .anthropic_api_key = getEnv(allocator, env_content, "ANTHROPIC_API_KEY") orelse "",
             .allocator = allocator,
         };
 
@@ -148,6 +154,51 @@ pub const Config = struct {
         }
 
         return config;
+    }
+
+    const db_mod = @import("db.zig");
+
+    /// Load runtime settings from DB, overriding env defaults.
+    pub fn loadSettingsFromDb(self: *Config, db: *db_mod.Db) void {
+        const alloc = self.allocator;
+        if (db.getState(alloc, "continuous_mode") catch null) |v| {
+            self.continuous_mode = std.mem.eql(u8, v, "true");
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "release_interval_mins") catch null) |v| {
+            self.release_interval_mins = std.fmt.parseInt(u32, v, 10) catch self.release_interval_mins;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "pipeline_max_backlog") catch null) |v| {
+            self.pipeline_max_backlog = std.fmt.parseInt(u32, v, 10) catch self.pipeline_max_backlog;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "agent_timeout_s") catch null) |v| {
+            self.agent_timeout_s = std.fmt.parseInt(i64, v, 10) catch self.agent_timeout_s;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "pipeline_seed_cooldown_s") catch null) |v| {
+            self.pipeline_seed_cooldown_s = std.fmt.parseInt(i64, v, 10) catch self.pipeline_seed_cooldown_s;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "pipeline_tick_s") catch null) |v| {
+            self.pipeline_tick_s = std.fmt.parseInt(u64, v, 10) catch self.pipeline_tick_s;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "container_memory_mb") catch null) |v| {
+            self.container_memory_mb = std.fmt.parseInt(u64, v, 10) catch self.container_memory_mb;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "pipeline_max_agents") catch null) |v| {
+            self.pipeline_max_agents = std.fmt.parseInt(u32, v, 10) catch self.pipeline_max_agents;
+            alloc.free(v);
+        }
+        if (db.getState(alloc, "model") catch null) |v| {
+            self.model = v; // owned by allocator, don't free
+        }
+        if (db.getState(alloc, "assistant_name") catch null) |v| {
+            self.assistant_name = v;
+        }
     }
 
     /// Returns extra system prompt instructions derived from config.

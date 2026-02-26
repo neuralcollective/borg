@@ -1,5 +1,6 @@
 const std = @import("std");
 const sqlite = @import("sqlite.zig");
+const modes = @import("modes.zig");
 
 pub const RegisteredGroup = struct {
     jid: []const u8,
@@ -40,9 +41,10 @@ pub const PipelineTask = struct {
     notify_chat: []const u8,
     created_at: []const u8,
     session_id: []const u8,
+    mode: []const u8,
 
     pub fn deinit(self: PipelineTask, allocator: std.mem.Allocator) void {
-        const fields = .{ self.title, self.description, self.repo_path, self.branch, self.status, self.last_error, self.created_by, self.notify_chat, self.created_at, self.session_id };
+        const fields = .{ self.title, self.description, self.repo_path, self.branch, self.status, self.last_error, self.created_by, self.notify_chat, self.created_at, self.session_id, self.mode };
         inline for (fields) |f| allocator.free(f);
     }
 };
@@ -286,6 +288,8 @@ pub const Db = struct {
             "ALTER TABLE proposals ADD COLUMN triage_risk INTEGER DEFAULT 0",
             "ALTER TABLE proposals ADD COLUMN triage_effort INTEGER DEFAULT 0",
             "ALTER TABLE proposals ADD COLUMN triage_reasoning TEXT DEFAULT ''",
+            "ALTER TABLE pipeline_tasks ADD COLUMN mode TEXT DEFAULT 'swe'",
+            "UPDATE proposals SET status = 'proposed' WHERE status = 'pending'",
         };
 
         for (migrations, 1..) |sql, i| {
@@ -720,10 +724,10 @@ pub const Db = struct {
 
     // --- Pipeline Tasks ---
 
-    pub fn createPipelineTask(self: *Db, title: []const u8, description: []const u8, repo_path: []const u8, created_by: []const u8, notify_chat: []const u8) !i64 {
+    pub fn createPipelineTask(self: *Db, title: []const u8, description: []const u8, repo_path: []const u8, created_by: []const u8, notify_chat: []const u8, mode: []const u8) !i64 {
         try self.sqlite_db.execute(
-            "INSERT INTO pipeline_tasks (title, description, repo_path, created_by, notify_chat) VALUES (?1, ?2, ?3, ?4, ?5)",
-            .{ title, description, repo_path, created_by, notify_chat },
+            "INSERT INTO pipeline_tasks (title, description, repo_path, created_by, notify_chat, mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            .{ title, description, repo_path, created_by, notify_chat, if (mode.len > 0) mode else "swe" },
         );
         const id = self.sqlite_db.lastInsertRowId();
         self.logEvent("info", "pipeline", title[0..@min(title.len, 200)], "created");
@@ -731,25 +735,13 @@ pub const Db = struct {
     }
 
     pub fn getNextPipelineTask(self: *Db, allocator: std.mem.Allocator) !?PipelineTask {
-        // Priority: rebase > retry > impl > qa > spec > backlog
         var rows = try self.sqlite_db.query(
             allocator,
-            \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '')
-            \\FROM pipeline_tasks
-            \\WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')
-            \\ORDER BY
-            \\  CASE status
-            \\    WHEN 'rebase' THEN 0
-            \\    WHEN 'retry' THEN 1
-            \\    WHEN 'impl' THEN 2
-            \\    WHEN 'qa_fix' THEN 3
-            \\    WHEN 'qa' THEN 3
-            \\    WHEN 'spec' THEN 4
-            \\    WHEN 'backlog' THEN 5
-            \\  END,
-            \\  created_at ASC
-            \\LIMIT 1
-            ,
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, ''), COALESCE(mode, 'swe')" ++
+                " FROM pipeline_tasks" ++
+                " WHERE status IN " ++ modes.sql_active_statuses ++
+                " ORDER BY " ++ modes.sql_priority_case ++ ", created_at ASC" ++
+                " LIMIT 1",
             .{},
         );
         defer rows.deinit();
@@ -760,22 +752,11 @@ pub const Db = struct {
     pub fn getActivePipelineTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            \\SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '')
-            \\FROM pipeline_tasks
-            \\WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')
-            \\ORDER BY
-            \\  CASE status
-            \\    WHEN 'rebase' THEN 0
-            \\    WHEN 'retry' THEN 1
-            \\    WHEN 'impl' THEN 2
-            \\    WHEN 'qa_fix' THEN 3
-            \\    WHEN 'qa' THEN 3
-            \\    WHEN 'spec' THEN 4
-            \\    WHEN 'backlog' THEN 5
-            \\  END,
-            \\  created_at ASC
-            \\LIMIT ?1
-            ,
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, ''), COALESCE(mode, 'swe')" ++
+                " FROM pipeline_tasks" ++
+                " WHERE status IN " ++ modes.sql_active_statuses ++
+                " ORDER BY " ++ modes.sql_priority_case ++ ", created_at ASC" ++
+                " LIMIT ?1",
             .{limit},
         );
         defer rows.deinit();
@@ -790,7 +771,7 @@ pub const Db = struct {
     pub fn getPipelineTask(self: *Db, allocator: std.mem.Allocator, task_id: i64) !?PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '') FROM pipeline_tasks WHERE id = ?1",
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, ''), COALESCE(mode, 'swe') FROM pipeline_tasks WHERE id = ?1",
             .{task_id},
         );
         defer rows.deinit();
@@ -861,7 +842,7 @@ pub const Db = struct {
     pub fn getAllPipelineTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, '') FROM pipeline_tasks ORDER BY created_at DESC LIMIT ?1",
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, COALESCE(session_id, ''), COALESCE(mode, 'swe') FROM pipeline_tasks ORDER BY created_at DESC LIMIT ?1",
             .{limit},
         );
         defer rows.deinit();
@@ -888,6 +869,7 @@ pub const Db = struct {
             .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
             .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
             .session_id = try allocator.dupe(u8, row.get(12) orelse ""),
+            .mode = try allocator.dupe(u8, row.get(13) orelse "swe"),
         };
     }
 
@@ -924,7 +906,7 @@ pub const Db = struct {
     pub fn getActivePipelineTaskCount(self: *Db) !i64 {
         var rows = try self.sqlite_db.query(
             self.allocator,
-            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN ('backlog', 'spec', 'qa', 'qa_fix', 'impl', 'retry', 'rebase')",
+            "SELECT COUNT(*) FROM pipeline_tasks WHERE status IN " ++ modes.sql_active_statuses,
             .{},
         );
         defer rows.deinit();
@@ -1096,7 +1078,7 @@ pub const Db = struct {
 
     pub fn createProposal(self: *Db, repo_path: []const u8, title: []const u8, description: []const u8, rationale: []const u8) !i64 {
         try self.sqlite_db.execute(
-            "INSERT INTO proposals (repo_path, title, description, rationale) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO proposals (repo_path, title, description, rationale, status) VALUES (?1, ?2, ?3, ?4, 'proposed')",
             .{ repo_path, title, description, rationale },
         );
         return self.sqlite_db.lastInsertRowId();
@@ -1145,7 +1127,7 @@ pub const Db = struct {
     pub fn getRecentMergedTasks(self: *Db, allocator: std.mem.Allocator, limit: i64) ![]PipelineTask {
         var rows = try self.sqlite_db.query(
             allocator,
-            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, session_id FROM pipeline_tasks WHERE status = 'merged' ORDER BY id DESC LIMIT ?1",
+            "SELECT id, title, description, repo_path, branch, status, attempt, max_attempts, last_error, created_by, notify_chat, created_at, session_id, COALESCE(mode, 'swe') FROM pipeline_tasks WHERE status = 'merged' ORDER BY id DESC LIMIT ?1",
             .{limit},
         );
         defer rows.deinit();
@@ -1165,6 +1147,7 @@ pub const Db = struct {
                 .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
                 .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
                 .session_id = try allocator.dupe(u8, row.get(12) orelse ""),
+                .mode = try allocator.dupe(u8, row.get(13) orelse "swe"),
             });
         }
         return tasks.toOwnedSlice();
@@ -1338,8 +1321,8 @@ test "pipeline task lifecycle" {
     defer db.deinit();
 
     // Create tasks
-    const id1 = try db.createPipelineTask("Add feature X", "Detailed description", "/tmp/repo", "alice", "tg:123");
-    const id2 = try db.createPipelineTask("Fix bug Y", "Bug details", "/tmp/repo", "bob", "tg:456");
+    const id1 = try db.createPipelineTask("Add feature X", "Detailed description", "/tmp/repo", "alice", "tg:123", "swe");
+    const id2 = try db.createPipelineTask("Fix bug Y", "Bug details", "/tmp/repo", "bob", "tg:456", "swe");
     try std.testing.expect(id1 > 0);
     try std.testing.expect(id2 > id1);
 
@@ -1379,8 +1362,8 @@ test "integration queue operations" {
     var db = try Db.init(alloc, ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("Task 1", "desc", "/repo", "", "");
-    const id2 = try db.createPipelineTask("Task 2", "desc", "/repo", "", "");
+    const id1 = try db.createPipelineTask("Task 1", "desc", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("Task 2", "desc", "/repo", "", "", "swe");
 
     try db.enqueueForIntegration(id1, "feature/task-1", "/repo");
     try db.enqueueForIntegration(id2, "feature/task-2", "/repo");
