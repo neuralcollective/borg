@@ -8,7 +8,7 @@ export function TaskCreator() {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [mode, setMode] = useState("swe");
+  const [mode, setMode] = useState("sweborg");
   const [repoPath, setRepoPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -89,7 +89,7 @@ export function TaskCreator() {
               >
                 {modes?.map((m) => (
                   <option key={m.name} value={m.name}>{m.label}</option>
-                )) ?? <option value="swe">Software Engineering</option>}
+                )) ?? <option value="sweborg">Software Engineering</option>}
               </select>
             </div>
 
