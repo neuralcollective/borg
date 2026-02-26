@@ -2,6 +2,7 @@ import { useTaskDetail, useTaskStream, retryTask } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
+import { TaskChat } from "./task-chat";
 import { repoName, isActiveStatus, type TaskOutput } from "@/lib/types";
 import { useUIMode } from "@/lib/ui-mode";
 import { cn } from "@/lib/utils";
@@ -116,21 +117,26 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         </div>
       )}
 
-      {/* Live terminal for active tasks */}
-      {(isActive || streaming) && (
-        <div className="mx-4 mt-3 flex-1 min-h-0">
-          <LiveTerminal events={events} streaming={streaming} />
-        </div>
-      )}
+      {/* Main content area: terminal / outputs + chat */}
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+        {/* Live terminal for active tasks */}
+        {(isActive || streaming) && (
+          <div className="mx-4 mt-3 flex-1 min-h-0">
+            <LiveTerminal events={events} streaming={streaming} />
+          </div>
+        )}
 
-      {/* Completed phase outputs */}
-      {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
-        <OutputSelector key={task.outputs.length} outputs={task.outputs} />
-      ) : !isActive && !streaming ? (
-        <div className="flex flex-1 items-center justify-center text-xs text-zinc-700">
-          No agent outputs yet
-        </div>
-      ) : null}
+        {/* Completed phase outputs */}
+        {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
+          <OutputSelector key={task.outputs.length} outputs={task.outputs} />
+        ) : !isActive && !streaming ? (
+          <div className="flex flex-1 items-center justify-center text-xs text-zinc-700">
+            No agent outputs yet
+          </div>
+        ) : null}
+
+        <TaskChat taskId={task.id} />
+      </div>
     </div>
   );
 }

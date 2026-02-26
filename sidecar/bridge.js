@@ -6,6 +6,7 @@
 // All stdin commands include a "target" field: "discord" | "whatsapp"
 
 import { createInterface } from 'readline';
+import { spawn } from 'child_process';
 
 const ASSISTANT_NAME = (process.argv[2] || process.env.ASSISTANT_NAME || 'Borg').toLowerCase();
 
@@ -191,6 +192,99 @@ async function handleWhatsAppCommand(cmd) {
   }
 }
 
+// ── Agent session manager ────────────────────────────────────────────────
+
+const agentSessions = new Map(); // session_id → { process }
+
+function handleAgentCommand(cmd) {
+  const { action, session_id } = cmd;
+
+  if (action === 'start') {
+    startAgentSession(session_id, cmd);
+  } else if (action === 'inject') {
+    // Injection mid-run is not yet supported — log it
+    emit('agent', { event: 'inject_queued', session_id, message: cmd.message });
+  } else if (action === 'interrupt') {
+    const sess = agentSessions.get(session_id);
+    if (sess) {
+      sess.process.kill('SIGTERM');
+      agentSessions.delete(session_id);
+      emit('agent', { event: 'interrupted', session_id });
+    }
+  }
+}
+
+function startAgentSession(session_id, cmd) {
+  const { instruction, model, oauth_token, worktree_path, session_dir, allowed_tools, resume_session } = cmd;
+
+  const args = [
+    '--output-format', 'stream-json',
+    '--model', model || 'claude-opus-4-5',
+    '--allowedTools', allowed_tools || 'Read,Glob,Grep,Write,Edit,Bash',
+    '--max-turns', '200',
+  ];
+
+  if (resume_session) {
+    args.push('--resume', resume_session);
+  }
+
+  args.push('--print', instruction);
+
+  const env = {
+    ...process.env,
+    HOME: session_dir || process.env.HOME,
+    ANTHROPIC_API_KEY: oauth_token || process.env.ANTHROPIC_API_KEY || '',
+    CLAUDE_CODE_OAUTH_TOKEN: oauth_token || process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
+  };
+
+  const proc = spawn('claude', args, {
+    cwd: worktree_path || process.cwd(),
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  agentSessions.set(session_id, { process: proc });
+
+  let outputLines = [];
+
+  proc.stdout.on('data', (data) => {
+    const lines = data.toString().split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      outputLines.push(line);
+      emit('agent', { event: 'stream_line', session_id, line });
+    }
+  });
+
+  proc.stderr.on('data', (data) => {
+    const lines = data.toString().split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      emit('agent', { event: 'stderr', session_id, line });
+    }
+  });
+
+  proc.on('close', (code) => {
+    agentSessions.delete(session_id);
+
+    let output = '';
+    let new_session_id = null;
+    for (const line of outputLines) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === 'result' && obj.result) output = obj.result;
+        if (obj.type === 'system' && obj.session_id) new_session_id = obj.session_id;
+        if (obj.type === 'result' && obj.session_id) new_session_id = obj.session_id;
+      } catch {}
+    }
+
+    emit('agent', { event: 'complete', session_id, output, new_session_id, exit_code: code ?? 0 });
+  });
+
+  proc.on('error', (err) => {
+    agentSessions.delete(session_id);
+    emit('agent', { event: 'error', session_id, message: err.message });
+  });
+}
+
 // ── Stdin Router ────────────────────────────────────────────────────────
 
 const rl = createInterface({ input: process.stdin });
@@ -199,6 +293,7 @@ rl.on('line', async (line) => {
     const cmd = JSON.parse(line);
     if (cmd.target === 'discord') await handleDiscordCommand(cmd);
     else if (cmd.target === 'whatsapp') await handleWhatsAppCommand(cmd);
+    else if (cmd.target === 'agent') handleAgentCommand(cmd);
   } catch (e) {
     emit('system', { event: 'error', message: e.message });
   }

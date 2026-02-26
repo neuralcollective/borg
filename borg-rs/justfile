@@ -1,0 +1,14 @@
+build:
+    cargo build
+
+test:
+    cargo test
+
+run:
+    cargo run -p borg-server
+
+check:
+    cargo clippy -- -D warnings
+
+fmt:
+    cargo fmt

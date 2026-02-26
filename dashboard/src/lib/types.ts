@@ -81,6 +81,15 @@ export interface Proposal {
   triage_reasoning: string;
 }
 
+export interface TaskMessage {
+  id: number;
+  task_id: number;
+  role: "user" | "director" | "system";
+  content: string;
+  created_at: string;
+  delivered_phase: string | null;
+}
+
 export interface LogEvent {
   level: string;
   message: string;
