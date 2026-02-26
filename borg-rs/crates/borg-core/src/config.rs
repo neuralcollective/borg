@@ -1,8 +1,10 @@
-use crate::types::RepoConfig;
+use crate::{db::Db, types::RepoConfig};
 use anyhow::Result;
 use std::collections::HashMap;
 
-/// Full application configuration loaded from environment / .env file.
+/// Full application configuration.
+/// Non-sensitive fields are seeded to and loaded from the DB `config` table.
+/// Sensitive fields (tokens, API keys) come from env/.env only.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub telegram_token: String,
@@ -63,6 +65,10 @@ pub struct Config {
     pub git_user_coauthor: String,
 
     pub watched_repos: Vec<RepoConfig>,
+
+    // Build / self-update
+    /// Command to rebuild the binary on self-update (configurable via DB key "build_cmd").
+    pub build_cmd: String,
 
     // Codex
     pub codex_api_key: String,
@@ -237,13 +243,14 @@ fn parse_watched_repos(
         if entry.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = entry.splitn(3, ':').collect();
+        let parts: Vec<&str> = entry.splitn(4, ':').collect();
         if parts.is_empty() {
             continue;
         }
         let path = parts[0].to_string();
         let mut test_cmd = parts.get(1).copied().unwrap_or("").to_string();
         let prompt_file = parts.get(2).copied().unwrap_or("").to_string();
+        let mode = parts.get(3).copied().unwrap_or("sweborg").to_string();
 
         let auto_merge = if test_cmd.ends_with("!manual") {
             test_cmd = test_cmd[..test_cmd.len() - "!manual".len()].to_string();
@@ -261,7 +268,7 @@ fn parse_watched_repos(
             path,
             test_cmd,
             prompt_file,
-            mode: "sweborg".to_string(),
+            mode,
             is_self: false,
             auto_merge,
             lint_cmd: String::new(),
@@ -273,6 +280,126 @@ fn parse_watched_repos(
 }
 
 impl Config {
+    /// Write all non-sensitive fields to DB if not already present (first-run seeding).
+    pub fn seed_db(&self, db: &Db) -> Result<()> {
+        let entries: &[(&str, String)] = &[
+            ("assistant_name", self.assistant_name.clone()),
+            ("trigger_pattern", self.trigger_pattern.clone()),
+            ("data_dir", self.data_dir.clone()),
+            ("container_image", self.container_image.clone()),
+            ("model", self.model.clone()),
+            ("session_max_age_hours", self.session_max_age_hours.to_string()),
+            ("max_consecutive_errors", self.max_consecutive_errors.to_string()),
+            ("pipeline_repo", self.pipeline_repo.clone()),
+            ("pipeline_test_cmd", self.pipeline_test_cmd.clone()),
+            ("pipeline_lint_cmd", self.pipeline_lint_cmd.clone()),
+            ("backend", self.backend.clone()),
+            ("pipeline_admin_chat", self.pipeline_admin_chat.clone()),
+            ("release_interval_mins", self.release_interval_mins.to_string()),
+            ("continuous_mode", self.continuous_mode.to_string()),
+            ("chat_collection_window_ms", self.chat_collection_window_ms.to_string()),
+            ("chat_cooldown_ms", self.chat_cooldown_ms.to_string()),
+            ("agent_timeout_s", self.agent_timeout_s.to_string()),
+            ("max_chat_agents", self.max_chat_agents.to_string()),
+            ("chat_rate_limit", self.chat_rate_limit.to_string()),
+            ("pipeline_max_agents", self.pipeline_max_agents.to_string()),
+            ("web_bind", self.web_bind.clone()),
+            ("web_port", self.web_port.to_string()),
+            ("dashboard_dist_dir", self.dashboard_dist_dir.clone()),
+            ("container_setup", self.container_setup.clone()),
+            ("container_memory_mb", self.container_memory_mb.to_string()),
+            ("sandbox_backend", self.sandbox_backend.clone()),
+            ("pipeline_max_backlog", self.pipeline_max_backlog.to_string()),
+            ("pipeline_seed_cooldown_s", self.pipeline_seed_cooldown_s.to_string()),
+            ("proposal_promote_threshold", self.proposal_promote_threshold.to_string()),
+            ("pipeline_tick_s", self.pipeline_tick_s.to_string()),
+            ("remote_check_interval_s", self.remote_check_interval_s.to_string()),
+            ("git_author_name", self.git_author_name.clone()),
+            ("git_author_email", self.git_author_email.clone()),
+            ("git_committer_name", self.git_committer_name.clone()),
+            ("git_committer_email", self.git_committer_email.clone()),
+            ("git_via_borg", self.git_via_borg.to_string()),
+            ("git_claude_coauthor", self.git_claude_coauthor.to_string()),
+            ("git_user_coauthor", self.git_user_coauthor.clone()),
+            ("build_cmd", "cargo build --release".into()),
+            ("observer_config", self.observer_config.clone()),
+            ("wa_disabled", self.wa_disabled.to_string()),
+        ];
+        let conn_guard = db.raw_conn();
+        let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
+        for (key, value) in entries {
+            conn.execute(
+                "INSERT OR IGNORE INTO config (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
+                rusqlite::params![key, value],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Return a new Config with non-sensitive fields overridden from DB values.
+    pub fn load_from_db(&self, db: &Db) -> Self {
+        let mut c = self.clone();
+        let get = |key: &str| db.get_config(key).ok().flatten();
+        let get_str = |key: &str, cur: &str| get(key).unwrap_or_else(|| cur.to_string());
+        let get_bool = |key: &str, cur: bool| {
+            get(key).map(|v| v == "true" || v == "1").unwrap_or(cur)
+        };
+        macro_rules! load_i64 { ($key:expr, $field:expr) => {
+            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
+        }}
+        macro_rules! load_u32 { ($key:expr, $field:expr) => {
+            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
+        }}
+        macro_rules! load_u64 { ($key:expr, $field:expr) => {
+            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
+        }}
+        macro_rules! load_u16 { ($key:expr, $field:expr) => {
+            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
+        }}
+        c.assistant_name = get_str("assistant_name", &c.assistant_name);
+        c.trigger_pattern = get_str("trigger_pattern", &c.trigger_pattern);
+        c.data_dir = get_str("data_dir", &c.data_dir);
+        c.container_image = get_str("container_image", &c.container_image);
+        c.model = get_str("model", &c.model);
+        c.backend = get_str("backend", &c.backend);
+        c.pipeline_repo = get_str("pipeline_repo", &c.pipeline_repo);
+        c.pipeline_test_cmd = get_str("pipeline_test_cmd", &c.pipeline_test_cmd);
+        c.pipeline_lint_cmd = get_str("pipeline_lint_cmd", &c.pipeline_lint_cmd);
+        c.pipeline_admin_chat = get_str("pipeline_admin_chat", &c.pipeline_admin_chat);
+        c.container_setup = get_str("container_setup", &c.container_setup);
+        c.sandbox_backend = get_str("sandbox_backend", &c.sandbox_backend);
+        c.web_bind = get_str("web_bind", &c.web_bind);
+        c.dashboard_dist_dir = get_str("dashboard_dist_dir", &c.dashboard_dist_dir);
+        c.git_author_name = get_str("git_author_name", &c.git_author_name);
+        c.git_author_email = get_str("git_author_email", &c.git_author_email);
+        c.git_committer_name = get_str("git_committer_name", &c.git_committer_name);
+        c.git_committer_email = get_str("git_committer_email", &c.git_committer_email);
+        c.git_user_coauthor = get_str("git_user_coauthor", &c.git_user_coauthor);
+        c.observer_config = get_str("observer_config", &c.observer_config);
+        c.build_cmd = get_str("build_cmd", &c.build_cmd);
+        c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
+        c.git_via_borg = get_bool("git_via_borg", c.git_via_borg);
+        c.git_claude_coauthor = get_bool("git_claude_coauthor", c.git_claude_coauthor);
+        c.wa_disabled = get_bool("wa_disabled", c.wa_disabled);
+        load_i64!("session_max_age_hours", c.session_max_age_hours);
+        load_i64!("chat_collection_window_ms", c.chat_collection_window_ms);
+        load_i64!("chat_cooldown_ms", c.chat_cooldown_ms);
+        load_i64!("agent_timeout_s", c.agent_timeout_s);
+        load_i64!("pipeline_seed_cooldown_s", c.pipeline_seed_cooldown_s);
+        load_i64!("proposal_promote_threshold", c.proposal_promote_threshold);
+        load_i64!("remote_check_interval_s", c.remote_check_interval_s);
+        load_u32!("max_consecutive_errors", c.max_consecutive_errors);
+        load_u32!("release_interval_mins", c.release_interval_mins);
+        load_u32!("max_chat_agents", c.max_chat_agents);
+        load_u32!("chat_rate_limit", c.chat_rate_limit);
+        load_u32!("pipeline_max_agents", c.pipeline_max_agents);
+        load_u32!("pipeline_max_backlog", c.pipeline_max_backlog);
+        load_u64!("container_memory_mb", c.container_memory_mb);
+        load_u64!("pipeline_tick_s", c.pipeline_tick_s);
+        load_u16!("web_port", c.web_port);
+        c
+    }
+
     pub fn from_env() -> Result<Self> {
         let dotenv = parse_dotenv();
 
@@ -373,6 +500,7 @@ impl Config {
             git_claude_coauthor: get_bool("GIT_CLAUDE_COAUTHOR", &dotenv, false),
             git_user_coauthor: get_str("GIT_USER_COAUTHOR", &dotenv, ""),
             watched_repos,
+            build_cmd: "cargo build --release".into(),
             codex_api_key,
             codex_credentials_path,
             discord_token: get_str("DISCORD_TOKEN", &dotenv, ""),

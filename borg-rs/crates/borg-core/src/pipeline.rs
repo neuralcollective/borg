@@ -20,10 +20,31 @@ use crate::{
 
 /// Broadcast event emitted after each significant pipeline state change.
 #[derive(Debug, Clone)]
-pub struct PipelineEvent {
-    pub kind: String,
-    pub task_id: Option<i64>,
-    pub message: String,
+pub enum PipelineEvent {
+    Phase { task_id: Option<i64>, message: String },
+    Output { task_id: Option<i64>, message: String },
+    Notify { chat_id: String, message: String },
+}
+
+impl PipelineEvent {
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Phase { .. } => "task_phase",
+            Self::Output { .. } => "task_output",
+            Self::Notify { .. } => "notify",
+        }
+    }
+    pub fn task_id(&self) -> Option<i64> {
+        match self {
+            Self::Phase { task_id, .. } | Self::Output { task_id, .. } => *task_id,
+            Self::Notify { .. } => None,
+        }
+    }
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Phase { message, .. } | Self::Output { message, .. } | Self::Notify { message, .. } => message,
+        }
+    }
 }
 
 pub struct Pipeline {
@@ -33,7 +54,10 @@ pub struct Pipeline {
     pub sandbox: Sandbox,
     pub event_tx: broadcast::Sender<PipelineEvent>,
     pub stream_manager: Arc<TaskStreamManager>,
+    pub force_restart: Arc<std::sync::atomic::AtomicBool>,
     last_seed_secs: std::sync::atomic::AtomicI64,
+    last_self_update_secs: std::sync::atomic::AtomicI64,
+    startup_heads: HashMap<String, String>,
     in_flight: Mutex<HashSet<i64>>,
 }
 
@@ -42,8 +66,18 @@ impl Pipeline {
         db: Arc<Db>,
         backends: HashMap<String, Arc<dyn AgentBackend>>,
         config: Arc<Config>,
+        force_restart: Arc<std::sync::atomic::AtomicBool>,
     ) -> (Self, broadcast::Receiver<PipelineEvent>) {
         let (tx, rx) = broadcast::channel(256);
+        // Capture git HEAD for each watched repo at startup (used for self-update detection)
+        let mut startup_heads = HashMap::new();
+        for repo in &config.watched_repos {
+            if repo.is_self {
+                if let Ok(head) = crate::git::Git::new(&repo.path).rev_parse_head() {
+                    startup_heads.insert(repo.path.clone(), head);
+                }
+            }
+        }
         let p = Self {
             db,
             backends,
@@ -51,7 +85,10 @@ impl Pipeline {
             sandbox: Sandbox,
             event_tx: tx,
             stream_manager: TaskStreamManager::new(),
+            force_restart,
             last_seed_secs: std::sync::atomic::AtomicI64::new(0),
+            last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
+            startup_heads,
             in_flight: Mutex::new(HashSet::new()),
         };
         (p, rx)
@@ -162,10 +199,10 @@ impl Pipeline {
 
     // ── Main loop ─────────────────────────────────────────────────────────
 
-    /// Main tick: dispatch ready tasks and run seed if idle.
+    /// Main tick: dispatch ready tasks and run all periodic background work.
     pub async fn tick(self: Arc<Self>) -> Result<()> {
+        // Dispatch ready tasks
         let tasks = self.db.list_active_tasks().context("list_active_tasks")?;
-
         let max_agents = self.config.pipeline_max_agents as usize;
         let mut dispatched = 0usize;
 
@@ -193,6 +230,20 @@ impl Pipeline {
 
         if dispatched == 0 && self.in_flight.lock().await.is_empty() {
             self.seed_if_idle().await?;
+        }
+
+        // Periodic background work (each is internally throttled)
+        self.clone().check_integration().await.unwrap_or_else(|e| warn!("check_integration: {e}"));
+        self.maybe_auto_promote_proposals();
+        self.maybe_auto_triage().await;
+        self.check_health().await.unwrap_or_else(|e| warn!("check_health: {e}"));
+        self.check_remote_updates().await;
+        self.maybe_apply_self_update();
+
+        // Check if main loop should exit for self-update restart
+        if self.force_restart.load(std::sync::atomic::Ordering::Acquire) {
+            info!("force_restart flag set — exiting for systemd restart");
+            std::process::exit(0);
         }
 
         Ok(())
@@ -314,8 +365,7 @@ impl Pipeline {
         self.db.update_task_status(task.id, next, None)?;
 
         info!("created worktree {} (branch {}) for task #{}", wt_path, branch, task.id);
-        self.emit(PipelineEvent {
-            kind: "task_phase".into(),
+        self.emit(PipelineEvent::Phase {
             task_id: Some(task.id),
             message: format!("task #{} started branch {}", task.id, branch),
         });
@@ -399,8 +449,7 @@ impl Pipeline {
             warn!("task #{}: insert_task_output: {e}", task.id);
         }
 
-        self.emit(PipelineEvent {
-            kind: "task_output".into(),
+        self.emit(PipelineEvent::Output {
             task_id: Some(task.id),
             message: format!("task #{} phase {} completed (success={})", task.id, phase.name, result.success),
         });
@@ -618,8 +667,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         } else {
             self.db.update_task_status(task.id, next, None)?;
         }
-        self.emit(PipelineEvent {
-            kind: "task_phase".into(),
+        self.emit(PipelineEvent::Phase {
             task_id: Some(task.id),
             message: format!("task #{} advanced to '{}'", task.id, next),
         });
@@ -664,6 +712,247 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         ["_test.", "/tests/", "test_", ".test.", "spec."]
             .iter()
             .any(|p| error.contains(p))
+    }
+
+    // ── Integration merge ─────────────────────────────────────────────────
+
+    pub async fn check_integration(self: &Arc<Self>) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        let last = self.db.get_ts("last_release_ts");
+        let min_interval = if self.config.continuous_mode {
+            60i64
+        } else {
+            self.config.release_interval_mins as i64 * 60
+        };
+        if now - last < min_interval {
+            return Ok(());
+        }
+
+        let mut ran_any = false;
+        for repo in &self.config.watched_repos {
+            let queued = self.db.get_queued_branches_for_repo(&repo.path)?;
+            if queued.is_empty() {
+                continue;
+            }
+            info!("Integration: {} branches for {}", queued.len(), repo.path);
+            if let Err(e) = self.run_integration(queued, &repo.path, repo.auto_merge).await {
+                warn!("Integration error for {}: {e}", repo.path);
+            }
+            ran_any = true;
+        }
+
+        if ran_any {
+            self.db.set_ts("last_release_ts", chrono::Utc::now().timestamp());
+        }
+        Ok(())
+    }
+
+    async fn run_integration(&self, queued: Vec<crate::types::QueueEntry>, repo_path: &str, auto_merge: bool) -> Result<()> {
+        let git = Git::new(repo_path);
+        git.checkout("main")?;
+        git.pull()?;
+
+        // Filter entries whose branches no longer exist
+        let mut live = Vec::new();
+        for entry in queued {
+            let check = git.exec(repo_path, &["rev-parse", "--verify", &entry.branch]);
+            if check.map(|r| r.success()).unwrap_or(false) {
+                live.push(entry);
+            } else {
+                warn!("Excluding {} from integration: branch not found", entry.branch);
+                self.db.update_queue_status_with_error(entry.id, "excluded", "branch not found")?;
+            }
+        }
+        if live.is_empty() {
+            return Ok(());
+        }
+
+        let mut excluded_ids: HashSet<i64> = HashSet::new();
+        let mut freshly_pushed: HashSet<i64> = HashSet::new();
+
+        for entry in &live {
+            // Check if already merged on GitHub
+            let state_out = self.run_test_command(repo_path, &format!(
+                "gh pr view {0} --json state --jq .state 2>/dev/null", entry.branch
+            )).await;
+            if let Ok(ref o) = state_out {
+                if o.stdout.trim() == "MERGED" {
+                    info!("Task #{} {}: PR already merged", entry.task_id, entry.branch);
+                    self.db.update_queue_status(entry.id, "merged")?;
+                    self.db.update_task_status(entry.task_id, "merged", None)?;
+                    excluded_ids.insert(entry.id);
+                    continue;
+                }
+            }
+
+            // Reject if not rebased on main
+            let rb = git.exec(repo_path, &["merge-base", "--is-ancestor", "origin/main", &entry.branch]);
+            if rb.map(|r| !r.success()).unwrap_or(false) {
+                info!("Task #{} {} not rebased on main, sending to rebase", entry.task_id, entry.branch);
+                self.db.update_queue_status_with_error(entry.id, "excluded", "branch not rebased on main")?;
+                self.db.update_task_status(entry.task_id, "rebase", None)?;
+                excluded_ids.insert(entry.id);
+                continue;
+            }
+
+            // Push branch (force, to handle post-rebase)
+            let push = git.push_force(&entry.branch)?;
+            if !push.success() {
+                if push.stderr.contains("cannot lock ref") {
+                    git.delete_remote_branch(&entry.branch).ok();
+                    let push2 = git.push_force(&entry.branch)?;
+                    if !push2.success() {
+                        warn!("Failed to push {} after ref fix: {}", entry.branch, &push2.stderr[..push2.stderr.len().min(200)]);
+                        continue;
+                    }
+                } else {
+                    warn!("Failed to push {}: {}", entry.branch, &push.stderr[..push.stderr.len().min(200)]);
+                    continue;
+                }
+            }
+
+            // Check if PR already exists
+            let view_out = self.run_test_command(repo_path, &format!(
+                "gh pr view {0} --json number --jq .number 2>/dev/null", entry.branch
+            )).await?;
+            if view_out.exit_code == 0 && !view_out.stdout.trim().is_empty() {
+                if !push.stderr.contains("Everything up-to-date") {
+                    freshly_pushed.insert(entry.id);
+                }
+                continue;
+            }
+
+            // Get task title for PR
+            let title = self.db.get_task(entry.task_id)?
+                .map(|t| t.title.chars().take(100).map(|c| if "\"\\$`".contains(c) { ' ' } else { c }).collect::<String>())
+                .unwrap_or_else(|| entry.branch.clone());
+
+            let create_out = self.run_test_command(repo_path, &format!(
+                r#"gh pr create --base main --head {0} --title "{1}" --body "Automated implementation.""#,
+                entry.branch, title
+            )).await?;
+
+            if create_out.exit_code != 0 {
+                let err = &create_out.stderr[..create_out.stderr.len().min(300)];
+                if err.contains("No commits between") {
+                    info!("Task #{} {}: no commits vs main, marking merged", entry.task_id, entry.branch);
+                    self.db.update_queue_status(entry.id, "merged")?;
+                    self.db.update_task_status(entry.task_id, "merged", None)?;
+                    excluded_ids.insert(entry.id);
+                } else {
+                    warn!("gh pr create {}: {}", entry.branch, err);
+                }
+            } else {
+                info!("Created PR for {}", entry.branch);
+                freshly_pushed.insert(entry.id);
+            }
+        }
+
+        let mut merged_branches: Vec<String> = Vec::new();
+
+        if !auto_merge {
+            for entry in &live {
+                if excluded_ids.contains(&entry.id) { continue; }
+                self.db.update_queue_status(entry.id, "pending_review")?;
+                info!("Task #{} {}: PR ready for manual review", entry.task_id, entry.branch);
+            }
+        } else {
+            for entry in &live {
+                if excluded_ids.contains(&entry.id) { continue; }
+                if freshly_pushed.contains(&entry.id) {
+                    info!("Task #{} {}: skipping merge (just pushed)", entry.task_id, entry.branch);
+                    continue;
+                }
+
+                let view_out = self.run_test_command(repo_path, &format!(
+                    "gh pr view {0} --json state --jq .state", entry.branch
+                )).await?;
+                if view_out.exit_code != 0 { continue; }
+                let pr_state = view_out.stdout.trim();
+
+                if pr_state == "MERGED" {
+                    info!("Task #{} {}: already merged", entry.task_id, entry.branch);
+                    self.db.update_queue_status(entry.id, "merged")?;
+                    self.db.update_task_status(entry.task_id, "merged", None)?;
+                    merged_branches.push(entry.branch.clone());
+                    continue;
+                }
+
+                // Check mergeability
+                let mb_out = self.run_test_command(repo_path, &format!(
+                    "gh pr view {0} --json mergeable --jq .mergeable", entry.branch
+                )).await?;
+                let mb = mb_out.stdout.trim().to_string();
+                let mut force_merge = false;
+
+                if mb == "UNKNOWN" {
+                    let retries = self.db.get_unknown_retries(entry.id);
+                    if retries >= 5 {
+                        warn!("Task #{} {}: mergeability UNKNOWN after {} retries, forcing merge", entry.task_id, entry.branch, retries);
+                        self.db.reset_unknown_retries(entry.id)?;
+                        force_merge = true;
+                    } else {
+                        self.db.increment_unknown_retries(entry.id)?;
+                        info!("Task #{} {}: UNKNOWN ({}/5), retrying next tick", entry.task_id, entry.branch, retries + 1);
+                        continue;
+                    }
+                }
+                if !force_merge && mb != "MERGEABLE" {
+                    info!("Task #{} {}: mergeable={mb}, sending to rebase", entry.task_id, entry.branch);
+                    self.db.update_queue_status_with_error(entry.id, "excluded", "merge conflict with main")?;
+                    self.db.update_task_status(entry.task_id, "rebase", None)?;
+                    continue;
+                }
+
+                self.db.update_queue_status(entry.id, "merging")?;
+                let merge_out = self.run_test_command(repo_path, &format!(
+                    "gh pr merge {0} --squash --delete-branch", entry.branch
+                )).await;
+
+                match merge_out {
+                    Err(e) => {
+                        warn!("gh pr merge {}: {e}", entry.branch);
+                        self.db.update_queue_status(entry.id, "queued")?;
+                    }
+                    Ok(out) if out.exit_code != 0 => {
+                        let err = &out.stderr[..out.stderr.len().min(200)];
+                        warn!("gh pr merge {}: {}", entry.branch, err);
+                        if err.contains("not mergeable") || err.contains("cannot be cleanly created") {
+                            self.db.update_queue_status_with_error(entry.id, "excluded", "merge conflict with main")?;
+                            self.db.update_task_status(entry.task_id, "rebase", None)?;
+                            info!("Task #{} has conflicts, sent to rebase", entry.task_id);
+                        } else {
+                            self.db.update_queue_status(entry.id, "queued")?;
+                        }
+                    }
+                    Ok(_) => {
+                        self.db.update_queue_status(entry.id, "merged")?;
+                        self.db.update_task_status(entry.task_id, "merged", None)?;
+                        merged_branches.push(entry.branch.clone());
+                        if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
+                            self.notify(&task.notify_chat, &format!("Task #{} \"{}\" merged via PR.", task.id, task.title));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !merged_branches.is_empty() {
+            git.pull().ok();
+            let digest = self.generate_digest(&merged_branches);
+            self.notify(&self.config.pipeline_admin_chat, &digest);
+            info!("Integration complete: {} merged", merged_branches.len());
+        }
+
+        Ok(())
+    }
+
+    fn generate_digest(&self, merged: &[String]) -> String {
+        let mut s = format!("*{} PR(s) merged*\n", merged.len());
+        for branch in merged {
+            s.push_str(&format!("  + {branch}\n"));
+        }
+        s
     }
 
     // ── Seed ─────────────────────────────────────────────────────────────
@@ -739,7 +1028,11 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             label: seed_cfg.label.clone(),
             instruction: seed_cfg.prompt.clone(),
             fresh_session: true,
-            allowed_tools: "Read,Glob,Grep,Bash".to_string(),
+            allowed_tools: if seed_cfg.allowed_tools.is_empty() {
+                "Read,Glob,Grep,Bash".to_string()
+            } else {
+                seed_cfg.allowed_tools.clone()
+            },
             ..Default::default()
         };
 
@@ -761,7 +1054,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             info!("seed '{}' output: {:?}", seed_cfg.name, &result.output);
         }
 
-        self.parse_seed_output(&result.output, &repo.path, mode_name, seed_cfg.output_type)?;
+        let target_repo = if seed_cfg.target_primary_repo {
+            self.config.watched_repos.iter().find(|r| r.is_self).map(|r| r.path.as_str()).unwrap_or(&repo.path)
+        } else {
+            &repo.path
+        };
+        self.parse_seed_output(&result.output, target_repo, mode_name, seed_cfg.output_type)?;
         Ok(())
     }
 
@@ -836,7 +1134,317 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         Ok(())
     }
 
-    // ── Event broadcast ───────────────────────────────────────────────────
+    // ── Health monitoring ─────────────────────────────────────────────────
+
+    pub async fn check_health(&self) -> Result<()> {
+        const HEALTH_INTERVAL_S: i64 = 1800;
+        let now = chrono::Utc::now().timestamp();
+        if now - self.db.get_ts("last_health_ts") < HEALTH_INTERVAL_S {
+            return Ok(());
+        }
+        self.db.set_ts("last_health_ts", now);
+
+        for repo in &self.config.watched_repos {
+            if !repo.is_self {
+                continue;
+            }
+            let git = Git::new(&repo.path);
+            if git.checkout("main").is_err() || git.pull().is_err() {
+                continue;
+            }
+            match self.run_test_command(&repo.path, &repo.test_cmd).await {
+                Ok(out) if out.exit_code != 0 => {
+                    warn!("Health: tests failed for {}", repo.path);
+                    self.create_health_task(&repo.path, "tests", &out.stderr).await;
+                }
+                Ok(_) => info!("Health: {} OK", repo.path),
+                Err(e) => warn!("Health: test command error for {}: {e}", repo.path),
+            }
+        }
+        Ok(())
+    }
+
+    async fn create_health_task(&self, repo_path: &str, kind: &str, stderr: &str) {
+        // Dedup: skip if a fix task already exists for this repo
+        if let Ok(active) = self.db.list_active_tasks() {
+            if active.iter().any(|t| t.title.starts_with("Fix failing ") && t.repo_path == repo_path) {
+                return;
+            }
+        }
+        let tail = if stderr.len() > 500 { &stderr[stderr.len() - 500..] } else { stderr };
+        let title = format!("Fix failing {kind} on main");
+        let desc = format!("Health check detected {kind} failure on main branch.\n\nError output:\n```\n{tail}\n```");
+        let task = crate::types::Task {
+            id: 0,
+            title: title.clone(),
+            description: desc,
+            repo_path: repo_path.to_string(),
+            branch: String::new(),
+            status: "backlog".into(),
+            attempt: 0,
+            max_attempts: 5,
+            last_error: String::new(),
+            created_by: "health-check".into(),
+            notify_chat: String::new(),
+            created_at: chrono::Utc::now(),
+            session_id: String::new(),
+            mode: "sweborg".into(),
+            backend: String::new(),
+        };
+        match self.db.insert_task(&task) {
+            Ok(id) => {
+                info!("Health: created fix task #{id} for {repo_path} {kind} failure");
+                self.notify(&self.config.pipeline_admin_chat, &format!("Health check: {kind} failing for {repo_path}, created fix task #{id}"));
+            }
+            Err(e) => warn!("Health: insert_task: {e}"),
+        }
+    }
+
+    // ── Self-update ───────────────────────────────────────────────────────
+
+    pub async fn check_remote_updates(&self) {
+        let now = chrono::Utc::now().timestamp();
+        if now - self.db.get_ts("last_remote_check_ts") < self.config.remote_check_interval_s {
+            return;
+        }
+        self.db.set_ts("last_remote_check_ts", now);
+
+        for repo in &self.config.watched_repos {
+            if !repo.is_self {
+                continue;
+            }
+            let git = Git::new(&repo.path);
+            if git.fetch_origin().is_err() {
+                return;
+            }
+            let local = match git.rev_parse_head() { Ok(h) => h, Err(_) => return };
+            let remote = match git.rev_parse("origin/main") { Ok(h) => h, Err(_) => return };
+            if local == remote {
+                return;
+            }
+            info!("Remote update detected on {}, pulling...", repo.path);
+            if let Err(e) = git.pull() {
+                warn!("Remote pull failed: {e}");
+                return;
+            }
+            self.check_self_update(&repo.path).await;
+            return;
+        }
+    }
+
+    async fn check_self_update(&self, repo_path: &str) {
+        let git = Git::new(repo_path);
+        let current = match git.rev_parse_head() { Ok(h) => h, Err(_) => return };
+        let startup = match self.startup_heads.get(repo_path) { Some(h) => h, None => return };
+        if &current == startup {
+            return;
+        }
+
+        info!("Self-update: HEAD changed, rebuilding...");
+        self.notify(&self.config.pipeline_admin_chat, "Self-update: new commits detected, rebuilding...");
+
+        let build_cmd = self.db.get_config("build_cmd").ok().flatten()
+            .unwrap_or_else(|| self.config.build_cmd.clone());
+
+        let out = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&build_cmd)
+            .current_dir(repo_path)
+            .output()
+            .await;
+
+        match out {
+            Err(e) => {
+                warn!("Self-update: build spawn failed: {e}");
+                self.notify(&self.config.pipeline_admin_chat, "Self-update: build FAILED (spawn error).");
+            }
+            Ok(o) if !o.status.success() => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                warn!("Self-update: build failed: {}", &stderr[..stderr.len().min(500)]);
+                self.notify(&self.config.pipeline_admin_chat, "Self-update: build FAILED, continuing with old binary.");
+            }
+            Ok(_) => {
+                info!("Self-update: build succeeded, restart scheduled");
+                self.notify(&self.config.pipeline_admin_chat, "Self-update: new build ready. Will restart in 3h or on director command.");
+                self.last_self_update_secs.store(chrono::Utc::now().timestamp(), std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn maybe_apply_self_update(&self) {
+        let ts = self.last_self_update_secs.load(std::sync::atomic::Ordering::Relaxed);
+        if ts == 0 {
+            return;
+        }
+        let forced = self.force_restart.load(std::sync::atomic::Ordering::Acquire);
+        let age = chrono::Utc::now().timestamp() - ts;
+        if !forced && age < 3 * 3600 {
+            return;
+        }
+        info!("Self-update: applying restart (forced={forced}, age={age}s)");
+        self.notify(&self.config.pipeline_admin_chat, "Self-update: restarting now...");
+        // Signal main loop to exit; systemd restarts the process
+        self.force_restart.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    // ── Auto-promote + auto-triage ────────────────────────────────────────
+
+    pub fn maybe_auto_promote_proposals(&self) {
+        let active = self.db.active_task_count();
+        let max = self.config.pipeline_max_backlog as i64;
+        if active >= max {
+            return;
+        }
+        let slots = max - active;
+        let proposals = match self.db.get_top_scored_proposals(self.config.proposal_promote_threshold, slots) {
+            Ok(p) => p,
+            Err(e) => { warn!("auto_promote: {e}"); return; }
+        };
+        for p in proposals {
+            let mode = self.config.watched_repos.iter()
+                .find(|r| r.path == p.repo_path)
+                .map(|r| r.mode.as_str())
+                .unwrap_or("sweborg");
+            let task = crate::types::Task {
+                id: 0,
+                title: p.title.clone(),
+                description: p.description.clone(),
+                repo_path: p.repo_path.clone(),
+                branch: String::new(),
+                status: "backlog".into(),
+                attempt: 0,
+                max_attempts: 5,
+                last_error: String::new(),
+                created_by: "proposal".into(),
+                notify_chat: String::new(),
+                created_at: chrono::Utc::now(),
+                session_id: String::new(),
+                mode: mode.to_string(),
+                backend: String::new(),
+            };
+            match self.db.insert_task(&task) {
+                Ok(id) => {
+                    self.db.update_proposal_status(p.id, "approved").ok();
+                    info!("Auto-promoted proposal #{} (score={}) → task #{}: {}", p.id, p.triage_score, id, p.title);
+                }
+                Err(e) => warn!("auto_promote insert_task: {e}"),
+            }
+        }
+    }
+
+    pub async fn maybe_auto_triage(&self) {
+        const TRIAGE_INTERVAL_S: i64 = 6 * 3600;
+        let now = chrono::Utc::now().timestamp();
+        if now - self.db.get_ts("last_triage_ts") < TRIAGE_INTERVAL_S {
+            return;
+        }
+        if self.db.count_unscored_proposals() == 0 {
+            return;
+        }
+        self.db.set_ts("last_triage_ts", now);
+
+        let proposals = match self.db.list_untriaged_proposals() {
+            Ok(p) if !p.is_empty() => p,
+            _ => return,
+        };
+        let merged = self.db.get_recent_merged_tasks(50).unwrap_or_default();
+
+        let mut prompt = String::from(
+            "Rate each proposal on 4 dimensions (1-5 scale), and flag proposals that should be auto-dismissed.\n\n\
+            Dimensions:\n\
+            - impact: How much value does this deliver? (5=critical, 1=cosmetic)\n\
+            - feasibility: How likely is an AI agent to implement this correctly? (5=trivial, 1=needs human)\n\
+            - risk: How likely to break existing functionality? (5=very risky, 1=safe)\n\
+            - effort: How many agent cycles will this need? (5=massive, 1=simple)\n\n\
+            Overall score formula: (impact*2 + feasibility*2 - risk - effort) mapped to 1-10.\n\n\
+            Set \"dismiss\": true if: already implemented, duplicate, nonsensical, vague, or irrelevant.\n\n\
+            Reply with ONLY a JSON array, no markdown fences:\n\
+            [{\"id\": <n>, \"impact\": <1-5>, \"feasibility\": <1-5>, \"risk\": <1-5>, \"effort\": <1-5>, \"score\": <1-10>, \"reasoning\": \"<one sentence>\", \"dismiss\": <bool>}]\n\n",
+        );
+        if !merged.is_empty() {
+            prompt.push_str("Recently merged tasks (for duplicate detection):\n");
+            for t in &merged { prompt.push_str(&format!("- {}\n", t.title)); }
+            prompt.push('\n');
+        }
+        prompt.push_str("Proposals to evaluate:\n\n");
+        for p in &proposals {
+            prompt.push_str(&format!(
+                "- ID {}: {}\n  Description: {}\n  Rationale: {}\n\n",
+                p.id, p.title,
+                if p.description.is_empty() { "(none)" } else { &p.description },
+                if p.rationale.is_empty() { "(none)" } else { &p.rationale },
+            ));
+        }
+
+        let output = self.run_claude_print("claude-haiku-4-5-20251001", &prompt).await;
+        let output = match output { Ok(o) => o, Err(e) => { warn!("auto_triage: {e}"); return; } };
+
+        let arr_start = match output.find('[') { Some(i) => i, None => { warn!("auto_triage: no JSON array in output"); return; } };
+        let arr_end = match output.rfind(']') { Some(i) => i + 1, None => return };
+        let json_slice = &output[arr_start..arr_end];
+
+        let items: Vec<serde_json::Value> = match serde_json::from_str(json_slice) {
+            Ok(v) => v,
+            Err(e) => { warn!("auto_triage: JSON parse failed: {e}"); return; }
+        };
+
+        let mut scored = 0u32;
+        let mut dismissed = 0u32;
+        for item in &items {
+            let get_i64 = |k: &str| item.get(k).and_then(|v| v.as_i64());
+            let p_id = match get_i64("id") { Some(v) => v, None => continue };
+            let impact = match get_i64("impact") { Some(v) => v, None => continue };
+            let feasibility = match get_i64("feasibility") { Some(v) => v, None => continue };
+            let risk = match get_i64("risk") { Some(v) => v, None => continue };
+            let effort = match get_i64("effort") { Some(v) => v, None => continue };
+            let score = match get_i64("score") { Some(v) => v, None => continue };
+            let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
+            let should_dismiss = item.get("dismiss").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            if let Err(e) = self.db.update_proposal_triage(p_id, score, impact, feasibility, risk, effort, reasoning) {
+                warn!("auto_triage: update_proposal_triage #{p_id}: {e}");
+                continue;
+            }
+            scored += 1;
+            if should_dismiss {
+                self.db.update_proposal_status(p_id, "auto_dismissed").ok();
+                dismissed += 1;
+                info!("Auto-triage: dismissed proposal #{p_id}: {reasoning}");
+            }
+        }
+        info!("Auto-triage: scored {scored}/{} proposals, dismissed {dismissed}", proposals.len());
+    }
+
+    /// Run `claude --print --model <model>` with prompt on stdin, return stdout.
+    async fn run_claude_print(&self, model: &str, prompt: &str) -> Result<String> {
+        use tokio::io::AsyncWriteExt;
+        let mut child = tokio::process::Command::new("claude")
+            .args(["--print", "--model", model, "--permission-mode", "bypassPermissions"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .env("CLAUDE_CODE_OAUTH_TOKEN", &self.config.oauth_token)
+            .spawn()
+            .context("spawn claude --print")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(prompt.as_bytes()).await.ok();
+        }
+        let out = child.wait_with_output().await.context("wait claude --print")?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    // ── Notify + event broadcast ──────────────────────────────────────────
+
+    pub fn notify(&self, chat_id: &str, message: &str) {
+        if chat_id.is_empty() {
+            return;
+        }
+        self.emit(PipelineEvent::Notify {
+            chat_id: chat_id.to_string(),
+            message: message.to_string(),
+        });
+    }
 
     fn emit(&self, event: PipelineEvent) {
         let _ = self.event_tx.send(event);
@@ -867,13 +1475,36 @@ fn extract_blocks(text: &str, start_marker: &str, end_marker: &str) -> Vec<Strin
 }
 
 fn extract_field(block: &str, field: &str) -> Option<String> {
-    for line in block.lines() {
+    let mut lines = block.lines().peekable();
+    while let Some(line) = lines.next() {
         if let Some(rest) = line.strip_prefix(field) {
-            let val = rest.trim().to_string();
+            let mut parts = vec![rest.trim()];
+            // Collect continuation lines until the next field (word: pattern)
+            while let Some(&next) = lines.peek() {
+                if looks_like_field_key(next) {
+                    break;
+                }
+                let trimmed = next.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed);
+                }
+                lines.next();
+            }
+            let val: Vec<&str> = parts.into_iter().filter(|s| !s.is_empty()).collect();
             if !val.is_empty() {
-                return Some(val);
+                return Some(val.join("\n"));
             }
         }
     }
     None
+}
+
+fn looks_like_field_key(line: &str) -> bool {
+    let trimmed = line.trim();
+    if let Some(colon) = trimmed.find(':') {
+        let key = &trimmed[..colon];
+        !key.is_empty() && !key.contains(' ') && key.chars().next().map_or(false, |c| c.is_alphabetic())
+    } else {
+        false
+    }
 }

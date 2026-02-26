@@ -66,6 +66,29 @@ pub struct ChatMessage {
     pub is_bot_message: bool,
 }
 
+pub struct RegisteredGroup {
+    pub jid: String,
+    pub name: String,
+    pub folder: String,
+    pub trigger_pattern: String,
+    pub requires_trigger: bool,
+}
+
+pub struct ChatAgentRun {
+    pub id: i64,
+    pub jid: String,
+    pub status: String,
+    pub transport: String,
+    pub original_id: String,
+    pub trigger_msg_id: String,
+    pub folder: String,
+    pub output: String,
+    pub new_session_id: String,
+    pub last_msg_timestamp: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
 // ── Timestamp helpers ─────────────────────────────────────────────────────
 
 fn parse_ts(s: &str) -> DateTime<Utc> {
@@ -172,6 +195,23 @@ fn row_to_repo(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRow> {
     })
 }
 
+fn row_to_chat_agent_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatAgentRun> {
+    Ok(ChatAgentRun {
+        id: row.get(0)?,
+        jid: row.get(1)?,
+        status: row.get(2)?,
+        transport: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        original_id: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        trigger_msg_id: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        folder: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+        output: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        new_session_id: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+        last_msg_timestamp: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+        started_at: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+        completed_at: row.get(11)?,
+    })
+}
+
 fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent> {
     Ok(LegacyEvent {
         id: row.get(0)?,
@@ -186,6 +226,10 @@ fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent>
 // ── Db impl ───────────────────────────────────────────────────────────────
 
 impl Db {
+    pub fn raw_conn(&self) -> &std::sync::Mutex<Connection> {
+        &self.conn
+    }
+
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open SQLite database at {path:?}"))?;
@@ -464,6 +508,32 @@ impl Db {
         )
         .context("update_proposal_triage")?;
         Ok(())
+    }
+
+    pub fn get_top_scored_proposals(&self, threshold: i64, limit: i64) -> Result<Vec<Proposal>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, repo_path, title, description, rationale, status, created_at, \
+             triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
+             triage_reasoning \
+             FROM proposals WHERE status='proposed' AND triage_score >= ?1 \
+             ORDER BY triage_score DESC LIMIT ?2",
+        )?;
+        let proposals = stmt
+            .query_map(params![threshold, limit], row_to_proposal)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_top_scored_proposals")?;
+        Ok(proposals)
+    }
+
+    pub fn count_unscored_proposals(&self) -> i64 {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) FROM proposals WHERE status='proposed' AND triage_score=0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
     }
 
     pub fn list_untriaged_proposals(&self) -> Result<Vec<Proposal>> {
@@ -805,6 +875,87 @@ impl Db {
         Ok(events)
     }
 
+    pub fn create_pipeline_task(
+        &self,
+        title: &str,
+        description: &str,
+        repo_path: &str,
+        source: &str,
+        notify_chat: &str,
+        mode: &str,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO pipeline_tasks \
+             (title, description, repo_path, status, attempt, max_attempts, last_error, \
+              created_by, notify_chat, created_at, session_id, mode, backend) \
+             VALUES (?1, ?2, ?3, 'backlog', 0, 5, '', ?4, ?5, ?6, '', ?7, '')",
+            params![title, description, repo_path, source, notify_chat, Utc::now().to_rfc3339(), mode],
+        )
+        .context("create_pipeline_task")?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn active_task_count(&self) -> i64 {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT COUNT(*) FROM pipeline_tasks WHERE status NOT IN ('done','merged','failed')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    }
+
+    pub fn get_recent_merged_tasks(&self, limit: i64) -> Result<Vec<Task>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, title, description, repo_path, branch, status, attempt, \
+             max_attempts, last_error, created_by, notify_chat, created_at, \
+             session_id, mode, backend \
+             FROM pipeline_tasks WHERE status = 'merged' ORDER BY id DESC LIMIT ?1",
+        )?;
+        let tasks = stmt
+            .query_map(params![limit], row_to_task)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_recent_merged_tasks")?;
+        Ok(tasks)
+    }
+
+    pub fn recycle_failed_tasks(&self, repo_path: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn.execute(
+            "UPDATE pipeline_tasks SET status='backlog', attempt=0, last_error='' \
+             WHERE status='failed' AND repo_path=?1",
+            params![repo_path],
+        )
+        .context("recycle_failed_tasks")?;
+        Ok(n)
+    }
+
+    pub fn reset_task_attempt(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipeline_tasks SET attempt=0 WHERE id=?1",
+            params![id],
+        )
+        .context("reset_task_attempt")?;
+        Ok(())
+    }
+
+    // ── Timing state (persisted across restarts) ──────────────────────────
+
+    pub fn get_ts(&self, key: &str) -> i64 {
+        self.get_config(key)
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    pub fn set_ts(&self, key: &str, value: i64) {
+        let _ = self.set_config(key, &value.to_string());
+    }
+
     // ── Full Task List ────────────────────────────────────────────────────
 
     pub fn list_all_tasks(&self, repo_path: Option<&str>) -> Result<Vec<Task>> {
@@ -902,6 +1053,164 @@ impl Db {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("get_chat_messages")?;
+        Ok(rows)
+    }
+
+    // ── Registered groups ─────────────────────────────────────────────────
+
+    pub fn get_all_groups(&self) -> Result<Vec<RegisteredGroup>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT jid, name, folder, trigger_pattern, requires_trigger FROM registered_groups ORDER BY added_at ASC",
+        )?;
+        let groups = stmt
+            .query_map([], |row| {
+                Ok(RegisteredGroup {
+                    jid: row.get(0)?,
+                    name: row.get(1)?,
+                    folder: row.get(2)?,
+                    trigger_pattern: row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "@Borg".into()),
+                    requires_trigger: row.get::<_, i32>(4)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_all_groups")?;
+        Ok(groups)
+    }
+
+    pub fn register_group(&self, jid: &str, name: &str, folder: &str, trigger_pattern: &str, requires_trigger: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO registered_groups (jid, name, folder, trigger_pattern, requires_trigger) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(jid) DO UPDATE SET name=excluded.name, folder=excluded.folder, \
+               trigger_pattern=excluded.trigger_pattern, requires_trigger=excluded.requires_trigger",
+            params![jid, name, folder, trigger_pattern, if requires_trigger { 1i32 } else { 0 }],
+        )
+        .context("register_group")?;
+        Ok(())
+    }
+
+    pub fn unregister_group(&self, jid: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM registered_groups WHERE jid = ?1", params![jid])
+            .context("unregister_group")?;
+        Ok(())
+    }
+
+    // ── Chat sessions ─────────────────────────────────────────────────────
+
+    pub fn get_session(&self, folder: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT session_id FROM sessions WHERE folder = ?1",
+            params![folder],
+            |r| r.get(0),
+        )
+        .optional()
+        .context("get_session")
+    }
+
+    pub fn set_session(&self, folder: &str, session_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO sessions (folder, session_id) VALUES (?1, ?2) \
+             ON CONFLICT(folder) DO UPDATE SET session_id=excluded.session_id, created_at=datetime('now')",
+            params![folder, session_id],
+        )
+        .context("set_session")?;
+        Ok(())
+    }
+
+    pub fn expire_sessions(&self, max_age_hours: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn.execute(
+            "DELETE FROM sessions WHERE created_at < datetime('now', ?1)",
+            params![format!("-{max_age_hours} hours")],
+        )
+        .context("expire_sessions")?;
+        Ok(n)
+    }
+
+    // ── Chat agent runs ───────────────────────────────────────────────────
+
+    pub fn create_chat_agent_run(&self, jid: &str, transport: &str, original_id: &str, trigger_msg_id: &str, folder: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO chat_agent_runs (jid, status, transport, original_id, trigger_msg_id, folder) \
+             VALUES (?1, 'running', ?2, ?3, ?4, ?5)",
+            params![jid, transport, original_id, trigger_msg_id, folder],
+        )
+        .context("create_chat_agent_run")?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn complete_chat_agent_run(&self, id: i64, output: &str, new_session_id: &str, last_msg_timestamp: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE chat_agent_runs SET status='completed', output=?1, new_session_id=?2, \
+             last_msg_timestamp=?3, completed_at=datetime('now') WHERE id=?4",
+            params![output, new_session_id, last_msg_timestamp, id],
+        )
+        .context("complete_chat_agent_run")?;
+        Ok(())
+    }
+
+    pub fn mark_chat_agent_run_delivered(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE chat_agent_runs SET status='delivered' WHERE id=?1",
+            params![id],
+        )
+        .context("mark_chat_agent_run_delivered")?;
+        Ok(())
+    }
+
+    pub fn get_undelivered_runs(&self, jid: &str) -> Result<Vec<ChatAgentRun>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, jid, status, transport, original_id, trigger_msg_id, folder, \
+             output, new_session_id, last_msg_timestamp, started_at, completed_at \
+             FROM chat_agent_runs WHERE jid=?1 AND status='completed' ORDER BY id ASC",
+        )?;
+        let runs = stmt
+            .query_map(params![jid], row_to_chat_agent_run)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_undelivered_runs")?;
+        Ok(runs)
+    }
+
+    pub fn abandon_running_agents(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn.execute(
+            "UPDATE chat_agent_runs SET status='abandoned' WHERE status='running'",
+            [],
+        )
+        .context("abandon_running_agents")?;
+        Ok(n)
+    }
+
+    pub fn get_messages_since(&self, chat_jid: &str, since_ts: &str, limit: i64) -> Result<Vec<ChatMessage>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message \
+             FROM messages WHERE chat_jid=?1 AND timestamp > ?2 ORDER BY timestamp ASC LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_jid, since_ts, limit], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    chat_jid: row.get(1)?,
+                    sender: row.get(2)?,
+                    sender_name: row.get(3)?,
+                    content: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    is_from_me: row.get::<_, i32>(6)? != 0,
+                    is_bot_message: row.get::<_, i32>(7)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_messages_since")?;
         Ok(rows)
     }
 
