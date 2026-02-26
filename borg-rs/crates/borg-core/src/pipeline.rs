@@ -7,6 +7,8 @@ use tracing::{error, info, warn};
 
 use chrono::Utc;
 
+pub use crate::types::PipelineEvent;
+
 use crate::{
     agent::AgentBackend,
     config::Config,
@@ -17,35 +19,6 @@ use crate::{
     stream::TaskStreamManager,
     types::{IntegrationType, PhaseConfig, PhaseContext, PhaseHistoryEntry, PhaseOutput, PhaseType, PipelineMode, PipelineStateSnapshot, Proposal, RepoConfig, SeedOutputType, Task},
 };
-
-/// Broadcast event emitted after each significant pipeline state change.
-#[derive(Debug, Clone)]
-pub enum PipelineEvent {
-    Phase { task_id: Option<i64>, message: String },
-    Output { task_id: Option<i64>, message: String },
-    Notify { chat_id: String, message: String },
-}
-
-impl PipelineEvent {
-    pub fn kind(&self) -> &str {
-        match self {
-            Self::Phase { .. } => "task_phase",
-            Self::Output { .. } => "task_output",
-            Self::Notify { .. } => "notify",
-        }
-    }
-    pub fn task_id(&self) -> Option<i64> {
-        match self {
-            Self::Phase { task_id, .. } | Self::Output { task_id, .. } => *task_id,
-            Self::Notify { .. } => None,
-        }
-    }
-    pub fn message(&self) -> &str {
-        match self {
-            Self::Phase { message, .. } | Self::Output { message, .. } | Self::Notify { message, .. } => message,
-        }
-    }
-}
 
 pub struct Pipeline {
     pub db: Arc<Db>,

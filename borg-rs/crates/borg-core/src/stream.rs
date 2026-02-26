@@ -48,11 +48,26 @@ impl TaskStreamManager {
         }
     }
 
+    /// Inject a synthetic phase_result SSE line into the task's stream.
+    pub async fn push_phase_result(&self, task_id: i64, phase: &str, content: &str) {
+        let line = format!(
+            r#"{{"type":"phase_result","phase":{},"content":{}}}"#,
+            serde_json::to_string(phase).unwrap_or_default(),
+            serde_json::to_string(content).unwrap_or_default(),
+        );
+        self.push_line(task_id, line).await;
+    }
+
     /// Mark a task stream as ended (sends stream_end event, keeps history).
     pub async fn end_task(&self, task_id: i64) {
+        let line = r#"{"type":"stream_end"}"#.to_string();
         let mut map = self.streams.lock().await;
         if let Some(s) = map.get_mut(&task_id) {
-            let _ = s.tx.send(r#"{"type":"stream_end"}"#.to_string());
+            let _ = s.tx.send(line.clone());
+            s.history.push_back(line);
+            if s.history.len() > MAX_HISTORY_LINES {
+                s.history.pop_front();
+            }
             s.ended = true;
         }
     }

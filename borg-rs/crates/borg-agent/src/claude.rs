@@ -10,6 +10,31 @@ use tokio::process::Command;
 use std::process::Stdio;
 use tracing::{info, warn};
 
+pub const PHASE_RESULT_START: &str = "---PHASE_RESULT_START---";
+pub const PHASE_RESULT_END: &str = "---PHASE_RESULT_END---";
+
+/// Extract the last complete marker block from decoded text.
+/// Returns a trimmed slice of the content between the last pair of markers, or None.
+pub fn extract_phase_result(text: &str) -> Option<&str> {
+    let mut last_content: Option<&str> = None;
+    let mut search = text;
+    while let Some(start_pos) = search.find(PHASE_RESULT_START) {
+        let after_start = &search[start_pos + PHASE_RESULT_START.len()..];
+        if let Some(end_pos) = after_start.find(PHASE_RESULT_END) {
+            let content = after_start[..end_pos].trim();
+            if !content.is_empty() {
+                last_content = Some(content);
+            } else {
+                last_content = None;
+            }
+            search = &after_start[end_pos + PHASE_RESULT_END.len()..];
+        } else {
+            break;
+        }
+    }
+    last_content
+}
+
 /// Runs Claude Code as a subprocess, with configurable sandbox isolation.
 pub struct ClaudeBackend {
     /// Path to the `claude` CLI binary.
