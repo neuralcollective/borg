@@ -110,27 +110,36 @@ export interface PipelineMode {
   phases: PhaseInfo[];
 }
 
-// SWE phases (default fallback)
+// sweborg phases (default fallback)
 const SWE_DISPLAY_PHASES = ["backlog", "spec", "qa", "impl", "done", "merged"] as const;
 const SWE_PHASE_LABELS: Record<string, string> = {
   backlog: "Backlog", spec: "Spec", qa: "QA", impl: "Implement",
   done: "Testing", merged: "Merged",
 };
 
-// Legal phases
+// lawborg phases
 const LEGAL_DISPLAY_PHASES = ["backlog", "research", "draft", "review", "done"] as const;
 const LEGAL_PHASE_LABELS: Record<string, string> = {
   backlog: "Backlog", research: "Research", draft: "Drafting",
   review: "Review", done: "Complete",
 };
 
+// webborg phases
+const WEB_DISPLAY_PHASES = ["backlog", "audit", "improve", "done", "merged"] as const;
+const WEB_PHASE_LABELS: Record<string, string> = {
+  backlog: "Backlog", audit: "Audit", improve: "Improve",
+  done: "Done", merged: "Merged",
+};
+
 export function getDisplayPhases(mode?: string): readonly string[] {
-  if (mode === "legal") return LEGAL_DISPLAY_PHASES;
+  if (mode === "lawborg" || mode === "legal") return LEGAL_DISPLAY_PHASES;
+  if (mode === "webborg") return WEB_DISPLAY_PHASES;
   return SWE_DISPLAY_PHASES;
 }
 
 export function getPhaseLabel(phase: string, mode?: string): string {
-  if (mode === "legal") return LEGAL_PHASE_LABELS[phase] ?? phase;
+  if (mode === "lawborg" || mode === "legal") return LEGAL_PHASE_LABELS[phase] ?? phase;
+  if (mode === "webborg") return WEB_PHASE_LABELS[phase] ?? phase;
   return SWE_PHASE_LABELS[phase] ?? phase;
 }
 
@@ -140,12 +149,17 @@ export const PHASE_LABELS = SWE_PHASE_LABELS;
 
 export function isActiveStatus(status: string) {
   const all = ["backlog", "spec", "qa", "qa_fix", "impl", "retry", "rebase",
-               "research", "draft", "review"];
+               "research", "draft", "review", "audit", "improve"];
   return all.includes(status);
 }
 
 export function effectivePhase(status: string, mode?: string): string {
-  if (mode === "legal") return status;
+  if (mode === "lawborg" || mode === "legal") return status;
+  if (mode === "webborg") {
+    if (status === "rebase") return "improve";
+    if (status === "failed") return "improve";
+    return status;
+  }
   if (status === "retry" || status === "rebase") return "impl";
   if (status === "failed") return "impl";
   if (status === "qa_fix") return "qa";

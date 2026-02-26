@@ -73,7 +73,7 @@ const MOBILE_TABS = [
 function detectDefaultMode(repos?: { mode: string; is_self: boolean }[]): UIMode {
   if (!repos || repos.length === 0) return "advanced";
   const primary = repos.find((r) => r.is_self) ?? repos[0];
-  return primary.mode !== "swe" ? "minimal" : "advanced";
+  return primary.mode === "lawborg" || primary.mode === "legal" ? "minimal" : "advanced";
 }
 
 export default function App() {
@@ -191,12 +191,11 @@ function AppInner() {
       {/* Sidebar nav */}
       <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] py-3">
         <div className="mb-4 flex flex-col items-center">
-          <div className="flex h-6 w-6 items-center justify-center rounded bg-white">
-            <span className="text-[11px] font-black text-black leading-none">b</span>
+          <div className="flex w-6 flex-col items-center rounded bg-white py-1">
+            {["b", "o", "r", "g"].map((c) => (
+              <span key={c} className="text-[10px] font-black text-black leading-none">{c}</span>
+            ))}
           </div>
-          {["o", "r", "g"].map((c) => (
-            <span key={c} className="text-[11px] font-black text-zinc-600 leading-tight">{c}</span>
-          ))}
         </div>
 
         <div className="flex flex-1 flex-col items-center gap-1">

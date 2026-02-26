@@ -727,7 +727,7 @@ pub const Db = struct {
     pub fn createPipelineTask(self: *Db, title: []const u8, description: []const u8, repo_path: []const u8, created_by: []const u8, notify_chat: []const u8, mode: []const u8) !i64 {
         try self.sqlite_db.execute(
             "INSERT INTO pipeline_tasks (title, description, repo_path, created_by, notify_chat, mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            .{ title, description, repo_path, created_by, notify_chat, if (mode.len > 0) mode else "swe" },
+            .{ title, description, repo_path, created_by, notify_chat, if (mode.len > 0) mode else "sweborg" },
         );
         const id = self.sqlite_db.lastInsertRowId();
         self.logEvent("info", "pipeline", title[0..@min(title.len, 200)], "created");
@@ -869,7 +869,7 @@ pub const Db = struct {
             .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
             .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
             .session_id = try allocator.dupe(u8, row.get(12) orelse ""),
-            .mode = try allocator.dupe(u8, row.get(13) orelse "swe"),
+            .mode = try allocator.dupe(u8, row.get(13) orelse "sweborg"),
         };
     }
 
@@ -1147,7 +1147,7 @@ pub const Db = struct {
                 .notify_chat = try allocator.dupe(u8, row.get(10) orelse ""),
                 .created_at = try allocator.dupe(u8, row.get(11) orelse ""),
                 .session_id = try allocator.dupe(u8, row.get(12) orelse ""),
-                .mode = try allocator.dupe(u8, row.get(13) orelse "swe"),
+                .mode = try allocator.dupe(u8, row.get(13) orelse "sweborg"),
             });
         }
         return tasks.toOwnedSlice();

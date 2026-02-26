@@ -484,7 +484,7 @@ pub const WebServer = struct {
         };
         const description = json_mod.getString(parsed.value, "description") orelse title;
         const repo = json_mod.getString(parsed.value, "repo") orelse self.config.pipeline_repo;
-        const mode = json_mod.getString(parsed.value, "mode") orelse "swe";
+        const mode = json_mod.getString(parsed.value, "mode") orelse "sweborg";
 
         const task_id = self.db.createPipelineTask(title, description, repo, "director", "", mode) catch {
             self.serve500(stream);
@@ -1057,7 +1057,7 @@ pub const WebServer = struct {
                 proposal.repo_path,
                 "proposal",
                 "",
-                "swe",
+                "sweborg",
             ) catch {
                 self.serve500(stream);
                 return;

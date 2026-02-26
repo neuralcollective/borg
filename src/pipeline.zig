@@ -163,7 +163,7 @@ pub const Pipeline = struct {
                 else
                     title;
 
-                _ = self.db.createPipelineTask(title, description, repo.path, "backlog", self.config.pipeline_admin_chat, "swe") catch continue;
+                _ = self.db.createPipelineTask(title, description, repo.path, "backlog", self.config.pipeline_admin_chat, repo.mode) catch continue;
                 created += 1;
             }
 
@@ -1568,7 +1568,7 @@ pub const Pipeline = struct {
         const title = std.fmt.allocPrint(self.allocator, "Fix failing {s} on main", .{kind}) catch return;
         defer self.allocator.free(title);
 
-        _ = self.db.createPipelineTask(title, desc, repo_path, "health-check", "", "swe") catch return;
+        _ = self.db.createPipelineTask(title, desc, repo_path, "health-check", "", "sweborg") catch return;
         std.log.info("Health: created fix task for {s} {s} failure", .{ repo_path, kind });
         self.notify(self.config.pipeline_admin_chat, std.fmt.allocPrint(self.allocator, "Health check: {s} failing for {s}, created fix task", .{ kind, repo_path }) catch return);
     }

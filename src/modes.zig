@@ -200,7 +200,7 @@ const swe_rebase_fix_error =
 // ── SWE Mode ───────────────────────────────────────────────────────────
 
 pub const swe_mode = PipelineMode{
-    .name = "swe",
+    .name = "sweborg",
     .label = "Software Engineering",
     .initial_status = "backlog",
     .uses_git_worktrees = true,
@@ -390,7 +390,7 @@ const legal_review_retry =
 // ── Legal Mode ─────────────────────────────────────────────────────────
 
 pub const legal_mode = PipelineMode{
-    .name = "legal",
+    .name = "lawborg",
     .label = "Legal",
     .initial_status = "backlog",
     .uses_git_worktrees = true,
@@ -466,9 +466,134 @@ pub const legal_mode = PipelineMode{
     },
 };
 
+// ── Web Prompts ─────────────────────────────────────────────────────────
+
+const web_audit_system =
+    \\You are a frontend performance and UX expert in an autonomous web improvement pipeline.
+    \\Analyze the web application codebase and identify concrete opportunities to improve
+    \\performance, visual design, accessibility, and user experience.
+    \\Write your findings to audit.md at the repository root. Do not modify source files.
+;
+
+const web_audit_instruction =
+    \\Write audit.md containing:
+    \\1. Current state summary (tech stack, key components)
+    \\2. Performance issues (bundle size, render bottlenecks, missing lazy loading)
+    \\3. Visual and UX improvements (layout, spacing, typography, responsiveness)
+    \\4. Accessibility gaps (contrast, keyboard navigation, ARIA)
+    \\5. Prioritized action items — concrete, targeted changes for this iteration
+;
+
+const web_improve_system =
+    \\You are a frontend performance and UX expert in an autonomous web improvement pipeline.
+    \\Read audit.md and implement the prioritized improvements.
+    \\Focus on measurable wins: faster loads, better visuals, improved UX.
+    \\Do not modify audit.md.
+;
+
+const web_improve_instruction =
+    \\Read audit.md and implement the action items listed under "Prioritized action items".
+    \\Make targeted, surgical edits. Verify changes compile/build correctly.
+;
+
+const web_improve_retry =
+    \\
+    \\
+    \\Previous attempt failed. Error output:
+    \\```
+    \\{ERROR}
+    \\```
+    \\Fix the issue.
+;
+
+// ── Web Mode ────────────────────────────────────────────────────────────
+
+pub const web_mode = PipelineMode{
+    .name = "webborg",
+    .label = "Frontend",
+    .initial_status = "backlog",
+    .uses_git_worktrees = true,
+    .uses_docker = true,
+    .uses_test_cmd = true,
+    .integration = .git_pr,
+    .default_max_attempts = 3,
+    .phases = &.{
+        .{
+            .name = "backlog",
+            .label = "Backlog",
+            .phase_type = .setup,
+            .next = "audit",
+            .priority = 60,
+        },
+        .{
+            .name = "audit",
+            .label = "Audit",
+            .system_prompt = web_audit_system,
+            .instruction = web_audit_instruction,
+            .include_task_context = true,
+            .include_file_listing = true,
+            .check_artifact = "audit.md",
+            .use_docker = true,
+            .next = "improve",
+            .priority = 50,
+        },
+        .{
+            .name = "improve",
+            .label = "Improve",
+            .system_prompt = web_improve_system,
+            .instruction = web_improve_instruction,
+            .error_instruction = web_improve_retry,
+            .allowed_tools = "Read,Glob,Grep,Write,Edit,Bash",
+            .use_docker = true,
+            .commits = true,
+            .commit_message = "improve: frontend improvements from web agent",
+            .runs_tests = true,
+            .next = "done",
+            .priority = 10,
+        },
+        .{
+            .name = "rebase",
+            .label = "Rebase",
+            .phase_type = .rebase,
+            .system_prompt = swe_worker_system,
+            .instruction = swe_rebase_instruction,
+            .error_instruction = swe_rebase_error,
+            .allowed_tools = "Read,Glob,Grep,Write,Edit,Bash",
+            .fix_instruction = swe_rebase_fix,
+            .fix_error_instruction = swe_rebase_fix_error,
+            .next = "done",
+            .priority = 5,
+        },
+    },
+    .seed_modes = &.{
+        .{ .name = "performance", .label = "Performance", .output_type = .task, .prompt =
+        \\Analyze the web app for performance issues. Look for: large bundle sizes,
+        \\missing code splitting or lazy loading, expensive re-renders, unoptimized
+        \\assets, blocking resources. Create a task for each concrete improvement.
+        },
+        .{ .name = "visual", .label = "Visual Polish", .output_type = .task, .prompt =
+        \\Review the UI for visual inconsistencies and polish opportunities.
+        \\Look for: spacing/padding inconsistencies, typography mismatches,
+        \\color inconsistencies, rough responsive breakpoints, missing hover/focus states.
+        \\Create a task for each concrete visual improvement.
+        },
+        .{ .name = "accessibility", .label = "Accessibility", .output_type = .task, .prompt =
+        \\Audit the web app for accessibility issues. Look for: missing alt text,
+        \\poor color contrast, missing ARIA labels, broken keyboard navigation,
+        \\missing focus indicators, improper heading hierarchy.
+        \\Create a task for each real a11y issue found.
+        },
+        .{ .name = "ux", .label = "UX Improvements", .output_type = .proposal, .prompt =
+        \\Identify 1-3 user experience improvements that would meaningfully reduce
+        \\friction or improve usability. Base suggestions on actual UX patterns
+        \\found while exploring the UI code and component structure.
+        },
+    },
+};
+
 // ── Registry ───────────────────────────────────────────────────────────
 
-pub const all_modes: []const PipelineMode = &.{ swe_mode, legal_mode };
+pub const all_modes: []const PipelineMode = &.{ swe_mode, legal_mode, web_mode };
 
 /// SQL CASE expression for ordering tasks by phase priority (lower = first).
 /// Generated at comptime from all modes' phase configs.
@@ -606,12 +731,15 @@ pub fn getMode(name: []const u8) ?*const PipelineMode {
     for (all_modes) |*m| {
         if (std.mem.eql(u8, m.name, name)) return m;
     }
+    // Backward-compat aliases for old mode names
+    if (std.mem.eql(u8, name, "swe")) return getMode("sweborg");
+    if (std.mem.eql(u8, name, "legal")) return getMode("lawborg");
     return null;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
-test "swe_mode has all expected phases" {
+test "sweborg_mode has all expected phases" {
     try std.testing.expect(swe_mode.getPhase("backlog") != null);
     try std.testing.expect(swe_mode.getPhase("spec") != null);
     try std.testing.expect(swe_mode.getPhase("qa") != null);
@@ -622,7 +750,7 @@ test "swe_mode has all expected phases" {
     try std.testing.expect(swe_mode.getPhase("nonexistent") == null);
 }
 
-test "legal_mode has all expected phases" {
+test "lawborg_mode has all expected phases" {
     try std.testing.expect(legal_mode.getPhase("backlog") != null);
     try std.testing.expect(legal_mode.getPhase("research") != null);
     try std.testing.expect(legal_mode.getPhase("draft") != null);
@@ -630,12 +758,25 @@ test "legal_mode has all expected phases" {
     try std.testing.expect(legal_mode.getPhase("nonexistent") == null);
 }
 
+test "webborg_mode has all expected phases" {
+    try std.testing.expect(web_mode.getPhase("backlog") != null);
+    try std.testing.expect(web_mode.getPhase("audit") != null);
+    try std.testing.expect(web_mode.getPhase("improve") != null);
+    try std.testing.expect(web_mode.getPhase("rebase") != null);
+    try std.testing.expect(web_mode.getPhase("nonexistent") == null);
+}
+
 test "getMode returns correct modes" {
+    try std.testing.expect(getMode("sweborg") != null);
+    try std.testing.expect(getMode("lawborg") != null);
+    try std.testing.expect(getMode("webborg") != null);
+    try std.testing.expect(getMode("nonexistent") == null);
+    try std.testing.expectEqualStrings("Software Engineering", getMode("sweborg").?.label);
+    try std.testing.expectEqualStrings("Legal", getMode("lawborg").?.label);
+    try std.testing.expectEqualStrings("Frontend", getMode("webborg").?.label);
+    // Backward-compat aliases
     try std.testing.expect(getMode("swe") != null);
     try std.testing.expect(getMode("legal") != null);
-    try std.testing.expect(getMode("nonexistent") == null);
-    try std.testing.expectEqualStrings("Software Engineering", getMode("swe").?.label);
-    try std.testing.expectEqualStrings("Legal", getMode("legal").?.label);
 }
 
 test "phase transitions are valid" {
@@ -701,12 +842,13 @@ test "substituteError without placeholder" {
 }
 
 test "sql_priority_case covers all phases" {
-    // Should contain CASE and WHEN clauses for all known phases
     try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "CASE status") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "'backlog'") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "'impl'") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "'research'") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "'draft'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "'audit'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "'improve'") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_priority_case, "ELSE 100 END") != null);
 }
 
@@ -714,6 +856,8 @@ test "sql_active_statuses covers all phases" {
     try std.testing.expect(std.mem.indexOf(u8, sql_active_statuses, "'backlog'") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_active_statuses, "'impl'") != null);
     try std.testing.expect(std.mem.indexOf(u8, sql_active_statuses, "'research'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sql_active_statuses, "'audit'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sql_active_statuses, "'improve'") != null);
     try std.testing.expect(sql_active_statuses[0] == '(');
     try std.testing.expect(sql_active_statuses[sql_active_statuses.len - 1] == ')');
 }

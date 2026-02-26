@@ -4,7 +4,7 @@ pub const RepoConfig = struct {
     path: []const u8,
     test_cmd: []const u8,
     prompt_file: []const u8 = "",
-    mode: []const u8 = "swe",
+    mode: []const u8 = "sweborg",
     is_self: bool = false,
     auto_merge: bool = true,
 };

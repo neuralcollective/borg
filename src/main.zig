@@ -1314,7 +1314,7 @@ fn handleCommand(
             description = std.mem.trim(u8, rest[nl + 1 ..], &[_]u8{ ' ', '\t', '\r' });
         }
 
-        const task_id = try pdb.createPipelineTask(title, description, config.pipeline_repo, msg.sender_name, msg.jid, "swe");
+        const task_id = try pdb.createPipelineTask(title, description, config.pipeline_repo, msg.sender_name, msg.jid, "sweborg");
 
         var reply_buf: [256]u8 = undefined;
         const text = try std.fmt.bufPrint(&reply_buf, "Task #{d} created: {s}", .{ task_id, title[0..@min(title.len, 100)] });
