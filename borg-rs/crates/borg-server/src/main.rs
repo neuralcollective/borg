@@ -14,7 +14,7 @@ use borg_agent::ollama::OllamaBackend;
 use borg_core::{
     chat::ChatCollector,
     config::Config,
-    db::{ChatMessage, Db, LegacyEvent, TaskMessage, TaskOutput},
+    db::{Db, LegacyEvent, TaskMessage, TaskOutput},
     modes::all_modes,
     observer::Observer,
     pipeline::{Pipeline, PipelineEvent},
@@ -39,12 +39,14 @@ use tracing::info;
 
 pub struct AppState {
     pub db: Arc<Db>,
+    pub config: Arc<Config>,
     pub start_time: Instant,
     pub log_tx: broadcast::Sender<String>,
     pub log_ring: Arc<std::sync::Mutex<VecDeque<String>>>,
     pub pipeline_event_tx: broadcast::Sender<PipelineEvent>,
     pub stream_manager: Arc<TaskStreamManager>,
     pub chat_event_tx: broadcast::Sender<String>,
+    pub web_sessions: Arc<TokioMutex<HashMap<String, String>>>,
     pub backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>,
     pub force_restart: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -911,12 +913,14 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         db,
+        config: Arc::clone(&config),
         start_time: Instant::now(),
         log_tx,
         log_ring,
         pipeline_event_tx,
         stream_manager,
         chat_event_tx,
+        web_sessions: Arc::new(TokioMutex::new(HashMap::new())),
         backends,
         force_restart,
     });
@@ -1772,35 +1776,24 @@ async fn post_chat(
     .to_string();
     let _ = state.chat_event_tx.send(event);
 
-    // Run agent async — sessions stored in AppState web_sessions map
+    // Run agent async — sessions shared via AppState.web_sessions
     let state2 = Arc::clone(&state);
     let thread2 = thread.clone();
     let sender2 = sender.clone();
     let text2 = body.text.clone();
     tokio::spawn(async move {
-        let sessions: Arc<TokioMutex<HashMap<String, String>>> =
-            Arc::new(TokioMutex::new(HashMap::new()));
-        // Fetch stored session for this web thread from config table
-        let session_key = format!("web_chat_session:{}", thread2);
-        if let Ok(Some(sid)) = state2.db.get_config(&session_key) {
-            sessions.lock().await.insert(thread2.clone(), sid);
-        }
         match run_chat_agent(
             &thread2,
             &sender2,
             &[text2],
-            &sessions,
+            &state2.web_sessions,
+            &state2.config,
             &state2.db,
             &state2.chat_event_tx,
         )
         .await
         {
-            Ok(_) => {
-                // Persist session ID for continuity
-                if let Some(sid) = sessions.lock().await.get(&thread2).cloned() {
-                    let _ = state2.db.set_config(&session_key, &sid);
-                }
-            }
+            Ok(_) => {}
             Err(e) => tracing::warn!("web chat agent error: {e}"),
         }
     });

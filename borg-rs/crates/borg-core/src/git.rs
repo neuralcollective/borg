@@ -89,14 +89,82 @@ impl Git {
     }
 
     pub fn rev_parse_head(&self) -> Result<String> {
-        let result = self.exec(&self.repo_path, &["rev-parse", "HEAD"])?;
+        self.rev_parse("HEAD")
+    }
+
+    pub fn rev_parse(&self, refname: &str) -> Result<String> {
+        let result = self.exec(&self.repo_path, &["rev-parse", refname])?;
         if !result.success() {
             return Err(anyhow!(
-                "git rev-parse HEAD failed: {}",
+                "git rev-parse {refname} failed: {}",
                 result.combined_output()
             ));
         }
         Ok(result.stdout.trim().to_string())
+    }
+
+    pub fn checkout(&self, branch: &str) -> Result<()> {
+        let result = self.exec(&self.repo_path, &["checkout", branch])?;
+        if !result.success() {
+            return Err(anyhow!(
+                "git checkout {branch} failed: {}",
+                result.combined_output()
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn pull(&self) -> Result<()> {
+        let result = self.exec(&self.repo_path, &["pull"])?;
+        if !result.success() {
+            return Err(anyhow!(
+                "git pull failed: {}",
+                result.combined_output()
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn push_force(&self, branch: &str) -> Result<ExecResult> {
+        self.exec(&self.repo_path, &["push", "--force", "origin", branch])
+    }
+
+    pub fn delete_remote_branch(&self, branch: &str) -> Result<()> {
+        let result = self.exec(&self.repo_path, &["push", "origin", "--delete", branch])?;
+        if !result.success() {
+            return Err(anyhow!(
+                "git push origin --delete {branch} failed: {}",
+                result.combined_output()
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn delete_branch(&self, branch: &str) -> Result<()> {
+        let result = self.exec(&self.repo_path, &["branch", "-D", branch])?;
+        if !result.success() {
+            return Err(anyhow!(
+                "git branch -D {branch} failed: {}",
+                result.combined_output()
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn stash(&self) -> Result<()> {
+        let result = self.exec(&self.repo_path, &["stash"])?;
+        if !result.success() {
+            return Err(anyhow!("git stash failed: {}", result.combined_output()));
+        }
+        Ok(())
+    }
+
+    pub fn stash_pop(&self) -> Result<()> {
+        let result = self.exec(&self.repo_path, &["stash", "pop"])?;
+        if !result.success() {
+            return Err(anyhow!("git stash pop failed: {}", result.combined_output()));
+        }
+        Ok(())
     }
 
     pub fn fetch_origin(&self) -> Result<()> {

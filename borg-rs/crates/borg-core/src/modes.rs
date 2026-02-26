@@ -1,7 +1,7 @@
 use crate::types::{IntegrationType, PhaseConfig, PhaseType, PipelineMode, SeedConfig, SeedOutputType};
 
 pub fn all_modes() -> Vec<PipelineMode> {
-    vec![swe_mode(), legal_mode(), web_mode()]
+    vec![swe_mode(), legal_mode(), web_mode(), crew_mode(), sales_mode()]
 }
 
 pub fn get_mode(name: &str) -> Option<PipelineMode> {
@@ -346,6 +346,165 @@ pub fn web_mode() -> PipelineMode {
                 label: "UX Improvements".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: "Identify 1-3 user experience improvements that would meaningfully reduce friction.".into(),
+            },
+        ],
+    }
+}
+
+pub fn crew_mode() -> PipelineMode {
+    PipelineMode {
+        name: "crewborg".into(),
+        label: "Talent Search".into(),
+        initial_status: "backlog".into(),
+        uses_git_worktrees: true,
+        uses_docker: false,
+        uses_test_cmd: false,
+        integration: IntegrationType::None,
+        default_max_attempts: 3,
+        phases: vec![
+            PhaseConfig {
+                name: "backlog".into(),
+                label: "Backlog".into(),
+                phase_type: PhaseType::Setup,
+                next: "source".into(),
+                priority: 60,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "source".into(),
+                label: "Sourcing".into(),
+                system_prompt: CREW_SOURCE_SYSTEM.into(),
+                instruction: CREW_SOURCE_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,WebSearch,WebFetch".into(),
+                include_task_context: true,
+                check_artifact: Some("candidates.md".into()),
+                next: "evaluate".into(),
+                priority: 50,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "evaluate".into(),
+                label: "Evaluation".into(),
+                system_prompt: CREW_EVALUATE_SYSTEM.into(),
+                instruction: CREW_EVALUATE_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch".into(),
+                commits: true,
+                commit_message: "eval: candidate evaluations from crew agent".into(),
+                next: "rank".into(),
+                priority: 30,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "rank".into(),
+                label: "Ranking".into(),
+                system_prompt: CREW_RANK_SYSTEM.into(),
+                instruction: CREW_RANK_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
+                commits: true,
+                commit_message: "rank: prioritized shortlist from crew agent".into(),
+                next: "done".into(),
+                priority: 10,
+                ..default_phase()
+            },
+        ],
+        seed_modes: vec![
+            SeedConfig {
+                name: "discovery".into(),
+                label: "Candidate Discovery".into(),
+                output_type: SeedOutputType::Task,
+                prompt: CREW_SEED_DISCOVERY.into(),
+            },
+            SeedConfig {
+                name: "refresh".into(),
+                label: "Re-evaluate Pool".into(),
+                output_type: SeedOutputType::Task,
+                prompt: CREW_SEED_REFRESH.into(),
+            },
+            SeedConfig {
+                name: "criteria".into(),
+                label: "Refine Criteria".into(),
+                output_type: SeedOutputType::Proposal,
+                prompt: CREW_SEED_CRITERIA.into(),
+            },
+        ],
+    }
+}
+
+pub fn sales_mode() -> PipelineMode {
+    PipelineMode {
+        name: "salesborg".into(),
+        label: "Sales Outreach".into(),
+        initial_status: "backlog".into(),
+        uses_git_worktrees: true,
+        uses_docker: false,
+        uses_test_cmd: false,
+        integration: IntegrationType::None,
+        default_max_attempts: 3,
+        phases: vec![
+            PhaseConfig {
+                name: "backlog".into(),
+                label: "Backlog".into(),
+                phase_type: PhaseType::Setup,
+                next: "research".into(),
+                priority: 60,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "research".into(),
+                label: "Prospect Research".into(),
+                system_prompt: SALES_RESEARCH_SYSTEM.into(),
+                instruction: SALES_RESEARCH_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,WebSearch,WebFetch".into(),
+                include_task_context: true,
+                check_artifact: Some("prospect.md".into()),
+                next: "draft".into(),
+                priority: 50,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "draft".into(),
+                label: "Outreach Draft".into(),
+                system_prompt: SALES_DRAFT_SYSTEM.into(),
+                instruction: SALES_DRAFT_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
+                commits: true,
+                commit_message: "draft: outreach from sales agent".into(),
+                next: "review".into(),
+                priority: 30,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "review".into(),
+                label: "Review".into(),
+                system_prompt: SALES_REVIEW_SYSTEM.into(),
+                instruction: SALES_REVIEW_INSTRUCTION.into(),
+                error_instruction: SALES_REVIEW_RETRY.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
+                commits: true,
+                commit_message: "review: revisions from sales review agent".into(),
+                next: "done".into(),
+                priority: 10,
+                ..default_phase()
+            },
+        ],
+        seed_modes: vec![
+            SeedConfig {
+                name: "lead_discovery".into(),
+                label: "Lead Discovery".into(),
+                output_type: SeedOutputType::Task,
+                prompt: SALES_SEED_DISCOVERY.into(),
+            },
+            SeedConfig {
+                name: "follow_up".into(),
+                label: "Follow-up Drafts".into(),
+                output_type: SeedOutputType::Task,
+                prompt: SALES_SEED_FOLLOWUP.into(),
+            },
+            SeedConfig {
+                name: "icp".into(),
+                label: "ICP Refinement".into(),
+                output_type: SeedOutputType::Proposal,
+                prompt: SALES_SEED_ICP.into(),
             },
         ],
     }

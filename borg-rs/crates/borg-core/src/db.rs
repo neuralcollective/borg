@@ -509,12 +509,59 @@ impl Db {
     }
 
     pub fn update_queue_status(&self, id: i64, status: &str) -> Result<()> {
+        self.update_queue_status_with_error(id, status, "")
+    }
+
+    pub fn update_queue_status_with_error(&self, id: i64, status: &str, error_msg: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
-            "UPDATE integration_queue SET status = ?1 WHERE id = ?2",
-            params![status, id],
+            "UPDATE integration_queue SET status = ?1, error_msg = ?2 WHERE id = ?3",
+            params![status, error_msg, id],
         )
-        .context("update_queue_status")?;
+        .context("update_queue_status_with_error")?;
+        Ok(())
+    }
+
+    pub fn get_queued_branches_for_repo(&self, repo_path: &str) -> Result<Vec<QueueEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, branch, repo_path, status, queued_at, pr_number \
+             FROM integration_queue WHERE repo_path = ?1 AND status = 'queued' ORDER BY task_id ASC",
+        )?;
+        let entries = stmt
+            .query_map(params![repo_path], row_to_queue_entry)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_queued_branches_for_repo")?;
+        Ok(entries)
+    }
+
+    pub fn get_unknown_retries(&self, id: i64) -> i64 {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT unknown_retries FROM integration_queue WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    }
+
+    pub fn increment_unknown_retries(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE integration_queue SET unknown_retries = unknown_retries + 1 WHERE id = ?1",
+            params![id],
+        )
+        .context("increment_unknown_retries")?;
+        Ok(())
+    }
+
+    pub fn reset_unknown_retries(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE integration_queue SET unknown_retries = 0 WHERE id = ?1",
+            params![id],
+        )
+        .context("reset_unknown_retries")?;
         Ok(())
     }
 
