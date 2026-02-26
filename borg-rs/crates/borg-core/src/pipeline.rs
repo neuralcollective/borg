@@ -493,8 +493,7 @@ impl Pipeline {
         });
 
         if let Some(ref artifact) = phase.check_artifact {
-            let artifact_path = format!("{wt_path}/{artifact}");
-            if !std::path::Path::new(&artifact_path).exists() && result.output.is_empty() {
+            if !crate::ipc::check_artifact(&wt_path, artifact) && result.output.is_empty() {
                 self.db.update_task_status(
                     task.id,
                     "failed",
