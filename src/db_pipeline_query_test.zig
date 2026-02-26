@@ -38,7 +38,7 @@ test "AC2: getNextPipelineTask returns the sole backlog task" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("My Task", "desc", "/repo", "tg:1", "tg:1");
+    _ = try db.createPipelineTask("My Task", "desc", "/repo", "tg:1", "tg:1", "swe");
 
     const task = try db.getNextPipelineTask(arena.allocator());
     try std.testing.expect(task != null);
@@ -58,13 +58,13 @@ test "AC3: getNextPipelineTask priority: rebase > retry > impl > spec > backlog"
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id_rebase = try db.createPipelineTask("T-rebase",  "d", "/repo", "", "");
-    const id_retry  = try db.createPipelineTask("T-retry",   "d", "/repo", "", "");
-    const id_impl   = try db.createPipelineTask("T-impl",    "d", "/repo", "", "");
-    const id_qa_fix = try db.createPipelineTask("T-qa_fix",  "d", "/repo", "", "");
-    const id_qa     = try db.createPipelineTask("T-qa",      "d", "/repo", "", "");
-    const id_spec   = try db.createPipelineTask("T-spec",    "d", "/repo", "", "");
-    const id_back   = try db.createPipelineTask("T-backlog", "d", "/repo", "", "");
+    const id_rebase = try db.createPipelineTask("T-rebase",  "d", "/repo", "", "", "swe");
+    const id_retry  = try db.createPipelineTask("T-retry",   "d", "/repo", "", "", "swe");
+    const id_impl   = try db.createPipelineTask("T-impl",    "d", "/repo", "", "", "swe");
+    const id_qa_fix = try db.createPipelineTask("T-qa_fix",  "d", "/repo", "", "", "swe");
+    const id_qa     = try db.createPipelineTask("T-qa",      "d", "/repo", "", "", "swe");
+    const id_spec   = try db.createPipelineTask("T-spec",    "d", "/repo", "", "", "swe");
+    const id_back   = try db.createPipelineTask("T-backlog", "d", "/repo", "", "", "swe");
 
     try db.updateTaskStatus(id_rebase, "rebase");
     try db.updateTaskStatus(id_retry,  "retry");
@@ -129,10 +129,10 @@ test "AC4: getNextPipelineTask excludes done, merged, failed, test" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T-done",   "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T-merged", "d", "/repo", "", "");
-    const id3 = try db.createPipelineTask("T-failed", "d", "/repo", "", "");
-    const id4 = try db.createPipelineTask("T-test",   "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T-done",   "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T-merged", "d", "/repo", "", "", "swe");
+    const id3 = try db.createPipelineTask("T-failed", "d", "/repo", "", "", "swe");
+    const id4 = try db.createPipelineTask("T-test",   "d", "/repo", "", "", "swe");
 
     try db.updateTaskStatus(id1, "done");
     try db.updateTaskStatus(id2, "merged");
@@ -153,8 +153,8 @@ test "AC5: getNextPipelineTask returns the earlier-inserted task when priorities
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("First",  "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("Second", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("First",  "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("Second", "d", "/repo", "", "", "swe");
     _ = id2;
 
     const task = (try db.getNextPipelineTask(arena.allocator())).?;
@@ -186,9 +186,9 @@ test "AC7: getActivePipelineTasks returns tasks in priority order (impl > spec >
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id_back = try db.createPipelineTask("T-backlog", "d", "/repo", "", "");
-    const id_impl = try db.createPipelineTask("T-impl",    "d", "/repo", "", "");
-    const id_spec = try db.createPipelineTask("T-spec",    "d", "/repo", "", "");
+    const id_back = try db.createPipelineTask("T-backlog", "d", "/repo", "", "", "swe");
+    const id_impl = try db.createPipelineTask("T-impl",    "d", "/repo", "", "", "swe");
+    const id_spec = try db.createPipelineTask("T-spec",    "d", "/repo", "", "", "swe");
 
     _ = id_back; // stays backlog
     try db.updateTaskStatus(id_impl, "impl");
@@ -211,9 +211,9 @@ test "AC8: getActivePipelineTasks excludes merged tasks" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("B1", "d", "/repo", "", "");
-    _ = try db.createPipelineTask("B2", "d", "/repo", "", "");
-    const id_m = try db.createPipelineTask("M1", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("B1", "d", "/repo", "", "", "swe");
+    _ = try db.createPipelineTask("B2", "d", "/repo", "", "", "swe");
+    const id_m = try db.createPipelineTask("M1", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id_m, "merged");
 
     const tasks = try db.getActivePipelineTasks(arena.allocator(), 20);
@@ -234,7 +234,7 @@ test "AC9: getActivePipelineTasks respects limit=2 from 5 tasks" {
     defer db.deinit();
 
     for (0..5) |_| {
-        _ = try db.createPipelineTask("T", "d", "/repo", "", "");
+        _ = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     }
 
     const limited = try db.getActivePipelineTasks(arena.allocator(), 2);
@@ -247,7 +247,7 @@ test "AC9: getActivePipelineTasks with limit=0 returns empty slice" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("T", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
 
     const tasks = try db.getActivePipelineTasks(arena.allocator(), 0);
     try std.testing.expectEqual(@as(usize, 0), tasks.len);
@@ -263,13 +263,13 @@ test "AC10: getActivePipelineTasks returns all 7 active statuses with rebase fir
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id_back   = try db.createPipelineTask("T-backlog", "d", "/repo", "", "");
-    const id_spec   = try db.createPipelineTask("T-spec",    "d", "/repo", "", "");
-    const id_qa     = try db.createPipelineTask("T-qa",      "d", "/repo", "", "");
-    const id_qa_fix = try db.createPipelineTask("T-qa_fix",  "d", "/repo", "", "");
-    const id_impl   = try db.createPipelineTask("T-impl",    "d", "/repo", "", "");
-    const id_retry  = try db.createPipelineTask("T-retry",   "d", "/repo", "", "");
-    const id_rebase = try db.createPipelineTask("T-rebase",  "d", "/repo", "", "");
+    const id_back   = try db.createPipelineTask("T-backlog", "d", "/repo", "", "", "swe");
+    const id_spec   = try db.createPipelineTask("T-spec",    "d", "/repo", "", "", "swe");
+    const id_qa     = try db.createPipelineTask("T-qa",      "d", "/repo", "", "", "swe");
+    const id_qa_fix = try db.createPipelineTask("T-qa_fix",  "d", "/repo", "", "", "swe");
+    const id_impl   = try db.createPipelineTask("T-impl",    "d", "/repo", "", "", "swe");
+    const id_retry  = try db.createPipelineTask("T-retry",   "d", "/repo", "", "", "swe");
+    const id_rebase = try db.createPipelineTask("T-rebase",  "d", "/repo", "", "", "swe");
 
     _ = id_back; // stays backlog
     try db.updateTaskStatus(id_spec,   "spec");
@@ -308,8 +308,8 @@ test "AC12: getPipelineTask returns the correct task by ID, not another" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("First Task",  "d1", "/repo", "", "");
-    const id2 = try db.createPipelineTask("Second Task", "d2", "/repo", "", "");
+    _ = try db.createPipelineTask("First Task",  "d1", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("Second Task", "d2", "/repo", "", "", "swe");
 
     const task = (try db.getPipelineTask(arena.allocator(), id2)).?;
     try std.testing.expectEqual(id2, task.id);
@@ -332,6 +332,7 @@ test "AC13: getPipelineTask maps all 13 fields correctly after mutations" {
         "/path/to/repo",
         "tg:creator",
         "tg:notify",
+        "swe",
     );
 
     try db.updateTaskStatus(id, "impl");
@@ -368,7 +369,7 @@ test "AC14: updateTaskError stores error string without touching status or attem
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     try db.updateTaskError(id, "subprocess failed: exit 1");
 
     const t = (try db.getPipelineTask(arena.allocator(), id)).?;
@@ -387,7 +388,7 @@ test "AC15: updateTaskError clears error when set to empty string" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     try db.updateTaskError(id, "some error");
     try db.updateTaskError(id, "");
 
@@ -405,8 +406,8 @@ test "AC16: updateTaskError does not affect other tasks" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
 
     try db.updateTaskError(id1, "error on task 1");
 
@@ -424,7 +425,7 @@ test "AC17: setTaskSessionId stores session ID without touching status" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     try db.setTaskSessionId(id, "sess-abc123");
 
     const t = (try db.getPipelineTask(arena.allocator(), id)).?;
@@ -443,7 +444,7 @@ test "AC18: setTaskSessionId overwrites previous session ID" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     try db.setTaskSessionId(id, "sess-v1");
     try db.setTaskSessionId(id, "sess-v2");
 
@@ -461,8 +462,8 @@ test "AC19: setTaskSessionId does not affect other tasks" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
 
     try db.setTaskSessionId(id1, "sess-for-task-1");
 
@@ -480,9 +481,9 @@ test "E1: getNextPipelineTask returns null when all tasks are done/merged/failed
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "");
-    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "");
+    const id1 = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    const id2 = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
+    const id3 = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe");
 
     try db.updateTaskStatus(id1, "done");
     try db.updateTaskStatus(id2, "merged");
@@ -502,8 +503,8 @@ test "E2: getActivePipelineTasks(limit=1) returns same task as getNextPipelineTa
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("T-backlog", "d", "/repo", "", "");
-    const id_impl = try db.createPipelineTask("T-impl", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T-backlog", "d", "/repo", "", "", "swe");
+    const id_impl = try db.createPipelineTask("T-impl", "d", "/repo", "", "", "swe");
     try db.updateTaskStatus(id_impl, "impl");
 
     const next   = (try db.getNextPipelineTask(arena.allocator())).?;
@@ -529,8 +530,8 @@ test "E3: qa_fix and qa have same weight — both appear in active task list" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id_qa_fix = try db.createPipelineTask("T-qa_fix", "d", "/repo", "", "");
-    const id_qa     = try db.createPipelineTask("T-qa",     "d", "/repo", "", "");
+    const id_qa_fix = try db.createPipelineTask("T-qa_fix", "d", "/repo", "", "", "swe");
+    const id_qa     = try db.createPipelineTask("T-qa",     "d", "/repo", "", "", "swe");
 
     try db.updateTaskStatus(id_qa_fix, "qa_fix");
     try db.updateTaskStatus(id_qa,     "qa");
@@ -559,7 +560,7 @@ test "E4: updateTaskError stores and retrieves a long error string without trunc
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
 
     const long_err = "E" ** 2000;
     try db.updateTaskError(id, long_err);
@@ -579,7 +580,7 @@ test "E5: getPipelineTask returns null after the task is deleted" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     try db.deletePipelineTask(id);
 
     const task = try db.getPipelineTask(arena.allocator(), id);
@@ -596,9 +597,9 @@ test "E6: getActivePipelineTasks with oversized limit returns all active tasks" 
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("T1", "d", "/repo", "", "");
-    _ = try db.createPipelineTask("T2", "d", "/repo", "", "");
-    _ = try db.createPipelineTask("T3", "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T1", "d", "/repo", "", "", "swe");
+    _ = try db.createPipelineTask("T2", "d", "/repo", "", "", "swe");
+    _ = try db.createPipelineTask("T3", "d", "/repo", "", "", "swe");
 
     const tasks = try db.getActivePipelineTasks(arena.allocator(), 1000);
     try std.testing.expectEqual(@as(usize, 3), tasks.len);
@@ -614,7 +615,7 @@ test "E7: setTaskSessionId with empty string stores empty, not NULL" {
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    const id = try db.createPipelineTask("T", "d", "/repo", "", "");
+    const id = try db.createPipelineTask("T", "d", "/repo", "", "", "swe");
     try db.setTaskSessionId(id, "sess-old");
     try db.setTaskSessionId(id, "");
 
@@ -632,9 +633,9 @@ test "E8: getNextPipelineTask and getActivePipelineTasks(limit=1) return the sam
     var db = try Db.init(arena.allocator(), ":memory:");
     defer db.deinit();
 
-    _ = try db.createPipelineTask("T-backlog", "d", "/repo", "", "");
-    const id_rebase = try db.createPipelineTask("T-rebase", "d", "/repo", "", "");
-    const id_spec   = try db.createPipelineTask("T-spec",   "d", "/repo", "", "");
+    _ = try db.createPipelineTask("T-backlog", "d", "/repo", "", "", "swe");
+    const id_rebase = try db.createPipelineTask("T-rebase", "d", "/repo", "", "", "swe");
+    const id_spec   = try db.createPipelineTask("T-spec",   "d", "/repo", "", "", "swe");
 
     try db.updateTaskStatus(id_rebase, "rebase");
     try db.updateTaskStatus(id_spec,   "spec");

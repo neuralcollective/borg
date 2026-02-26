@@ -2,6 +2,7 @@ const std = @import("std");
 const db_mod = @import("db.zig");
 const Db = db_mod.Db;
 const json_mod = @import("json.zig");
+const modes = @import("modes.zig");
 const Config = @import("config.zig").Config;
 const main = @import("main.zig");
 
@@ -379,6 +380,8 @@ pub const WebServer = struct {
         } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.endsWith(u8, path, "/stream")) {
             self.serveTaskStream(stream, path);
             return; // SSE keeps connection open
+        } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.endsWith(u8, path, "/retry") and std.mem.eql(u8, method, "POST")) {
+            self.handleRetryTask(stream, path);
         } else if (std.mem.startsWith(u8, path, "/api/tasks/") and std.mem.eql(u8, method, "DELETE")) {
             self.handleDeleteTask(stream, path);
         } else if (std.mem.eql(u8, path, "/api/release") and std.mem.eql(u8, method, "POST")) {
@@ -399,6 +402,12 @@ pub const WebServer = struct {
             self.handleProposalAction(stream, path);
         } else if (std.mem.startsWith(u8, path, "/api/proposals")) {
             self.serveProposalsJson(stream, path);
+        } else if (std.mem.eql(u8, path, "/api/modes")) {
+            self.serveModesJson(stream);
+        } else if (std.mem.eql(u8, path, "/api/settings") and std.mem.eql(u8, method, "GET")) {
+            self.serveSettingsJson(stream);
+        } else if (std.mem.eql(u8, path, "/api/settings") and (std.mem.eql(u8, method, "PUT") or std.mem.eql(u8, method, "POST"))) {
+            self.handleUpdateSettings(stream, request);
         } else {
             self.serveStatic(stream, path);
         }
@@ -475,8 +484,9 @@ pub const WebServer = struct {
         };
         const description = json_mod.getString(parsed.value, "description") orelse title;
         const repo = json_mod.getString(parsed.value, "repo") orelse self.config.pipeline_repo;
+        const mode = json_mod.getString(parsed.value, "mode") orelse "swe";
 
-        const task_id = self.db.createPipelineTask(title, description, repo, "director", "") catch {
+        const task_id = self.db.createPipelineTask(title, description, repo, "director", "", mode) catch {
             self.serve500(stream);
             return;
         };
@@ -501,6 +511,28 @@ pub const WebServer = struct {
 
         self.serveJsonResponse(stream, 200, "{\"status\":\"deleted\"}");
         std.log.info("Director cancelled task #{d}", .{task_id});
+    }
+
+    fn handleRetryTask(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
+        // path is /api/tasks/:id/retry
+        const suffix = "/retry";
+        const inner = path["/api/tasks/".len .. path.len - suffix.len];
+        const task_id = std.fmt.parseInt(i64, inner, 10) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid task ID\"}");
+            return;
+        };
+
+        self.db.resetTaskAttempt(task_id) catch {
+            self.serve500(stream);
+            return;
+        };
+        self.db.updateTaskStatus(task_id, "backlog") catch {
+            self.serve500(stream);
+            return;
+        };
+
+        self.serveJsonResponse(stream, 200, "{\"status\":\"retrying\"}");
+        std.log.info("Director retrying task #{d}", .{task_id});
     }
 
     fn handleTriggerRelease(self: *WebServer, stream: std.net.Stream) void {
@@ -797,7 +829,7 @@ pub const WebServer = struct {
             const repo = jsonEscape(&esc_repo, t.repo_path);
             var esc_err: [512]u8 = undefined;
             const last_err = jsonEscape(&esc_err, t.last_error[0..@min(t.last_error.len, 200)]);
-            w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"last_error\":\"{s}\"}}", .{
+            w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"last_error\":\"{s}\",\"mode\":\"{s}\"}}", .{
                 t.id,
                 title,
                 desc,
@@ -809,6 +841,7 @@ pub const WebServer = struct {
                 t.created_by,
                 t.created_at,
                 last_err,
+                t.mode,
             }) catch return;
         }
 
@@ -852,7 +885,7 @@ pub const WebServer = struct {
 
         var esc_repo: [512]u8 = undefined;
         const repo = jsonEscape(&esc_repo, task.repo_path);
-        w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"last_error\":\"{s}\",\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"outputs\":[", .{
+        w.print("{{\"id\":{d},\"title\":\"{s}\",\"description\":\"{s}\",\"status\":\"{s}\",\"branch\":\"{s}\",\"repo_path\":\"{s}\",\"attempt\":{d},\"max_attempts\":{d},\"last_error\":\"{s}\",\"created_by\":\"{s}\",\"created_at\":\"{s}\",\"mode\":\"{s}\",\"outputs\":[", .{
             task.id,
             title,
             desc,
@@ -864,6 +897,7 @@ pub const WebServer = struct {
             last_err,
             task.created_by,
             task.created_at,
+            task.mode,
         }) catch return;
 
         for (outputs, 0..) |o, i| {
@@ -914,6 +948,27 @@ pub const WebServer = struct {
 
         w.writeAll("]") catch return;
         self.sendJson(stream, buf.items);
+    }
+
+    fn serveModesJson(self: *WebServer, stream: std.net.Stream) void {
+        _ = self;
+        var buf: [4096]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        const w = fbs.writer();
+        w.writeAll("[") catch return;
+        for (modes.all_modes, 0..) |mode, mi| {
+            if (mi > 0) w.writeAll(",") catch return;
+            w.print("{{\"name\":\"{s}\",\"label\":\"{s}\",\"phases\":[", .{ mode.name, mode.label }) catch return;
+            for (mode.phases, 0..) |phase, pi| {
+                if (pi > 0) w.writeAll(",") catch return;
+                w.print("{{\"name\":\"{s}\",\"label\":\"{s}\",\"priority\":{d}}}", .{ phase.name, phase.label, phase.priority }) catch return;
+            }
+            w.writeAll("]}") catch return;
+        }
+        w.writeAll("]") catch return;
+        const headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+        stream.writeAll(headers) catch return;
+        stream.writeAll(fbs.getWritten()) catch return;
     }
 
     fn serveProposalsJson(self: *WebServer, stream: std.net.Stream, path: []const u8) void {
@@ -1002,6 +1057,7 @@ pub const WebServer = struct {
                 proposal.repo_path,
                 "proposal",
                 "",
+                "swe",
             ) catch {
                 self.serve500(stream);
                 return;
@@ -1270,11 +1326,12 @@ pub const WebServer = struct {
             if (i > 0) w.writeAll(",") catch return;
             var esc_path: [512]u8 = undefined;
             var esc_cmd: [512]u8 = undefined;
-            w.print("{{\"path\":\"{s}\",\"test_cmd\":\"{s}\",\"is_self\":{s},\"auto_merge\":{s}}}", .{
+            w.print("{{\"path\":\"{s}\",\"test_cmd\":\"{s}\",\"is_self\":{s},\"auto_merge\":{s},\"mode\":\"{s}\"}}", .{
                 jsonEscape(&esc_path, repo.path),
                 jsonEscape(&esc_cmd, repo.test_cmd),
                 if (repo.is_self) "true" else "false",
                 if (repo.auto_merge) "true" else "false",
+                repo.mode,
             }) catch return;
         }
 
@@ -1290,6 +1347,116 @@ pub const WebServer = struct {
         }) catch return;
 
         self.sendJson(stream, buf.items);
+    }
+
+    const mutable_settings = [_]struct { key: []const u8, kind: enum { bool_val, int_val, str_val } }{
+        .{ .key = "continuous_mode", .kind = .bool_val },
+        .{ .key = "release_interval_mins", .kind = .int_val },
+        .{ .key = "pipeline_max_backlog", .kind = .int_val },
+        .{ .key = "agent_timeout_s", .kind = .int_val },
+        .{ .key = "pipeline_seed_cooldown_s", .kind = .int_val },
+        .{ .key = "pipeline_tick_s", .kind = .int_val },
+        .{ .key = "model", .kind = .str_val },
+        .{ .key = "container_memory_mb", .kind = .int_val },
+        .{ .key = "assistant_name", .kind = .str_val },
+        .{ .key = "pipeline_max_agents", .kind = .int_val },
+    };
+
+    fn serveSettingsJson(self: *WebServer, stream: std.net.Stream) void {
+        var buf: [2048]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        const w = fbs.writer();
+        var esc_model: [128]u8 = undefined;
+        var esc_name: [128]u8 = undefined;
+        w.print("{{\"continuous_mode\":{s},\"release_interval_mins\":{d},\"pipeline_max_backlog\":{d},\"agent_timeout_s\":{d},\"pipeline_seed_cooldown_s\":{d},\"pipeline_tick_s\":{d},\"model\":\"{s}\",\"container_memory_mb\":{d},\"assistant_name\":\"{s}\",\"pipeline_max_agents\":{d}}}", .{
+            if (self.config.continuous_mode) "true" else "false",
+            self.config.release_interval_mins,
+            self.config.pipeline_max_backlog,
+            self.config.agent_timeout_s,
+            self.config.pipeline_seed_cooldown_s,
+            self.config.pipeline_tick_s,
+            jsonEscape(&esc_model, self.config.model),
+            self.config.container_memory_mb,
+            jsonEscape(&esc_name, self.config.assistant_name),
+            self.config.pipeline_max_agents,
+        }) catch return;
+        self.sendJson(stream, fbs.getWritten());
+    }
+
+    fn handleUpdateSettings(self: *WebServer, stream: std.net.Stream, request: []const u8) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const body = parseBody(request);
+        if (body.len == 0) {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"empty body\"}");
+            return;
+        }
+
+        var parsed = json_mod.parse(alloc, body) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+
+        var changed: u32 = 0;
+        for (mutable_settings) |s| {
+            switch (s.kind) {
+                .bool_val => {
+                    if (json_mod.getBool(parsed.value, s.key)) |val| {
+                        const val_str = if (val) "true" else "false";
+                        self.db.setState(s.key, val_str) catch continue;
+                        self.applySettingToConfig(s.key, val_str);
+                        changed += 1;
+                    }
+                },
+                .int_val => {
+                    if (json_mod.getInt(parsed.value, s.key)) |val| {
+                        var num_buf: [32]u8 = undefined;
+                        const val_str = std.fmt.bufPrint(&num_buf, "{d}", .{val}) catch continue;
+                        self.db.setState(s.key, val_str) catch continue;
+                        self.applySettingToConfig(s.key, val_str);
+                        changed += 1;
+                    }
+                },
+                .str_val => {
+                    if (json_mod.getString(parsed.value, s.key)) |val| {
+                        self.db.setState(s.key, val) catch continue;
+                        self.applySettingToConfig(s.key, val);
+                        changed += 1;
+                    }
+                },
+            }
+        }
+
+        var resp_buf: [64]u8 = undefined;
+        const resp = std.fmt.bufPrint(&resp_buf, "{{\"updated\":{d}}}", .{changed}) catch return;
+        self.serveJsonResponse(stream, 200, resp);
+    }
+
+    fn applySettingToConfig(self: *WebServer, key: []const u8, val: []const u8) void {
+        if (std.mem.eql(u8, key, "continuous_mode")) {
+            self.config.continuous_mode = std.mem.eql(u8, val, "true");
+        } else if (std.mem.eql(u8, key, "release_interval_mins")) {
+            self.config.release_interval_mins = std.fmt.parseInt(u32, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "pipeline_max_backlog")) {
+            self.config.pipeline_max_backlog = std.fmt.parseInt(u32, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "agent_timeout_s")) {
+            self.config.agent_timeout_s = std.fmt.parseInt(i64, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "pipeline_seed_cooldown_s")) {
+            self.config.pipeline_seed_cooldown_s = std.fmt.parseInt(i64, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "pipeline_tick_s")) {
+            self.config.pipeline_tick_s = std.fmt.parseInt(u64, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "container_memory_mb")) {
+            self.config.container_memory_mb = std.fmt.parseInt(u64, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "pipeline_max_agents")) {
+            self.config.pipeline_max_agents = std.fmt.parseInt(u32, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "model")) {
+            self.config.model = self.config.allocator.dupe(u8, val) catch return;
+        } else if (std.mem.eql(u8, key, "assistant_name")) {
+            self.config.assistant_name = self.config.allocator.dupe(u8, val) catch return;
+        }
     }
 
     fn sendJson(_: *WebServer, stream: std.net.Stream, body: []const u8) void {

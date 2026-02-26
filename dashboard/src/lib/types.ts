@@ -10,6 +10,7 @@ export interface Task {
   created_by: string;
   created_at: string;
   last_error?: string;
+  mode?: string;
 }
 
 export interface TaskDetail extends Task {
@@ -40,6 +41,7 @@ export interface WatchedRepo {
   test_cmd: string;
   is_self: boolean;
   auto_merge: boolean;
+  mode: string;
 }
 
 export interface Status {
@@ -96,23 +98,54 @@ export interface DbEvent {
   metadata: string;
 }
 
-export const PHASES = ["backlog", "spec", "qa", "impl", "done", "merged"] as const;
-export const PHASE_LABELS: Record<string, string> = {
-  backlog: "Backlog",
-  spec: "Spec",
-  qa: "QA",
-  impl: "Implement",
-  done: "Testing",
-  merged: "Merged",
-};
-
-export const ACTIVE_STATUSES = ["backlog", "spec", "qa", "qa_fix", "impl", "retry", "rebase"];
-
-export function isActiveStatus(status: string) {
-  return ACTIVE_STATUSES.includes(status);
+export interface PhaseInfo {
+  name: string;
+  label: string;
+  priority: number;
 }
 
-export function effectivePhase(status: string): string {
+export interface PipelineMode {
+  name: string;
+  label: string;
+  phases: PhaseInfo[];
+}
+
+// SWE phases (default fallback)
+const SWE_DISPLAY_PHASES = ["backlog", "spec", "qa", "impl", "done", "merged"] as const;
+const SWE_PHASE_LABELS: Record<string, string> = {
+  backlog: "Backlog", spec: "Spec", qa: "QA", impl: "Implement",
+  done: "Testing", merged: "Merged",
+};
+
+// Legal phases
+const LEGAL_DISPLAY_PHASES = ["backlog", "research", "draft", "review", "done"] as const;
+const LEGAL_PHASE_LABELS: Record<string, string> = {
+  backlog: "Backlog", research: "Research", draft: "Drafting",
+  review: "Review", done: "Complete",
+};
+
+export function getDisplayPhases(mode?: string): readonly string[] {
+  if (mode === "legal") return LEGAL_DISPLAY_PHASES;
+  return SWE_DISPLAY_PHASES;
+}
+
+export function getPhaseLabel(phase: string, mode?: string): string {
+  if (mode === "legal") return LEGAL_PHASE_LABELS[phase] ?? phase;
+  return SWE_PHASE_LABELS[phase] ?? phase;
+}
+
+// Keep legacy exports for backward compat
+export const PHASES = SWE_DISPLAY_PHASES;
+export const PHASE_LABELS = SWE_PHASE_LABELS;
+
+export function isActiveStatus(status: string) {
+  const all = ["backlog", "spec", "qa", "qa_fix", "impl", "retry", "rebase",
+               "research", "draft", "review"];
+  return all.includes(status);
+}
+
+export function effectivePhase(status: string, mode?: string): string {
+  if (mode === "legal") return status;
   if (status === "retry" || status === "rebase") return "impl";
   if (status === "failed") return "impl";
   if (status === "qa_fix") return "qa";

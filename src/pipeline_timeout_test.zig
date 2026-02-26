@@ -183,14 +183,10 @@ test "AC9: agent and docker SIGKILL_GRACE_S constants are consistent" {
 // =============================================================================
 // AC8: Public pipeline API is unchanged after refactor
 //
-// Regression guard: the Pipeline struct and AgentPersona enum must still be
-// exported so callers in main.zig continue to compile.
+// Regression guard: the Pipeline struct must still be exported
+// so callers in main.zig continue to compile.
 // =============================================================================
 
 test "AC8: pipeline.Pipeline struct is still exported" {
     try std.testing.expect(@hasDecl(pipeline, "Pipeline"));
-}
-
-test "AC8: pipeline.AgentPersona enum is still exported" {
-    try std.testing.expect(@hasDecl(pipeline, "AgentPersona"));
 }
