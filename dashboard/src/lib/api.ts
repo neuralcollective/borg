@@ -1,6 +1,6 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useCallback, useState } from "react";
-import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal, PipelineMode } from "./types";
+import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal, PipelineMode, TaskMessage } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -203,6 +203,42 @@ export interface StreamEvent {
   name?: string;
   content?: unknown;
   output?: unknown;
+}
+
+export function useTaskMessages(taskId: number | null) {
+  return useQuery<TaskMessage[]>({
+    queryKey: ["task_messages", taskId],
+    queryFn: async () => {
+      if (!taskId) return [];
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/messages`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.messages ?? [];
+      } catch {
+        return [];
+      }
+    },
+    enabled: taskId !== null,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useSendTaskMessage(taskId: number) {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: async (content: string) => {
+      const res = await fetch(`/api/tasks/${taskId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "user", content }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["task_messages", taskId] });
+    },
+  });
 }
 
 export function useTaskStream(taskId: number | null, active: boolean) {

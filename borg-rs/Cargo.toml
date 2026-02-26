@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/borg-core",
+    "crates/borg-server",
+    "crates/borg-agent",
+]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging/tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# HTTP
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Async trait
+async-trait = "0.1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[workspace.lints.clippy]
+# Deny common footguns
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+# Allow common patterns that are fine in this codebase
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
