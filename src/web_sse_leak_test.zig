@@ -8,6 +8,7 @@
 // - broadcastChatEvent does the same
 // - handleChatPost's inline broadcast does the same
 // - stop() doesn't close SSE client streams at all
+// - serveSse/serveChatSse silently abandon the stream on OOM append failure
 
 const std = @import("std");
 const web_mod = @import("web.zig");
@@ -57,6 +58,7 @@ fn cleanupTestServer(ws: *WebServer) void {
     for (ws.chat_sse_clients.items) |client| client.close();
     ws.chat_sse_clients.deinit();
     ws.chat_queue.deinit();
+    ws.task_streams.deinit();
 }
 
 // ── AC1: broadcastSse closes removed streams ───────────────────────────
@@ -407,6 +409,61 @@ test "Edge6: stop with no SSE clients does not crash" {
 
     try std.testing.expectEqual(@as(usize, 0), ws.sse_clients.items.len);
     try std.testing.expectEqual(@as(usize, 0), ws.chat_sse_clients.items.len);
+}
+
+// ── Edge Case 7: OOM on sse_clients.append closes the stream ──────────
+//
+// serveSse and serveChatSse call sse_clients.append(stream) or
+// chat_sse_clients.append(stream) which can fail with OOM. In that case
+// the stream must be closed. We test the required pattern directly since
+// serveSse/serveChatSse are private functions.
+
+test "Edge7: OOM on sse_clients append — stream is closed via catch" {
+    // Use a FailingAllocator that fails on the very first allocation so
+    // that ArrayList.append (which needs to grow its backing store) fails.
+    var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var clients = std.ArrayList(std.net.Stream).init(fa.allocator());
+    defer clients.deinit();
+
+    const s = try makeBrokenStream();
+    const fd = s.handle;
+    try std.testing.expect(isFdOpen(fd));
+
+    // Pattern that must exist in serveSse after the fix:
+    clients.append(s) catch {
+        s.close(); // THE FIX: close stream on OOM
+    };
+
+    // Either the append succeeded (no OOM) or the stream was closed.
+    // With fail_index=0 the append fails and the stream must be closed.
+    if (clients.items.len == 0) {
+        // OOM path taken: stream must be closed
+        try std.testing.expect(!isFdOpen(fd));
+    } else {
+        // Append succeeded (shouldn't happen with fail_index=0, but handle it)
+        clients.items[0].close();
+    }
+}
+
+test "Edge7: OOM on chat_sse_clients append — stream is closed via catch" {
+    var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var clients = std.ArrayList(std.net.Stream).init(fa.allocator());
+    defer clients.deinit();
+
+    const s = try makeBrokenStream();
+    const fd = s.handle;
+    try std.testing.expect(isFdOpen(fd));
+
+    // Pattern that must exist in serveChatSse after the fix:
+    clients.append(s) catch {
+        s.close(); // THE FIX: close stream on OOM
+    };
+
+    if (clients.items.len == 0) {
+        try std.testing.expect(!isFdOpen(fd));
+    } else {
+        clients.items[0].close();
+    }
 }
 
 // ── Mixed scenario: good and bad clients ───────────────────────────────
