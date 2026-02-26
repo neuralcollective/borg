@@ -170,6 +170,14 @@ pub fn swe_mode() -> PipelineMode {
                 allowed_tools: String::new(),
                 target_primary_repo: false,
             },
+            SeedConfig {
+                name: "cross_pollinate".into(),
+                label: "Cross-Pollinate".into(),
+                output_type: SeedOutputType::Proposal,
+                prompt: SEED_CROSS_POLLINATE.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: true,
+            },
         ],
     }
 }
@@ -730,6 +738,14 @@ const SEED_ARCHITECTURE: &str = "Identify 1-2 significant structural improvement
 \nthat span multiple files, or replacing approaches that have outgrown\
 \ntheir original design.\
 \n\nEach proposal should be a multi-day project, not a quick fix.";
+
+const SEED_CROSS_POLLINATE: &str = "Study this codebase to understand its patterns, features, and architecture.\
+\nThen suggest 1-3 ideas inspired by what you see here that could be adapted\
+\nor ported to a DIFFERENT project (not this one).\
+\n\nFocus on: elegant abstractions worth copying, clever approaches to common\
+\nproblems, architectural patterns that solve hard problems well.\
+\n\nOutput proposals — each one describes a concrete improvement to apply\
+\nelsewhere, inspired by what you found here.";
 
 // ── CrewBorg prompts ──────────────────────────────────────────────────────
 

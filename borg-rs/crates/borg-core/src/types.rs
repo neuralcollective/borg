@@ -178,12 +178,8 @@ pub struct PhaseConfig {
     /// Start with a fresh session (no resume).
     pub fresh_session: bool,
 
-    // Rebase-specific
+    /// Instruction passed to the fix agent when rebase fails (rebase phases only).
     pub fix_instruction: String,
-    pub fix_error_instruction: String,
-
-    /// Lower = processed first.
-    pub priority: u8,
 }
 
 /// Configuration for a seed scan mode.

@@ -896,6 +896,27 @@ impl Db {
         Ok(conn.last_insert_rowid())
     }
 
+    /// Return "done" tasks that have no "queued" integration_queue entry (orphaned after restart).
+    pub fn list_done_tasks_without_queue(&self) -> Result<Vec<Task>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, title, description, repo_path, branch, status, attempt, \
+             max_attempts, last_error, created_by, notify_chat, created_at, \
+             session_id, mode, backend \
+             FROM pipeline_tasks \
+             WHERE status = 'done' \
+             AND NOT EXISTS ( \
+               SELECT 1 FROM integration_queue q \
+               WHERE q.task_id = pipeline_tasks.id AND q.status = 'queued' \
+             )",
+        )?;
+        let tasks = stmt
+            .query_map([], row_to_task)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_done_tasks_without_queue")?;
+        Ok(tasks)
+    }
+
     pub fn active_task_count(&self) -> i64 {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(

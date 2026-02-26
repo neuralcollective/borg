@@ -201,6 +201,22 @@ impl Pipeline {
 
     /// Main tick: dispatch ready tasks and run all periodic background work.
     pub async fn tick(self: Arc<Self>) -> Result<()> {
+        // Re-enqueue any "done" tasks that lost their queue entry (e.g. after restart)
+        if let Ok(orphans) = self.db.list_done_tasks_without_queue() {
+            for task in orphans {
+                if let Some(mode) = get_mode(&task.mode).or_else(|| get_mode("sweborg")) {
+                    if mode.integration == IntegrationType::GitPr {
+                        let branch = format!("task-{}", task.id);
+                        if let Err(e) = self.db.enqueue(task.id, &branch, &task.repo_path, 0) {
+                            warn!("re-enqueue orphaned done task #{}: {e}", task.id);
+                        } else {
+                            info!("re-enqueued orphaned done task #{}: {}", task.id, task.title);
+                        }
+                    }
+                }
+            }
+        }
+
         // Dispatch ready tasks
         let tasks = self.db.list_active_tasks().context("list_active_tasks")?;
         let max_agents = self.config.pipeline_max_agents as usize;
@@ -1023,11 +1039,35 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             backend: String::new(),
         };
 
+        let task_suffix = "\n\nFor each improvement, output EXACTLY this format (one per task):\n\n\
+            TASK_START\n\
+            Title: <short imperative title, max 80 chars>\n\
+            Description: <2-4 sentences explaining what to change and why>\n\
+            TASK_END\n\n\
+            Output ONLY the task blocks above. No other text.";
+        let proposal_suffix = "\n\nFor each proposal, output EXACTLY this format:\n\n\
+            PROPOSAL_START\n\
+            Title: <short imperative title, max 80 chars>\n\
+            Description: <2-4 sentences explaining the feature or change>\n\
+            Rationale: <1-2 sentences on why this would be valuable>\n\
+            PROPOSAL_END\n\n\
+            Output ONLY the proposal blocks above. No other text.";
+        let preamble = "First, thoroughly explore the codebase before making any suggestions. \
+            Use Read to examine key source files, Grep to search for patterns, \
+            and Glob to discover the project structure. Understand the architecture, \
+            existing patterns, and current state of the code.\n\nThen, based on your exploration:\n\n";
+        let suffix = match seed_cfg.output_type {
+            SeedOutputType::Task => task_suffix,
+            SeedOutputType::Proposal => proposal_suffix,
+        };
+        let instruction = format!("{preamble}{}{suffix}", seed_cfg.prompt);
+
         let phase = PhaseConfig {
             name: format!("seed_{}", seed_cfg.name),
             label: seed_cfg.label.clone(),
-            instruction: seed_cfg.prompt.clone(),
+            instruction,
             fresh_session: true,
+            include_file_listing: true,
             allowed_tools: if seed_cfg.allowed_tools.is_empty() {
                 "Read,Glob,Grep,Bash".to_string()
             } else {
