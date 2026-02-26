@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, Component } from "react";
+import type { ReactNode, ErrorInfo } from "react";
 import { useLogs, useStatus } from "@/lib/api";
 import { UIModeProvider, useUIMode } from "@/lib/ui-mode";
 import type { UIMode } from "@/lib/ui-mode";
@@ -12,6 +13,30 @@ import { ChatPanel } from "@/components/chat-panel";
 import { SettingsPanel } from "@/components/settings-panel";
 import { ListTodo, Terminal, GitMerge, MessageSquare, Lightbulb, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Dashboard error:", error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex h-screen items-center justify-center bg-[#09090b] text-zinc-400">
+          <div className="max-w-md text-center space-y-3">
+            <p className="text-sm font-medium text-red-400">Something went wrong</p>
+            <pre className="text-xs text-zinc-600 whitespace-pre-wrap">{(this.state.error as Error).message}</pre>
+            <button onClick={() => this.setState({ error: null })} className="text-xs text-zinc-500 hover:text-zinc-300 underline">
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 type View = "tasks" | "proposals" | "logs" | "queue" | "chat" | "settings";
 type MobileTab = "tasks" | "logs" | "queue" | "chat";
@@ -56,9 +81,11 @@ export default function App() {
   const defaultMode = useMemo(() => detectDefaultMode(status?.watched_repos), [status]);
 
   return (
-    <UIModeProvider defaultMode={defaultMode}>
-      <AppInner />
-    </UIModeProvider>
+    <ErrorBoundary>
+      <UIModeProvider defaultMode={defaultMode}>
+        <AppInner />
+      </UIModeProvider>
+    </ErrorBoundary>
   );
 }
 

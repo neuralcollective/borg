@@ -78,7 +78,7 @@ pub const Pipeline = struct {
         std.log.info("Pipeline thread started for {d} repo(s)", .{self.config.watched_repos.len});
 
         // Clear stale dispatched_at from previous instance (ACID recovery)
-        self.db.clearAllDispatched() catch {};
+        self.db.clearAllDispatched() catch |e| std.log.warn("clearAllDispatched: {}", .{e});
         self.killOrphanedContainers();
 
         self.processBacklogFiles();
@@ -255,7 +255,7 @@ pub const Pipeline = struct {
 
             _ = std.Thread.spawn(.{}, processTaskThread, .{ self, task }) catch {
                 _ = self.active_agents.fetchSub(1, .acq_rel);
-                self.db.clearTaskDispatched(task.id) catch {};
+                self.db.clearTaskDispatched(task.id) catch |e| std.log.warn("clearTaskDispatched #{d}: {}", .{ task.id, e });
                 continue;
             };
             dispatched[i] = true;
@@ -275,13 +275,13 @@ pub const Pipeline = struct {
         defer {
             task.deinit(self.allocator);
             _ = self.active_agents.fetchSub(1, .acq_rel);
-            self.db.clearTaskDispatched(task.id) catch {};
+            self.db.clearTaskDispatched(task.id) catch |e| std.log.warn("clearTaskDispatched #{d}: {}", .{ task.id, e });
         }
 
         // Only run tasks for the primary (self) repo — delete stray tasks from other repos
         if (!self.isSelfRepo(task.repo_path)) {
             std.log.warn("Task #{d} targets non-primary repo {s}, deleting", .{ task.id, task.repo_path });
-            self.db.deletePipelineTask(task.id) catch {};
+            self.db.deletePipelineTask(task.id) catch |e| std.log.warn("deletePipelineTask #{d}: {}", .{ task.id, e });
             return;
         }
 
@@ -692,11 +692,11 @@ pub const Pipeline = struct {
 
         // Store session
         if (result.new_session_id) |sid| {
-            self.db.setTaskSessionId(task.id, sid) catch {};
+            self.db.setTaskSessionId(task.id, sid) catch |e| std.log.warn("setTaskSessionId #{d}: {}", .{ task.id, e });
             self.allocator.free(sid);
         }
 
-        self.db.storeTaskOutputFull(task.id, phase.name, result.output, result.raw_stream, 0) catch {};
+        self.db.storeTaskOutputFull(task.id, phase.name, result.output, result.raw_stream, 0) catch |e| std.log.warn("storeTaskOutput #{d} {s}: {}", .{ task.id, phase.name, e });
 
         // Check artifact if required
         if (phase.check_artifact) |artifact| {
@@ -712,7 +712,7 @@ pub const Pipeline = struct {
                     defer self.allocator.free(c);
                     const diff_name = try std.fmt.allocPrint(self.allocator, "{s}_diff", .{phase.name});
                     defer self.allocator.free(diff_name);
-                    self.db.storeTaskOutput(task.id, diff_name, c, 0) catch {};
+                    self.db.storeTaskOutput(task.id, diff_name, c, 0) catch |e| std.log.warn("storeTaskOutput #{d} artifact: {}", .{ task.id, e });
                 }
             }
             if (!exists and result.output.len == 0) {
@@ -736,7 +736,7 @@ pub const Pipeline = struct {
                 if (diff.success()) {
                     const diff_name = try std.fmt.allocPrint(self.allocator, "{s}_diff", .{phase.name});
                     defer self.allocator.free(diff_name);
-                    self.db.storeTaskOutput(task.id, diff_name, diff.stdout, 0) catch {};
+                    self.db.storeTaskOutput(task.id, diff_name, diff.stdout, 0) catch |e| std.log.warn("storeTaskOutput #{d} diff: {}", .{ task.id, e });
                 }
             } else if (phase.check_artifact == null and !phase.allow_no_changes) {
                 try self.failTask(task, "agent produced no changes", commit.stderr);
@@ -762,7 +762,7 @@ pub const Pipeline = struct {
                 }) catch null;
                 if (test_combined) |tc| {
                     defer self.allocator.free(tc);
-                    self.db.storeTaskOutput(task.id, "test", tc, @intCast(test_result.exit_code)) catch {};
+                    self.db.storeTaskOutput(task.id, "test", tc, @intCast(test_result.exit_code)) catch |e| std.log.warn("storeTaskOutput #{d} test: {}", .{ task.id, e });
                 }
             }
 
@@ -789,7 +789,7 @@ pub const Pipeline = struct {
 
                     if (phase.has_qa_fix_routing and task.attempt >= 1 and isTestFileError(test_result.stderr, test_result.stdout)) {
                         try self.db.updateTaskStatus(task.id, "qa_fix");
-                        self.db.setTaskSessionId(task.id, "") catch {};
+                        self.db.setTaskSessionId(task.id, "") catch |e| std.log.warn("setTaskSessionId #{d}: {}", .{ task.id, e });
                         std.log.info("Task #{d} test error in test files, routing to QA fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts });
                         self.notify(task.notify_chat, try std.fmt.allocPrint(self.allocator, "Task #{d} test code has bugs — sending back to QA for fix ({d}/{d})", .{ task.id, task.attempt + 1, task.max_attempts }));
                     } else {
@@ -883,11 +883,11 @@ pub const Pipeline = struct {
             defer self.allocator.free(result.raw_stream);
 
             if (result.new_session_id) |sid| {
-                self.db.setTaskSessionId(task.id, sid) catch {};
+                self.db.setTaskSessionId(task.id, sid) catch |e| std.log.warn("setTaskSessionId #{d}: {}", .{ task.id, e });
                 self.allocator.free(sid);
             }
 
-            self.db.storeTaskOutputFull(task.id, "rebase", result.output, result.raw_stream, 0) catch {};
+            self.db.storeTaskOutputFull(task.id, "rebase", result.output, result.raw_stream, 0) catch |e| std.log.warn("storeTaskOutput #{d} rebase: {}", .{ task.id, e });
         }
 
         // Verify the agent actually completed the rebase before doing anything else.
@@ -973,7 +973,7 @@ pub const Pipeline = struct {
                 };
                 defer self.allocator.free(fix_result.output);
                 defer self.allocator.free(fix_result.raw_stream);
-                self.db.storeTaskOutputFull(task.id, "rebase_fix", fix_result.output, fix_result.raw_stream, 0) catch {};
+                self.db.storeTaskOutputFull(task.id, "rebase_fix", fix_result.output, fix_result.raw_stream, 0) catch |e| std.log.warn("storeTaskOutput #{d} rebase_fix: {}", .{ task.id, e });
 
                 // Re-run tests after fix agent
                 const retest = self.runTestCommandForRepo(wt_path, rebase_test_cmd) catch |err| {
@@ -1132,8 +1132,8 @@ pub const Pipeline = struct {
                 const state = std.mem.trim(u8, state_result.stdout, " \t\r\n");
                 if (std.mem.eql(u8, state, "MERGED")) {
                     std.log.info("Task #{d} {s}: PR already merged, cleaning up", .{ entry.task_id, entry.branch });
-                    self.db.updateQueueStatus(entry.id, "merged", null) catch {};
-                    self.db.updateTaskStatus(entry.task_id, "merged") catch {};
+                    self.db.updateQueueStatus(entry.id, "merged", null) catch |e| std.log.warn("updateQueueStatus #{d}: {}", .{ entry.id, e });
+                    self.db.updateTaskStatus(entry.task_id, "merged") catch |e| std.log.warn("updateTaskStatus #{d}: {}", .{ entry.task_id, e });
                     excluded_ids.put(entry.id, {}) catch {};
                     continue;
                 }
@@ -1217,8 +1217,8 @@ pub const Pipeline = struct {
                 const err_text = create_result.stderr[0..@min(create_result.stderr.len, 300)];
                 if (std.mem.indexOf(u8, err_text, "No commits between") != null) {
                     std.log.info("Task #{d} {s}: no commits vs main, marking as merged", .{ entry.task_id, entry.branch });
-                    self.db.updateQueueStatus(entry.id, "merged", null) catch {};
-                    self.db.updateTaskStatus(entry.task_id, "merged") catch {};
+                    self.db.updateQueueStatus(entry.id, "merged", null) catch |e| std.log.warn("updateQueueStatus #{d}: {}", .{ entry.id, e });
+                    self.db.updateTaskStatus(entry.task_id, "merged") catch |e| std.log.warn("updateTaskStatus #{d}: {}", .{ entry.task_id, e });
                     excluded_ids.put(entry.id, {}) catch {};
                     continue;
                 }
@@ -1439,7 +1439,7 @@ pub const Pipeline = struct {
         child.spawn() catch return;
 
         if (child.stdin) |stdin| {
-            stdin.writeAll(prompt_buf.items) catch {};
+            stdin.writeAll(prompt_buf.items) catch |e| std.log.warn("Auto-triage: stdin write failed: {}", .{e});
             stdin.close();
             child.stdin = null;
         }
@@ -1920,7 +1920,7 @@ pub const Pipeline = struct {
         }
         if (!done.load(.acquire)) {
             std.log.warn("Agent timeout ({d}s): killing container {s}", .{ timeout_s, name });
-            docker.killContainer(name) catch {};
+            docker.killContainer(name) catch |e| std.log.warn("killContainer {s}: {}", .{ name, e });
         }
     }
 

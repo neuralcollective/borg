@@ -487,8 +487,8 @@ pub fn main() !void {
     config.loadSettingsFromDb(&db);
 
     // Resume: reset any stuck queue entries and failed tasks from a previous crash/restart
-    db.resetStuckQueueEntries() catch {};
-    db.recycleFailedTasks() catch {};
+    db.resetStuckQueueEntries() catch |e| std.log.warn("resetStuckQueueEntries: {}", .{e});
+    db.recycleFailedTasks() catch |e| std.log.warn("recycleFailedTasks: {}", .{e});
     db.logEvent("info", "system", "Borg started", version);
 
     var tg = Telegram.init(allocator, config.telegram_token);
@@ -502,7 +502,7 @@ pub fn main() !void {
             std.log.err("Docker daemon not reachable but PIPELINE_REPO is set", .{});
             return;
         }
-        docker.cleanupOrphans() catch {};
+        docker.cleanupOrphans() catch |e| std.log.warn("cleanupOrphans: {}", .{e});
     }
 
     // Start unified sidecar (Discord + WhatsApp in one bun process)
@@ -599,7 +599,7 @@ pub fn main() !void {
             if (std.mem.eql(u8, g.jid, web_jid)) break true;
         } else false;
         if (!already) {
-            db.registerGroup(web_jid, "Dashboard", "dashboard", "@" ++ "Borg", false) catch {};
+            db.registerGroup(web_jid, "Dashboard", "dashboard", "@" ++ "Borg", false) catch |e| std.log.warn("registerGroup web: {}", .{e});
             try groups_list.append(.{
                 .jid = web_jid,
                 .name = "Dashboard",
@@ -613,7 +613,7 @@ pub fn main() !void {
 
     // ── Startup Recovery ─────────────────────────────────────────────────
     // Mark any in-flight agent runs from previous instance as abandoned
-    db.abandonRunningAgents() catch {};
+    db.abandonRunningAgents() catch |e| std.log.warn("abandonRunningAgents: {}", .{e});
 
     // Deliver any completed-but-undelivered agent runs from previous instance
     {
@@ -644,11 +644,11 @@ pub fn main() !void {
                 sender.send(transport, run.original_id, run.output, if (run.trigger_msg_id.len > 0) run.trigger_msg_id else null);
 
                 if (run.new_session_id.len > 0) {
-                    db.setSession(run.folder, run.new_session_id) catch {};
+                    db.setSession(run.folder, run.new_session_id) catch |e| std.log.warn("setSession {s}: {}", .{ run.folder, e });
                 }
                 std.log.info("Recovered undelivered response for {s}", .{run.jid});
             }
-            db.markChatAgentRunDelivered(run.id) catch {};
+            db.markChatAgentRunDelivered(run.id) catch |e| std.log.warn("markChatAgentRunDelivered #{d}: {}", .{ run.id, e });
         }
         if (undelivered.len > 0) allocator.free(undelivered);
     }
@@ -700,7 +700,7 @@ pub fn main() !void {
         session_expire_counter += 1;
         if (session_expire_counter >= 60) {
             session_expire_counter = 0;
-            db.expireSessions(config.session_max_age_hours) catch {};
+            db.expireSessions(config.session_max_age_hours) catch |e| std.log.warn("expireSessions: {}", .{e});
         }
 
         // 1. Poll Telegram messages
@@ -1104,7 +1104,7 @@ fn agentThreadInner(ctx: *AgentContext) !*AgentOutcome {
 
     // Write prompt to stdin
     if (child.stdin) |stdin| {
-        stdin.writeAll(ctx.prompt) catch {};
+        stdin.writeAll(ctx.prompt) catch |e| std.log.warn("agent stdin write {s}: {}", .{ ctx.jid, e });
         stdin.close();
         child.stdin = null;
     }
@@ -1153,7 +1153,7 @@ fn deliverOutcome(
 
     if (d.outcome.success) {
         if (d.outcome.new_session_id) |new_sid| {
-            db.setSession(d.folder, new_sid) catch {};
+            db.setSession(d.folder, new_sid) catch |e| std.log.warn("setSession {s}: {}", .{ d.folder, e });
         }
 
         if (d.outcome.output.len > 0) {
@@ -1176,7 +1176,7 @@ fn deliverOutcome(
 
     // Mark run as delivered in DB
     if (d.outcome.run_id > 0) {
-        db.markChatAgentRunDelivered(d.outcome.run_id) catch {};
+        db.markChatAgentRunDelivered(d.outcome.run_id) catch |e| std.log.warn("markChatAgentRunDelivered #{d}: {}", .{ d.outcome.run_id, e });
         db.logEvent(
             if (d.outcome.success) "info" else "error",
             "chat",
@@ -1251,7 +1251,7 @@ fn handleCommand(
             }
             _ = groups_list.orderedRemove(idx);
             gm.removeGroup(msg.jid);
-            db.unregisterGroup(msg.jid) catch {};
+            db.unregisterGroup(msg.jid) catch |e| std.log.warn("unregisterGroup {s}: {}", .{ msg.jid, e });
             reply(sender, msg, "Unregistered. I'll stop responding here.");
             std.log.info("Unregistered: {s}", .{msg.jid});
         } else {
