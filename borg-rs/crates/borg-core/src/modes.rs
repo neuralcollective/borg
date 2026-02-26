@@ -518,7 +518,7 @@ const SWE_REBASE_INSTRUCTION: &str = "This branch has merge conflicts with main.
 
 const SWE_REBASE_ERROR: &str = "\n\nPrevious error context:\n```\n{ERROR}\n```";
 
-const SWE_REBASE_FIX: &str = "The branch was rebased onto origin/main successfully, but tests now fail.\nFix the code so tests pass. Read spec.md for context on what this branch does.\nRun the test command to verify your fix before finishing.";
+const SWE_REBASE_FIX: &str = "The git rebase onto origin/main failed with conflicts:\n\n{ERROR}\n\nYou are in the worktree where the rebase is paused. Resolve all conflicts:\n- For 'deleted by us' files (files removed from main): run `git rm <file>` for each one\n- For content conflicts (<<<< markers): edit the file to resolve, then `git add <file>`\nAfter resolving all conflicts, run `git rebase --continue`.\nDo NOT run `git rebase --abort`.";
 
 
 const LEGAL_RESEARCH_SYSTEM: &str = "You are the research agent in an autonomous legal pipeline.\nAnalyze the legal issue, research relevant law, precedent, and context,\nthen produce a research memo (research.md) at the workspace root.\nDo not draft legal documents yet — focus on thorough analysis.";

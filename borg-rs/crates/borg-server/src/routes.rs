@@ -275,15 +275,16 @@ pub(crate) async fn run_chat_agent(
 
 /// Build a release binary and replace the running process via execve.
 pub(crate) async fn rebuild_and_exec(repo_path: &str) {
+    let build_dir = format!("{repo_path}/borg-rs");
     let build = tokio::process::Command::new("cargo")
         .args(["build", "--release"])
-        .current_dir(repo_path)
+        .current_dir(&build_dir)
         .status()
         .await;
     match build {
         Ok(s) if s.success() => {
             tracing::info!("Build done, restarting");
-            let bin = format!("{repo_path}/target/release/borg-server");
+            let bin = format!("{repo_path}/borg-rs/target/release/borg-server");
             use std::os::unix::process::CommandExt;
             let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let err = std::process::Command::new(&bin).args(&args[1..]).exec();
