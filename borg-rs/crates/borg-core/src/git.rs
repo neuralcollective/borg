@@ -115,7 +115,7 @@ impl Git {
     }
 
     pub fn pull(&self) -> Result<()> {
-        let result = self.exec(&self.repo_path, &["pull"])?;
+        let result = self.exec(&self.repo_path, &["pull", "origin", "main"])?;
         if !result.success() {
             return Err(anyhow!(
                 "git pull failed: {}",
