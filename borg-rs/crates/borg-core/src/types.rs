@@ -121,6 +121,36 @@ pub struct QueueEntry {
     pub pr_number: i64,
 }
 
+// ── Pipeline State Snapshot ───────────────────────────────────────────────
+
+/// One entry in the recent phase-output history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseHistoryEntry {
+    pub phase: String,
+    pub success: bool,
+    /// Truncated agent output (first 2 000 chars).
+    pub output: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Point-in-time pipeline state written to `.borg/pipeline-state.json`
+/// before each container agent launch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineStateSnapshot {
+    pub task_id: i64,
+    pub task_title: String,
+    pub phase: String,
+    pub worktree_path: String,
+    /// GitHub PR URL, or null if no PR has been opened yet.
+    pub pr_url: Option<String>,
+    /// Queue entries for this task that are in `pending_review` status
+    /// (awaiting manual merge approval).
+    pub pending_approvals: Vec<String>,
+    /// Up to 5 most-recent phase outputs, oldest first.
+    pub phase_history: Vec<PhaseHistoryEntry>,
+    pub generated_at: DateTime<Utc>,
+}
+
 // ── Config Types ─────────────────────────────────────────────────────────
 
 /// Per-repository pipeline configuration.

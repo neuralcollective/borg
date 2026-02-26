@@ -612,6 +612,19 @@ impl Db {
         Ok(entries)
     }
 
+    pub fn get_queue_entries_for_task(&self, task_id: i64) -> Result<Vec<QueueEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, branch, repo_path, status, queued_at, pr_number \
+             FROM integration_queue WHERE task_id = ?1 ORDER BY id ASC",
+        )?;
+        let entries = stmt
+            .query_map(params![task_id], row_to_queue_entry)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_queue_entries_for_task")?;
+        Ok(entries)
+    }
+
     pub fn get_unknown_retries(&self, id: i64) -> i64 {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
