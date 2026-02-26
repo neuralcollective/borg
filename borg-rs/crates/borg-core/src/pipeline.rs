@@ -15,7 +15,7 @@ use crate::{
     modes::get_mode,
     sandbox::Sandbox,
     stream::TaskStreamManager,
-    types::{IntegrationType, PhaseConfig, PhaseContext, PhaseOutput, PhaseType, PipelineMode, Proposal, RepoConfig, SeedOutputType, Task},
+    types::{IntegrationType, PhaseConfig, PhaseContext, PhaseHistoryEntry, PhaseOutput, PhaseType, PipelineMode, PipelineStateSnapshot, Proposal, RepoConfig, SeedOutputType, Task},
 };
 
 /// Broadcast event emitted after each significant pipeline state change.
@@ -468,6 +468,9 @@ impl Pipeline {
                 return Ok(());
             }
         };
+        if let Err(e) = self.write_pipeline_state_snapshot(task, &phase.name, &wt_path).await {
+            warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
+        }
         let result = backend
             .run_phase(task, phase, ctx)
             .await
@@ -585,6 +588,9 @@ impl Pipeline {
                     let ctx = self.make_context(task, wt_path.clone(), session_dir, Vec::new());
 
                     if let Some(backend) = self.resolve_backend(task) {
+                        if let Err(e) = self.write_pipeline_state_snapshot(task, "rebase_fix", &wt_path).await {
+                            warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
+                        }
                         if let Err(fix_err) = backend.run_phase(task, &fix_phase, ctx).await {
                             warn!("task #{} fix agent error: {fix_err}", task.id);
                         }
@@ -660,10 +666,15 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             let ctx = self.make_context(task, wt_path.clone(), session_dir.clone(), Vec::new());
 
             let agent_result = match self.resolve_backend(task) {
-                Some(b) => b.run_phase(task, &fix_phase, ctx).await.unwrap_or_else(|e| {
-                    error!("lint-fix agent for task #{}: {e}", task.id);
-                    PhaseOutput::failed(String::new())
-                }),
+                Some(b) => {
+                    if let Err(e) = self.write_pipeline_state_snapshot(task, &fix_phase.name, &wt_path).await {
+                        warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
+                    }
+                    b.run_phase(task, &fix_phase, ctx).await.unwrap_or_else(|e| {
+                        error!("lint-fix agent for task #{}: {e}", task.id);
+                        PhaseOutput::failed(String::new())
+                    })
+                }
                 None => {
                     warn!("task #{}: no backend, skipping lint fix attempt {}", task.id, fix_attempt);
                     self.advance_phase(task, phase, mode)?;
@@ -730,6 +741,84 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             task_id: Some(task.id),
             message: format!("task #{} advanced to '{}'", task.id, next),
         });
+        Ok(())
+    }
+
+    // ── Pipeline state snapshot ───────────────────────────────────────────
+
+    /// Write `.borg/pipeline-state.json` into the worktree before agent launch.
+    /// Logs a warning and returns Ok(()) on any error so phase execution is
+    /// never aborted by snapshot failures.
+    async fn write_pipeline_state_snapshot(
+        &self,
+        task: &Task,
+        phase_name: &str,
+        wt_path: &str,
+    ) -> Result<()> {
+        // Build phase_history from last 5 task outputs, truncating output to 2 000 chars.
+        let phase_history: Vec<PhaseHistoryEntry> = self
+            .db
+            .get_task_outputs(task.id)
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .take(5)
+            .rev()
+            .map(|o| PhaseHistoryEntry {
+                phase: o.phase,
+                success: o.exit_code == 0,
+                output: o.output.chars().take(2_000).collect(),
+                timestamp: o.created_at,
+            })
+            .collect();
+
+        // Look up queue entries for this task to populate pending_approvals and pr_url.
+        let queue_entries = self
+            .db
+            .get_queue_entries_for_task(task.id)
+            .unwrap_or_default();
+
+        let pending_approvals: Vec<String> = queue_entries
+            .iter()
+            .filter(|e| e.status == "pending_review")
+            .map(|e| e.branch.clone())
+            .collect();
+
+        // Derive PR URL by calling `gh pr view` if any queue entry exists.
+        let pr_url: Option<String> = if let Some(entry) = queue_entries.first() {
+            let out = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "gh pr view {} --json url --jq .url 2>/dev/null",
+                    entry.branch
+                ))
+                .output()
+                .await
+                .ok();
+            out.and_then(|o| {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if s.is_empty() { None } else { Some(s) }
+            })
+        } else {
+            None
+        };
+
+        let snapshot = PipelineStateSnapshot {
+            task_id: task.id,
+            task_title: task.title.clone(),
+            phase: phase_name.to_string(),
+            worktree_path: wt_path.to_string(),
+            pr_url,
+            pending_approvals,
+            phase_history,
+            generated_at: Utc::now(),
+        };
+
+        let borg_dir = format!("{wt_path}/.borg");
+        tokio::fs::create_dir_all(&borg_dir).await?;
+        let json = serde_json::to_string_pretty(&snapshot)?;
+        tokio::fs::write(format!("{borg_dir}/pipeline-state.json"), json).await?;
+
         Ok(())
     }
 
