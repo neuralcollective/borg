@@ -348,6 +348,27 @@ async fn run_chat_agent(
     Ok(text)
 }
 
+/// Build a release binary and replace the running process via execve.
+async fn rebuild_and_exec(repo_path: &str) {
+    let build = tokio::process::Command::new("cargo")
+        .args(["build", "--release"])
+        .current_dir(repo_path)
+        .status()
+        .await;
+    match build {
+        Ok(s) if s.success() => {
+            tracing::info!("Build done, restarting");
+            let bin = format!("{repo_path}/target/release/borg-server");
+            use std::os::unix::process::CommandExt;
+            let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+            let err = std::process::Command::new(&bin).args(&args[1..]).exec();
+            tracing::error!("execve failed: {err}");
+        }
+        Ok(_) => tracing::error!("Release build failed"),
+        Err(e) => tracing::error!("Failed to run cargo: {e}"),
+    }
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -368,12 +389,21 @@ async fn main() -> anyhow::Result<()> {
         .with(BroadcastLayer { tx: log_tx.clone(), ring: Arc::clone(&log_ring) })
         .init();
 
-    let config = Config::from_env()?;
+    let env_config = Config::from_env()?;
 
-    std::fs::create_dir_all(&config.data_dir)?;
-    let db_path = format!("{}/borg.db", config.data_dir);
+    std::fs::create_dir_all(&env_config.data_dir)?;
+    let db_path = format!("{}/borg.db", env_config.data_dir);
     let mut db = Db::open(&db_path)?;
     db.migrate()?;
+
+    // Seed DB from env on first run, then load DB values (DB wins over env)
+    env_config.seed_db(&db)?;
+    let config = env_config.load_from_db(&db);
+
+    // Abandon any runs left in 'running' state from previous crash
+    if let Err(e) = db.abandon_running_agents() {
+        tracing::error!("abandon_running_agents failed: {e}");
+    }
 
     // Upsert repos from config into DB
     for repo in &config.watched_repos {
@@ -381,7 +411,7 @@ async fn main() -> anyhow::Result<()> {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(&repo.path);
-        db.upsert_repo(
+        if let Err(e) = db.upsert_repo(
             &repo.path,
             name,
             &repo.mode,
@@ -389,8 +419,9 @@ async fn main() -> anyhow::Result<()> {
             &repo.prompt_file,
             repo.auto_merge,
             None,
-        )
-        .ok();
+        ) {
+            tracing::error!("upsert_repo {}: {e}", repo.path);
+        }
     }
 
     let db = Arc::new(db);
@@ -427,7 +458,12 @@ async fn main() -> anyhow::Result<()> {
 
     let force_restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    let (pipeline, pipeline_rx) = Pipeline::new(Arc::clone(&db), backends.clone(), Arc::clone(&config));
+    let (pipeline, pipeline_rx) = Pipeline::new(
+        Arc::clone(&db),
+        backends.clone(),
+        Arc::clone(&config),
+        Arc::clone(&force_restart),
+    );
     let pipeline_event_tx = pipeline.event_tx.clone();
     let pipeline = Arc::new(pipeline);
 
@@ -460,6 +496,7 @@ async fn main() -> anyhow::Result<()> {
                 tracing::warn!("Telegram connect failed: {e}");
                 return;
             }
+            let tg = Arc::new(tg);
             loop {
                 match tg.get_updates().await {
                     Ok(messages) => {
@@ -516,42 +553,49 @@ async fn main() -> anyhow::Result<()> {
                                     backend: String::new(),
                                 };
                                 let task_title = task.title.clone();
+                                let tg2 = Arc::clone(&tg);
                                 match db_tg.insert_task(&task) {
                                     Ok(id) => {
                                         let reply = format!("Task #{id} created: {task_title}");
-                                        let _ = tg
+                                        let _ = tg2
                                             .send_message(msg.chat_id, &reply, Some(msg.message_id))
                                             .await;
                                     }
                                     Err(e) => tracing::error!("insert_task from telegram: {e}"),
                                 }
                             } else {
-                                // Run chat agent
+                                // Run chat agent in a separate task so the poll loop isn't blocked
                                 let chat_key = format!("telegram:{}", msg.chat_id);
                                 let _ = tg.send_typing(msg.chat_id).await;
-                                match run_chat_agent(
-                                    &chat_key,
-                                    &msg.sender_name,
-                                    &[text],
-                                    &tg_sessions,
-                                    &config_tg,
-                                    &db_tg,
-                                    &tg_chat_event_tx,
-                                )
-                                .await
-                                {
-                                    Ok(reply) if !reply.is_empty() => {
-                                        let _ = tg
-                                            .send_message(
-                                                msg.chat_id,
-                                                &reply,
-                                                Some(msg.message_id),
-                                            )
-                                            .await;
+                                let tg2 = Arc::clone(&tg);
+                                let sessions2 = Arc::clone(&tg_sessions);
+                                let config2 = Arc::clone(&config_tg);
+                                let db2 = Arc::clone(&db_tg);
+                                let chat_tx2 = tg_chat_event_tx.clone();
+                                let sender_name = msg.sender_name.clone();
+                                let chat_id = msg.chat_id;
+                                let message_id = msg.message_id;
+                                tokio::spawn(async move {
+                                    match run_chat_agent(
+                                        &chat_key,
+                                        &sender_name,
+                                        &[text],
+                                        &sessions2,
+                                        &config2,
+                                        &db2,
+                                        &chat_tx2,
+                                    )
+                                    .await
+                                    {
+                                        Ok(reply) if !reply.is_empty() => {
+                                            let _ = tg2
+                                                .send_message(chat_id, &reply, Some(message_id))
+                                                .await;
+                                        }
+                                        Ok(_) => {}
+                                        Err(e) => tracing::warn!("Telegram chat agent error: {e}"),
                                     }
-                                    Ok(_) => {}
-                                    Err(e) => tracing::warn!("Telegram chat agent error: {e}"),
-                                }
+                                });
                             }
                         }
                     }
@@ -576,23 +620,7 @@ async fn main() -> anyhow::Result<()> {
                 if force_restart_check.load(std::sync::atomic::Ordering::Relaxed) {
                     tracing::info!("Force restart requested via /api/release, rebuilding...");
                     force_restart_check.store(false, std::sync::atomic::Ordering::Relaxed);
-                    let build = tokio::process::Command::new("cargo")
-                        .args(["build", "--release"])
-                        .current_dir(&self_repo.path)
-                        .status()
-                        .await;
-                    match build {
-                        Ok(s) if s.success() => {
-                            tracing::info!("Release build done, restarting");
-                            let bin = format!("{}/target/release/borg-server", self_repo.path);
-                            use std::os::unix::process::CommandExt;
-                            let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-                            let err = std::process::Command::new(&bin).args(&args[1..]).exec();
-                            tracing::error!("execve failed: {err}");
-                        }
-                        Ok(_) => tracing::error!("Release build failed"),
-                        Err(e) => tracing::error!("Failed to run cargo: {e}"),
-                    }
+                    rebuild_and_exec(&self_repo.path).await;
                     continue;
                 }
 
@@ -614,25 +642,11 @@ async fn main() -> anyhow::Result<()> {
                     "Self-update: new commit on origin/main: {}",
                     &remote_head[..8.min(remote_head.len())]
                 );
-                last_head = remote_head;
                 tracing::info!("Self-update: rebuilding...");
-                let build = tokio::process::Command::new("cargo")
-                    .args(["build", "--release"])
-                    .current_dir(&self_repo.path)
-                    .status()
-                    .await;
-                match build {
-                    Ok(s) if s.success() => {
-                        tracing::info!("Self-update: build done, restarting");
-                        let bin = format!("{}/target/release/borg-server", self_repo.path);
-                        use std::os::unix::process::CommandExt;
-                        let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-                        let err = std::process::Command::new(&bin).args(&args[1..]).exec();
-                        tracing::error!("execve failed: {err}");
-                    }
-                    Ok(_) => tracing::error!("Self-update: cargo build failed"),
-                    Err(e) => tracing::error!("Self-update: failed to run cargo: {e}"),
-                }
+                rebuild_and_exec(&self_repo.path).await;
+                // Only advance last_head after a successful execve replaces us.
+                // If build failed, we stay here and retry on the next remote change.
+                last_head = remote_head;
             }
         });
     }
@@ -886,18 +900,28 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Forward pipeline events to the SSE log stream
+    // Forward pipeline events to SSE log stream; route Notify events to Telegram
     {
         let log_tx_fwd = log_tx.clone();
+        let tg_token_notify = config.telegram_token.clone();
         tokio::spawn(async move {
             let mut rx = pipeline_rx;
             loop {
                 match rx.recv().await {
                     Ok(evt) => {
+                        if let PipelineEvent::Notify { ref chat_id, ref message } = evt {
+                            if !tg_token_notify.is_empty() {
+                                let raw_id = chat_id.strip_prefix("tg:").unwrap_or(chat_id.as_str());
+                                if let Ok(chat_id_i64) = raw_id.parse::<i64>() {
+                                    let tg = borg_core::telegram::Telegram::new(tg_token_notify.clone());
+                                    let _ = tg.send_message(chat_id_i64, message, None).await;
+                                }
+                            }
+                        }
                         let data = serde_json::json!({
-                            "type": evt.kind,
-                            "task_id": evt.task_id,
-                            "message": evt.message,
+                            "type": evt.kind(),
+                            "task_id": evt.task_id(),
+                            "message": evt.message(),
                         })
                         .to_string();
                         let _ = log_tx_fwd.send(data);
@@ -1112,8 +1136,7 @@ async fn post_task_message(
                 .db
                 .insert_task_message(id, &body.role, &body.content)
                 .map_err(internal)?;
-            let _ = state.pipeline_event_tx.send(PipelineEvent {
-                kind: "task_message".into(),
+            let _ = state.pipeline_event_tx.send(PipelineEvent::Output {
                 task_id: Some(id),
                 message: body.content.clone(),
             });
@@ -1352,7 +1375,7 @@ async fn triage_proposals(
                 stream_tx: None,
             };
 
-            std::fs::create_dir_all(&ctx.session_dir).ok();
+            tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
 
             match backend.run_phase(&task, &phase, ctx).await {
                 Ok(result) => {

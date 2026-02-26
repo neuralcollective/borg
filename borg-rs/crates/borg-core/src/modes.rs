@@ -1,7 +1,7 @@
 use crate::types::{IntegrationType, PhaseConfig, PhaseType, PipelineMode, SeedConfig, SeedOutputType};
 
 pub fn all_modes() -> Vec<PipelineMode> {
-    vec![swe_mode(), legal_mode(), web_mode(), crew_mode(), sales_mode()]
+    vec![swe_mode(), legal_mode(), web_mode(), crew_mode(), sales_mode(), data_mode()]
 }
 
 pub fn get_mode(name: &str) -> Option<PipelineMode> {
@@ -135,30 +135,40 @@ pub fn swe_mode() -> PipelineMode {
                 label: "Refactoring".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SEED_REFACTOR.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "security".into(),
                 label: "Bug Audit".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SEED_SECURITY.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "tests".into(),
                 label: "Test Coverage".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SEED_TESTS.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "features".into(),
                 label: "Feature Discovery".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: SEED_FEATURES.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "architecture".into(),
                 label: "Architecture Review".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: SEED_ARCHITECTURE.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
         ],
     }
@@ -228,24 +238,32 @@ pub fn legal_mode() -> PipelineMode {
                 label: "Clause Review".into(),
                 output_type: SeedOutputType::Task,
                 prompt: "Review the legal documents in this repository. Identify 1-3 specific\nclauses, provisions, or terms that could be improved, clarified, or\nthat pose legal risk. Focus on practical, actionable improvements.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "compliance".into(),
                 label: "Compliance Audit".into(),
                 output_type: SeedOutputType::Task,
                 prompt: "Audit the documents for compliance gaps against relevant regulations,\nstandards, and best practices. Create a task for each genuine compliance\nissue found. Be specific about the regulation or standard being violated.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "precedent".into(),
                 label: "Precedent Research".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: "Analyze the legal matters addressed in this repository. Suggest 1-3\nresearch directions for relevant case law, statutory authority, or\nregulatory guidance that could strengthen the legal positions taken.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "risk".into(),
                 label: "Risk Assessment".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: "Perform a risk assessment of the legal documents and matters. Identify\n1-2 significant legal risks, exposure areas, or positions that could\nbe challenged. Focus on material risks, not theoretical ones.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
         ],
     }
@@ -328,24 +346,32 @@ pub fn web_mode() -> PipelineMode {
                 label: "Performance".into(),
                 output_type: SeedOutputType::Task,
                 prompt: "Analyze the web app for performance issues.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "visual".into(),
                 label: "Visual Polish".into(),
                 output_type: SeedOutputType::Task,
                 prompt: "Review the UI for visual inconsistencies and polish opportunities.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "accessibility".into(),
                 label: "Accessibility".into(),
                 output_type: SeedOutputType::Task,
                 prompt: "Audit the web app for accessibility issues.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "ux".into(),
                 label: "UX Improvements".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: "Identify 1-3 user experience improvements that would meaningfully reduce friction.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
         ],
     }
@@ -377,6 +403,7 @@ pub fn crew_mode() -> PipelineMode {
                 instruction: CREW_SOURCE_INSTRUCTION.into(),
                 allowed_tools: "Read,Glob,Grep,Write,WebSearch,WebFetch".into(),
                 include_task_context: true,
+                include_file_listing: true,
                 check_artifact: Some("candidates.md".into()),
                 next: "evaluate".into(),
                 priority: 50,
@@ -413,18 +440,24 @@ pub fn crew_mode() -> PipelineMode {
                 label: "Candidate Discovery".into(),
                 output_type: SeedOutputType::Task,
                 prompt: CREW_SEED_DISCOVERY.into(),
+                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "refresh".into(),
                 label: "Re-evaluate Pool".into(),
                 output_type: SeedOutputType::Task,
                 prompt: CREW_SEED_REFRESH.into(),
+                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "criteria".into(),
                 label: "Refine Criteria".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: CREW_SEED_CRITERIA.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
         ],
     }
@@ -493,18 +526,111 @@ pub fn sales_mode() -> PipelineMode {
                 label: "Lead Discovery".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SALES_SEED_DISCOVERY.into(),
+                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "follow_up".into(),
                 label: "Follow-up Drafts".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SALES_SEED_FOLLOWUP.into(),
+                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                target_primary_repo: false,
             },
             SeedConfig {
                 name: "icp".into(),
                 label: "ICP Refinement".into(),
                 output_type: SeedOutputType::Proposal,
                 prompt: SALES_SEED_ICP.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
+            },
+        ],
+    }
+}
+
+pub fn data_mode() -> PipelineMode {
+    PipelineMode {
+        name: "databorg".into(),
+        label: "Data Analysis".into(),
+        initial_status: "backlog".into(),
+        uses_git_worktrees: true,
+        uses_docker: false,
+        uses_test_cmd: false,
+        integration: IntegrationType::None,
+        default_max_attempts: 3,
+        phases: vec![
+            PhaseConfig {
+                name: "backlog".into(),
+                label: "Backlog".into(),
+                phase_type: PhaseType::Setup,
+                next: "ingest".into(),
+                priority: 60,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "ingest".into(),
+                label: "Data Ingestion".into(),
+                system_prompt: DATA_INGEST_SYSTEM.into(),
+                instruction: DATA_INGEST_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Bash,WebSearch,WebFetch".into(),
+                include_task_context: true,
+                include_file_listing: true,
+                check_artifact: Some("data.md".into()),
+                next: "analyze".into(),
+                priority: 50,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "analyze".into(),
+                label: "Analysis".into(),
+                system_prompt: DATA_ANALYZE_SYSTEM.into(),
+                instruction: DATA_ANALYZE_INSTRUCTION.into(),
+                error_instruction: DATA_ANALYZE_RETRY.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
+                commits: true,
+                commit_message: "analyze: data analysis from databorg agent".into(),
+                next: "report".into(),
+                priority: 30,
+                ..default_phase()
+            },
+            PhaseConfig {
+                name: "report".into(),
+                label: "Report".into(),
+                system_prompt: DATA_REPORT_SYSTEM.into(),
+                instruction: DATA_REPORT_INSTRUCTION.into(),
+                allowed_tools: "Read,Glob,Grep,Write,Edit".into(),
+                commits: true,
+                commit_message: "report: findings from databorg agent".into(),
+                next: "done".into(),
+                priority: 10,
+                ..default_phase()
+            },
+        ],
+        seed_modes: vec![
+            SeedConfig {
+                name: "explore".into(),
+                label: "Exploratory Analysis".into(),
+                output_type: SeedOutputType::Task,
+                prompt: DATA_SEED_EXPLORE.into(),
+                allowed_tools: "Read,Glob,Grep,Bash".into(),
+                target_primary_repo: false,
+            },
+            SeedConfig {
+                name: "quality".into(),
+                label: "Data Quality Audit".into(),
+                output_type: SeedOutputType::Task,
+                prompt: DATA_SEED_QUALITY.into(),
+                allowed_tools: "Read,Glob,Grep,Bash".into(),
+                target_primary_repo: false,
+            },
+            SeedConfig {
+                name: "refresh".into(),
+                label: "Refresh Reports".into(),
+                output_type: SeedOutputType::Task,
+                prompt: DATA_SEED_REFRESH.into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
             },
         ],
     }
@@ -604,3 +730,159 @@ const SEED_ARCHITECTURE: &str = "Identify 1-2 significant structural improvement
 \nthat span multiple files, or replacing approaches that have outgrown\
 \ntheir original design.\
 \n\nEach proposal should be a multi-day project, not a quick fix.";
+
+// ── CrewBorg prompts ──────────────────────────────────────────────────────
+
+const CREW_SOURCE_SYSTEM: &str = "You are a talent sourcing agent. Your job is to find real, verifiable\
+\ncandidates that match the brief. Use web search to locate profiles,\
+\nportfolios, GitHub accounts, LinkedIn, personal sites, and relevant\
+\ncommunities. Do not invent candidates — only record those you can verify.";
+
+const CREW_SOURCE_INSTRUCTION: &str = "Read the task brief and search for matching candidates.\
+\nWrite candidates.md containing:\
+\n1. Brief (role, requirements, key criteria)\
+\n2. Sourcing channels searched\
+\n3. Candidate list — for each: name, profile URL(s), location, and why they match\
+\nAim for 10-20 candidates. Prefer quality over quantity.";
+
+const CREW_EVALUATE_SYSTEM: &str = "You are a talent evaluation agent. Read candidates.md and do deeper\
+\nresearch on each candidate. Assess fit against the brief criteria.\
+\nBe honest about gaps and uncertainties. Do not inflate scores.";
+
+const CREW_EVALUATE_INSTRUCTION: &str = "Read candidates.md and evaluate each candidate.\
+\nFor each, research their background, work quality, and relevance.\
+\nAppend an evaluation section to candidates.md with:\
+\n- Score (1-10) per key criterion\
+\n- Overall fit score\
+\n- Strengths and gaps\
+\n- Availability signals (if findable)\
+\n- Red flags if any";
+
+const CREW_RANK_SYSTEM: &str = "You are a talent ranking agent. Synthesise the evaluations from\
+\ncandidates.md into a final prioritised shortlist. Be concise and decisive.\
+\nThe shortlist is the deliverable — make it actionable.";
+
+const CREW_RANK_INSTRUCTION: &str = "Read candidates.md with evaluations and produce shortlist.md:\
+\n1. Top picks (ranked 1-5) — name, score, 2-sentence summary, contact/profile link\
+\n2. Reserves (next 5) — brief note on each\
+\n3. Not recommended — list names and one-line reason\
+\n4. Recommended next steps (outreach order, questions to ask)";
+
+const CREW_SEED_DISCOVERY: &str = "Review the existing candidate pool in this repository.\
+\nIdentify gaps: roles not yet sourced, underrepresented skill sets,\
+\nor geographies not yet searched. Create a task to source candidates\
+\nfor the most critical gap.";
+
+const CREW_SEED_REFRESH: &str = "Check candidates in the existing shortlist for staleness.\
+\nSearch for any whose profiles or availability may have changed\
+\nsince last evaluated. Create a task to re-evaluate those candidates.";
+
+const CREW_SEED_CRITERIA: &str = "Review the search briefs and evaluation criteria in this repository.\
+\nSuggest 1-2 improvements: criteria that are too vague, missing signals\
+\nthat would better predict fit, or sourcing channels not yet tried.";
+
+// ── SalesBorg prompts ─────────────────────────────────────────────────────
+
+const SALES_RESEARCH_SYSTEM: &str = "You are a sales research agent. Research the prospect thoroughly\
+\nbefore any outreach is drafted. Find recent news, product focus, team\
+\nsize, funding, pain points, and relevant context. Do not fabricate facts.";
+
+const SALES_RESEARCH_INSTRUCTION: &str = "Research the prospect described in the task and write prospect.md:\
+\n1. Company/person overview (what they do, size, stage)\
+\n2. Recent news and signals (funding, launches, hires, press)\
+\n3. Likely pain points relevant to our offering\
+\n4. Key decision-makers and their roles\
+\n5. Recommended angle for outreach (what to lead with and why)";
+
+const SALES_DRAFT_SYSTEM: &str = "You are a sales outreach agent. Read prospect.md and draft\
+\npersonalised, concise outreach. Lead with insight, not a pitch.\
+\nAvoid generic templates — every word should be specific to this prospect.";
+
+const SALES_DRAFT_INSTRUCTION: &str = "Read prospect.md and draft outreach.md containing:\
+\n1. Email subject line (sharp, specific, not clickbait)\
+\n2. Email body (3-5 short paragraphs max)\
+\n   - Hook: something specific and relevant to them\
+\n   - Bridge: connect their situation to what we offer\
+\n   - Ask: one clear, low-friction call to action\
+\n3. LinkedIn message variant (under 300 chars)\
+\n4. Notes on timing or personalisation to add before sending";
+
+const SALES_REVIEW_SYSTEM: &str = "You are a senior sales reviewer. Read prospect.md and outreach.md.\
+\nAssess the outreach for relevance, tone, personalisation, and clarity.\
+\nFix weak spots directly in outreach.md. Do not just list issues.";
+
+const SALES_REVIEW_INSTRUCTION: &str = "Review outreach.md against prospect.md. Check:\
+\n1. Does the hook reference something genuinely specific to the prospect?\
+\n2. Is the value prop clear and relevant to their likely pain points?\
+\n3. Is the ask concrete and easy to say yes to?\
+\n4. Tone: confident but not pushy, peer-to-peer\
+\n5. Length: email under 200 words, LinkedIn under 300 chars\
+\nFix any issues directly. Leave a brief review note at the top of outreach.md.";
+
+const SALES_REVIEW_RETRY: &str = "\n\nPrevious review flagged unresolved issues:\n{ERROR}\n\nAddress them.";
+
+const SALES_SEED_DISCOVERY: &str = "Review the prospect list in this repository.\
+\nIdentify 1-3 new leads that fit the ideal customer profile based on\
+\nwhat's already here. Each lead should be a real, findable company or person.\
+\nCreate a task for each with enough context to kick off research.";
+
+const SALES_SEED_FOLLOWUP: &str = "Review prospects where outreach was sent but no reply recorded.\
+\nDraft a follow-up task for the highest-priority ones.\
+\nFollow-ups should add new value (a resource, insight, or hook)\
+\nrather than just bumping the thread.";
+
+const SALES_SEED_ICP: &str = "Analyse the prospect list and outreach results in this repository.\
+\nSuggest 1-2 refinements to the ideal customer profile: segments that\
+\nare converting better, new verticals worth targeting, or personas\
+\nbeing missed. Base suggestions on what's already in the data.";
+
+// ── DataBorg prompts ──────────────────────────────────────────────────────
+
+const DATA_INGEST_SYSTEM: &str = "You are a data ingestion agent. Your job is to understand the raw data\
+\nin this repository — schemas, formats, quality, and coverage — and produce\
+\na clear summary so downstream agents can work with it effectively.\
+\nDo not draw conclusions yet. Focus on accurate characterisation.";
+
+const DATA_INGEST_INSTRUCTION: &str = "Explore the data files in this repository and write data.md:\
+\n1. Data inventory — files/tables, formats, row counts, date ranges\
+\n2. Schema summary — key fields, types, nullability, relationships\
+\n3. Quality issues — missing values, outliers, encoding problems, duplicates\
+\n4. Coverage gaps — what's present vs what the task requires\
+\n5. Recommended approach for the analysis requested in the task";
+
+const DATA_ANALYZE_SYSTEM: &str = "You are a data analysis agent. Read data.md and the raw data,\
+\nthen perform the analysis described in the task. Write clean, reproducible\
+\ncode (Python preferred). Prefer simple, correct analysis over complex models.";
+
+const DATA_ANALYZE_INSTRUCTION: &str = "Read data.md and the task description, then:\
+\n1. Write analysis code in analysis.py (or analysis.sql for pure SQL tasks)\
+\n2. Run the code and capture output — include key numbers and results inline\
+\n3. Note any assumptions made or data limitations that affect conclusions";
+
+const DATA_ANALYZE_RETRY: &str = "\n\nPrevious attempt failed. Error:\n```\n{ERROR}\n```\nFix the issue.";
+
+const DATA_REPORT_SYSTEM: &str = "You are a data reporting agent. Read the analysis outputs and produce\
+\na clear, concise report. Lead with findings, not methodology.\
+\nWrite for a non-technical reader unless the task specifies otherwise.";
+
+const DATA_REPORT_INSTRUCTION: &str = "Read data.md and the analysis outputs, then write report.md:\
+\n1. Key findings (3-5 bullet points, concrete numbers)\
+\n2. Methodology summary (1 short paragraph — what was done and why)\
+\n3. Detailed results — tables, trends, comparisons as appropriate\
+\n4. Caveats and limitations\
+\n5. Recommended next steps or actions based on findings";
+
+const DATA_SEED_EXPLORE: &str = "Survey the data in this repository. Identify 1-3 analyses that\
+\nwould yield actionable insight: trends worth quantifying, anomalies\
+\nworth investigating, or comparisons not yet made. Create a task for each.";
+
+const DATA_SEED_QUALITY: &str = "Audit data quality in this repository. Look for:\
+\n- Fields with high null rates that should be populated\
+\n- Duplicate records or inconsistent identifiers\
+\n- Value distributions that suggest encoding errors or pipeline bugs\
+\n- Date/time coverage gaps\
+\nCreate a task for each genuine quality issue worth fixing.";
+
+const DATA_SEED_REFRESH: &str = "Review the existing reports and analyses in this repository.\
+\nIdentify which are stale and would benefit from a refresh with current data.\
+\nCreate a task to re-run the most valuable one.";

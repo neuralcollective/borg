@@ -193,6 +193,13 @@ pub struct SeedConfig {
     pub label: String,
     pub prompt: String,
     pub output_type: SeedOutputType,
+    /// Tools available to the seed agent. Empty = default set (Read,Glob,Grep,Bash).
+    #[serde(default)]
+    pub allowed_tools: String,
+    /// When true, output (tasks/proposals) is attributed to the primary (is_self) repo
+    /// rather than the watched repo being seeded. Used for cross-pollinate seeds.
+    #[serde(default)]
+    pub target_primary_repo: bool,
 }
 
 /// A complete pipeline mode definition (e.g. "sweborg", "lawborg", "webborg").
