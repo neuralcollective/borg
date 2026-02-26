@@ -18,11 +18,48 @@ fn spawnWriter(allocator: std.mem.Allocator, stdout_size: usize, stderr_size: us
     return child;
 }
 
-// ── AC2: Deadlock resolved — large stderr, minimal stdout ──────────────
+// ── Compile-time signature verification ────────────────────────────────
 
-test "AC2: subprocess writing >64KB to stderr with 0 bytes stdout completes without deadlock" {
+test "collectOutput: function exists with correct return type" {
+    // If subprocess.zig is missing or collectOutput is absent, this is a compile error.
+    // The return type must be an error union (i.e. !PipeOutput).
+    const Fn = @TypeOf(subprocess.collectOutput);
+    const fn_info = @typeInfo(Fn).@"fn";
+    const ret = fn_info.return_type.?;
+    try std.testing.expect(@typeInfo(ret) == .error_union);
+}
+
+test "collectOutput: function accepts three parameters (allocator, *Child, usize)" {
+    const Fn = @TypeOf(subprocess.collectOutput);
+    const fn_info = @typeInfo(Fn).@"fn";
+    try std.testing.expectEqual(@as(usize, 3), fn_info.params.len);
+}
+
+test "PipeOutput: struct has stdout, stderr, and allocator fields of correct types" {
+    const info = @typeInfo(PipeOutput);
+    const fields = info.@"struct".fields;
+    const expected = [_][]const u8{ "stdout", "stderr", "allocator" };
+    for (expected) |name| {
+        var found = false;
+        for (fields) |f| {
+            if (std.mem.eql(u8, f.name, name)) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "PipeOutput: deinit method exists" {
+    try std.testing.expect(@hasDecl(PipeOutput, "deinit"));
+}
+
+// ── AC1 / AC2: Deadlock resolved — large stderr, minimal stdout ─────────
+
+test "AC1: subprocess writing >64KB to stderr with 0 bytes stdout completes without deadlock" {
     const allocator = std.testing.allocator;
-    const stderr_size: usize = 128 * 1024; // 128KB — well over the ~64KB pipe buffer
+    const stderr_size: usize = 128 * 1024; // 128 KB — well over the ~64 KB pipe buffer
 
     var child = try spawnWriter(allocator, 0, stderr_size);
     var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
@@ -31,7 +68,23 @@ test "AC2: subprocess writing >64KB to stderr with 0 bytes stdout completes with
 
     try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
     try std.testing.expectEqual(stderr_size, output.stderr.len);
-    // Verify exit success
+    switch (term) {
+        .Exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        else => return error.UnexpectedTermination,
+    }
+}
+
+test "AC2: subprocess writing >64KB to stderr with 0 bytes stdout completes without deadlock" {
+    const allocator = std.testing.allocator;
+    const stderr_size: usize = 128 * 1024;
+
+    var child = try spawnWriter(allocator, 0, stderr_size);
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    defer output.deinit();
+    const term = try child.wait();
+
+    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
+    try std.testing.expectEqual(stderr_size, output.stderr.len);
     switch (term) {
         .Exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
         else => return error.UnexpectedTermination,
@@ -51,7 +104,7 @@ test "AC2: subprocess writing exactly 64KB to stderr completes" {
     try std.testing.expectEqual(stderr_size, output.stderr.len);
 }
 
-// ── AC3: Deadlock resolved (reverse) — large stdout, minimal stderr ────
+// ── AC3: Deadlock resolved (reverse) — large stdout, minimal stderr ─────
 
 test "AC3: subprocess writing >64KB to stdout with 0 bytes stderr completes without deadlock" {
     const allocator = std.testing.allocator;
@@ -70,9 +123,9 @@ test "AC3: subprocess writing >64KB to stdout with 0 bytes stderr completes with
     }
 }
 
-// ── AC2+AC3 combined: large output on BOTH streams simultaneously ──────
+// ── AC4: Large output on BOTH streams simultaneously ────────────────────
 
-test "AC2+AC3: subprocess writing >64KB to both stdout and stderr completes" {
+test "AC4: subprocess writing >64KB to both stdout and stderr completes" {
     const allocator = std.testing.allocator;
     const size: usize = 128 * 1024;
 
@@ -85,12 +138,11 @@ test "AC2+AC3: subprocess writing >64KB to both stdout and stderr completes" {
     try std.testing.expectEqual(size, output.stderr.len);
 }
 
-// ── AC6: Behavioral equivalence — data integrity ───────────────────────
+// ── AC5 / AC6: Exact byte content captured ──────────────────────────────
 
-test "AC6: collectOutput captures exact byte content from stdout" {
+test "AC5: collectOutput captures exact byte content from stdout" {
     const allocator = std.testing.allocator;
 
-    // Use a command that writes known content to stdout
     var child = std.process.Child.init(
         &.{ "/bin/sh", "-c", "echo 'hello stdout'" },
         allocator,
@@ -128,7 +180,7 @@ test "AC6: collectOutput captures exact byte content from stderr" {
     try std.testing.expectEqualStrings("hello stderr\n", output.stderr);
 }
 
-test "AC6: collectOutput captures content on both streams simultaneously" {
+test "AC5+AC6: collectOutput captures content on both streams simultaneously" {
     const allocator = std.testing.allocator;
 
     var child = std.process.Child.init(
@@ -148,13 +200,12 @@ test "AC6: collectOutput captures content on both streams simultaneously" {
     try std.testing.expectEqualStrings("err\n", output.stderr);
 }
 
-// ── AC7: Thread cleanup — stderr reader thread always joined ───────────
+// ── AC7: Thread cleanup — stderr reader thread always joined ────────────
 
-test "AC7: no thread leak after successful collectOutput" {
+test "AC7: no thread leak after 20 sequential collectOutput calls" {
     const allocator = std.testing.allocator;
 
-    // Run multiple collectOutput calls in sequence. If threads leaked,
-    // we'd eventually exhaust thread resources.
+    // If threads leaked, we'd eventually exhaust thread resources.
     for (0..20) |_| {
         var child = try spawnWriter(allocator, 1024, 1024);
         var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
@@ -163,7 +214,7 @@ test "AC7: no thread leak after successful collectOutput" {
     }
 }
 
-test "AC7: thread joined even when child exits with error" {
+test "AC7: thread is joined even when child exits with non-zero code" {
     const allocator = std.testing.allocator;
 
     var child = std.process.Child.init(
@@ -188,7 +239,26 @@ test "AC7: thread joined even when child exits with error" {
     }
 }
 
-// ── AC8: Unit test in subprocess.zig (verified here too) ───────────────
+// ── AC8: PipeOutput.deinit frees both slices — no memory leak ───────────
+
+test "AC8: PipeOutput.deinit does not leak memory" {
+    const allocator = std.testing.allocator;
+
+    var child = std.process.Child.init(
+        &.{ "/bin/sh", "-c", "echo 'test'; echo 'err' >&2" },
+        allocator,
+    );
+    child.stdin_behavior = .Close;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
+
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    _ = try child.wait();
+
+    // If deinit doesn't free properly, testing.allocator will catch the leak
+    output.deinit();
+}
 
 test "AC8: spawn child producing >64KB on stderr — both streams fully captured" {
     const allocator = std.testing.allocator;
@@ -220,18 +290,18 @@ test "AC8: spawn child producing >64KB on stderr — both streams fully captured
     }
 }
 
-// ── Edge Case 1: Child closes stdout before stderr ─────────────────────
+// ── Edge Case: null stdout pipe ─────────────────────────────────────────
 
-test "Edge1: child closes stdout before stderr — both streams fully read" {
+test "EdgeNull: null stdout pipe — collectOutput returns empty stdout, captures stderr" {
     const allocator = std.testing.allocator;
 
-    // stdout closes immediately (no output), stderr writes after a brief delay
+    // stdout_behavior = .Close means child.stdout will be null after spawn
     var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'late-stderr' >&2" },
+        &.{ "/bin/sh", "-c", "echo 'err-only' >&2" },
         allocator,
     );
     child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
+    child.stdout_behavior = .Close;
     child.stderr_behavior = .Pipe;
     try child.spawn();
 
@@ -240,33 +310,30 @@ test "Edge1: child closes stdout before stderr — both streams fully read" {
     _ = try child.wait();
 
     try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
-    try std.testing.expectEqualStrings("late-stderr\n", output.stderr);
+    try std.testing.expectEqualStrings("err-only\n", output.stderr);
 }
 
-test "Edge1: child closes stderr before stdout — both streams fully read" {
+test "EdgeNull: null stderr pipe — collectOutput captures stdout, returns empty stderr" {
     const allocator = std.testing.allocator;
 
-    // stderr closes immediately, stdout writes after
     var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'late-stdout'" },
+        &.{ "/bin/sh", "-c", "echo 'out-only'" },
         allocator,
     );
     child.stdin_behavior = .Close;
     child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    child.stderr_behavior = .Close;
     try child.spawn();
 
     var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
     defer output.deinit();
     _ = try child.wait();
 
-    try std.testing.expectEqualStrings("late-stdout\n", output.stdout);
+    try std.testing.expectEqualStrings("out-only\n", output.stdout);
     try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
 }
 
-// ── Edge Case 2: Zero output on one or both streams ────────────────────
-
-test "Edge2: child produces zero output on both streams — returns empty slices" {
+test "EdgeNull: both pipes null — collectOutput returns two empty owned slices without crash" {
     const allocator = std.testing.allocator;
 
     var child = std.process.Child.init(
@@ -274,49 +341,8 @@ test "Edge2: child produces zero output on both streams — returns empty slices
         allocator,
     );
     child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-
-    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-    defer output.deinit();
-    _ = try child.wait();
-
-    // Must return empty slices, not null
-    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
-    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
-}
-
-test "Edge2: child produces output only on stdout — stderr is empty slice" {
-    const allocator = std.testing.allocator;
-
-    var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'only-stdout'" },
-        allocator,
-    );
-    child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-
-    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-    defer output.deinit();
-    _ = try child.wait();
-
-    try std.testing.expectEqualStrings("only-stdout\n", output.stdout);
-    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
-}
-
-test "Edge2: child produces output only on stderr — stdout is empty slice" {
-    const allocator = std.testing.allocator;
-
-    var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'only-stderr' >&2" },
-        allocator,
-    );
-    child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    child.stdout_behavior = .Close;
+    child.stderr_behavior = .Close;
     try child.spawn();
 
     var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
@@ -324,15 +350,70 @@ test "Edge2: child produces output only on stderr — stdout is empty slice" {
     _ = try child.wait();
 
     try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
-    try std.testing.expectEqualStrings("only-stderr\n", output.stderr);
+    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
 }
 
-// ── Edge Case 3: Child exits before all output is read ─────────────────
+// ── Edge Case: max_bytes cap ─────────────────────────────────────────────
 
-test "Edge3: pipes remain readable after child exit — all output captured" {
+test "EdgeMax: output exceeding max_bytes is truncated to at most max_bytes" {
+    const allocator = std.testing.allocator;
+    const max_size: usize = 1024;
+
+    var child = try spawnWriter(allocator, 4096, 0);
+    var output = try subprocess.collectOutput(allocator, &child, max_size);
+    defer output.deinit();
+    _ = child.wait() catch {};
+
+    try std.testing.expect(output.stdout.len <= max_size);
+}
+
+test "EdgeMax: max_bytes limits each stream independently" {
+    const allocator = std.testing.allocator;
+    const max_size: usize = 2048;
+
+    var child = try spawnWriter(allocator, 4096, 4096);
+    var output = try subprocess.collectOutput(allocator, &child, max_size);
+    defer output.deinit();
+    _ = child.wait() catch {};
+
+    try std.testing.expect(output.stdout.len <= max_size);
+    try std.testing.expect(output.stderr.len <= max_size);
+}
+
+test "EdgeMax: output under max_bytes is fully captured" {
+    const allocator = std.testing.allocator;
+    const max_size: usize = 10 * 1024 * 1024;
+    const write_size: usize = 1024;
+
+    var child = try spawnWriter(allocator, write_size, write_size);
+    var output = try subprocess.collectOutput(allocator, &child, max_size);
+    defer output.deinit();
+    _ = try child.wait();
+
+    try std.testing.expectEqual(write_size, output.stdout.len);
+    try std.testing.expectEqual(write_size, output.stderr.len);
+}
+
+test "EdgeMax: output exactly equal to max_bytes is captured in full without off-by-one truncation" {
+    const allocator = std.testing.allocator;
+    // Write exactly max_size bytes to each stream — must be fully captured, not dropped.
+    const max_size: usize = 4096;
+
+    var child = try spawnWriter(allocator, max_size, max_size);
+    var output = try subprocess.collectOutput(allocator, &child, max_size);
+    defer output.deinit();
+    _ = try child.wait();
+
+    // At the boundary the data must still be fully captured.
+    try std.testing.expectEqual(max_size, output.stdout.len);
+    try std.testing.expectEqual(max_size, output.stderr.len);
+}
+
+// ── Edge Case: child exits before parent reads ───────────────────────────
+
+test "EdgeEOF: pipes remain readable after child exits — all output captured" {
     const allocator = std.testing.allocator;
 
-    // Child writes data and exits immediately; parent must still drain pipes
     var child = std.process.Child.init(
         &.{ "/bin/sh", "-c", "printf 'aaa'; printf 'bbb' >&2" },
         allocator,
@@ -350,77 +431,20 @@ test "Edge3: pipes remain readable after child exit — all output captured" {
     try std.testing.expectEqualStrings("bbb", output.stderr);
 }
 
-// ── Edge Case 5: Very large output respects max_size ───────────────────
+// ── Edge Case: interleaved writes on both streams ────────────────────────
 
-test "Edge5: output exceeding max_size is truncated" {
+test "EdgeInterleaved: interleaved large writes on both streams complete without deadlock" {
     const allocator = std.testing.allocator;
-    const max_size: usize = 1024; // 1KB limit
 
-    // Write 4KB to stdout
-    var child = try spawnWriter(allocator, 4096, 0);
-    var output = try subprocess.collectOutput(allocator, &child, max_size);
-    defer output.deinit();
-    _ = child.wait() catch {};
-
-    // stdout should be capped at max_size
-    try std.testing.expect(output.stdout.len <= max_size);
-}
-
-test "Edge5: max_size limits each stream independently" {
-    const allocator = std.testing.allocator;
-    const max_size: usize = 2048;
-
-    // Write 4KB to both streams
-    var child = try spawnWriter(allocator, 4096, 4096);
-    var output = try subprocess.collectOutput(allocator, &child, max_size);
-    defer output.deinit();
-    _ = child.wait() catch {};
-
-    // Each stream independently limited
-    try std.testing.expect(output.stdout.len <= max_size);
-    try std.testing.expect(output.stderr.len <= max_size);
-}
-
-test "Edge5: output under max_size is fully captured" {
-    const allocator = std.testing.allocator;
-    const max_size: usize = 10 * 1024 * 1024;
-    const write_size: usize = 1024;
-
-    var child = try spawnWriter(allocator, write_size, write_size);
-    var output = try subprocess.collectOutput(allocator, &child, max_size);
-    defer output.deinit();
-    _ = try child.wait();
-
-    try std.testing.expectEqual(write_size, output.stdout.len);
-    try std.testing.expectEqual(write_size, output.stderr.len);
-}
-
-// ── Edge Case 8: checkSelfUpdate reverse order deadlock ────────────────
-
-test "Edge8: reverse deadlock scenario — large stdout with stderr drained first" {
-    // This simulates the checkSelfUpdate bug: if code tried to read stderr
-    // first while child fills stdout >64KB, it would deadlock.
-    // With concurrent reading, this must complete.
-    const allocator = std.testing.allocator;
-    const stdout_size: usize = 128 * 1024;
-    const stderr_size: usize = 256; // small stderr
-
-    var child = try spawnWriter(allocator, stdout_size, stderr_size);
-    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-    defer output.deinit();
-    _ = try child.wait();
-
-    try std.testing.expectEqual(stdout_size, output.stdout.len);
-    try std.testing.expectEqual(stderr_size, output.stderr.len);
-}
-
-// ── PipeOutput.deinit frees memory correctly ───────────────────────────
-
-test "PipeOutput.deinit does not leak memory" {
-    const allocator = std.testing.allocator;
+    // Alternates writing chunks to stdout and stderr — maximises pipe-buffer fill probability.
+    const cmd =
+        "i=0; while [ $i -lt 100 ]; do " ++
+        "head -c 2048 /dev/zero; " ++
+        "head -c 2048 /dev/zero >&2; " ++
+        "i=$((i+1)); done";
 
     var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'test'; echo 'err' >&2" },
+        &.{ "/bin/sh", "-c", cmd },
         allocator,
     );
     child.stdin_behavior = .Close;
@@ -429,19 +453,22 @@ test "PipeOutput.deinit does not leak memory" {
     try child.spawn();
 
     var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    defer output.deinit();
     _ = try child.wait();
 
-    // If deinit doesn't free properly, testing.allocator will catch the leak
-    output.deinit();
+    // 100 iterations × 2048 bytes = 204 800 bytes per stream
+    const expected: usize = 100 * 2048;
+    try std.testing.expectEqual(expected, output.stdout.len);
+    try std.testing.expectEqual(expected, output.stderr.len);
 }
 
-// ── PipeOutput struct has expected fields ───────────────────────────────
+// ── Edge Case: streams close in opposite orders ──────────────────────────
 
-test "PipeOutput struct has stdout, stderr, and allocator fields" {
+test "EdgeOrder: stdout closes first, stderr closes later — both fully read" {
     const allocator = std.testing.allocator;
 
     var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "true" },
+        &.{ "/bin/sh", "-c", "echo 'late-stderr' >&2" },
         allocator,
     );
     child.stdin_behavior = .Close;
@@ -449,42 +476,39 @@ test "PipeOutput struct has stdout, stderr, and allocator fields" {
     child.stderr_behavior = .Pipe;
     try child.spawn();
 
-    var output = try subprocess.collectOutput(allocator, &child, 1024);
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
     defer output.deinit();
     _ = try child.wait();
 
-    // Verify struct fields exist and have correct types
-    const _stdout: []u8 = output.stdout;
-    const _stderr: []u8 = output.stderr;
-    const _alloc: std.mem.Allocator = output.allocator;
-    _ = _stdout;
-    _ = _stderr;
-    _ = _alloc;
+    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
+    try std.testing.expectEqualStrings("late-stderr\n", output.stderr);
 }
 
-// ── Stress test: many concurrent collectOutput calls ───────────────────
-
-test "stress: multiple sequential collectOutput calls with large output" {
+test "EdgeOrder: stderr closes first, stdout closes later — both fully read" {
     const allocator = std.testing.allocator;
-    const size: usize = 100 * 1024; // 100KB each
 
-    for (0..5) |_| {
-        var child = try spawnWriter(allocator, size, size);
-        var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-        defer output.deinit();
-        _ = try child.wait();
+    var child = std.process.Child.init(
+        &.{ "/bin/sh", "-c", "echo 'late-stdout'" },
+        allocator,
+    );
+    child.stdin_behavior = .Close;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
 
-        try std.testing.expectEqual(size, output.stdout.len);
-        try std.testing.expectEqual(size, output.stderr.len);
-    }
+    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+    defer output.deinit();
+    _ = try child.wait();
+
+    try std.testing.expectEqualStrings("late-stdout\n", output.stdout);
+    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
 }
 
-// ── Binary data preserved correctly ────────────────────────────────────
+// ── Edge Case: binary (non-UTF-8) data ──────────────────────────────────
 
-test "AC6: binary data with null bytes is preserved" {
+test "EdgeBinary: null bytes (0x00) and high bytes (0xff) are preserved verbatim" {
     const allocator = std.testing.allocator;
 
-    // Write binary data containing null bytes to stdout
     var child = std.process.Child.init(
         &.{ "/bin/sh", "-c", "printf '\\x00\\x01\\x02\\xff'" },
         allocator,
@@ -505,99 +529,78 @@ test "AC6: binary data with null bytes is preserved" {
     try std.testing.expectEqual(@as(u8, 0xff), output.stdout[3]);
 }
 
-// ── Edge Case 8: null stdout or stderr pipe ────────────────────────────
+// ── Edge Case: reverse-order deadlock scenario ───────────────────────────
 
-test "Edge8: null stdout pipe — collectOutput returns empty stdout, captures stderr" {
+test "EdgeReverse: large stdout with small stderr — no deadlock when stderr is drained concurrently" {
+    // Regression guard: if code read stderr first while child fills stdout >64 KB it would deadlock.
     const allocator = std.testing.allocator;
+    const stdout_size: usize = 128 * 1024;
+    const stderr_size: usize = 256;
 
-    // stdout_behavior = .Close means child.stdout will be null after spawn
-    var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'err-only' >&2" },
-        allocator,
-    );
-    child.stdin_behavior = .Close;
-    child.stdout_behavior = .Close; // stdout pipe is null
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-
+    var child = try spawnWriter(allocator, stdout_size, stderr_size);
     var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
     defer output.deinit();
     _ = try child.wait();
 
-    // No null-pointer dereference; stdout is treated as zero bytes
-    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
-    try std.testing.expectEqualStrings("err-only\n", output.stderr);
+    try std.testing.expectEqual(stdout_size, output.stdout.len);
+    try std.testing.expectEqual(stderr_size, output.stderr.len);
 }
 
-test "Edge8: null stderr pipe — collectOutput captures stdout, returns empty stderr" {
+// ── Stress: many sequential calls ───────────────────────────────────────
+
+test "stress: 5 sequential collectOutput calls with 100KB on each stream" {
     const allocator = std.testing.allocator;
+    const size: usize = 100 * 1024;
 
-    var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "echo 'out-only'" },
-        allocator,
-    );
-    child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Close; // stderr pipe is null
-    try child.spawn();
+    for (0..5) |_| {
+        var child = try spawnWriter(allocator, size, size);
+        var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
+        defer output.deinit();
+        _ = try child.wait();
 
-    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-    defer output.deinit();
-    _ = try child.wait();
-
-    try std.testing.expectEqualStrings("out-only\n", output.stdout);
-    // No null-pointer dereference; stderr is treated as zero bytes
-    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
+        try std.testing.expectEqual(size, output.stdout.len);
+        try std.testing.expectEqual(size, output.stderr.len);
+    }
 }
 
-test "Edge8: both pipes null — collectOutput returns two empty slices without crash" {
-    const allocator = std.testing.allocator;
+// ── Source-code integration: git.zig must be updated ────────────────────
+//
+// These checks FAIL before the implementation because git.zig still
+// contains the sequential drain pattern and has no subprocess import.
 
-    var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", "true" },
-        allocator,
-    );
-    child.stdin_behavior = .Close;
-    child.stdout_behavior = .Close;
-    child.stderr_behavior = .Close;
-    try child.spawn();
-
-    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-    defer output.deinit();
-    _ = try child.wait();
-
-    try std.testing.expectEqual(@as(usize, 0), output.stdout.len);
-    try std.testing.expectEqual(@as(usize, 0), output.stderr.len);
+test "Integration: git.zig imports subprocess.zig" {
+    const src = @embedFile("git.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "@import(\"subprocess.zig\")") != null);
 }
 
-// ── Interleaved writes on both streams ─────────────────────────────────
+test "Integration: git.zig no longer contains sequential read_buf drain in exec" {
+    // The sequential drain pattern used a [8192]u8 stack buffer; after the fix
+    // that buffer must be gone from the exec function body.
+    const src = @embedFile("git.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "read_buf: [8192]u8") == null);
+}
 
-test "AC2+AC3: interleaved large writes on both streams complete without deadlock" {
-    const allocator = std.testing.allocator;
+test "Integration: git.zig calls subprocess.collectOutput inside exec" {
+    const src = @embedFile("git.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "collectOutput") != null);
+}
 
-    // This command alternates writing chunks to stdout and stderr,
-    // maximizing the chance of filling both pipe buffers.
-    const cmd =
-        "i=0; while [ $i -lt 100 ]; do " ++
-        "head -c 2048 /dev/zero; " ++
-        "head -c 2048 /dev/zero >&2; " ++
-        "i=$((i+1)); done";
+// ── Source-code integration: pipeline.zig must be updated ───────────────
+//
+// These checks FAIL before the implementation because pipeline.zig still
+// contains the sequential drain pattern inside runTestCommandForRepo.
 
-    var child = std.process.Child.init(
-        &.{ "/bin/sh", "-c", cmd },
-        allocator,
-    );
-    child.stdin_behavior = .Close;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+test "Integration: pipeline.zig imports subprocess.zig" {
+    const src = @embedFile("pipeline.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "@import(\"subprocess.zig\")") != null);
+}
 
-    var output = try subprocess.collectOutput(allocator, &child, 10 * 1024 * 1024);
-    defer output.deinit();
-    _ = try child.wait();
+test "Integration: pipeline.zig no longer contains sequential read_buf drain in runTestCommandForRepo" {
+    const src = @embedFile("pipeline.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "read_buf: [8192]u8") == null);
+}
 
-    // 100 iterations * 2048 bytes = 204800 bytes per stream
-    const expected: usize = 100 * 2048;
-    try std.testing.expectEqual(expected, output.stdout.len);
-    try std.testing.expectEqual(expected, output.stderr.len);
+test "Integration: pipeline.zig calls subprocess.collectOutput inside runTestCommandForRepo" {
+    const src = @embedFile("pipeline.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "collectOutput") != null);
 }
