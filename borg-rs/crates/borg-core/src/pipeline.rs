@@ -213,6 +213,13 @@ impl Pipeline {
 
     /// Main tick: dispatch ready tasks and run all periodic background work.
     pub async fn tick(self: Arc<Self>) -> Result<()> {
+        // Reset integration_queue entries stuck in "merging" (crash mid-merge)
+        if let Ok(n) = self.db.reset_stale_merging_queue() {
+            if n > 0 {
+                info!("Reset {n} stale merging integration_queue entries to queued");
+            }
+        }
+
         // Re-enqueue any "done" tasks that lost their queue entry (e.g. after restart)
         if let Ok(orphans) = self.db.list_done_tasks_without_queue() {
             for task in orphans {
@@ -543,6 +550,13 @@ impl Pipeline {
     async fn run_rebase_phase(&self, task: &Task, phase: &PhaseConfig, _mode: &PipelineMode) -> Result<()> {
         let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
         let git = Git::new(&task.repo_path);
+
+        if !std::path::Path::new(&wt_path).exists() {
+            warn!("task #{} rebase: worktree missing at {wt_path}, resetting to backlog", task.id);
+            self.db.update_task_status(task.id, "backlog", None)?;
+            return Ok(());
+        }
+
         git.fetch_origin().ok();
 
         match git.rebase_onto_main(&wt_path) {
@@ -953,7 +967,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
                 self.db.update_queue_status(entry.id, "merging")?;
                 let merge_out = self.run_test_command(repo_path, &format!(
-                    "gh pr merge {0} --squash --delete-branch", entry.branch
+                    "gh pr merge {0} --squash", entry.branch
                 )).await;
 
                 match merge_out {
@@ -976,6 +990,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         self.db.update_queue_status(entry.id, "merged")?;
                         self.db.update_task_status(entry.task_id, "merged", None)?;
                         merged_branches.push(entry.branch.clone());
+                        // Clean up worktree and local branch (gh --squash doesn't do local cleanup)
+                        let wt_path = git.worktree_path(&entry.branch);
+                        if let Err(e) = git.remove_worktree(&wt_path) {
+                            warn!("remove_worktree {} after merge: {e}", entry.branch);
+                        }
+                        let _ = git.delete_branch(&entry.branch);
                         if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
                             self.notify(&task.notify_chat, &format!("Task #{} \"{}\" merged via PR.", task.id, task.title));
                         }

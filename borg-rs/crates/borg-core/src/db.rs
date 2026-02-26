@@ -283,7 +283,14 @@ impl Db {
              session_id, mode, backend \
              FROM pipeline_tasks \
              WHERE status NOT IN ('done', 'merged', 'failed') \
-             ORDER BY id ASC",
+             ORDER BY CASE status \
+               WHEN 'rebase' THEN 0 \
+               WHEN 'impl' THEN 1 \
+               WHEN 'retry' THEN 1 \
+               WHEN 'qa' THEN 2 \
+               WHEN 'spec' THEN 3 \
+               ELSE 4 \
+             END, id ASC",
         )?;
         let tasks = stmt
             .query_map([], row_to_task)?
@@ -915,6 +922,18 @@ impl Db {
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("list_done_tasks_without_queue")?;
         Ok(tasks)
+    }
+
+    /// Reset integration_queue entries stuck in "merging" where the task is not yet merged.
+    pub fn reset_stale_merging_queue(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn.execute(
+            "UPDATE integration_queue SET status = 'queued' \
+             WHERE status = 'merging' \
+             AND task_id IN (SELECT id FROM pipeline_tasks WHERE status != 'merged')",
+            [],
+        )?;
+        Ok(n)
     }
 
     pub fn active_task_count(&self) -> i64 {
