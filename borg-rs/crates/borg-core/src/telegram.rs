@@ -213,12 +213,215 @@ fn split_text(text: &str, limit: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = text;
     while remaining.len() > limit {
-        let cut = remaining[..limit].rfind('\n').unwrap_or(limit);
+        let safe_limit = remaining.floor_char_boundary(limit);
+        let cut = remaining[..safe_limit].rfind('\n').unwrap_or(safe_limit);
         chunks.push(remaining[..cut].to_string());
-        remaining = remaining[cut..].trim_start_matches('\n');
+        remaining = &remaining[cut..];
+        remaining = remaining.trim_start_matches('\n');
     }
     if !remaining.is_empty() {
         chunks.push(remaining.to_string());
     }
     chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_text;
+
+    // --- AC5: ASCII-only behaviour ---
+
+    #[test]
+    fn split_text_ascii_short() {
+        let chunks = split_text("hello world", 4000);
+        assert_eq!(chunks, vec!["hello world"]);
+    }
+
+    #[test]
+    fn split_text_ascii_exact_limit() {
+        let s = "a".repeat(4000);
+        let chunks = split_text(&s, 4000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 4000);
+    }
+
+    #[test]
+    fn split_text_ascii_splits_at_newline() {
+        // Two 3000-char lines separated by \n → total 6001 bytes; should split at \n.
+        let line = "a".repeat(3000);
+        let text = format!("{}\n{}", line, line);
+        let chunks = split_text(&text, 4000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], line);
+        assert_eq!(chunks[1], line);
+    }
+
+    #[test]
+    fn split_text_ascii_no_newline_no_loss() {
+        // AC3 + AC4 for ASCII: join of chunks must equal original.
+        let s = "a".repeat(8000);
+        let chunks = split_text(&s, 4000);
+        assert_eq!(chunks.len(), 2);
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        assert_eq!(chunks.join(""), s);
+    }
+
+    // --- Edge case: limit = 0 ---
+
+    #[test]
+    fn split_text_limit_zero() {
+        let chunks = split_text("hello", 0);
+        assert_eq!(chunks, vec!["hello"]);
+    }
+
+    // --- Edge case: text just over limit → exactly 2 chunks ---
+
+    #[test]
+    fn split_text_just_over_limit() {
+        let s = "a".repeat(4001);
+        let chunks = split_text(&s, 4000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 4000);
+        assert_eq!(chunks[1].len(), 1);
+    }
+
+    // --- Edge case: newline immediately before boundary → clean split ---
+
+    #[test]
+    fn split_text_newline_before_boundary() {
+        let before = "x".repeat(3999);
+        let after = "y".repeat(100);
+        let text = format!("{}\n{}", before, after);
+        let chunks = split_text(&text, 4000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], before);
+        assert_eq!(chunks[1], after);
+    }
+
+    // --- Edge case: consecutive newlines at boundary ---
+
+    #[test]
+    fn split_text_consecutive_newlines_at_boundary() {
+        // Newlines at bytes 3998 and 3999; rfind picks the later one.
+        let before = "a".repeat(3998);
+        let after = "b".repeat(100);
+        let text = format!("{}\n\n{}", before, after);
+        let chunks = split_text(&text, 4000);
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        let joined = chunks.join("\n");
+        assert!(joined.contains(&before));
+        assert!(joined.contains(after.as_str()));
+    }
+
+    // === Tests that PANIC with the buggy code ===
+
+    // AC1 + AC7: emoji starting at byte 3998 straddles the 4000-byte boundary.
+    // floor_char_boundary(4000) must retreat to 3998.
+    // Buggy code: remaining[..4000] panics (byte 4000 is inside the 4-byte emoji).
+    #[test]
+    fn split_text_emoji_at_boundary() {
+        // 3998 ASCII bytes + U+1F600 (4 bytes: starts at 3998, ends at 4002) + 100 ASCII
+        let prefix = "a".repeat(3998);
+        let emoji = "\u{1F600}";
+        let suffix = "b".repeat(100);
+        let text = format!("{}{}{}", prefix, emoji, suffix);
+        assert_eq!(text.len(), 3998 + 4 + 100);
+
+        let chunks = split_text(&text, 4000);
+
+        // AC3: every chunk within limit
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        // AC4: no data loss (no newlines, so direct join)
+        assert_eq!(chunks.join(""), text);
+        // First chunk ends before the emoji (safe_limit = 3998, no newline → cut = 3998)
+        assert_eq!(chunks[0].len(), 3998);
+        assert_eq!(chunks[1], format!("{}{}", emoji, suffix));
+    }
+
+    // AC2 + AC6: entire string is CJK (3-byte chars); byte 4000 is a continuation byte.
+    // "中" = U+4E2D = 3 bytes. 2000 × 3 = 6000 bytes.
+    // 4000 = 1333×3 + 1 → byte 4000 is the 2nd byte of char #1334 → PANIC with buggy code.
+    #[test]
+    fn split_text_multibyte() {
+        let text: String = "中".repeat(2000);
+        assert_eq!(text.len(), 6000);
+
+        let chunks = split_text(&text, 4000);
+
+        // AC3: every chunk within limit
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        // AC4: no data loss (no newlines)
+        assert_eq!(chunks.join(""), text);
+        // floor_char_boundary(4000) = 1333×3 = 3999 bytes = 1333 chars for first chunk.
+        // Remaining: 667 chars = 2001 bytes ≤ 4000 → exactly 2 chunks.
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chars().count(), 1333);
+        assert_eq!(chunks[1].chars().count(), 667);
+    }
+
+    // AC1: Arabic text (2-byte chars) with a 1-byte ASCII prefix to misalign the boundary.
+    // "ا" (U+0627) = 2 bytes. "a" + "ا"×3000 = 1 + 6000 = 6001 bytes.
+    // Byte 4000: (4000-1)=3999 is odd → continuation byte of 2-byte Arabic char → PANIC.
+    #[test]
+    fn split_text_arabic_no_panic() {
+        let text: String = "a".to_string() + &"ا".repeat(3000);
+        assert_eq!(text.len(), 6001);
+
+        let chunks = split_text(&text, 4000);
+
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        // AC4: no data loss
+        assert_eq!(chunks.join(""), text);
+    }
+
+    // AC2: 4-byte emoji with a 3-byte ASCII prefix misaligns the boundary.
+    // "aaa" + U+1F600×2000 = 3 + 8000 = 8003 bytes.
+    // Byte 4000: (4000-3)=3997; 3997%4=1 → continuation byte → PANIC with buggy code.
+    #[test]
+    fn split_text_all_emoji_no_newline() {
+        let text: String = "aaa".to_string() + &"\u{1F600}".repeat(2000);
+        assert_eq!(text.len(), 3 + 8000);
+
+        let chunks = split_text(&text, 4000);
+
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        // AC4: no data loss
+        assert_eq!(chunks.join(""), text);
+    }
+
+    // AC3 + AC4: mixed CJK and ASCII newlines; verify no data loss via non-newline char count.
+    // Each segment: "日"×1000 + "\n" = 3001 bytes. Three segments = 9003 bytes.
+    // Byte 4000 falls inside a "日" (3 bytes) in the second segment → PANIC with buggy code.
+    #[test]
+    fn split_text_mixed_multibyte_newlines_no_loss() {
+        let segment = format!("{}\n", "日".repeat(1000));
+        let text = segment.repeat(3);
+        assert!(text.len() > 4000);
+
+        let chunks = split_text(&text, 4000);
+
+        for c in &chunks {
+            assert!(c.len() <= 4000, "chunk len {} > 4000", c.len());
+        }
+        // Newlines at split boundaries are consumed; count non-newline chars.
+        let orig_non_nl: usize = text.chars().filter(|&c| c != '\n').count();
+        let chunk_non_nl: usize = chunks
+            .iter()
+            .flat_map(|c| c.chars())
+            .filter(|&c| c != '\n')
+            .count();
+        assert_eq!(chunk_non_nl, orig_non_nl, "non-newline char count mismatch");
+    }
 }
