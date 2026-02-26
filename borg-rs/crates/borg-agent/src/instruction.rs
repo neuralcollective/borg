@@ -49,9 +49,11 @@ pub fn build_instruction(
 /// Read the per-repo prompt from the explicit prompt_file config, or by
 /// auto-detecting `.borg/prompt.md` in the worktree / repo root.
 fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
-    // 1. Explicit prompt_file from config
+    use borg_core::ipc::{self, IpcReadResult};
+
+    // 1. Explicit prompt_file from config (operator-trusted absolute path)
     if !ctx.repo_config.prompt_file.is_empty() {
-        if let Ok(content) = std::fs::read_to_string(&ctx.repo_config.prompt_file) {
+        if let IpcReadResult::Ok(content) = ipc::read_trusted_path(&ctx.repo_config.prompt_file) {
             let trimmed = content.trim().to_string();
             if !trimmed.is_empty() {
                 return Some(trimmed);
@@ -60,18 +62,16 @@ fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
     }
 
     // 2. .borg/prompt.md in the worktree (may differ from repo root during tasks)
-    let worktree_prompt = format!("{}/.borg/prompt.md", ctx.worktree_path);
-    if let Ok(content) = std::fs::read_to_string(&worktree_prompt) {
+    if let IpcReadResult::Ok(content) = ipc::read_file(&ctx.worktree_path, ".borg/prompt.md") {
         let trimmed = content.trim().to_string();
         if !trimmed.is_empty() {
             return Some(trimmed);
         }
     }
 
-    // 3. .borg/prompt.md in the repo root
-    let repo_prompt = format!("{}/.borg/prompt.md", ctx.repo_config.path);
-    if repo_prompt != worktree_prompt {
-        if let Ok(content) = std::fs::read_to_string(&repo_prompt) {
+    // 3. .borg/prompt.md in the repo root (skip if same path as worktree)
+    if ctx.repo_config.path != ctx.worktree_path {
+        if let IpcReadResult::Ok(content) = ipc::read_file(&ctx.repo_config.path, ".borg/prompt.md") {
             let trimmed = content.trim().to_string();
             if !trimmed.is_empty() {
                 return Some(trimmed);
