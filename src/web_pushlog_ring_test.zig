@@ -1,10 +1,15 @@
-// Tests for: pushLog ring buffer wrap-around, count cap, and message truncation
+// Tests for: pushLog ring buffer wrap-around, count cap, and message truncation,
+// and Task #75: Fix stream history cap to check size before appending all slices.
 //
 // Verifies the four core behaviours of the WebServer log ring buffer:
 //   1. Single push increments count and advances head
 //   2. Filling the ring caps log_count at LOG_RING_SIZE
 //   3. One push beyond full silently overwrites the oldest slot
 //   4. Messages longer than 512 bytes are stored truncated, not panicked
+//
+// Also verifies (Task #75) that broadcastTaskStream's 2MB history cap accounts
+// for the 8-byte SSE frame overhead ("data: " + "\n\n") before appending, so
+// a near-2MB line cannot push history past the cap.
 //
 // To wire this file into the build, add inside the `test { … }` block at
 // the bottom of src/web.zig:
@@ -288,4 +293,265 @@ test "EC6: log_head is always less than LOG_RING_SIZE after overflow" {
     }
 
     try std.testing.expect(ws.log_head < LOG_RING_SIZE);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Task #75 — Stream history cap: check total bytes before appending
+//
+// The corrected guard is:
+//   entry.history.items.len + line.len + 8 < 2 * 1024 * 1024
+//
+// where 8 = len("data: ") + len("\n\n").
+//
+// Tests AC1–AC5 and all edge cases from spec.md.
+// Tests marked "FAILS initially" will fail against the buggy implementation.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const HIST_CAP: usize = 2 * 1024 * 1024;
+const SSE_FRAME_OVERHEAD: usize = 8; // "data: " (6) + "\n\n" (2)
+
+/// Open a Unix pipe; return write end as std.net.Stream and keep read fd.
+fn makeTestPipe() !struct { stream: std.net.Stream, read_fd: std.posix.fd_t } {
+    const fds = try std.posix.pipe();
+    return .{ .stream = .{ .handle = fds[1] }, .read_fd = fds[0] };
+}
+
+/// End all named task streams then call cleanupTestServer.
+/// Must be used instead of cleanupTestServer whenever startTaskStream was called,
+/// to free the per-stream ArrayList allocations before the map is deinit'd.
+fn cleanupWithStreams(ws: *WebServer, task_ids: []const i64) void {
+    for (task_ids) |id| ws.endTaskStream(id);
+    cleanupTestServer(ws);
+}
+
+// ── AC75-1: near-2MB line rejected when history already has data ─────────────
+//
+// FAILS initially: the buggy check `history.items.len < CAP` passes (tiny < CAP)
+// and appends a nearly-2MB line, blowing past the cap.
+
+test "AC75-1: line of CAP-1 bytes is rejected when history already has data" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1001;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // Seed history with a small line ("data: init\n\n" = 13 bytes).
+    ws.broadcastTaskStream(task_id, "init\n");
+    const after_init = ws.task_streams.getPtr(task_id).?.history.items.len;
+    try std.testing.expectEqual(@as(usize, 13), after_init);
+
+    // A line of CAP-1 bytes: after_init + (CAP-1) + 8 = CAP + 20 >= CAP → reject.
+    const line_len = HIST_CAP - 1;
+    const buf = try alloc.alloc(u8, line_len + 1);
+    defer alloc.free(buf);
+    @memset(buf[0..line_len], 'A');
+    buf[line_len] = '\n';
+
+    ws.broadcastTaskStream(task_id, buf);
+
+    // Fixed: history stays at 13. Buggy: history >> CAP.
+    try std.testing.expectEqual(after_init, ws.task_streams.getPtr(task_id).?.history.items.len);
+}
+
+// ── AC75-2: line that brings total to exactly CAP-1 bytes IS appended ───────
+//
+// Passes with both old and new code (regression / documentation test).
+
+test "AC75-2: line bringing total to exactly CAP-1 bytes is appended" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1002;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // 0 + line_len + 8 = CAP - 1  →  line_len = CAP - 9
+    const line_len = HIST_CAP - SSE_FRAME_OVERHEAD - 1;
+    const buf = try alloc.alloc(u8, line_len + 1);
+    defer alloc.free(buf);
+    @memset(buf[0..line_len], 'B');
+    buf[line_len] = '\n';
+
+    ws.broadcastTaskStream(task_id, buf);
+
+    // history = "data: " + line_len bytes + "\n\n" = CAP - 1 bytes
+    try std.testing.expectEqual(HIST_CAP - 1, ws.task_streams.getPtr(task_id).?.history.items.len);
+}
+
+// ── AC75-3: line that brings total to exactly CAP bytes is NOT appended ──────
+//
+// FAILS initially: buggy check `0 < CAP` passes and appends, making history = CAP.
+
+test "AC75-3: line that would bring total to exactly 2MB bytes is rejected" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1003;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // 0 + line_len + 8 = CAP  →  line_len = CAP - 8  →  not < CAP → reject.
+    const line_len = HIST_CAP - SSE_FRAME_OVERHEAD;
+    const buf = try alloc.alloc(u8, line_len + 1);
+    defer alloc.free(buf);
+    @memset(buf[0..line_len], 'C');
+    buf[line_len] = '\n';
+
+    ws.broadcastTaskStream(task_id, buf);
+
+    // Fixed: history stays at 0. Buggy: history = CAP.
+    try std.testing.expectEqual(@as(usize, 0), ws.task_streams.getPtr(task_id).?.history.items.len);
+}
+
+// ── AC75-4: small line from empty history is appended normally ───────────────
+//
+// Passes with both old and new code (regression / documentation test).
+
+test "AC75-4: small line from empty history is appended" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1004;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    ws.broadcastTaskStream(task_id, "hello\n");
+
+    // "data: hello\n\n" = 6 + 5 + 2 = 13 bytes
+    const hist = ws.task_streams.getPtr(task_id).?.history.items;
+    try std.testing.expectEqual(@as(usize, 13), hist.len);
+    try std.testing.expectEqualStrings("data: hello\n\n", hist);
+}
+
+// ── AC75-5: live client delivery unaffected when line is rejected from history ─
+//
+// Even when the history cap rejects a line, broadcastTaskStream must still
+// deliver it to registered live clients.  Passes with both old and new code
+// (regression test — the fix must not accidentally move delivery inside the if).
+
+test "AC75-5: live client receives data even when history cap rejects the line" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1005;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // Register a live client via a Unix pipe.
+    const pipe = try makeTestPipe();
+    defer std.posix.close(pipe.read_fd);
+    try ws.task_streams.getPtr(task_id).?.clients.append(pipe.stream);
+
+    // Pre-fill history so the next short line would be rejected (total > CAP).
+    // Direct append is safe in single-threaded tests.
+    const entry = ws.task_streams.getPtr(task_id).?;
+    try entry.history.appendNTimes('X', HIST_CAP - 5);
+
+    // "msg\n": line_len=3, total = (CAP-5) + 3 + 8 = CAP + 6 >= CAP → rejected.
+    ws.broadcastTaskStream(task_id, "msg\n");
+
+    // History must not have grown.
+    try std.testing.expectEqual(HIST_CAP - 5, ws.task_streams.getPtr(task_id).?.history.items.len);
+
+    // The line must have been delivered to the live client regardless.
+    // The write was synchronous, so the data is in the pipe buffer now.
+    var read_buf: [32]u8 = undefined;
+    const n = try std.posix.read(pipe.read_fd, &read_buf);
+    try std.testing.expectEqualStrings("data: msg\n\n", read_buf[0..n]);
+}
+
+// ── Edge: exactly CAP-9 bytes admitted (total = CAP-1) ──────────────────────
+//
+// Passes with both old and new code.
+
+test "AC75-edge-boundary: line of CAP-9 bytes from empty history is admitted" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1006;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // 0 + (CAP-9) + 8 = CAP-1 < CAP → admitted
+    const line_len = HIST_CAP - SSE_FRAME_OVERHEAD - 1;
+    const buf = try alloc.alloc(u8, line_len + 1);
+    defer alloc.free(buf);
+    @memset(buf[0..line_len], 'D');
+    buf[line_len] = '\n';
+
+    ws.broadcastTaskStream(task_id, buf);
+
+    try std.testing.expectEqual(HIST_CAP - 1, ws.task_streams.getPtr(task_id).?.history.items.len);
+}
+
+// ── Edge: exactly CAP-8 bytes rejected (total = CAP, strict <) ──────────────
+//
+// FAILS initially: buggy `0 < CAP` passes and appends CAP bytes to history.
+
+test "AC75-edge-boundary+1: line of CAP-8 bytes from empty history is rejected" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1007;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // 0 + (CAP-8) + 8 = CAP, NOT < CAP → rejected
+    const line_len = HIST_CAP - SSE_FRAME_OVERHEAD;
+    const buf = try alloc.alloc(u8, line_len + 1);
+    defer alloc.free(buf);
+    @memset(buf[0..line_len], 'E');
+    buf[line_len] = '\n';
+
+    ws.broadcastTaskStream(task_id, buf);
+
+    // Fixed: 0 bytes. Buggy: CAP bytes.
+    try std.testing.expectEqual(@as(usize, 0), ws.task_streams.getPtr(task_id).?.history.items.len);
+}
+
+// ── Edge: pre-filled buffer — short line rejected when history is near cap ───
+//
+// FAILS initially: `(CAP-10) < CAP` passes and appends the short line.
+
+test "AC75-prefilled: short line rejected when history is already near cap" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1008;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // Pre-fill history directly (single-threaded test, no lock needed).
+    const fill: usize = HIST_CAP - 10;
+    const entry = ws.task_streams.getPtr(task_id).?;
+    try entry.history.appendNTimes('X', fill);
+
+    // "hello\n": line_len=5, total = (CAP-10) + 5 + 8 = CAP+3 >= CAP → rejected.
+    ws.broadcastTaskStream(task_id, "hello\n");
+
+    // Fixed: history stays at fill. Buggy: history grows by 13 bytes.
+    try std.testing.expectEqual(fill, ws.task_streams.getPtr(task_id).?.history.items.len);
+}
+
+// ── Edge: consecutive lines — second rejected after first fills history ───────
+//
+// Each line is evaluated independently against the current buffer length.
+// FAILS initially: after the first line history = CAP-1; the buggy check
+// `(CAP-1) < CAP` still passes and appends the one-byte second line.
+
+test "AC75-consecutive: second line rejected after first fills history to CAP-1" {
+    const alloc = std.testing.allocator;
+    var ws = makeTestServer(alloc);
+    const task_id: i64 = 1009;
+    ws.startTaskStream(task_id);
+    defer cleanupWithStreams(&ws, &.{task_id});
+
+    // First line: CAP-9 bytes → total = CAP-1 → admitted.
+    const line1_len = HIST_CAP - SSE_FRAME_OVERHEAD - 1;
+    const buf1 = try alloc.alloc(u8, line1_len + 1);
+    defer alloc.free(buf1);
+    @memset(buf1[0..line1_len], 'F');
+    buf1[line1_len] = '\n';
+    ws.broadcastTaskStream(task_id, buf1);
+    try std.testing.expectEqual(HIST_CAP - 1, ws.task_streams.getPtr(task_id).?.history.items.len);
+
+    // Second line: "x\n" → line_len=1, total = (CAP-1) + 1 + 8 = CAP+8 → rejected.
+    ws.broadcastTaskStream(task_id, "x\n");
+
+    // Fixed: history stays at CAP-1. Buggy: history = CAP+8.
+    try std.testing.expectEqual(HIST_CAP - 1, ws.task_streams.getPtr(task_id).?.history.items.len);
 }
