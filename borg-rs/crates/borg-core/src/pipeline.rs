@@ -894,7 +894,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let mut freshly_pushed: HashSet<i64> = HashSet::new();
 
         for entry in &live {
-            // Check if already merged on GitHub
+            // Check if already merged on GitHub, or if changes already in main (squash-merge case)
             let state_out = self.run_test_command(repo_path, &format!(
                 "gh pr view {0} --json state --jq .state 2>/dev/null", entry.branch
             )).await;
@@ -906,6 +906,19 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     excluded_ids.insert(entry.id);
                     continue;
                 }
+            }
+
+            // If diff between branch and main is empty, the work is already in main
+            // (e.g. squash-merged PR where GitHub PR state shows CLOSED not MERGED)
+            let diff_empty = git.exec(repo_path, &["diff", &format!("{0}...origin/main", entry.branch)])
+                .map(|r| r.success() && r.stdout.trim().is_empty())
+                .unwrap_or(false);
+            if diff_empty {
+                info!("Task #{} {}: diff vs main is empty, marking merged", entry.task_id, entry.branch);
+                self.db.update_queue_status(entry.id, "merged")?;
+                self.db.update_task_status(entry.task_id, "merged", None)?;
+                excluded_ids.insert(entry.id);
+                continue;
             }
 
             // Reject if not rebased on main
