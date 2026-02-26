@@ -395,6 +395,16 @@ pub const Pipeline = struct {
         }
     }
 
+    fn activeFocus(self: *Pipeline) ?[]const u8 {
+        const maybe = self.db.getState(self.allocator, "pipeline_focus") catch return null;
+        const text = maybe orelse return null;
+        if (text.len == 0) {
+            self.allocator.free(text);
+            return null;
+        }
+        return text;
+    }
+
     fn seedRepo(self: *Pipeline, repo_path: []const u8, seed_config: modes.SeedConfig, mode: *const modes.PipelineMode, current_count: u32) u32 {
         var prompt_buf = std.ArrayList(u8).init(self.allocator);
         defer prompt_buf.deinit();
@@ -404,6 +414,12 @@ pub const Pipeline = struct {
         self.appendRepoContext(&prompt_buf, repo_path);
         w.writeAll(prompts.seed_explore_preamble) catch return 0;
         w.writeAll(seed_config.prompt) catch return 0;
+
+        if (self.activeFocus()) |focus| {
+            defer self.allocator.free(focus);
+            w.print("\n\nActive focus: {s}\nBias your output toward this area where relevant.", .{focus}) catch {};
+            std.log.info("Seed scan: injecting focus \"{s}\"", .{focus});
+        }
 
         if (seed_config.output_type == .proposal) {
             w.writeAll(prompts.seed_proposal_suffix) catch return 0;
@@ -549,6 +565,12 @@ pub const Pipeline = struct {
         // Describe the target project (primary repo) so the agent knows what to suggest for
         const primary_name = std.fs.path.basename(primary_repo);
         w.print("Project: {s} (at {s})\n\n", .{ primary_name, primary_repo }) catch return 0;
+
+        if (self.activeFocus()) |focus| {
+            defer self.allocator.free(focus);
+            w.print("Active focus: {s}\nBias your output toward this area where relevant.\n\n", .{focus}) catch {};
+        }
+
         w.writeAll(prompts.seed_proposal_suffix) catch return 0;
 
         return self.seedRepoProposals(watched_repo, primary_repo, prompt_buf.items);
