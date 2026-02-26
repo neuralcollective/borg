@@ -170,6 +170,7 @@ impl AgentBackend for ClaudeBackend {
         let task_id = task.id;
         let phase_name = phase.name.clone();
         let timeout_s = self.timeout_s;
+        let stream_tx = ctx.stream_tx.clone();
 
         let io_future = async move {
             let mut raw_stream = String::new();
@@ -181,6 +182,9 @@ impl AgentBackend for ClaudeBackend {
                     line = stdout_reader.next_line() => {
                         match line.context("error reading stdout")? {
                             Some(l) => {
+                                if let Some(tx) = &stream_tx {
+                                    let _ = tx.send(l.clone());
+                                }
                                 raw_stream.push_str(&l);
                                 raw_stream.push('\n');
                             }

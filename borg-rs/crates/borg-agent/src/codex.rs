@@ -84,6 +84,7 @@ impl AgentBackend for CodexBackend {
 
         let stdout = child.stdout.take().context("failed to take stdout")?;
         let stderr = child.stderr.take().context("failed to take stderr")?;
+        let stream_tx = ctx.stream_tx.clone();
 
         let mut output_lines = Vec::new();
         let mut stdout_reader = BufReader::new(stdout).lines();
@@ -93,7 +94,12 @@ impl AgentBackend for CodexBackend {
             tokio::select! {
                 line = stdout_reader.next_line() => {
                     match line.context("error reading stdout")? {
-                        Some(l) => output_lines.push(l),
+                        Some(l) => {
+                            if let Some(tx) = &stream_tx {
+                                let _ = tx.send(l.clone());
+                            }
+                            output_lines.push(l);
+                        }
                         None => break,
                     }
                 }

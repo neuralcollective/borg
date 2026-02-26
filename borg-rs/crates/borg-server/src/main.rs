@@ -14,22 +14,23 @@ use borg_agent::ollama::OllamaBackend;
 use borg_core::{
     chat::ChatCollector,
     config::Config,
-    db::{Db, TaskMessage, TaskOutput},
+    db::{ChatMessage, Db, LegacyEvent, TaskMessage, TaskOutput},
     modes::all_modes,
     observer::Observer,
     pipeline::{Pipeline, PipelineEvent},
     sandbox::Sandbox,
     sidecar::{Sidecar, SidecarEvent, Source},
+    stream::TaskStreamManager,
     types::Task,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, Mutex as TokioMutex};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, UnboundedReceiverStream};
 use tokio_stream::StreamExt;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 use tracing::info;
@@ -40,7 +41,10 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub start_time: Instant,
     pub log_tx: broadcast::Sender<String>,
+    pub log_ring: Arc<std::sync::Mutex<VecDeque<String>>>,
     pub pipeline_event_tx: broadcast::Sender<PipelineEvent>,
+    pub stream_manager: Arc<TaskStreamManager>,
+    pub chat_event_tx: broadcast::Sender<String>,
     pub backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>,
     pub force_restart: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -91,6 +95,20 @@ struct RepoQuery {
 #[derive(Deserialize)]
 struct TasksQuery {
     repo: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    category: Option<String>,
+    level: Option<String>,
+    since: Option<i64>,
+    limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct ChatMessagesQuery {
+    thread: String,
+    limit: Option<i64>,
 }
 
 // ── Serializable wrappers ─────────────────────────────────────────────────
@@ -145,6 +163,7 @@ impl From<TaskMessage> for TaskMessageJson {
 
 struct BroadcastLayer {
     tx: broadcast::Sender<String>,
+    ring: Arc<std::sync::Mutex<VecDeque<String>>>,
 }
 
 struct MessageVisitor<'a> {
@@ -210,7 +229,13 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BroadcastLayer {
         })
         .to_string();
 
-        let _ = self.tx.send(json);
+        let _ = self.tx.send(json.clone());
+        if let Ok(mut ring) = self.ring.lock() {
+            ring.push_back(json);
+            if ring.len() > 500 {
+                ring.pop_front();
+            }
+        }
     }
 }
 
@@ -231,9 +256,29 @@ async fn run_chat_agent(
     messages: &[String],
     sessions: &Arc<TokioMutex<HashMap<String, String>>>,
     config: &Config,
+    db: &Arc<Db>,
+    chat_event_tx: &broadcast::Sender<String>,
 ) -> anyhow::Result<String> {
     let session_dir = format!("{}/sessions/chat-{}", config.data_dir, sanitize_chat_key(chat_key));
     std::fs::create_dir_all(&session_dir)?;
+
+    // Store each incoming message
+    let ts_secs = Utc::now().timestamp();
+    for (i, msg) in messages.iter().enumerate() {
+        let msg_id = format!("{}-{}-{}", chat_key, ts_secs, i);
+        let _ = db.insert_chat_message(
+            &msg_id, chat_key, Some(sender_name), Some(sender_name),
+            msg, false, false,
+        );
+        let event = json!({
+            "role": "user",
+            "sender": sender_name,
+            "text": msg,
+            "ts": ts_secs,
+            "thread": chat_key,
+        }).to_string();
+        let _ = chat_event_tx.send(event);
+    }
 
     let prompt = if messages.len() == 1 {
         format!("{} says: {}", sender_name, messages[0])
@@ -280,6 +325,24 @@ async fn run_chat_agent(
         sessions.lock().await.insert(chat_key.to_string(), sid);
     }
 
+    // Store bot response
+    if !text.is_empty() {
+        let reply_ts = Utc::now().timestamp();
+        let reply_id = format!("{}-bot-{}", chat_key, reply_ts);
+        let _ = db.insert_chat_message(
+            &reply_id, chat_key, Some("borg"), Some("borg"),
+            &text, true, true,
+        );
+        let event = json!({
+            "role": "assistant",
+            "sender": "borg",
+            "text": &text,
+            "ts": reply_ts,
+            "thread": chat_key,
+        }).to_string();
+        let _ = chat_event_tx.send(event);
+    }
+
     Ok(text)
 }
 
@@ -290,6 +353,9 @@ async fn main() -> anyhow::Result<()> {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     let (log_tx, _log_rx) = broadcast::channel::<String>(1024);
+    let log_ring: Arc<std::sync::Mutex<VecDeque<String>>> =
+        Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(500)));
+    let (chat_event_tx, _) = broadcast::channel::<String>(256);
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "borg_server=info,borg_core=info,borg_agent=info,tower_http=warn".into());
@@ -297,7 +363,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(BroadcastLayer { tx: log_tx.clone() })
+        .with(BroadcastLayer { tx: log_tx.clone(), ring: Arc::clone(&log_ring) })
         .init();
 
     let config = Config::from_env()?;
@@ -383,6 +449,7 @@ async fn main() -> anyhow::Result<()> {
         let db_tg = Arc::clone(&db);
         let repos = config.watched_repos.clone();
         let config_tg = Arc::clone(&config);
+        let tg_chat_event_tx = chat_event_tx.clone();
         let tg_sessions: Arc<TokioMutex<HashMap<String, String>>> =
             Arc::new(TokioMutex::new(HashMap::new()));
         tokio::spawn(async move {
@@ -466,6 +533,8 @@ async fn main() -> anyhow::Result<()> {
                                     &[text],
                                     &tg_sessions,
                                     &config_tg,
+                                    &db_tg,
+                                    &tg_chat_event_tx,
                                 )
                                 .await
                                 {
@@ -569,6 +638,8 @@ async fn main() -> anyhow::Result<()> {
     // Sidecar (Discord + WhatsApp bridge)
     if !config.discord_token.is_empty() || !config.wa_auth_dir.is_empty() {
         let config_sc = Arc::clone(&config);
+        let db_sc = Arc::clone(&db);
+        let sc_chat_event_tx = chat_event_tx.clone();
         match Sidecar::spawn(
             &config.assistant_name,
             &config.discord_token,
@@ -593,6 +664,8 @@ async fn main() -> anyhow::Result<()> {
                 let sidecar_flush = Arc::clone(&sidecar);
                 let sessions_flush = Arc::clone(&sc_sessions);
                 let config_flush = Arc::clone(&config_sc);
+                let db_flush = Arc::clone(&db_sc);
+                let chat_tx_flush = sc_chat_event_tx.clone();
                 tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
@@ -600,6 +673,8 @@ async fn main() -> anyhow::Result<()> {
                             let sidecar2 = Arc::clone(&sidecar_flush);
                             let sessions2 = Arc::clone(&sessions_flush);
                             let config2 = Arc::clone(&config_flush);
+                            let db2 = Arc::clone(&db_flush);
+                            let chat_tx2 = chat_tx_flush.clone();
                             let collector2 = Arc::clone(&collector_flush);
                             // chat_key format: "discord:<channel_id>" or "whatsapp:<jid>"
                             let is_discord = batch.chat_key.starts_with("discord:");
@@ -616,6 +691,8 @@ async fn main() -> anyhow::Result<()> {
                                     &batch.messages,
                                     &sessions2,
                                     &config2,
+                                    &db2,
+                                    &chat_tx2,
                                 )
                                 .await
                                 {
@@ -636,6 +713,8 @@ async fn main() -> anyhow::Result<()> {
                 });
 
                 // Process incoming sidecar events
+                let db_events = Arc::clone(&db_sc);
+                let chat_tx_events = sc_chat_event_tx.clone();
                 tokio::spawn(async move {
                     loop {
                         let Some(event) = event_rx.recv().await else {
@@ -660,6 +739,8 @@ async fn main() -> anyhow::Result<()> {
                             let sidecar2 = Arc::clone(&sidecar);
                             let sessions2 = Arc::clone(&sc_sessions);
                             let config2 = Arc::clone(&config_sc);
+                            let db2 = Arc::clone(&db_events);
+                            let chat_tx2 = chat_tx_events.clone();
                             let collector2 = Arc::clone(&collector);
                             let is_discord = msg.source == Source::Discord;
                             let chat_id = msg.chat_id.clone();
@@ -677,6 +758,8 @@ async fn main() -> anyhow::Result<()> {
                                     &batch.messages,
                                     &sessions2,
                                     &config2,
+                                    &db2,
+                                    &chat_tx2,
                                 )
                                 .await
                                 {
@@ -731,10 +814,24 @@ async fn main() -> anyhow::Result<()> {
                     let wt_path = format!("{}/.worktrees/task-{}", entry.repo_path, entry.task_id);
                     let git = borg_core::git::Git::new(&entry.repo_path);
 
-                    if let Err(e) = git.push_branch(&wt_path, &entry.branch) {
-                        tracing::warn!("push_branch task #{}: {e}", entry.task_id);
-                        db_iq.update_queue_status(entry.id, "failed").ok();
-                        continue;
+                    if let Err(push_err) = git.push_branch(&wt_path, &entry.branch) {
+                        let err_str = push_err.to_string();
+                        if err_str.contains("cannot lock ref") {
+                            tracing::warn!(
+                                "task #{}: cannot lock ref on push, deleting remote branch and retrying",
+                                entry.task_id
+                            );
+                            let _ = git.exec(&entry.repo_path, &["push", "origin", "--delete", &entry.branch]);
+                            if let Err(e2) = git.push_branch(&wt_path, &entry.branch) {
+                                tracing::warn!("task #{}: push retry failed: {e2}", entry.task_id);
+                                db_iq.update_queue_status(entry.id, "failed").ok();
+                                continue;
+                            }
+                        } else {
+                            tracing::warn!("push_branch task #{}: {push_err}", entry.task_id);
+                            db_iq.update_queue_status(entry.id, "failed").ok();
+                            continue;
+                        }
                     }
 
                     let pr_out = tokio::process::Command::new("gh")
@@ -765,7 +862,7 @@ async fn main() -> anyhow::Result<()> {
 
                             if auto_merge {
                                 let merge_out = tokio::process::Command::new("gh")
-                                    .args(["pr", "merge", "--squash", "--auto", &pr_url])
+                                    .args(["pr", "merge", "--squash", "--auto", "--delete-branch", &pr_url])
                                     .current_dir(&entry.repo_path)
                                     .output()
                                     .await;
@@ -810,11 +907,16 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let stream_manager = Arc::clone(&pipeline.stream_manager);
+
     let state = Arc::new(AppState {
         db,
         start_time: Instant::now(),
         log_tx,
+        log_ring,
         pipeline_event_tx,
+        stream_manager,
+        chat_event_tx,
         backends,
         force_restart,
     });
@@ -862,6 +964,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/focus", delete(delete_focus))
         // SSE logs
         .route("/api/logs", get(sse_logs))
+        // Events (queryable log)
+        .route("/api/events", get(get_events))
+        // Chat
+        .route("/api/chat/events", get(sse_chat_events))
+        .route("/api/chat/threads", get(get_chat_threads))
+        .route("/api/chat/messages", get(get_chat_messages))
+        .route("/api/chat", post(post_chat))
         // Release / restart
         .route("/api/release", post(post_release))
         // Backend overrides
@@ -1236,6 +1345,7 @@ async fn triage_proposals(
                 pending_messages: Vec::new(),
                 system_prompt_suffix: String::new(),
                 user_coauthor: String::new(),
+                stream_tx: None,
             };
 
             std::fs::create_dir_all(&ctx.session_dir).ok();
@@ -1413,15 +1523,36 @@ async fn delete_focus(State(state): State<Arc<AppState>>) -> Result<StatusCode, 
     Ok(StatusCode::OK)
 }
 
-// SSE logs
+// SSE logs — replays ring buffer history then streams live events
 
 async fn sse_logs(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let rx = state.log_tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| {
-        msg.ok().map(|data| Ok(Event::default().data(data)))
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // Subscribe before snapshotting ring to avoid race
+    let live_rx = state.log_tx.subscribe();
+    let history: Vec<String> = state
+        .log_ring
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect();
+    tokio::spawn(async move {
+        for line in history {
+            if tx.send(line).is_err() { return; }
+        }
+        let mut live_rx = live_rx;
+        loop {
+            match live_rx.recv().await {
+                Ok(line) => { if tx.send(line).is_err() { return; } }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
     });
+    let stream = UnboundedReceiverStream::new(rx)
+        .map(|data| Ok::<_, std::convert::Infallible>(Event::default().data(data)));
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(std::time::Duration::from_secs(15))
@@ -1487,24 +1618,53 @@ async fn get_task_outputs_handler(
     }
 }
 
+// Task NDJSON stream — replays in-memory history then streams live Claude output.
+// Falls back to DB raw_stream for tasks completed before this process started.
+
 async fn sse_task_stream(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let rx = state.pipeline_event_tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(move |msg| {
-        match msg {
-            Ok(evt) if evt.task_id == Some(id) => {
-                let data = serde_json::json!({
-                    "kind": evt.kind,
-                    "message": evt.message,
-                })
-                .to_string();
-                Some(Ok(Event::default().data(data)))
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        let (history, live_rx) = state.stream_manager.subscribe(id).await;
+
+        let history = if history.is_empty() && live_rx.is_none() {
+            // No in-memory stream — serve stored raw_stream from DB
+            let mut lines = Vec::new();
+            if let Ok(outputs) = state.db.get_task_outputs(id) {
+                for output in outputs {
+                    for line in output.raw_stream.lines() {
+                        if !line.is_empty() {
+                            lines.push(line.to_string());
+                        }
+                    }
+                }
             }
-            _ => None,
+            if !lines.is_empty() {
+                lines.push(r#"{"type":"stream_end"}"#.to_string());
+            }
+            lines
+        } else {
+            history
+        };
+
+        for line in history {
+            if tx.send(line).is_err() { return; }
+        }
+
+        if let Some(mut live_rx) = live_rx {
+            loop {
+                match live_rx.recv().await {
+                    Ok(line) => { if tx.send(line).is_err() { return; } }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
         }
     });
+    let stream = UnboundedReceiverStream::new(rx)
+        .map(|data| Ok::<_, std::convert::Infallible>(Event::default().data(data)));
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(std::time::Duration::from_secs(15))
@@ -1516,4 +1676,134 @@ async fn post_release(State(state): State<Arc<AppState>>) -> Json<Value> {
     state.force_restart.store(true, std::sync::atomic::Ordering::Relaxed);
     info!("Force restart requested via /api/release");
     Json(json!({ "ok": true }))
+}
+
+async fn get_events(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<EventsQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let events: Vec<LegacyEvent> = state
+        .db
+        .get_events_filtered(
+            q.category.as_deref(),
+            q.level.as_deref(),
+            q.since,
+            q.limit.unwrap_or(100),
+        )
+        .map_err(internal)?;
+    Ok(Json(json!(events)))
+}
+
+async fn sse_chat_events(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let rx = state.chat_event_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
+        Ok(data) => Some(Ok(Event::default().data(data))),
+        _ => None,
+    });
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    )
+}
+
+async fn get_chat_threads(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let threads = state.db.get_chat_threads().map_err(internal)?;
+    let v: Vec<Value> = threads
+        .into_iter()
+        .map(|(jid, count, last_ts)| json!({ "id": jid, "message_count": count, "last_ts": last_ts }))
+        .collect();
+    Ok(Json(json!(v)))
+}
+
+async fn get_chat_messages(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ChatMessagesQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let msgs = state
+        .db
+        .get_chat_messages(&q.thread, q.limit.unwrap_or(100))
+        .map_err(internal)?;
+    let v: Vec<Value> = msgs
+        .iter()
+        .map(|m| json!({
+            "role": if m.is_from_me { "assistant" } else { "user" },
+            "sender": m.sender_name,
+            "text": m.content,
+            "ts": m.timestamp,
+            "thread": m.chat_jid,
+        }))
+        .collect();
+    Ok(Json(json!(v)))
+}
+
+#[derive(Deserialize)]
+struct ChatPostBody {
+    text: String,
+    sender: Option<String>,
+    thread: Option<String>,
+}
+
+async fn post_chat(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ChatPostBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let thread = body.thread.clone().unwrap_or_else(|| "web:dashboard".to_string());
+    let sender = body.sender.clone().unwrap_or_else(|| "web-user".to_string());
+    let ts = Utc::now().timestamp();
+    let msg_id = format!("{}-{}", thread, ts);
+
+    state
+        .db
+        .insert_chat_message(&msg_id, &thread, Some(&sender), Some(&sender), &body.text, false, false)
+        .map_err(internal)?;
+
+    let event = json!({
+        "role": "user",
+        "sender": &sender,
+        "text": &body.text,
+        "ts": ts,
+        "thread": &thread,
+    })
+    .to_string();
+    let _ = state.chat_event_tx.send(event);
+
+    // Run agent async — sessions stored in AppState web_sessions map
+    let state2 = Arc::clone(&state);
+    let thread2 = thread.clone();
+    let sender2 = sender.clone();
+    let text2 = body.text.clone();
+    tokio::spawn(async move {
+        let sessions: Arc<TokioMutex<HashMap<String, String>>> =
+            Arc::new(TokioMutex::new(HashMap::new()));
+        // Fetch stored session for this web thread from config table
+        let session_key = format!("web_chat_session:{}", thread2);
+        if let Ok(Some(sid)) = state2.db.get_config(&session_key) {
+            sessions.lock().await.insert(thread2.clone(), sid);
+        }
+        match run_chat_agent(
+            &thread2,
+            &sender2,
+            &[text2],
+            &sessions,
+            &state2.db,
+            &state2.chat_event_tx,
+        )
+        .await
+        {
+            Ok(_) => {
+                // Persist session ID for continuity
+                if let Some(sid) = sessions.lock().await.get(&thread2).cloned() {
+                    let _ = state2.db.set_config(&session_key, &sid);
+                }
+            }
+            Err(e) => tracing::warn!("web chat agent error: {e}"),
+        }
+    });
+
+    Ok(Json(json!({ "ok": true })))
 }

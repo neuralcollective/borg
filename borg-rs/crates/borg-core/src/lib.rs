@@ -8,6 +8,7 @@ pub mod observer;
 pub mod pipeline;
 pub mod sandbox;
 pub mod sidecar;
+pub mod stream;
 pub mod telegram;
 pub mod types;
 

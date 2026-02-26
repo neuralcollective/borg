@@ -269,6 +269,8 @@ pub struct PhaseContext {
     pub system_prompt_suffix: String,
     /// If non-empty, append as Co-Authored-By trailer on git commits.
     pub user_coauthor: String,
+    /// If set, each raw stdout line from the agent is sent here for live streaming.
+    pub stream_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 /// Output produced by a phase executor.

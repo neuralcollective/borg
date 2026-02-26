@@ -44,6 +44,7 @@ pub struct RepoRow {
     pub auto_merge: bool,
 }
 
+#[derive(serde::Serialize)]
 pub struct LegacyEvent {
     pub id: i64,
     pub ts: i64,
@@ -51,6 +52,18 @@ pub struct LegacyEvent {
     pub category: String,
     pub message: String,
     pub metadata: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub chat_jid: String,
+    pub sender: Option<String>,
+    pub sender_name: Option<String>,
+    pub content: String,
+    pub timestamp: String,
+    pub is_from_me: bool,
+    pub is_bot_message: bool,
 }
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────
@@ -772,5 +785,101 @@ impl Db {
                 Ok(Some((t, outputs)))
             }
         }
+    }
+
+    // ── Chat message history ──────────────────────────────────────────────
+
+    /// Insert a chat message (incoming or outgoing) into the messages table.
+    pub fn insert_chat_message(
+        &self,
+        id: &str,
+        chat_jid: &str,
+        sender: Option<&str>,
+        sender_name: Option<&str>,
+        content: &str,
+        is_from_me: bool,
+        is_bot_message: bool,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let ts = now_str();
+        conn.execute(
+            "INSERT OR IGNORE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, chat_jid, sender, sender_name, content, ts,
+                    if is_from_me { 1i32 } else { 0 },
+                    if is_bot_message { 1i32 } else { 0 }],
+        )
+        .context("insert_chat_message")?;
+        Ok(())
+    }
+
+    /// List all chat threads (distinct chat_jid values) with msg count and last timestamp.
+    pub fn get_chat_threads(&self) -> Result<Vec<(String, i64, String)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT chat_jid, COUNT(*) as msg_count, MAX(timestamp) as last_ts \
+             FROM messages GROUP BY chat_jid ORDER BY last_ts DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_chat_threads")?;
+        Ok(rows)
+    }
+
+    /// Get messages for a specific chat thread, newest last.
+    pub fn get_chat_messages(&self, chat_jid: &str, limit: i64) -> Result<Vec<ChatMessage>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message \
+             FROM messages WHERE chat_jid = ?1 ORDER BY timestamp ASC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_jid, limit], |row| {
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    chat_jid: row.get(1)?,
+                    sender: row.get(2)?,
+                    sender_name: row.get(3)?,
+                    content: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    is_from_me: row.get::<_, i32>(6)? != 0,
+                    is_bot_message: row.get::<_, i32>(7)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_chat_messages")?;
+        Ok(rows)
+    }
+
+    // ── Events query ──────────────────────────────────────────────────────
+
+    /// Query the legacy events table with optional filters.
+    pub fn get_events_filtered(
+        &self,
+        category: Option<&str>,
+        level: Option<&str>,
+        since_ts: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<LegacyEvent>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, level, category, message, metadata FROM events \
+             WHERE (?1 IS NULL OR category = ?1) \
+             AND (?2 IS NULL OR level = ?2) \
+             AND (?3 IS NULL OR ts >= ?3) \
+             ORDER BY ts DESC, id DESC LIMIT ?4",
+        )?;
+        let events = stmt
+            .query_map(params![category, level, since_ts, limit], row_to_legacy_event)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("get_events_filtered")?;
+        Ok(events)
     }
 }

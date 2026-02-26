@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -35,94 +36,63 @@ pub enum SidecarEvent {
 }
 
 /// Client for the unified Discord+WhatsApp bridge.js sidecar process.
+/// Uses a shared cmd_tx that is replaced on restart, so callers hold a stable Arc<Sidecar>.
 pub struct Sidecar {
-    cmd_tx: mpsc::UnboundedSender<String>,
+    cmd_tx: Arc<Mutex<Option<mpsc::UnboundedSender<String>>>>,
 }
 
 impl Sidecar {
-    /// Spawn `bun sidecar/bridge.js` and return (Sidecar, event_rx).
+    /// Spawn `bun sidecar/bridge.js` with automatic restart on exit.
+    /// Returns `(Arc<Sidecar>, event_rx)` where event_rx is a persistent channel
+    /// that receives events from all sidecar lifetimes.
     pub async fn spawn(
         assistant_name: &str,
         discord_token: &str,
         wa_auth_dir: &str,
         wa_disabled: bool,
     ) -> Result<(Self, mpsc::UnboundedReceiver<SidecarEvent>)> {
-        let mut cmd = Command::new("bun");
-        cmd.args(["sidecar/bridge.js", assistant_name]);
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::inherit());
-        if !discord_token.is_empty() {
-            cmd.env("DISCORD_TOKEN", discord_token);
-        }
-        if !wa_auth_dir.is_empty() {
-            cmd.env("WA_AUTH_DIR", wa_auth_dir);
-        }
-        if wa_disabled {
-            cmd.env("WA_DISABLED", "true");
-        }
-
-        let mut child = cmd.spawn().context("failed to spawn sidecar/bridge.js")?;
-        let stdin = child.stdin.take().context("sidecar stdin unavailable")?;
-        let stdout = child.stdout.take().context("sidecar stdout unavailable")?;
-
+        let cmd_tx_arc: Arc<Mutex<Option<mpsc::UnboundedSender<String>>>> =
+            Arc::new(Mutex::new(None));
         let (event_tx, event_rx) = mpsc::unbounded_channel::<SidecarEvent>();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
 
-        // Stdout reader → events
+        let cmd_tx_arc2 = Arc::clone(&cmd_tx_arc);
         let event_tx2 = event_tx.clone();
+        let assistant_name = assistant_name.to_string();
+        let discord_token = discord_token.to_string();
+        let wa_auth_dir = wa_auth_dir.to_string();
+
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line.is_empty() {
-                    continue;
+            let mut attempt = 0u32;
+            loop {
+                match spawn_once(
+                    &assistant_name,
+                    &discord_token,
+                    &wa_auth_dir,
+                    wa_disabled,
+                    event_tx2.clone(),
+                )
+                .await
+                {
+                    Ok((cmd_tx, died_rx)) => {
+                        attempt = 0;
+                        *cmd_tx_arc2.lock().unwrap_or_else(|e| e.into_inner()) = Some(cmd_tx);
+                        died_rx.await.ok();
+                        *cmd_tx_arc2.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        warn!("Sidecar process exited, restarting in 5s");
+                    }
+                    Err(e) => {
+                        attempt += 1;
+                        let delay = (5u64 * attempt as u64).min(60);
+                        warn!("Sidecar spawn failed (attempt {attempt}): {e}, retrying in {delay}s");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                        continue;
+                    }
                 }
-                let Some(event) = parse_event(&line) else {
-                    continue;
-                };
-                match &event {
-                    SidecarEvent::DiscordReady { bot_id } => {
-                        info!("Discord connected as bot {}", bot_id);
-                    }
-                    SidecarEvent::WaConnected { jid } => {
-                        info!("WhatsApp connected as {}", jid);
-                    }
-                    SidecarEvent::WaQr { .. } => {
-                        info!("WhatsApp QR code generated - scan with phone");
-                    }
-                    SidecarEvent::Disconnected { source, reason } => {
-                        warn!("Sidecar {:?} disconnected: {}", source, reason);
-                    }
-                    SidecarEvent::Error { source, message } => {
-                        warn!("Sidecar {:?} error: {}", source, message);
-                    }
-                    _ => {}
-                }
-                let _ = event_tx2.send(event);
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         });
 
-        // Stdin writer ← commands
-        tokio::spawn(async move {
-            let mut stdin = stdin;
-            while let Some(line) = cmd_rx.recv().await {
-                let payload = format!("{line}\n");
-                if let Err(e) = stdin.write_all(payload.as_bytes()).await {
-                    warn!("Sidecar stdin write error: {}", e);
-                    break;
-                }
-                let _ = stdin.flush().await;
-            }
-        });
-
-        // Keep child alive; warn on exit
-        tokio::spawn(async move {
-            let _ = child.wait().await;
-            warn!("Sidecar process exited");
-        });
-
-        info!("Sidecar process started");
-        Ok((Self { cmd_tx }, event_rx))
+        Ok((Self { cmd_tx: cmd_tx_arc }, event_rx))
     }
 
     pub fn send_discord(&self, channel_id: &str, text: &str, reply_to: Option<&str>) {
@@ -134,7 +104,7 @@ impl Sidecar {
             cmd.push_str(&format!(r#","reply_to":"{id}""#));
         }
         cmd.push('}');
-        self.cmd_tx.send(cmd).ok();
+        self.send_raw(cmd);
     }
 
     pub fn send_whatsapp(&self, jid: &str, text: &str, quote_id: Option<&str>) {
@@ -146,18 +116,112 @@ impl Sidecar {
             cmd.push_str(&format!(r#","quote_id":"{id}""#));
         }
         cmd.push('}');
-        self.cmd_tx.send(cmd).ok();
+        self.send_raw(cmd);
     }
 
     pub fn send_discord_typing(&self, channel_id: &str) {
         let cmd = format!(r#"{{"target":"discord","cmd":"typing","channel_id":"{channel_id}"}}"#);
-        self.cmd_tx.send(cmd).ok();
+        self.send_raw(cmd);
     }
 
     pub fn send_whatsapp_typing(&self, jid: &str) {
         let cmd = format!(r#"{{"target":"whatsapp","cmd":"typing","jid":"{jid}"}}"#);
-        self.cmd_tx.send(cmd).ok();
+        self.send_raw(cmd);
     }
+
+    fn send_raw(&self, cmd: String) {
+        if let Ok(guard) = self.cmd_tx.lock() {
+            if let Some(tx) = guard.as_ref() {
+                tx.send(cmd).ok();
+            }
+        }
+    }
+}
+
+/// Spawn one sidecar process. Returns (cmd_tx, died_rx).
+/// `event_tx` receives all parsed events. `died_rx` fires when the process exits.
+async fn spawn_once(
+    assistant_name: &str,
+    discord_token: &str,
+    wa_auth_dir: &str,
+    wa_disabled: bool,
+    event_tx: mpsc::UnboundedSender<SidecarEvent>,
+) -> Result<(mpsc::UnboundedSender<String>, tokio::sync::oneshot::Receiver<()>)> {
+    let mut cmd = Command::new("bun");
+    cmd.args(["sidecar/bridge.js", assistant_name]);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::inherit());
+    if !discord_token.is_empty() {
+        cmd.env("DISCORD_TOKEN", discord_token);
+    }
+    if !wa_auth_dir.is_empty() {
+        cmd.env("WA_AUTH_DIR", wa_auth_dir);
+    }
+    if wa_disabled {
+        cmd.env("WA_DISABLED", "true");
+    }
+
+    let mut child = cmd.spawn().context("failed to spawn sidecar/bridge.js")?;
+    let stdin = child.stdin.take().context("sidecar stdin unavailable")?;
+    let stdout = child.stdout.take().context("sidecar stdout unavailable")?;
+
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
+    let (died_tx, died_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // Stdout reader → events
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if line.is_empty() {
+                continue;
+            }
+            let Some(event) = parse_event(&line) else {
+                continue;
+            };
+            match &event {
+                SidecarEvent::DiscordReady { bot_id } => {
+                    info!("Discord connected as bot {}", bot_id);
+                }
+                SidecarEvent::WaConnected { jid } => {
+                    info!("WhatsApp connected as {}", jid);
+                }
+                SidecarEvent::WaQr { .. } => {
+                    info!("WhatsApp QR code generated - scan with phone");
+                }
+                SidecarEvent::Disconnected { source, reason } => {
+                    warn!("Sidecar {:?} disconnected: {}", source, reason);
+                }
+                SidecarEvent::Error { source, message } => {
+                    warn!("Sidecar {:?} error: {}", source, message);
+                }
+                _ => {}
+            }
+            let _ = event_tx.send(event);
+        }
+    });
+
+    // Stdin writer ← commands
+    tokio::spawn(async move {
+        let mut stdin = stdin;
+        while let Some(line) = cmd_rx.recv().await {
+            let payload = format!("{line}\n");
+            if let Err(e) = stdin.write_all(payload.as_bytes()).await {
+                warn!("Sidecar stdin write error: {}", e);
+                break;
+            }
+            let _ = stdin.flush().await;
+        }
+    });
+
+    // Monitor process exit; fire died_tx when done
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+        let _ = died_tx.send(());
+    });
+
+    info!("Sidecar process started");
+    Ok((cmd_tx, died_rx))
 }
 
 fn parse_source(s: &str) -> Option<Source> {
@@ -290,5 +354,10 @@ mod tests {
         assert!(s.contains("\\t"));
         assert!(s.contains("\\\""));
         assert!(!s.starts_with('"'));
+    }
+
+    #[test]
+    fn json_escape_empty() {
+        assert_eq!(json_escape(""), "");
     }
 }

@@ -32,6 +32,7 @@ pub struct Pipeline {
     pub config: Arc<Config>,
     pub sandbox: Sandbox,
     pub event_tx: broadcast::Sender<PipelineEvent>,
+    pub stream_manager: Arc<TaskStreamManager>,
     last_seed_secs: std::sync::atomic::AtomicI64,
     in_flight: Mutex<HashSet<i64>>,
 }
@@ -49,6 +50,7 @@ impl Pipeline {
             config,
             sandbox: Sandbox,
             event_tx: tx,
+            stream_manager: TaskStreamManager::new(),
             last_seed_secs: std::sync::atomic::AtomicI64::new(0),
             in_flight: Mutex::new(HashSet::new()),
         };
@@ -122,6 +124,7 @@ impl Pipeline {
             pending_messages,
             system_prompt_suffix,
             user_coauthor,
+            stream_tx: None,
         }
     }
 
@@ -344,9 +347,22 @@ impl Pipeline {
             .map(|m| (m.role, m.content))
             .collect::<Vec<_>>();
 
-        let ctx = self.make_context(task, wt_path.clone(), session_dir, pending_messages);
+        let mut ctx = self.make_context(task, wt_path.clone(), session_dir, pending_messages);
         let had_pending = !ctx.pending_messages.is_empty();
         let test_cmd = ctx.repo_config.test_cmd.clone();
+
+        // Wire live NDJSON stream for the dashboard LiveTerminal.
+        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        ctx.stream_tx = Some(stream_tx);
+        self.stream_manager.start(task.id).await;
+        let sm = Arc::clone(&self.stream_manager);
+        let stream_task_id = task.id;
+        tokio::spawn(async move {
+            while let Some(line) = stream_rx.recv().await {
+                sm.push_line(stream_task_id, line).await;
+            }
+            sm.end_task(stream_task_id).await;
+        });
 
         info!("running {} phase for task #{}", phase.name, task.id);
 
