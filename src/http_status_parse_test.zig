@@ -1,4 +1,4 @@
-// Tests for the HTTP status-line bounds check fix (Task #46).
+// Tests for the HTTP status-line bounds check fix (Task #63).
 //
 // The parsing logic in unixRequest must be extracted into a testable helper:
 //
@@ -9,7 +9,7 @@
 // To include in the build, add inside http.zig's test section:
 //   _ = @import("http_status_parse_test.zig");
 //
-// All tests marked AC1–AC6 map directly to the acceptance criteria in spec.md.
+// All tests marked AC1–AC5 map directly to the acceptance criteria in spec.md.
 // Edge-case tests cover the boundary values and non-numeric input.
 
 const std = @import("std");
