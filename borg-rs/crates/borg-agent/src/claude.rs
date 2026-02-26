@@ -67,6 +67,7 @@ impl AgentBackend for ClaudeBackend {
             ctx.model.clone(),
             "--output-format".to_string(),
             "stream-json".to_string(),
+            "--verbose".to_string(),
             "--allowedTools".to_string(),
             allowed_tools,
             "--max-turns".to_string(),
