@@ -403,8 +403,12 @@ impl Pipeline {
             task.repo_path.clone()
         };
 
-        let session_dir = format!("store/sessions/task-{}", task.id);
-        tokio::fs::create_dir_all(&session_dir).await.ok();
+        let session_dir_rel = format!("store/sessions/task-{}", task.id);
+        tokio::fs::create_dir_all(&session_dir_rel).await.ok();
+        let session_dir = std::fs::canonicalize(&session_dir_rel)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
+            .to_string_lossy()
+            .to_string();
 
         let pending_messages = self
             .db
@@ -543,7 +547,11 @@ impl Pipeline {
                         ..Default::default()
                     };
 
-                    let session_dir = format!("store/sessions/task-{}", task.id);
+                    let session_dir_rel = format!("store/sessions/task-{}", task.id);
+                    let session_dir = std::fs::canonicalize(&session_dir_rel)
+                        .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
+                        .to_string_lossy()
+                        .to_string();
                     let ctx = self.make_context(task, wt_path.clone(), session_dir, Vec::new());
 
                     if let Some(backend) = self.resolve_backend(task) {
@@ -591,7 +599,11 @@ minimal changes needed. After editing, do not run the linter yourself — the pi
             return Ok(());
         }
 
-        let session_dir = format!("store/sessions/task-{}", task.id);
+        let session_dir_rel = format!("store/sessions/task-{}", task.id);
+        let session_dir = std::fs::canonicalize(&session_dir_rel)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
+            .to_string_lossy()
+            .to_string();
 
         for fix_attempt in 0..2u32 {
             let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)

@@ -151,11 +151,17 @@ impl AgentBackend for ClaudeBackend {
                     .context("failed to spawn docker")?
             }
             SandboxMode::Direct => {
+                let path = std::env::var("PATH").unwrap_or_default();
+                let augmented_path = format!(
+                    "{path}:/home/{}/.local/bin:/usr/local/bin",
+                    std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_default()
+                );
                 Command::new(&self.claude_bin)
                     .args(&full_cmd[1..])
                     .kill_on_drop(true)
                     .current_dir(&ctx.worktree_path)
                     .env("HOME", &ctx.session_dir)
+                    .env("PATH", &augmented_path)
                     .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())

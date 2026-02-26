@@ -520,7 +520,6 @@ const SWE_REBASE_ERROR: &str = "\n\nPrevious error context:\n```\n{ERROR}\n```";
 
 const SWE_REBASE_FIX: &str = "The branch was rebased onto origin/main successfully, but tests now fail.\nFix the code so tests pass. Read spec.md for context on what this branch does.\nRun the test command to verify your fix before finishing.";
 
-const SWE_REBASE_FIX_ERROR: &str = "\n\nTest output:\n```\n{ERROR}\n```";
 
 const LEGAL_RESEARCH_SYSTEM: &str = "You are the research agent in an autonomous legal pipeline.\nAnalyze the legal issue, research relevant law, precedent, and context,\nthen produce a research memo (research.md) at the workspace root.\nDo not draft legal documents yet — focus on thorough analysis.";
 
