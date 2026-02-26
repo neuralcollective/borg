@@ -14,6 +14,7 @@ use crate::{
     git::Git,
     modes::get_mode,
     sandbox::Sandbox,
+    stream::TaskStreamManager,
     types::{IntegrationType, PhaseConfig, PhaseContext, PhaseOutput, PhaseType, PipelineMode, Proposal, RepoConfig, SeedOutputType, Task},
 };
 
