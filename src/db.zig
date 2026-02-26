@@ -1408,6 +1408,7 @@ test {
     _ = @import("db_pipeline_query_test.zig");
     _ = @import("db_task_output_test.zig");
     _ = @import("db_proposal_test.zig");
+    _ = @import("db_unanswered_test.zig");
 }
 
 test "state key-value store" {
