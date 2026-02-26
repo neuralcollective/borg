@@ -89,6 +89,28 @@ export async function updateSettings(settings: Partial<Settings>): Promise<{ upd
   return res.json();
 }
 
+export function useFocus() {
+  return useQuery<{ text: string; active: boolean }>({
+    queryKey: ["focus"],
+    queryFn: () => fetchJson("/api/focus"),
+    staleTime: 10_000,
+  });
+}
+
+export async function setFocus(text: string): Promise<void> {
+  const res = await fetch("/api/focus", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function clearFocus(): Promise<void> {
+  const res = await fetch("/api/focus", { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 export async function approveProposal(id: number): Promise<{ task_id: number }> {
   const res = await fetch(`/api/proposals/${id}/approve`, { method: "POST" });
   if (!res.ok) throw new Error(`${res.status}`);

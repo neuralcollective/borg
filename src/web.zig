@@ -408,6 +408,10 @@ pub const WebServer = struct {
             self.serveSettingsJson(stream);
         } else if (std.mem.eql(u8, path, "/api/settings") and (std.mem.eql(u8, method, "PUT") or std.mem.eql(u8, method, "POST"))) {
             self.handleUpdateSettings(stream, request);
+        } else if (std.mem.eql(u8, path, "/api/focus") and std.mem.eql(u8, method, "GET")) {
+            self.serveFocus(stream);
+        } else if (std.mem.eql(u8, path, "/api/focus") and (std.mem.eql(u8, method, "POST") or std.mem.eql(u8, method, "DELETE"))) {
+            self.handleSetFocus(stream, request);
         } else {
             self.serveStatic(stream, path);
         }
@@ -1353,6 +1357,50 @@ pub const WebServer = struct {
         }) catch return;
 
         self.sendJson(stream, buf.items);
+    }
+
+    fn serveFocus(self: *WebServer, stream: std.net.Stream) void {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+        const text = self.db.getState(alloc, "pipeline_focus") catch null orelse "";
+        var buf: [1024]u8 = undefined;
+        var esc: [512]u8 = undefined;
+        const resp = std.fmt.bufPrint(&buf, "{{\"text\":\"{s}\",\"active\":{s}}}", .{
+            jsonEscape(&esc, text),
+            if (text.len > 0) "true" else "false",
+        }) catch return;
+        self.sendJson(stream, resp);
+    }
+
+    fn handleSetFocus(self: *WebServer, stream: std.net.Stream, request: []const u8) void {
+        const method = parseMethod(request);
+        if (std.mem.eql(u8, method, "DELETE")) {
+            self.db.setState("pipeline_focus", "") catch {};
+            self.serveJsonResponse(stream, 200, "{\"active\":false}");
+            std.log.info("Focus cleared", .{});
+            return;
+        }
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const body = parseBody(request);
+        var parsed = json_mod.parse(arena.allocator(), body) catch {
+            self.serveJsonResponse(stream, 400, "{\"error\":\"invalid JSON\"}");
+            return;
+        };
+        defer parsed.deinit();
+        const text = json_mod.getString(parsed.value, "text") orelse "";
+        self.db.setState("pipeline_focus", text) catch {
+            self.serve500(stream);
+            return;
+        };
+        if (text.len > 0) {
+            std.log.info("Focus set: {s}", .{text});
+            self.serveJsonResponse(stream, 200, "{\"active\":true}");
+        } else {
+            std.log.info("Focus cleared", .{});
+            self.serveJsonResponse(stream, 200, "{\"active\":false}");
+        }
     }
 
     const mutable_settings = [_]struct { key: []const u8, kind: enum { bool_val, int_val, str_val } }{
