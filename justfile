@@ -27,9 +27,9 @@ sidecar:
 # Full setup: build everything
 setup: image sidecar dash b
 
-# Restart the systemd user service
+# Restart the service — kills the process and lets systemd restart it (no sudo needed)
 restart:
-    systemctl --user restart borg
+    pkill -x borg-server || true
 
 # Build release and restart service
 deploy: b restart
@@ -45,9 +45,9 @@ install-service:
     cp borg.service ~/.config/systemd/user/borg.service
     systemctl --user daemon-reload
 
-# Check service status (systemd if available, else API, else not running)
+# Check service status
 status:
     systemctl --user status borg 2>/dev/null || \
-    docker compose ps borg 2>/dev/null || \
+    systemctl status borg 2>/dev/null || \
     curl -sf http://127.0.0.1:3131/api/status 2>/dev/null | jq . || \
     echo "borg is not running"

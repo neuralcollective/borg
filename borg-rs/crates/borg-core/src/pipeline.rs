@@ -60,6 +60,8 @@ pub struct Pipeline {
     last_self_update_secs: std::sync::atomic::AtomicI64,
     startup_heads: HashMap<String, String>,
     in_flight: Mutex<HashSet<i64>>,
+    /// Serializes git worktree creation to avoid .git/config lock contention.
+    worktree_create_lock: Mutex<()>,
 }
 
 impl Pipeline {
@@ -91,6 +93,7 @@ impl Pipeline {
             last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
             startup_heads,
             in_flight: Mutex::new(HashSet::new()),
+            worktree_create_lock: Mutex::new(()),
         };
         (p, rx)
     }
@@ -364,6 +367,9 @@ impl Pipeline {
         tokio::fs::create_dir_all(&wt_dir).await.ok();
         let wt_path = format!("{wt_dir}/task-{}", task.id);
 
+        // Serialize worktree creation to avoid .git/config lock contention.
+        let _wt_lock = self.worktree_create_lock.lock().await;
+
         let _ = git.remove_worktree(&wt_path);
         tokio::fs::remove_dir_all(&wt_path).await.ok();
         let _ = git.exec(&task.repo_path, &["worktree", "prune"]);
@@ -373,6 +379,9 @@ impl Pipeline {
             &task.repo_path,
             &["worktree", "add", &wt_path, "-b", &branch, "origin/main"],
         )?;
+
+        drop(_wt_lock);
+
         if !wt_result.success() {
             self.db.update_task_status(task.id, "failed", Some(&wt_result.stderr))?;
             return Ok(());

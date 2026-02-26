@@ -193,7 +193,7 @@ function AppInner() {
         <div className="mb-4 flex flex-col items-center">
           <div className="flex w-6 flex-col items-center rounded bg-white py-0.5">
             {["b", "o", "r", "g"].map((c) => (
-              <span key={c} className="text-[10px] font-black text-black" style={{ lineHeight: "1.05" }}>{c}</span>
+              <span key={c} className="text-[10px] font-black text-black" style={{ lineHeight: "0.9" }}>{c}</span>
             ))}
           </div>
         </div>
