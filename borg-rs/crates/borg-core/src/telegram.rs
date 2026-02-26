@@ -120,14 +120,12 @@ impl Telegram {
                 format!("{} {}", first, last)
             };
 
-            let bot_name = format!("@{}", self.bot_username).to_lowercase();
-            let text_lower = text.to_lowercase();
-            let mentions_bot = text_lower.contains(&bot_name)
-                || msg
-                    .get("entities")
-                    .and_then(|e| e.as_array())
-                    .map(|ents| ents.iter().any(|e| e["type"] == "mention"))
-                    .unwrap_or(false);
+            let entities: &[Value] = msg
+                .get("entities")
+                .and_then(|e| e.as_array())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let mentions_bot = check_mentions_bot(&self.bot_username, &text, entities);
 
             let reply_to_text = msg
                 .get("reply_to_message")
@@ -201,6 +199,37 @@ impl Telegram {
             .await?;
         Ok(())
     }
+}
+
+/// Returns true if the message text or its Telegram entities indicate the bot
+/// was mentioned.
+///
+/// - Text fallback: checks whether `text` (lowercased) contains `@bot_username`.
+/// - Entity path: for each entity with `type == "mention"`, slices the mention
+///   text using UTF-16 code-unit `offset`/`length` (as Telegram specifies),
+///   strips the leading `@`, and compares case-insensitively to `bot_username`.
+pub fn check_mentions_bot(bot_username: &str, text: &str, entities: &[Value]) -> bool {
+    let bot_name = format!("@{}", bot_username).to_lowercase();
+    if text.to_lowercase().contains(&bot_name) {
+        return true;
+    }
+    if bot_username.is_empty() {
+        return false;
+    }
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+    entities
+        .iter()
+        .filter(|e| e["type"] == "mention")
+        .any(|e| {
+            let offset = e["offset"].as_u64().unwrap_or(0) as usize;
+            let length = e["length"].as_u64().unwrap_or(0) as usize;
+            if length == 0 || offset >= utf16.len() {
+                return false;
+            }
+            let end = (offset + length).min(utf16.len());
+            let mention = String::from_utf16_lossy(&utf16[offset..end]);
+            mention.trim_start_matches('@').to_lowercase() == bot_username.to_lowercase()
+        })
 }
 
 fn split_text(text: &str, limit: usize) -> Vec<String> {
