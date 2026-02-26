@@ -98,7 +98,7 @@ test "AC1: broadcastSse closes all FDs when multiple clients fail" {
 
     for (fds) |fd| try std.testing.expect(isFdOpen(fd));
 
-    ws.pushLog("warn", "test all fail");
+    ws.pushLog("info", "test all fail");
 
     for (fds) |fd| try std.testing.expect(!isFdOpen(fd));
     try std.testing.expectEqual(@as(usize, 0), ws.sse_clients.items.len);
