@@ -152,6 +152,13 @@ impl Pipeline {
     ) -> PhaseContext {
         let (claude_coauthor, user_coauthor) = self.git_coauthor_settings();
         let system_prompt_suffix = Self::build_system_prompt_suffix(claude_coauthor, &user_coauthor);
+        let setup_script = if self.config.container_setup.is_empty() {
+            String::new()
+        } else {
+            std::fs::canonicalize(&self.config.container_setup)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| self.config.container_setup.clone())
+        };
         PhaseContext {
             task: task.clone(),
             repo_config: self.repo_config(task),
@@ -163,6 +170,7 @@ impl Pipeline {
             system_prompt_suffix,
             user_coauthor,
             stream_tx: None,
+            setup_script,
         }
     }
 

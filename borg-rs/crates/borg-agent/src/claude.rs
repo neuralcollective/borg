@@ -137,10 +137,13 @@ impl AgentBackend for ClaudeBackend {
                     .context("failed to spawn bwrap")?
             }
             SandboxMode::Docker => {
-                let binds = [
+                let mut binds = vec![
                     (ctx.worktree_path.as_str(), ctx.worktree_path.as_str()),
                     (ctx.session_dir.as_str(), ctx.session_dir.as_str()),
                 ];
+                if !ctx.setup_script.is_empty() {
+                    binds.push((ctx.setup_script.as_str(), "/workspace/setup.sh"));
+                }
                 Sandbox::docker_command(&self.docker_image, &binds, &ctx.worktree_path, &full_cmd)
                     .kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
