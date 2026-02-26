@@ -158,7 +158,7 @@ pub fn codex_has_credentials(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn read_oauth_from_credentials(path: &str) -> Option<String> {
+pub fn read_oauth_from_credentials(path: &str) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
     // Try claudeAiOauth.accessToken first, then oauthToken at root
@@ -171,6 +171,38 @@ fn read_oauth_from_credentials(path: &str) -> Option<String> {
                 .and_then(|t| t.as_str())
                 .map(str::to_string)
         })
+}
+
+fn read_oauth_expiry(path: &str) -> Option<i64> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    v.get("claudeAiOauth")
+        .and_then(|o| o.get("expiresAt"))
+        .and_then(|e| e.as_i64())
+}
+
+/// Refresh the OAuth token if expired or expiring within 5 minutes.
+/// Runs `claude auth status` to trigger CLI-side refresh, then re-reads from disk.
+/// Returns the freshest available token, falling back to `current` if all else fails.
+pub fn refresh_oauth_token(credentials_path: &str, current: &str) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let expiry = read_oauth_expiry(credentials_path).unwrap_or(0);
+    if expiry > 0 && expiry < now_ms + 300_000 {
+        tracing::info!("OAuth token expired or near-expiry, refreshing via CLI");
+        let _ = std::process::Command::new("claude")
+            .args(["auth", "status"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    read_oauth_from_credentials(credentials_path)
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| current.to_string())
 }
 
 fn parse_watched_repos(
