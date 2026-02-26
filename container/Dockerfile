@@ -14,6 +14,12 @@ RUN bun install -g @anthropic-ai/claude-code@latest \
     && chmod o+x /root \
     && chmod -R o+rx /root/.bun
 
+# Install Rust (stable) for pipeline agents working on Rust repos
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --quiet \
+    && chmod -R o+rx /root/.cargo /root/.rustup
+ENV PATH="/root/.cargo/bin:$PATH"
+
 # Create workspace dirs
 RUN mkdir -p /workspace/group /workspace/ipc /home/bun/.claude
 

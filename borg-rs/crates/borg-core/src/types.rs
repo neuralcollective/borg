@@ -272,6 +272,8 @@ pub struct PhaseContext {
     pub user_coauthor: String,
     /// If set, each raw stdout line from the agent is sent here for live streaming.
     pub stream_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Absolute path to a setup script to source at container start (mounted as /workspace/setup.sh).
+    pub setup_script: String,
 }
 
 /// Output produced by a phase executor.

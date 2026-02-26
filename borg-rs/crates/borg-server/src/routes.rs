@@ -644,6 +644,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 system_prompt_suffix: String::new(),
                 user_coauthor: String::new(),
                 stream_tx: None,
+                setup_script: String::new(),
             };
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
