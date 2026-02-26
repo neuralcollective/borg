@@ -272,3 +272,28 @@ test "Edge: /home/user/.ssh: sensitive host path with empty container path — b
     // Existing pattern check fires even when container path is empty.
     try std.testing.expect(!docker.isBindSafe("/home/user/.ssh:"));
 }
+
+// =============================================================================
+// Edge cases from spec §5 — multiple leading colons and path-traversal with
+// leading colon.  Both must return false.
+// =============================================================================
+
+test "Edge: multiple leading colons — ::dst returns false" {
+    // First colon is at index 0 → host_path == ""; empty-path guard fires.
+    try std.testing.expect(!docker.isBindSafe("::dst"));
+}
+
+test "Edge: multiple leading colons with option — ::dst:ro returns false" {
+    try std.testing.expect(!docker.isBindSafe("::dst:ro"));
+}
+
+test "Edge: path traversal with leading colon — :../etc returns false" {
+    // host_path == ""; empty-path guard fires before the ".." check.
+    // Both guards would independently reject this, but the empty-path guard
+    // runs first per the spec.
+    try std.testing.expect(!docker.isBindSafe(":../etc"));
+}
+
+test "Edge: path traversal with leading colon — :/../../root returns false" {
+    try std.testing.expect(!docker.isBindSafe(":../../root"));
+}
