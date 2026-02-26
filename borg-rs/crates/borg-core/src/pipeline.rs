@@ -690,7 +690,13 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     }
 
     async fn run_seed(&self, repo: &RepoConfig, mode_name: &str, seed_cfg: &crate::types::SeedConfig) -> Result<()> {
-        let session_dir = "store/sessions/seed".to_string();
+        let session_dir = std::fs::canonicalize("store/sessions/seed")
+            .unwrap_or_else(|_| {
+                std::fs::create_dir_all("store/sessions/seed").ok();
+                std::fs::canonicalize("store/sessions/seed").unwrap_or_else(|_| std::path::PathBuf::from("store/sessions/seed"))
+            })
+            .to_string_lossy()
+            .to_string();
         tokio::fs::create_dir_all(&session_dir).await.ok();
 
         let task = Task {
@@ -726,6 +732,17 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let backend = self.resolve_backend(&task)
             .ok_or_else(|| anyhow::anyhow!("no backends configured for seed"))?;
         let result = backend.run_phase(&task, &phase, ctx).await?;
+
+        if !result.success {
+            warn!(
+                "seed '{}' for {} failed (output: {:?})",
+                seed_cfg.name,
+                repo.path,
+                &result.output
+            );
+        } else {
+            info!("seed '{}' output: {:?}", seed_cfg.name, &result.output);
+        }
 
         self.parse_seed_output(&result.output, &repo.path, mode_name, seed_cfg.output_type)?;
         Ok(())

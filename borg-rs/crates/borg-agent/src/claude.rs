@@ -21,15 +21,19 @@ pub struct ClaudeBackend {
     pub docker_image: String,
     /// Kill subprocess and return failure after this many seconds (0 = no limit).
     pub timeout_s: u64,
+    /// Path to Claude credentials file for fresh token reads.
+    pub credentials_path: String,
 }
 
 impl ClaudeBackend {
     pub fn new(claude_bin: impl Into<String>, sandbox_mode: SandboxMode, docker_image: impl Into<String>) -> Self {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         Self {
             claude_bin: claude_bin.into(),
             sandbox_mode,
             docker_image: docker_image.into(),
             timeout_s: 0,
+            credentials_path: format!("{home}/.claude/.credentials.json"),
         }
     }
 
@@ -38,6 +42,10 @@ impl ClaudeBackend {
         self
     }
 
+    /// Refresh OAuth token (triggers CLI refresh if near-expiry, then re-reads from disk).
+    fn fresh_oauth_token(&self, fallback: &str) -> String {
+        borg_core::config::refresh_oauth_token(&self.credentials_path, fallback)
+    }
 }
 
 #[async_trait]
@@ -103,6 +111,8 @@ impl AgentBackend for ClaudeBackend {
             &SandboxMode::Direct
         };
 
+        let oauth_token = self.fresh_oauth_token(&ctx.oauth_token);
+
         info!(
             task_id = task.id,
             phase = %phase.name,
@@ -120,8 +130,8 @@ impl AgentBackend for ClaudeBackend {
                 Sandbox::bwrap_command(&writable, &ctx.worktree_path, &full_cmd)
                     .kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
-                    .env("ANTHROPIC_API_KEY", &ctx.oauth_token)
-                    .env("CLAUDE_CODE_OAUTH_TOKEN", &ctx.oauth_token)
+                    .env("ANTHROPIC_API_KEY", &oauth_token)
+                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -135,8 +145,8 @@ impl AgentBackend for ClaudeBackend {
                 Sandbox::docker_command(&self.docker_image, &binds, &ctx.worktree_path, &full_cmd)
                     .kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
-                    .env("ANTHROPIC_API_KEY", &ctx.oauth_token)
-                    .env("CLAUDE_CODE_OAUTH_TOKEN", &ctx.oauth_token)
+                    .env("ANTHROPIC_API_KEY", &oauth_token)
+                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -148,8 +158,8 @@ impl AgentBackend for ClaudeBackend {
                     .kill_on_drop(true)
                     .current_dir(&ctx.worktree_path)
                     .env("HOME", &ctx.session_dir)
-                    .env("ANTHROPIC_API_KEY", &ctx.oauth_token)
-                    .env("CLAUDE_CODE_OAUTH_TOKEN", &ctx.oauth_token)
+                    .env("ANTHROPIC_API_KEY", &oauth_token)
+                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
