@@ -313,3 +313,189 @@ test "EC6: whatsapp message carries source whatsapp" {
     try std.testing.expect(msg.mentions_bot == false);
     try std.testing.expect(msg.is_group == true);
 }
+
+// ── AC12: discord/ready → discord_ready with bot_id ─────────────────────
+
+test "AC12: discord ready event extracts bot_id into discord_ready" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"discord\",\"event\":\"ready\",\"bot_id\":\"BOT123\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .discord_ready);
+    try std.testing.expectEqualStrings("BOT123", result.?.discord_ready);
+}
+
+// ── AC13: whatsapp/connected → wa_connected with jid ─────────────────────
+
+test "AC13: whatsapp connected event extracts jid into wa_connected" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"connected\",\"jid\":\"1234@s.whatsapp.net\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .wa_connected);
+    try std.testing.expectEqualStrings("1234@s.whatsapp.net", result.?.wa_connected);
+}
+
+// ── AC14: whatsapp/qr → wa_qr with data ──────────────────────────────────
+
+test "AC14: whatsapp qr event extracts data into wa_qr" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"qr\",\"data\":\"QR_DATA_PAYLOAD\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .wa_qr);
+    try std.testing.expectEqualStrings("QR_DATA_PAYLOAD", result.?.wa_qr);
+}
+
+// ── AC15: disconnected populates correct source and reason ────────────────
+
+test "AC15: discord disconnected event populates source and reason" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"discord\",\"event\":\"disconnected\",\"reason\":\"network error\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .disconnected);
+    try std.testing.expect(result.?.disconnected.source == .discord);
+    try std.testing.expectEqualStrings("network error", result.?.disconnected.reason);
+}
+
+test "AC15: whatsapp disconnected event populates source and reason" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"disconnected\",\"reason\":\"logout\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .disconnected);
+    try std.testing.expect(result.?.disconnected.source == .whatsapp);
+    try std.testing.expectEqualStrings("logout", result.?.disconnected.reason);
+}
+
+// ── AC16: error populates correct source and message string ──────────────
+
+test "AC16: discord error event populates source and message" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"discord\",\"event\":\"error\",\"message\":\"rate limited\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .err);
+    try std.testing.expect(result.?.err.source == .discord);
+    try std.testing.expectEqualStrings("rate limited", result.?.err.message);
+}
+
+test "AC16: whatsapp error event populates source and message" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"error\",\"message\":\"connection failed\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .err);
+    try std.testing.expect(result.?.err.source == .whatsapp);
+    try std.testing.expectEqualStrings("connection failed", result.?.err.message);
+}
+
+// ── EC7: ready with missing bot_id yields empty string ───────────────────
+
+test "EC7: discord ready with missing bot_id yields empty string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"discord\",\"event\":\"ready\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .discord_ready);
+    try std.testing.expectEqualStrings("", result.?.discord_ready);
+}
+
+// ── EC8: connected with missing jid yields empty string ──────────────────
+
+test "EC8: whatsapp connected with missing jid yields empty string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"connected\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .wa_connected);
+    try std.testing.expectEqualStrings("", result.?.wa_connected);
+}
+
+// ── EC9: qr with missing data yields empty string ────────────────────────
+
+test "EC9: whatsapp qr with missing data yields empty string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"qr\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .wa_qr);
+    try std.testing.expectEqualStrings("", result.?.wa_qr);
+}
+
+// ── EC10: disconnected with missing reason yields empty string ───────────
+
+test "EC10: discord disconnected with missing reason yields empty string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"discord\",\"event\":\"disconnected\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .disconnected);
+    try std.testing.expect(result.?.disconnected.source == .discord);
+    try std.testing.expectEqualStrings("", result.?.disconnected.reason);
+}
+
+// ── EC11: error with missing message yields empty string ─────────────────
+
+test "EC11: whatsapp error with missing message yields empty string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"error\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .err);
+    try std.testing.expect(result.?.err.source == .whatsapp);
+    try std.testing.expectEqualStrings("", result.?.err.message);
+}
+
+// ── EC12: ready with non-discord source still returns discord_ready ──────
+
+test "EC12: ready event with whatsapp source still returns discord_ready" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var s = testSidecar(alloc);
+
+    // The ready branch in parseEvent has no source guard; it returns
+    // discord_ready for any valid source. Verify the implementation matches.
+    const result = s.parseEvent(alloc, "{\"source\":\"whatsapp\",\"event\":\"ready\",\"bot_id\":\"X\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.? == .discord_ready);
+    try std.testing.expectEqualStrings("X", result.?.discord_ready);
+}
