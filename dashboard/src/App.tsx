@@ -191,9 +191,9 @@ function AppInner() {
       {/* Sidebar nav */}
       <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] py-3">
         <div className="mb-4 flex flex-col items-center">
-          <div className="flex w-6 flex-col items-center rounded bg-white py-1">
+          <div className="flex w-6 flex-col items-center rounded bg-white py-0.5">
             {["b", "o", "r", "g"].map((c) => (
-              <span key={c} className="text-[10px] font-black text-black leading-none">{c}</span>
+              <span key={c} className="text-[10px] font-black text-black" style={{ lineHeight: "1.05" }}>{c}</span>
             ))}
           </div>
         </div>

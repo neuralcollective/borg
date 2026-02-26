@@ -1051,13 +1051,19 @@ pub const WebServer = struct {
                 return;
             };
 
+            const proposal_mode = blk: {
+                for (self.config.watched_repos) |repo| {
+                    if (std.mem.eql(u8, repo.path, proposal.repo_path)) break :blk repo.mode;
+                }
+                break :blk "sweborg";
+            };
             const task_id = self.db.createPipelineTask(
                 proposal.title,
                 proposal.description,
                 proposal.repo_path,
                 "proposal",
                 "",
-                "sweborg",
+                proposal_mode,
             ) catch {
                 self.serve500(stream);
                 return;

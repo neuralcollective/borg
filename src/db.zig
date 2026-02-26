@@ -1106,6 +1106,20 @@ pub const Db = struct {
         return proposals.toOwnedSlice();
     }
 
+    pub fn getTopScoredProposals(self: *Db, allocator: std.mem.Allocator, min_score: i64, limit: i64) ![]Proposal {
+        var rows = try self.sqlite_db.query(
+            allocator,
+            "SELECT id, repo_path, title, description, rationale, status, created_at, triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, triage_reasoning FROM proposals WHERE status = 'proposed' AND triage_score >= ?1 ORDER BY triage_score DESC LIMIT ?2",
+            .{ min_score, limit },
+        );
+        defer rows.deinit();
+        var proposals = std.ArrayList(Proposal).init(allocator);
+        for (rows.items) |row| {
+            try proposals.append(proposalFromRow(allocator, row));
+        }
+        return proposals.toOwnedSlice();
+    }
+
     pub fn updateProposalStatus(self: *Db, proposal_id: i64, status: []const u8) !void {
         try self.sqlite_db.execute(
             "UPDATE proposals SET status = ?1 WHERE id = ?2",

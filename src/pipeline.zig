@@ -95,6 +95,7 @@ pub const Pipeline = struct {
             self.checkRemoteUpdates();
             self.checkHealth();
             self.maybeAutoTriage();
+            self.maybeAutoPromoteProposals();
             self.maybeApplySelfUpdate();
 
             std.time.sleep(self.config.pipeline_tick_s * std.time.ns_per_s);
@@ -1358,6 +1359,37 @@ pub const Pipeline = struct {
     }
 
     // --- Health Check ---
+
+    fn repoMode(self: *Pipeline, repo_path: []const u8) []const u8 {
+        for (self.config.watched_repos) |repo| {
+            if (std.mem.eql(u8, repo.path, repo_path)) return repo.mode;
+        }
+        return "sweborg";
+    }
+
+    const AUTO_PROMOTE_SCORE: i64 = 7;
+
+    fn maybeAutoPromoteProposals(self: *Pipeline) void {
+        const active = self.db.getActivePipelineTaskCount() catch return;
+        if (active >= self.config.pipeline_max_backlog) return;
+
+        const slots = @as(i64, @intCast(self.config.pipeline_max_backlog)) - active;
+
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const proposals = self.db.getTopScoredProposals(alloc, AUTO_PROMOTE_SCORE, slots) catch return;
+        for (proposals) |p| {
+            const mode = self.repoMode(p.repo_path);
+            const task_id = self.db.createPipelineTask(p.title, p.description, p.repo_path, "proposal", "", mode) catch |e| {
+                std.log.warn("Auto-promote proposal #{d}: {}", .{ p.id, e });
+                continue;
+            };
+            self.db.updateProposalStatus(p.id, "approved") catch |e| std.log.warn("updateProposalStatus #{d}: {}", .{ p.id, e });
+            std.log.info("Auto-promoted proposal #{d} (score={d}) → task #{d}: {s}", .{ p.id, p.triage_score, task_id, p.title });
+        }
+    }
 
     const TRIAGE_INTERVAL_S: i64 = 6 * 3600; // 6 hours
 
