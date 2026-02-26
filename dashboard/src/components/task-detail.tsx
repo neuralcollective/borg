@@ -44,7 +44,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
             <div className="flex items-center gap-2.5">
               <span className="font-mono text-[11px] text-zinc-600">#{task.id}</span>
               <StatusBadge status={task.status} />
-              {task.mode && task.mode !== "swe" && (
+              {task.mode && task.mode !== "sweborg" && task.mode !== "swe" && (
                 <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
                   {task.mode}
                 </span>

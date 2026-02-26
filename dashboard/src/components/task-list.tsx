@@ -98,7 +98,7 @@ function TaskRow({
             {repoName(task.repo_path)}
           </span>
         )}
-        {task.mode && task.mode !== "swe" && (
+        {task.mode && task.mode !== "sweborg" && task.mode !== "swe" && (
           <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
             {task.mode}
           </span>
