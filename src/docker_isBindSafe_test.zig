@@ -229,8 +229,46 @@ test "Edge: empty string is rejected (no colon)" {
 }
 
 test "Edge: host path is just a colon is rejected (empty host path — no valid path)" {
-    // host_path = "" which has no ".." and no blocked pattern, so this is
-    // actually allowed by current logic. Document the current behaviour.
-    // An empty host path passes all checks and returns true.
-    try std.testing.expect(docker.isBindSafe(":/data"));
+    // host_path == ""; must be rejected by an explicit empty-path guard.
+    try std.testing.expect(!docker.isBindSafe(":/data"));
+}
+
+// =============================================================================
+// AC (spec §4): Empty host path — all variants must return false
+// These tests FAIL before the fix is applied (isBindSafe has no len==0 check).
+// =============================================================================
+
+test "AC: leading colon — :/workspace returns false" {
+    try std.testing.expect(!docker.isBindSafe(":/workspace"));
+}
+
+test "AC: leading colon with mount option — :/workspace:ro returns false" {
+    try std.testing.expect(!docker.isBindSafe(":/workspace:ro"));
+}
+
+test "AC: leading colon with root container path — :/ returns false" {
+    try std.testing.expect(!docker.isBindSafe(":/"));
+}
+
+test "AC: bare colon with empty container path — : returns false" {
+    try std.testing.expect(!docker.isBindSafe(":"));
+}
+
+// =============================================================================
+// Edge cases from spec §5 — should hold both before and after the fix
+// =============================================================================
+
+test "Edge: /src: has non-empty host path — returns true" {
+    // Empty container path is Docker's concern; host path is valid and safe.
+    try std.testing.expect(docker.isBindSafe("/src:"));
+}
+
+test "Edge: /src:: duplicate colons — non-empty host path, still safe" {
+    // Only the first colon is the split point; extra colons don't affect host extraction.
+    try std.testing.expect(docker.isBindSafe("/src::"));
+}
+
+test "Edge: /home/user/.ssh: sensitive host path with empty container path — blocked" {
+    // Existing pattern check fires even when container path is empty.
+    try std.testing.expect(!docker.isBindSafe("/home/user/.ssh:"));
 }
