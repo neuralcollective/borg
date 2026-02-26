@@ -274,7 +274,8 @@ pub(crate) async fn run_chat_agent(
 }
 
 /// Build a release binary and replace the running process via execve.
-pub(crate) async fn rebuild_and_exec(repo_path: &str) {
+/// Returns true only if execve was invoked (this process should be replaced).
+pub(crate) async fn rebuild_and_exec(repo_path: &str) -> bool {
     let build_dir = format!("{repo_path}/borg-rs");
     let build = tokio::process::Command::new("cargo")
         .args(["build", "--release"])
@@ -289,9 +290,16 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str) {
             let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let err = std::process::Command::new(&bin).args(&args[1..]).exec();
             tracing::error!("execve failed: {err}");
+            false
         }
-        Ok(_) => tracing::error!("Release build failed"),
-        Err(e) => tracing::error!("Failed to run cargo: {e}"),
+        Ok(_) => {
+            tracing::error!("Release build failed");
+            false
+        }
+        Err(e) => {
+            tracing::error!("Failed to run cargo: {e}");
+            false
+        }
     }
 }
 

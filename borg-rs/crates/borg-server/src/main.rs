@@ -109,6 +109,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Restart recovery: pipeline tasks are resumed from persisted task.status + session_id.
+    // This makes recovery explicit and observable in logs after service restarts.
+    if let Ok(active) = db.list_active_tasks() {
+        let resumable = active
+            .iter()
+            .filter(|t| !t.session_id.is_empty())
+            .filter(|t| matches!(t.status.as_str(), "spec" | "qa" | "qa_fix" | "impl" | "retry" | "lint_fix" | "rebase"))
+            .count();
+        if resumable > 0 {
+            tracing::info!("restart recovery: {resumable} active pipeline tasks have resumable sessions");
+        }
+    }
+
     let db = Arc::new(db);
     let config = Arc::new(config);
 
@@ -304,8 +317,11 @@ async fn main() -> anyhow::Result<()> {
 
                 if force_restart_check.load(std::sync::atomic::Ordering::Relaxed) {
                     tracing::info!("Force restart requested via /api/release, rebuilding...");
-                    force_restart_check.store(false, std::sync::atomic::Ordering::Relaxed);
-                    routes::rebuild_and_exec(&self_repo.path).await;
+                    if routes::rebuild_and_exec(&self_repo.path).await {
+                        force_restart_check.store(false, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        tracing::warn!("Force restart rebuild failed; will retry");
+                    }
                     continue;
                 }
 
@@ -328,10 +344,13 @@ async fn main() -> anyhow::Result<()> {
                     &remote_head[..8.min(remote_head.len())]
                 );
                 tracing::info!("Self-update: rebuilding...");
-                routes::rebuild_and_exec(&self_repo.path).await;
-                // Only advance last_head after a successful execve replaces us.
-                // If build failed, we stay here and retry on the next remote change.
-                last_head = remote_head;
+                if routes::rebuild_and_exec(&self_repo.path).await {
+                    // Only advance last_head after a successful execve replaces us.
+                    // If build failed, we retry this same remote_head next loop.
+                    last_head = remote_head;
+                } else {
+                    tracing::warn!("Self-update rebuild failed; keeping previous last_head for retry");
+                }
             }
         });
     }
