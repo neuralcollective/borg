@@ -13,6 +13,12 @@ pub fn build_instruction(
 ) -> String {
     let mut s = String::new();
 
+    if let Some(repo_prompt) = read_repo_prompt(ctx) {
+        s.push_str("## Project Context\n\n");
+        s.push_str(&repo_prompt);
+        s.push_str("\n\n---\n\n");
+    }
+
     if phase.include_task_context {
         s.push_str(&format!("Task: {}\n\n{}\n\n---\n\n", task.title, task.description));
     }
@@ -38,4 +44,40 @@ pub fn build_instruction(
     }
 
     s
+}
+
+/// Read the per-repo prompt from the explicit prompt_file config, or by
+/// auto-detecting `.borg/prompt.md` in the worktree / repo root.
+fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
+    // 1. Explicit prompt_file from config
+    if !ctx.repo_config.prompt_file.is_empty() {
+        if let Ok(content) = std::fs::read_to_string(&ctx.repo_config.prompt_file) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+
+    // 2. .borg/prompt.md in the worktree (may differ from repo root during tasks)
+    let worktree_prompt = format!("{}/.borg/prompt.md", ctx.worktree_path);
+    if let Ok(content) = std::fs::read_to_string(&worktree_prompt) {
+        let trimmed = content.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+
+    // 3. .borg/prompt.md in the repo root
+    let repo_prompt = format!("{}/.borg/prompt.md", ctx.repo_config.path);
+    if repo_prompt != worktree_prompt {
+        if let Ok(content) = std::fs::read_to_string(&repo_prompt) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+
+    None
 }
