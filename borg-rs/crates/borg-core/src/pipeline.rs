@@ -475,6 +475,22 @@ impl Pipeline {
             message: format!("task #{} phase {} completed (success={})", task.id, phase.name, result.success),
         });
 
+        // Never advance on a failed agent run; retry the same logical phase path.
+        if !result.success {
+            let error_msg = if result.output.trim().is_empty() {
+                format!("{} phase failed", phase.name)
+            } else {
+                result.output.clone()
+            };
+            let retry_status = if phase.name == "impl" || phase.name == "retry" {
+                "retry"
+            } else {
+                phase.name.as_str()
+            };
+            self.fail_or_retry(task, retry_status, error_msg.trim())?;
+            return Ok(());
+        }
+
         if let Some(ref artifact) = phase.check_artifact {
             if !crate::ipc::check_artifact(&wt_path, artifact) && result.output.is_empty() {
                 self.db.update_task_status(
@@ -541,13 +557,14 @@ impl Pipeline {
                 info!("task #{} rebase succeeded", task.id);
             }
             Err(e) => {
+                let mut rebase_err = e.to_string();
                 if !phase.fix_instruction.is_empty() {
                     info!("task #{} rebase failed, running fix agent", task.id);
 
                     let fix_phase = PhaseConfig {
                         name: "rebase_fix".into(),
                         label: "Rebase Fix".into(),
-                        instruction: phase.fix_instruction.replace("{ERROR}", &e.to_string()),
+                        instruction: phase.fix_instruction.replace("{ERROR}", &rebase_err),
                         fresh_session: true,
                         allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
                         ..Default::default()
@@ -569,14 +586,52 @@ impl Pipeline {
                         }
                     }
 
-                    if let Ok(()) = git.rebase_onto_main(&wt_path) {
-                        self.db.update_task_status(task.id, &phase.next, None)?;
-                        info!("task #{} rebase succeeded after fix", task.id);
-                        return Ok(());
+                    if git.rebase_in_progress(&wt_path).unwrap_or(false) {
+                        if let Ok(cont) = git.exec(&wt_path, &["rebase", "--continue"]) {
+                            if !cont.success() {
+                                warn!(
+                                    "task #{} rebase --continue failed: {}",
+                                    task.id,
+                                    cont.combined_output()
+                                );
+                            }
+                        }
+                    }
+
+                    match git.rebase_onto_main(&wt_path) {
+                        Ok(()) => {
+                            self.db.update_task_status(task.id, &phase.next, None)?;
+                            info!("task #{} rebase succeeded after fix", task.id);
+                            return Ok(());
+                        }
+                        Err(e2) => {
+                            rebase_err = e2.to_string();
+                        }
+                    }
+
+                    let mut aborted = false;
+                    if git.rebase_in_progress(&wt_path).unwrap_or(false) {
+                        if let Err(abort_err) = git.rebase_abort(&wt_path) {
+                            warn!("task #{} rebase abort after failed fix: {abort_err}", task.id);
+                        }
+                        aborted = true;
+                    }
+
+                    if aborted {
+                        match git.rebase_onto_main(&wt_path) {
+                            Ok(()) => {
+                                self.db.update_task_status(task.id, &phase.next, None)?;
+                                info!("task #{} rebase succeeded after fix", task.id);
+                                return Ok(());
+                            }
+                            Err(e3) => {
+                                rebase_err = e3.to_string();
+                            }
+                        }
                     }
                 }
 
-                self.fail_or_retry(task, "rebase", &e.to_string())?;
+                self.fail_or_retry(task, "rebase", &rebase_err)?;
             }
         }
 

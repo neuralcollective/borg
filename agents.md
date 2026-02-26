@@ -61,10 +61,11 @@ just r
 Or with systemd:
 
 ```bash
-sudo cp borg.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now borg
-journalctl -u borg -f
+mkdir -p ~/.config/systemd/user
+cp borg.service ~/.config/systemd/user/borg.service
+systemctl --user daemon-reload
+systemctl --user enable --now borg
+journalctl --user -u borg -f
 ```
 
 ## 4. Register a Chat

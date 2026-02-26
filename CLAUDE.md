@@ -27,7 +27,7 @@ just dash              # Build dashboard
 just setup             # Full setup (image + sidecar + dashboard + build)
 ```
 
-Requires Rust stable. Run `sudo systemctl restart borg` to restart the service (not `just r`).
+Requires Rust stable. Use the user service flow (`just install-service` + `just restart`) instead of `sudo systemctl`.
 
 ## Configuration
 
