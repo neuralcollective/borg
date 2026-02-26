@@ -13,20 +13,44 @@ pub const seed_explore_preamble =
 ;
 
 pub const seed_refactor =
-    \\Identify 1-3 concrete, small improvements.
-    \\Focus on refactoring, code quality, and bug fixes — not new features.
+    \\Identify 1-3 concrete, small improvements in code quality. Look for:
+    \\- Dead code: unused functions, variables, imports, exports, or branches
+    \\- Duplication: repeated logic that should be extracted or unified
+    \\- Overly complex functions that do too much and should be split
+    \\- Inconsistent naming, style, or conventions across the codebase
+    \\- Stale, misleading, or redundant comments
+    \\- Error handling that silently swallows failures
+    \\- Magic numbers or strings that should be named constants
+    \\
+    \\Each task should be self-contained and safe to merge independently.
+    \\Do not suggest new features. Skip cosmetic-only changes with no real benefit.
 ;
 
 pub const seed_security =
-    \\Audit for bugs, security vulnerabilities, and reliability issues.
-    \\Look for: race conditions, resource leaks, error handling gaps,
-    \\integer overflows, injection vulnerabilities, undefined behavior.
-    \\Create a task for each real issue. Skip false positives.
+    \\Audit for bugs, security vulnerabilities, and reliability issues. Look for:
+    \\- Race conditions and unsafe concurrent access
+    \\- Resource leaks: memory, file handles, connections not released on all paths
+    \\- Silenced errors (empty catch blocks, ignored return values)
+    \\- Integer overflows, slice out-of-bounds, or unchecked casts
+    \\- Injection vulnerabilities: unsanitised input passed to shell, SQL, or paths
+    \\- Logic errors: off-by-one, wrong operator, inverted condition
+    \\- Type safety gaps: unsafe casts, missing null checks, wrong assumptions
+    \\- Undefined behaviour that passes tests but can corrupt state
+    \\
+    \\Create a task for each real, confirmed issue. Skip false positives and
+    \\theoretical risks that have no realistic exploit path.
 ;
 
 pub const seed_tests =
-    \\Identify gaps in test coverage that matter for correctness.
-    \\Create tasks to add specific test cases targeting individual functions or modules.
+    \\Identify gaps in test coverage that matter for correctness. Look for:
+    \\- Core logic with no tests at all
+    \\- Edge cases not covered: empty input, zero, max values, error paths
+    \\- Functions that are tested only via integration, never in isolation
+    \\- Recent changes or complex code paths with no regression tests
+    \\
+    \\Each task should target a specific function or module with a clear
+    \\description of what cases to cover and why they matter. Skip trivial
+    \\getters, boilerplate, and tests that would only assert mocks.
 ;
 
 pub const seed_features =
