@@ -553,8 +553,33 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Ok(out) if !out.status.success() => {
                             let stderr = String::from_utf8_lossy(&out.stderr);
-                            tracing::warn!("gh pr create failed task #{}: {stderr}", entry.task_id);
-                            db_iq.update_queue_status(entry.id, "failed").ok();
+                            // If PR already exists, extract its URL and proceed with merge
+                            let existing_url = stderr.lines()
+                                .find(|l| l.trim().starts_with("https://"))
+                                .map(|l| l.trim().to_string());
+                            if let Some(pr_url) = existing_url {
+                                tracing::info!("task #{} PR already exists: {pr_url}", entry.task_id);
+                                if auto_merge {
+                                    let merge_out = tokio::process::Command::new("gh")
+                                        .args(["pr", "merge", "--squash", "--auto", "--delete-branch", &pr_url])
+                                        .current_dir(&entry.repo_path)
+                                        .output()
+                                        .await;
+                                    if let Ok(m) = merge_out {
+                                        if m.status.success() {
+                                            tracing::info!("task #{} auto-merge queued (existing PR)", entry.task_id);
+                                            db_iq.update_task_status(entry.task_id, "merged", None).ok();
+                                        } else {
+                                            let merr = String::from_utf8_lossy(&m.stderr);
+                                            tracing::warn!("gh pr merge failed (existing PR): {merr}");
+                                        }
+                                    }
+                                }
+                                db_iq.update_queue_status(entry.id, "merging").ok();
+                            } else {
+                                tracing::warn!("gh pr create failed task #{}: {stderr}", entry.task_id);
+                                db_iq.update_queue_status(entry.id, "failed").ok();
+                            }
                         }
                         Ok(out) => {
                             let pr_url = String::from_utf8_lossy(&out.stdout).trim().to_string();
