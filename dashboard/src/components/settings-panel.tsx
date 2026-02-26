@@ -175,6 +175,22 @@ export function SettingsPanel() {
           />
         </Section>
 
+        {/* Git Attribution */}
+        <Section title="Git Attribution">
+          <ToggleField
+            label="Claude Co-author"
+            desc="Include Claude as Co-Authored-By in pipeline commits"
+            value={effective.git_claude_coauthor}
+            onChange={(v) => update("git_claude_coauthor", v)}
+          />
+          <TextField
+            label="User Co-author"
+            desc="Add as Co-Authored-By in commits (e.g. username <email@example.com>)"
+            value={effective.git_user_coauthor}
+            onChange={(v) => update("git_user_coauthor", v)}
+          />
+        </Section>
+
         {/* Per-Repo Settings */}
         <ReposSection />
 
