@@ -1,4 +1,5 @@
 const std = @import("std");
+const prompts = @import("prompts.zig");
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -299,20 +300,9 @@ pub const swe_mode = PipelineMode{
         },
     },
     .seed_modes = &.{
-        .{ .name = "refactoring", .label = "Refactoring", .output_type = .task, .prompt =
-        \\Identify 1-3 concrete, small improvements.
-        \\Focus on refactoring, code quality, and bug fixes — not new features.
-        },
-        .{ .name = "security", .label = "Bug Audit", .output_type = .task, .prompt =
-        \\Audit for bugs, security vulnerabilities, and reliability issues.
-        \\Look for: race conditions, resource leaks, error handling gaps,
-        \\integer overflows, injection vulnerabilities, undefined behavior.
-        \\Create a task for each real issue. Skip false positives.
-        },
-        .{ .name = "tests", .label = "Test Coverage", .output_type = .task, .prompt =
-        \\Identify gaps in test coverage that matter for correctness.
-        \\Create tasks to add specific test cases targeting individual functions or modules.
-        },
+        .{ .name = "refactoring", .label = "Refactoring", .output_type = .task, .prompt = prompts.seed_refactor },
+        .{ .name = "security", .label = "Bug Audit", .output_type = .task, .prompt = prompts.seed_security },
+        .{ .name = "tests", .label = "Test Coverage", .output_type = .task, .prompt = prompts.seed_tests },
         .{ .name = "features", .label = "Feature Discovery", .output_type = .proposal, .prompt =
         \\Suggest 1-3 concrete features that would meaningfully improve this project.
         \\Base your suggestions on actual gaps you found while exploring the code.
