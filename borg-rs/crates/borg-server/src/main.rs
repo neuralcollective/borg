@@ -42,6 +42,7 @@ pub struct AppState {
     pub log_tx: broadcast::Sender<String>,
     pub pipeline_event_tx: broadcast::Sender<PipelineEvent>,
     pub backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>,
+    pub force_restart: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -356,6 +357,8 @@ async fn main() -> anyhow::Result<()> {
         info!("local backend registered (Ollama)");
     }
 
+    let force_restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     let (pipeline, pipeline_rx) = Pipeline::new(Arc::clone(&db), backends.clone(), Arc::clone(&config));
     let pipeline_event_tx = pipeline.event_tx.clone();
     let pipeline = Arc::new(pipeline);
@@ -491,12 +494,36 @@ async fn main() -> anyhow::Result<()> {
     // Self-update detection loop
     if let Some(self_repo) = config.watched_repos.iter().find(|r| r.is_self).cloned() {
         let check_interval = config.remote_check_interval_s as u64;
+        let force_restart_check = Arc::clone(&force_restart);
         tokio::spawn(async move {
             let git = borg_core::git::Git::new(&self_repo.path);
             let mut last_head = git.rev_parse_head().unwrap_or_default();
 
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(check_interval)).await;
+
+                if force_restart_check.load(std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!("Force restart requested via /api/release, rebuilding...");
+                    force_restart_check.store(false, std::sync::atomic::Ordering::Relaxed);
+                    let build = tokio::process::Command::new("cargo")
+                        .args(["build", "--release"])
+                        .current_dir(&self_repo.path)
+                        .status()
+                        .await;
+                    match build {
+                        Ok(s) if s.success() => {
+                            tracing::info!("Release build done, restarting");
+                            let bin = format!("{}/target/release/borg-server", self_repo.path);
+                            use std::os::unix::process::CommandExt;
+                            let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+                            let err = std::process::Command::new(&bin).args(&args[1..]).exec();
+                            tracing::error!("execve failed: {err}");
+                        }
+                        Ok(_) => tracing::error!("Release build failed"),
+                        Err(e) => tracing::error!("Failed to run cargo: {e}"),
+                    }
+                    continue;
+                }
 
                 if let Err(e) = git.fetch_origin() {
                     tracing::warn!("self-update fetch failed: {e}");
@@ -558,6 +585,7 @@ async fn main() -> anyhow::Result<()> {
                 let collector = Arc::new(ChatCollector::new(
                     config.chat_collection_window_ms as u64,
                     config.max_chat_agents,
+                    config.chat_cooldown_ms as u64,
                 ));
 
                 // Flush expired collection windows periodically
@@ -788,6 +816,7 @@ async fn main() -> anyhow::Result<()> {
         log_tx,
         pipeline_event_tx,
         backends,
+        force_restart,
     });
 
     let dashboard_dir = config
@@ -807,6 +836,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/create", post(create_task))
         .route("/api/tasks/:id", get(get_task))
         .route("/api/tasks/:id/retry", post(retry_task))
+        .route("/api/tasks/:id/outputs", get(get_task_outputs_handler))
+        .route("/api/tasks/:id/stream", get(sse_task_stream))
         // Task messages
         .route("/api/tasks/:id/messages", get(get_task_messages))
         .route("/api/tasks/:id/messages", post(post_task_message))
@@ -831,6 +862,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/focus", delete(delete_focus))
         // SSE logs
         .route("/api/logs", get(sse_logs))
+        // Release / restart
+        .route("/api/release", post(post_release))
         // Backend overrides
         .route("/api/tasks/:id/backend", put(put_task_backend))
         .route("/api/repos", get(list_repos_handler))
@@ -1437,4 +1470,50 @@ async fn put_repo_backend(
     let backend = body["backend"].as_str().unwrap_or("").to_string();
     state.db.update_repo_backend(id, &backend).map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn get_task_outputs_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(_) => {
+            let outputs = state.db.get_task_outputs(id).map_err(internal)?;
+            let outputs_json: Vec<TaskOutputJson> =
+                outputs.into_iter().map(TaskOutputJson::from).collect();
+            Ok(Json(json!({ "outputs": outputs_json })))
+        }
+    }
+}
+
+async fn sse_task_stream(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let rx = state.pipeline_event_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(move |msg| {
+        match msg {
+            Ok(evt) if evt.task_id == Some(id) => {
+                let data = serde_json::json!({
+                    "kind": evt.kind,
+                    "message": evt.message,
+                })
+                .to_string();
+                Some(Ok(Event::default().data(data)))
+            }
+            _ => None,
+        }
+    });
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    )
+}
+
+async fn post_release(State(state): State<Arc<AppState>>) -> Json<Value> {
+    state.force_restart.store(true, std::sync::atomic::Ordering::Relaxed);
+    info!("Force restart requested via /api/release");
+    Json(json!({ "ok": true }))
 }

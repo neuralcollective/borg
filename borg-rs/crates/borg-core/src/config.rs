@@ -138,7 +138,7 @@ fn get_u16(key: &str, dotenv: &HashMap<String, String>, default: u16) -> u16 {
 fn resolve_tilde(path: &str) -> String {
     if path.starts_with("~/") {
         if let Ok(home) = std::env::var("HOME") {
-            return format!("{}/{}", home, &path[2..]);
+            return format!("{}/{}", home, path.strip_prefix("~/").unwrap_or(path));
         }
     }
     path.to_string()

@@ -204,6 +204,9 @@ impl Telegram {
 }
 
 fn split_text(text: &str, limit: usize) -> Vec<String> {
+    if limit == 0 {
+        return vec![text.to_string()];
+    }
     if text.len() <= limit {
         return vec![text.to_string()];
     }

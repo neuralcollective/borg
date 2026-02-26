@@ -109,7 +109,7 @@ pub fn swe_mode() -> PipelineMode {
                 name: "lint_fix".into(),
                 label: "Lint".into(),
                 phase_type: PhaseType::LintFix,
-                next: "done".into(),
+                next: "rebase".into(),
                 allow_no_changes: true,
                 priority: 7,
                 ..default_phase()
@@ -302,7 +302,7 @@ pub fn web_mode() -> PipelineMode {
                 name: "lint_fix".into(),
                 label: "Lint".into(),
                 phase_type: PhaseType::LintFix,
-                next: "done".into(),
+                next: "rebase".into(),
                 allow_no_changes: true,
                 priority: 7,
                 ..default_phase()

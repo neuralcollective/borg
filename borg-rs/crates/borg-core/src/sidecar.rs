@@ -227,6 +227,9 @@ fn str_val(v: &Value, key: &str) -> String {
 fn json_escape(s: &str) -> String {
     // serde_json::to_string produces `"..."` including quotes; strip them
     let quoted = serde_json::to_string(s).unwrap_or_default();
+    if quoted.len() < 2 {
+        return String::new();
+    }
     quoted[1..quoted.len() - 1].to_string()
 }
 

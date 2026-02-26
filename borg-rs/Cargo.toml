@@ -17,7 +17,6 @@ serde_json = "1"
 
 # Error handling
 anyhow = "1"
-thiserror = "1"
 
 # Logging/tracing
 tracing = "0.1"
