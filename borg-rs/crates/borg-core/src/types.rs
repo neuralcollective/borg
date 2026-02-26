@@ -85,6 +85,8 @@ pub struct Task {
     pub session_id: String,
     /// Pipeline mode name (e.g. "sweborg", "lawborg", "webborg").
     pub mode: String,
+    /// Agent backend override (e.g. "claude", "codex"). Empty = use global default.
+    pub backend: String,
 }
 
 /// A user-facing proposal that can be promoted to a Task.
@@ -135,6 +137,8 @@ pub struct RepoConfig {
     pub auto_merge: bool,
     /// Optional lint command for the lint_fix phase. Falls back to `.borg/lint.sh`.
     pub lint_cmd: String,
+    /// Agent backend override for this repo. Empty = use global default.
+    pub backend: String,
 }
 
 // ── Phase Config ─────────────────────────────────────────────────────────
@@ -270,4 +274,10 @@ pub struct PhaseOutput {
     pub new_session_id: Option<String>,
     pub raw_stream: String,
     pub success: bool,
+}
+
+impl PhaseOutput {
+    pub fn failed(output: impl Into<String>) -> Self {
+        Self { output: output.into(), new_session_id: None, raw_stream: String::new(), success: false }
+    }
 }

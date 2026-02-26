@@ -4,13 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=shulgin
 WorkingDirectory=/home/shulgin/borg
-ExecStart=/home/shulgin/borg/zig-out/bin/borg
+ExecStart=/home/shulgin/borg/borg-rs/target/release/borg-server
 Restart=always
 RestartSec=5
 Environment=HOME=/home/shulgin
 Environment=PATH=/home/shulgin/.local/bin:/home/shulgin/go/bin:/home/shulgin/.cargo/bin:/home/shulgin/.bun/bin:/home/shulgin/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

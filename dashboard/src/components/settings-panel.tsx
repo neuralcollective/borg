@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useSettings, useStatus, updateSettings, type Settings } from "@/lib/api";
+import { useSettings, useStatus, updateSettings, useRepos, setRepoBackend, type Settings } from "@/lib/api";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -134,6 +134,17 @@ export function SettingsPanel() {
 
         {/* Agent Settings */}
         <Section title="Agent">
+          <SelectField
+            label="Backend"
+            desc="Default AI provider for pipeline tasks"
+            value={effective.backend}
+            onChange={(v) => update("backend", v)}
+            options={[
+              { value: "claude", label: "Claude (Anthropic)" },
+              { value: "codex", label: "Codex (OpenAI)" },
+              { value: "local", label: "Local (Ollama)" },
+            ]}
+          />
           <TextField
             label="Model"
             desc="Claude model ID for agent tasks"
@@ -163,6 +174,9 @@ export function SettingsPanel() {
             onChange={(v) => update("assistant_name", v)}
           />
         </Section>
+
+        {/* Per-Repo Settings */}
+        <ReposSection />
 
         {/* System Info (read-only) */}
         <Section title="System">
@@ -198,6 +212,39 @@ export function SettingsPanel() {
         )}
       </div>
     </div>
+  );
+}
+
+function ReposSection() {
+  const { data: repos } = useRepos();
+  const queryClient = useQueryClient();
+
+  if (!repos || repos.length === 0) return null;
+
+  return (
+    <Section title="Repos">
+      {repos.map((repo) => (
+        <div key={repo.id} className="flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <Label>{repo.name}</Label>
+            <Desc>{repo.mode}{repo.auto_merge ? " · auto-merge" : " · manual"}</Desc>
+          </div>
+          <select
+            value={repo.backend ?? ""}
+            onChange={async (e) => {
+              await setRepoBackend(repo.id, e.target.value);
+              queryClient.invalidateQueries({ queryKey: ["repos"] });
+            }}
+            className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+          >
+            <option value="">default</option>
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+            <option value="local">local</option>
+          </select>
+        </div>
+      ))}
+    </Section>
   );
 }
 
@@ -297,6 +344,32 @@ function TextField({ label, desc, value, onChange }: {
         onChange={(e) => onChange(e.target.value)}
         className="w-56 rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
       />
+    </div>
+  );
+}
+
+function SelectField({ label, desc, value, onChange, options }: {
+  label: string;
+  desc: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <Label>{label}</Label>
+        <Desc>{desc}</Desc>
+      </div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
     </div>
   );
 }

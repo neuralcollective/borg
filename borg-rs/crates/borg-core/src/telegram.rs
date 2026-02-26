@@ -188,6 +188,19 @@ impl Telegram {
         }
         Ok(())
     }
+
+    pub async fn send_typing(&self, chat_id: i64) -> Result<()> {
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "action": "typing",
+        });
+        self.client
+            .post(self.api_url("sendChatAction"))
+            .json(&body)
+            .send()
+            .await?;
+        Ok(())
+    }
 }
 
 fn split_text(text: &str, limit: usize) -> Vec<String> {

@@ -43,30 +43,6 @@ impl CodexBackend {
             .unwrap_or(false)
     }
 
-    fn build_instruction(&self, task: &Task, phase: &PhaseConfig, ctx: &PhaseContext) -> String {
-        let mut instruction = String::new();
-
-        if phase.include_task_context {
-            instruction.push_str(&format!("Task: {}\n\n{}\n\n---\n\n", task.title, task.description));
-        }
-
-        instruction.push_str(&phase.instruction);
-
-        if !task.last_error.is_empty() && !phase.error_instruction.is_empty() {
-            let error_section = phase.error_instruction.replace("{ERROR}", &task.last_error);
-            instruction.push('\n');
-            instruction.push_str(&error_section);
-        }
-
-        if !ctx.pending_messages.is_empty() {
-            instruction.push_str("\n\n---\nThe following messages were sent by the user or director while this task was queued:\n");
-            for (role, content) in &ctx.pending_messages {
-                instruction.push_str(&format!("\n[{}]: {}", role, content));
-            }
-        }
-
-        instruction
-    }
 }
 
 #[async_trait]
@@ -81,7 +57,7 @@ impl AgentBackend for CodexBackend {
             bail!("codex binary not found: {}", self.codex_bin);
         }
 
-        let instruction = self.build_instruction(task, phase, &ctx);
+        let instruction = crate::instruction::build_instruction(task, phase, &ctx, None);
 
         info!(
             task_id = task.id,
@@ -90,16 +66,19 @@ impl AgentBackend for CodexBackend {
             "spawning codex subprocess"
         );
 
-        let mut child = tokio::process::Command::new(&self.codex_bin)
-            .arg("--model")
+        let mut cmd = tokio::process::Command::new(&self.codex_bin);
+        cmd.arg("--model")
             .arg(&self.model)
             .arg("--approval-mode")
             .arg("full-auto")
             .arg(&instruction)
             .current_dir(&ctx.worktree_path)
-            .env("OPENAI_API_KEY", &self.api_key)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if !self.api_key.is_empty() {
+            cmd.env("OPENAI_API_KEY", &self.api_key);
+        }
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("failed to spawn codex binary: {}", self.codex_bin))?;
 

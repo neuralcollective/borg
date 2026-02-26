@@ -2,15 +2,15 @@
 
 # Run all unit tests
 t:
-    zig build test
+    cd borg-rs && cargo test
 
-# Build the binary
+# Build release binary
 b:
-    zig build
+    cd borg-rs && cargo build --release
 
-# Build and run
+# Build and run (debug)
 r:
-    zig build && ./zig-out/bin/borg
+    cd borg-rs && cargo build && ./target/debug/borg-server
 
 # Build dashboard
 dash:
@@ -27,9 +27,23 @@ sidecar:
 # Full setup: build everything
 setup: image sidecar dash b
 
-# Run tests with AddressSanitizer
-san:
-    zig build test-asan
+# Restart the systemd user service
+restart:
+    systemctl --user restart borg
+
+# Build release and restart service
+deploy: b restart
+
+# Test, build, and restart service
+s: t b install-service restart
+
+ship: s
+
+# Install/update the systemd user service file
+install-service:
+    mkdir -p ~/.config/systemd/user
+    cp borg.service ~/.config/systemd/user/borg.service
+    systemctl --user daemon-reload
 
 # Check status via API
 status:

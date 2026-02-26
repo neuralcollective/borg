@@ -11,6 +11,7 @@ export interface Task {
   created_at: string;
   last_error?: string;
   mode?: string;
+  backend?: string;
 }
 
 export interface TaskDetail extends Task {

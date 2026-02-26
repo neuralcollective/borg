@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -27,7 +27,7 @@ pub struct PipelineEvent {
 
 pub struct Pipeline {
     pub db: Arc<Db>,
-    pub backend: Arc<dyn AgentBackend>,
+    pub backends: HashMap<String, Arc<dyn AgentBackend>>,
     pub config: Arc<Config>,
     pub sandbox: Sandbox,
     pub event_tx: broadcast::Sender<PipelineEvent>,
@@ -38,13 +38,13 @@ pub struct Pipeline {
 impl Pipeline {
     pub fn new(
         db: Arc<Db>,
-        backend: Arc<dyn AgentBackend>,
+        backends: HashMap<String, Arc<dyn AgentBackend>>,
         config: Arc<Config>,
     ) -> (Self, broadcast::Receiver<PipelineEvent>) {
         let (tx, rx) = broadcast::channel(256);
         let p = Self {
             db,
-            backend,
+            backends,
             config,
             sandbox: Sandbox,
             event_tx: tx,
@@ -54,11 +54,95 @@ impl Pipeline {
         (p, rx)
     }
 
+    // ── Backend resolution ────────────────────────────────────────────────
+
+    /// Select the agent backend for a task: task override → repo override → global → any.
+    fn resolve_backend(&self, task: &Task) -> Arc<dyn AgentBackend> {
+        if !task.backend.is_empty() {
+            if let Some(b) = self.backends.get(&task.backend) {
+                return Arc::clone(b);
+            }
+        }
+        if let Some(repo) = self.config.watched_repos.iter().find(|r| r.path == task.repo_path) {
+            if !repo.backend.is_empty() {
+                if let Some(b) = self.backends.get(&repo.backend) {
+                    return Arc::clone(b);
+                }
+            }
+        }
+        if let Some(b) = self.backends.get(&self.config.backend) {
+            return Arc::clone(b);
+        }
+        self.backends.values().next().map(Arc::clone)
+            .expect("no backends configured")
+    }
+
+    // ── Small helpers ─────────────────────────────────────────────────────
+
     pub fn active_agent_count(&self) -> usize {
-        // Can't block here; return 0 as a best-effort non-blocking check.
-        // Callers that need an accurate count should use try_lock.
         self.in_flight.try_lock().map(|g| g.len()).unwrap_or(0)
     }
+
+    /// Resolve repo config for a task, filling in defaults if not found.
+    fn repo_config(&self, task: &Task) -> RepoConfig {
+        self.config
+            .watched_repos
+            .iter()
+            .find(|r| r.path == task.repo_path)
+            .cloned()
+            .unwrap_or_else(|| RepoConfig {
+                path: task.repo_path.clone(),
+                test_cmd: String::new(),
+                prompt_file: String::new(),
+                mode: task.mode.clone(),
+                is_self: false,
+                auto_merge: true,
+                lint_cmd: String::new(),
+                backend: String::new(),
+            })
+    }
+
+    /// Build a PhaseContext for a task phase.
+    fn make_context(
+        &self,
+        task: &Task,
+        worktree_path: String,
+        session_dir: String,
+        pending_messages: Vec<(String, String)>,
+    ) -> PhaseContext {
+        PhaseContext {
+            task: task.clone(),
+            repo_config: self.repo_config(task),
+            session_dir,
+            worktree_path,
+            oauth_token: self.config.oauth_token.clone(),
+            model: self.config.model.clone(),
+            pending_messages,
+        }
+    }
+
+    /// Increment attempt and set the retry status, or fail if attempts exhausted.
+    fn fail_or_retry(&self, task: &Task, retry_status: &str, error: &str) -> Result<()> {
+        self.db.increment_attempt(task.id)?;
+        let current = self.db.get_task(task.id)?.unwrap_or_else(|| task.clone());
+        if current.attempt >= current.max_attempts {
+            self.db.update_task_status(task.id, "failed", Some(error))?;
+        } else {
+            self.db.update_task_status(task.id, retry_status, Some(error))?;
+        }
+        Ok(())
+    }
+
+    /// Git author pair from config, or None if not configured.
+    fn git_author(&self) -> Option<(&str, &str)> {
+        if self.config.git_author_name.is_empty() {
+            None
+        } else {
+            Some((self.config.git_author_name.as_str(), self.config.git_author_email.as_str()))
+        }
+    }
+
+    // ── Main loop ─────────────────────────────────────────────────────────
 
     /// Main tick: dispatch ready tasks and run seed if idle.
     pub async fn tick(self: Arc<Self>) -> Result<()> {
@@ -73,7 +157,6 @@ impl Pipeline {
                 break;
             }
 
-            // Skip if already in-flight
             {
                 let mut guard = self.in_flight.lock().await;
                 if guard.contains(&task.id) {
@@ -99,6 +182,8 @@ impl Pipeline {
 
         Ok(())
     }
+
+    // ── Task dispatch ─────────────────────────────────────────────────────
 
     /// Process a single task through its current phase.
     async fn process_task(self: Arc<Self>, task: Task) -> Result<()> {
@@ -132,6 +217,8 @@ impl Pipeline {
         Ok(())
     }
 
+    // ── Phase handlers ────────────────────────────────────────────────────
+
     /// Setup phase: create git worktree and advance to first agent phase.
     async fn setup_branch(&self, task: &Task, mode: &PipelineMode) -> Result<()> {
         if !mode.uses_git_worktrees {
@@ -145,17 +232,13 @@ impl Pipeline {
         }
 
         let git = Git::new(&task.repo_path);
-
-        // Best-effort fetch
         let _ = git.fetch_origin();
 
         let branch = format!("task-{}", task.id);
         let wt_dir = format!("{}/.worktrees", task.repo_path);
         std::fs::create_dir_all(&wt_dir).ok();
-
         let wt_path = format!("{wt_dir}/task-{}", task.id);
 
-        // Clean up any stale worktree
         let _ = git.remove_worktree(&wt_path);
         std::fs::remove_dir_all(&wt_path).ok();
         let _ = git.exec(&task.repo_path, &["worktree", "prune"]);
@@ -166,15 +249,12 @@ impl Pipeline {
             &["worktree", "add", &wt_path, "-b", &branch, "origin/main"],
         )?;
         if !wt_result.success() {
-            self.db
-                .update_task_status(task.id, "failed", Some(&wt_result.stderr))?;
+            self.db.update_task_status(task.id, "failed", Some(&wt_result.stderr))?;
             return Ok(());
         }
 
-        // Store branch name
         self.db.update_task_branch(task.id, &branch)?;
 
-        // Advance to first non-setup phase
         let next = mode
             .phases
             .iter()
@@ -184,10 +264,7 @@ impl Pipeline {
 
         self.db.update_task_status(task.id, next, None)?;
 
-        info!(
-            "created worktree {} (branch {}) for task #{}",
-            wt_path, branch, task.id
-        );
+        info!("created worktree {} (branch {}) for task #{}", wt_path, branch, task.id);
         self.emit(PipelineEvent {
             kind: "task_phase".into(),
             task_id: Some(task.id),
@@ -213,22 +290,6 @@ impl Pipeline {
         let session_dir = format!("store/sessions/task-{}", task.id);
         std::fs::create_dir_all(&session_dir).ok();
 
-        let repo_config = self
-            .config
-            .watched_repos
-            .iter()
-            .find(|r| r.path == task.repo_path)
-            .cloned()
-            .unwrap_or_else(|| RepoConfig {
-                path: task.repo_path.clone(),
-                test_cmd: String::new(),
-                prompt_file: String::new(),
-                mode: task.mode.clone(),
-                is_self: false,
-                auto_merge: true,
-                lint_cmd: String::new(),
-            });
-
         let pending_messages = self
             .db
             .get_pending_task_messages(task.id)
@@ -237,39 +298,25 @@ impl Pipeline {
             .map(|m| (m.role, m.content))
             .collect::<Vec<_>>();
 
-        let ctx = PhaseContext {
-            task: task.clone(),
-            repo_config,
-            session_dir,
-            worktree_path: wt_path.clone(),
-            oauth_token: self.config.oauth_token.clone(),
-            model: self.config.model.clone(),
-            pending_messages,
-        };
-
-        let had_pending_messages = !ctx.pending_messages.is_empty();
+        let ctx = self.make_context(task, wt_path.clone(), session_dir, pending_messages);
+        let had_pending = !ctx.pending_messages.is_empty();
+        let test_cmd = ctx.repo_config.test_cmd.clone();
 
         info!("running {} phase for task #{}", phase.name, task.id);
 
         let result = self
-            .backend
+            .resolve_backend(task)
             .run_phase(task, phase, ctx)
             .await
             .unwrap_or_else(|e| {
                 error!("backend.run_phase for task #{}: {e}", task.id);
-                PhaseOutput {
-                    output: String::new(),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                }
+                PhaseOutput::failed(String::new())
             });
 
         if let Some(ref sid) = result.new_session_id {
             self.db.update_task_session(task.id, sid).ok();
         }
-
-        if had_pending_messages {
+        if had_pending {
             self.db.mark_messages_delivered(task.id, &phase.name).ok();
         }
 
@@ -281,13 +328,9 @@ impl Pipeline {
         self.emit(PipelineEvent {
             kind: "task_output".into(),
             task_id: Some(task.id),
-            message: format!(
-                "task #{} phase {} completed (success={})",
-                task.id, phase.name, result.success
-            ),
+            message: format!("task #{} phase {} completed (success={})", task.id, phase.name, result.success),
         });
 
-        // Check artifact
         if let Some(ref artifact) = phase.check_artifact {
             let artifact_path = format!("{wt_path}/{artifact}");
             if !std::path::Path::new(&artifact_path).exists() && result.output.is_empty() {
@@ -300,102 +343,37 @@ impl Pipeline {
             }
         }
 
-        // Commit if configured
         if phase.commits && mode.uses_git_worktrees {
             let git = Git::new(&task.repo_path);
-            let author = if !self.config.git_author_name.is_empty() {
-                Some((
-                    self.config.git_author_name.as_str(),
-                    self.config.git_author_email.as_str(),
-                ))
-            } else {
-                None
-            };
-            match git.commit_all(&wt_path, &phase.commit_message, author) {
+            match git.commit_all(&wt_path, &phase.commit_message, self.git_author()) {
                 Ok(changed) => {
                     if !changed && !phase.allow_no_changes {
-                        self.db.update_task_status(
-                            task.id,
-                            "failed",
-                            Some("agent made no changes"),
-                        )?;
+                        self.db.update_task_status(task.id, "failed", Some("agent made no changes"))?;
                         return Ok(());
                     }
                 }
-                Err(e) => {
-                    warn!("commit_all for task #{}: {}", task.id, e);
-                }
+                Err(e) => warn!("commit_all for task #{}: {}", task.id, e),
             }
         }
 
-        // Run tests if configured
-        if phase.runs_tests && mode.uses_test_cmd {
-            let test_cmd = self
-                .config
-                .watched_repos
-                .iter()
-                .find(|r| r.path == task.repo_path)
-                .map(|r| r.test_cmd.clone())
-                .unwrap_or_default();
-
-            if !test_cmd.is_empty() {
-                let test_result = self.run_test_command(&wt_path, &test_cmd).await;
-                match test_result {
-                    Ok(ref out) if out.exit_code == 0 => {
-                        // Tests pass — fall through to advance phase
+        if phase.runs_tests && mode.uses_test_cmd && !test_cmd.is_empty() {
+            let test_result = self.run_test_command(&wt_path, &test_cmd).await;
+            match test_result {
+                Ok(ref out) if out.exit_code == 0 => {}
+                Ok(out) => {
+                    let error_msg = format!("{}\n{}", out.stdout, out.stderr);
+                    if phase.has_qa_fix_routing && self.error_is_in_test_files(&out.stderr) {
+                        self.db.update_task_status(task.id, "qa_fix", Some(&error_msg))?;
+                    } else {
+                        self.fail_or_retry(task, "retry", &error_msg)?;
                     }
-                    Ok(out) => {
-                        let error_msg = format!("{}\n{}", out.stdout, out.stderr);
-
-                        if phase.has_qa_fix_routing && self.error_is_in_test_files(&out.stderr) {
-                            self.db
-                                .update_task_status(task.id, "qa_fix", Some(&error_msg))?;
-                            return Ok(());
-                        }
-
-                        self.db.increment_attempt(task.id)?;
-
-                        let current = self
-                            .db
-                            .get_task(task.id)?
-                            .unwrap_or_else(|| task.clone());
-
-                        if current.attempt >= current.max_attempts {
-                            self.db.update_task_status(task.id, "failed", Some(&error_msg))?;
-                        } else {
-                            self.db.update_task_status(task.id, "retry", Some(&error_msg))?;
-                        }
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        warn!("test command error for task #{}: {}", task.id, e);
-                    }
+                    return Ok(());
                 }
+                Err(e) => warn!("test command error for task #{}: {}", task.id, e),
             }
         }
 
-        // Advance to next phase
-        let next = phase.next.as_str();
-        if next == "done" {
-            self.db.update_task_status(task.id, "done", None)?;
-            if mode.integration == IntegrationType::GitPr {
-                let branch = format!("task-{}", task.id);
-                if let Err(e) = self.db.enqueue(task.id, &branch, &task.repo_path, 0) {
-                    warn!("enqueue for task #{}: {}", task.id, e);
-                } else {
-                    info!("task #{} done, queued for integration", task.id);
-                }
-            }
-        } else {
-            self.db.update_task_status(task.id, next, None)?;
-        }
-
-        self.emit(PipelineEvent {
-            kind: "task_phase".into(),
-            task_id: Some(task.id),
-            message: format!("task #{} advanced to phase '{}'", task.id, next),
-        });
-
+        self.advance_phase(task, phase, mode)?;
         Ok(())
     }
 
@@ -403,62 +381,33 @@ impl Pipeline {
     async fn run_rebase_phase(&self, task: &Task, phase: &PhaseConfig, _mode: &PipelineMode) -> Result<()> {
         let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
         let git = Git::new(&task.repo_path);
-
         git.fetch_origin().ok();
 
         match git.rebase_onto_main(&wt_path) {
             Ok(()) => {
                 self.db.update_task_status(task.id, &phase.next, None)?;
                 info!("task #{} rebase succeeded", task.id);
-                return Ok(());
             }
             Err(e) => {
                 if !phase.fix_instruction.is_empty() {
                     info!("task #{} rebase failed, running fix agent", task.id);
-                    let err_str = e.to_string();
-                    let fix_instruction = phase.fix_instruction.replace("{ERROR}", &err_str);
 
                     let fix_phase = PhaseConfig {
                         name: "rebase_fix".into(),
                         label: "Rebase Fix".into(),
-                        instruction: fix_instruction,
+                        instruction: phase.fix_instruction.replace("{ERROR}", &e.to_string()),
                         fresh_session: true,
                         allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
                         ..Default::default()
                     };
 
                     let session_dir = format!("store/sessions/task-{}", task.id);
-                    let repo_config = self
-                        .config
-                        .watched_repos
-                        .iter()
-                        .find(|r| r.path == task.repo_path)
-                        .cloned()
-                        .unwrap_or_else(|| crate::types::RepoConfig {
-                            path: task.repo_path.clone(),
-                            test_cmd: String::new(),
-                            prompt_file: String::new(),
-                            mode: task.mode.clone(),
-                            is_self: false,
-                            auto_merge: true,
-                            lint_cmd: String::new(),
-                        });
+                    let ctx = self.make_context(task, wt_path.clone(), session_dir, Vec::new());
 
-                    let ctx = PhaseContext {
-                        task: task.clone(),
-                        repo_config,
-                        session_dir,
-                        worktree_path: wt_path.clone(),
-                        oauth_token: self.config.oauth_token.clone(),
-                        model: self.config.model.clone(),
-                        pending_messages: Vec::new(),
-                    };
-
-                    if let Err(fix_err) = self.backend.run_phase(task, &fix_phase, ctx).await {
+                    if let Err(fix_err) = self.resolve_backend(task).run_phase(task, &fix_phase, ctx).await {
                         warn!("task #{} fix agent error: {fix_err}", task.id);
                     }
 
-                    // Try rebase again after fix
                     if let Ok(()) = git.rebase_onto_main(&wt_path) {
                         self.db.update_task_status(task.id, &phase.next, None)?;
                         info!("task #{} rebase succeeded after fix", task.id);
@@ -466,18 +415,7 @@ impl Pipeline {
                     }
                 }
 
-                self.db.increment_attempt(task.id)?;
-                let current = self
-                    .db
-                    .get_task(task.id)?
-                    .unwrap_or_else(|| task.clone());
-                if current.attempt >= current.max_attempts {
-                    self.db
-                        .update_task_status(task.id, "failed", Some(&e.to_string()))?;
-                } else {
-                    self.db
-                        .update_task_status(task.id, "rebase", Some(&e.to_string()))?;
-                }
+                self.fail_or_retry(task, "rebase", &e.to_string())?;
             }
         }
 
@@ -509,6 +447,8 @@ minimal changes needed. After editing, do not run the linter yourself — the pi
             return Ok(());
         }
 
+        let session_dir = format!("store/sessions/task-{}", task.id);
+
         for fix_attempt in 0..2u32 {
             let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)
                 .trim()
@@ -531,46 +471,16 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 ..PhaseConfig::default()
             };
 
-            let session_dir = format!("store/sessions/task-{}", task.id);
-            let repo_config = self
-                .config
-                .watched_repos
-                .iter()
-                .find(|r| r.path == task.repo_path)
-                .cloned()
-                .unwrap_or_else(|| RepoConfig {
-                    path: task.repo_path.clone(),
-                    test_cmd: String::new(),
-                    prompt_file: String::new(),
-                    mode: task.mode.clone(),
-                    is_self: false,
-                    auto_merge: true,
-                    lint_cmd: String::new(),
+            let ctx = self.make_context(task, wt_path.clone(), session_dir.clone(), Vec::new());
+
+            let agent_result = self
+                .resolve_backend(task)
+                .run_phase(task, &fix_phase, ctx)
+                .await
+                .unwrap_or_else(|e| {
+                    error!("lint-fix agent for task #{}: {e}", task.id);
+                    PhaseOutput::failed(String::new())
                 });
-
-            let ctx = PhaseContext {
-                task: task.clone(),
-                repo_config,
-                session_dir,
-                worktree_path: wt_path.clone(),
-                oauth_token: self.config.oauth_token.clone(),
-                model: self.config.model.clone(),
-                pending_messages: Vec::new(),
-            };
-
-            let agent_result =
-                self.backend
-                    .run_phase(task, &fix_phase, ctx)
-                    .await
-                    .unwrap_or_else(|e| {
-                        error!("lint-fix agent for task #{}: {e}", task.id);
-                        PhaseOutput {
-                            output: String::new(),
-                            new_session_id: None,
-                            raw_stream: String::new(),
-                            success: false,
-                        }
-                    });
 
             if let Some(ref sid) = agent_result.new_session_id {
                 self.db.update_task_session(task.id, sid).ok();
@@ -586,15 +496,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .ok();
 
             let git = Git::new(&task.repo_path);
-            let author = if !self.config.git_author_name.is_empty() {
-                Some((
-                    self.config.git_author_name.as_str(),
-                    self.config.git_author_email.as_str(),
-                ))
-            } else {
-                None
-            };
-            let _ = git.commit_all(&wt_path, "fix: lint errors", author);
+            let _ = git.commit_all(&wt_path, "fix: lint errors", self.git_author());
 
             lint_out = self.run_test_command(&wt_path, &lint_cmd).await?;
             if lint_out.exit_code == 0 {
@@ -609,20 +511,13 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         }
 
         let error_msg = format!("{}\n{}", lint_out.stdout, lint_out.stderr);
-        self.db.increment_attempt(task.id)?;
-        let current = self.db.get_task(task.id)?.unwrap_or_else(|| task.clone());
-        if current.attempt >= current.max_attempts {
-            self.db
-                .update_task_status(task.id, "failed", Some(error_msg.trim()))?;
-        } else {
-            self.db
-                .update_task_status(task.id, "lint_fix", Some(error_msg.trim()))?;
-        }
-
+        self.fail_or_retry(task, "lint_fix", error_msg.trim())?;
         Ok(())
     }
 
-    /// Advance a task to the next phase (or done → enqueue for integration).
+    // ── Phase transition ──────────────────────────────────────────────────
+
+    /// Advance a task to the next phase, or enqueue for integration when done.
     fn advance_phase(&self, task: &Task, phase: &PhaseConfig, mode: &PipelineMode) -> Result<()> {
         let next = phase.next.as_str();
         if next == "done" {
@@ -638,10 +533,17 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         } else {
             self.db.update_task_status(task.id, next, None)?;
         }
+        self.emit(PipelineEvent {
+            kind: "task_phase".into(),
+            task_id: Some(task.id),
+            message: format!("task #{} advanced to '{}'", task.id, next),
+        });
         Ok(())
     }
 
-    /// Resolve lint command: explicit repo config → `.borg/lint.sh` in worktree.
+    // ── Lint helpers ──────────────────────────────────────────────────────
+
+    /// Resolve lint command: explicit repo config → `.borg/lint.sh` fallback.
     fn repo_lint_cmd(&self, repo_path: &str, wt_path: &str) -> Option<String> {
         if let Some(repo) = self.config.watched_repos.iter().find(|r| r.path == repo_path) {
             if !repo.lint_cmd.is_empty() {
@@ -655,7 +557,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         None
     }
 
-    /// Run the test command in a given directory.
+    // ── Test runner ───────────────────────────────────────────────────────
+
     async fn run_test_command(&self, dir: &str, cmd: &str) -> Result<TestOutput> {
         let output = tokio::process::Command::new("sh")
             .arg("-c")
@@ -672,13 +575,14 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         })
     }
 
-    /// Check if test errors are in test files (for QA fix routing).
     fn error_is_in_test_files(&self, error: &str) -> bool {
-        let test_patterns = ["_test.", "/tests/", "test_", ".test.", "spec."];
-        test_patterns.iter().any(|p| error.contains(p))
+        ["_test.", "/tests/", "test_", ".test.", "spec."]
+            .iter()
+            .any(|p| error.contains(p))
     }
 
-    /// Seed tasks if the pipeline is idle.
+    // ── Seed ─────────────────────────────────────────────────────────────
+
     async fn seed_if_idle(&self) -> Result<()> {
         if !self.config.continuous_mode {
             return Ok(());
@@ -689,12 +593,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let last = self
-            .last_seed_secs
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let cooldown = self.config.pipeline_seed_cooldown_s;
-
-        if now - last < cooldown {
+        let last = self.last_seed_secs.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last < self.config.pipeline_seed_cooldown_s {
             return Ok(());
         }
 
@@ -703,8 +603,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             return Ok(());
         }
 
-        self.last_seed_secs
-            .store(now, std::sync::atomic::Ordering::Relaxed);
+        self.last_seed_secs.store(now, std::sync::atomic::Ordering::Relaxed);
         info!("seed scan starting (idle pipeline)");
 
         for repo in &self.config.watched_repos {
@@ -741,6 +640,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             created_at: Utc::now(),
             session_id: String::new(),
             mode: mode_name.to_string(),
+            backend: String::new(),
         };
 
         let phase = PhaseConfig {
@@ -763,14 +663,19 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         };
 
         info!("running seed '{}' for {}", seed_cfg.name, repo.path);
-        let result = self.backend.run_phase(&task, &phase, ctx).await?;
+        let result = self.resolve_backend(&task).run_phase(&task, &phase, ctx).await?;
 
         self.parse_seed_output(&result.output, &repo.path, mode_name, seed_cfg.output_type)?;
-
         Ok(())
     }
 
-    fn parse_seed_output(&self, output: &str, repo_path: &str, mode_name: &str, output_type: SeedOutputType) -> Result<()> {
+    fn parse_seed_output(
+        &self,
+        output: &str,
+        repo_path: &str,
+        mode_name: &str,
+        output_type: SeedOutputType,
+    ) -> Result<()> {
         match output_type {
             SeedOutputType::Task => {
                 for block in extract_blocks(output, "TASK_START", "TASK_END") {
@@ -794,6 +699,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         created_at: Utc::now(),
                         session_id: String::new(),
                         mode: mode_name.to_string(),
+                        backend: String::new(),
                     };
                     match self.db.insert_task(&task) {
                         Ok(id) => info!("seed created task #{id}: {}", task.title),
@@ -834,10 +740,14 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         Ok(())
     }
 
+    // ── Event broadcast ───────────────────────────────────────────────────
+
     fn emit(&self, event: PipelineEvent) {
         let _ = self.event_tx.send(event);
     }
 }
+
+// ── Private helpers ───────────────────────────────────────────────────────────
 
 struct TestOutput {
     stdout: String,
@@ -845,7 +755,7 @@ struct TestOutput {
     exit_code: i32,
 }
 
-fn extract_blocks<'a>(text: &'a str, start_marker: &str, end_marker: &str) -> Vec<String> {
+fn extract_blocks(text: &str, start_marker: &str, end_marker: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut remaining = text;
     while let Some(start) = remaining.find(start_marker) {

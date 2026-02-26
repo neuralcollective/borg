@@ -65,6 +65,7 @@ export interface Settings {
   pipeline_seed_cooldown_s: number;
   pipeline_tick_s: number;
   model: string;
+  backend: string;
   container_memory_mb: number;
   assistant_name: string;
   pipeline_max_agents: number;
@@ -135,6 +136,42 @@ export async function reopenProposal(id: number): Promise<void> {
 
 export async function retryTask(id: number): Promise<void> {
   const res = await fetch(`/api/tasks/${id}/retry`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function setTaskBackend(id: number, backend: string): Promise<void> {
+  const res = await fetch(`/api/tasks/${id}/backend`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backend }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export interface RepoInfo {
+  id: number;
+  path: string;
+  name: string;
+  mode: string;
+  backend: string | null;
+  test_cmd: string;
+  auto_merge: boolean;
+}
+
+export function useRepos() {
+  return useQuery<RepoInfo[]>({
+    queryKey: ["repos"],
+    queryFn: () => fetchJson("/api/repos"),
+    staleTime: 30_000,
+  });
+}
+
+export async function setRepoBackend(id: number, backend: string): Promise<void> {
+  const res = await fetch(`/api/repos/${id}/backend`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backend }),
+  });
   if (!res.ok) throw new Error(`${res.status}`);
 }
 

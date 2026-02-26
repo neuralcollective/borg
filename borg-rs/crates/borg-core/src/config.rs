@@ -20,6 +20,7 @@ pub struct Config {
     pub pipeline_repo: String,
     pub pipeline_test_cmd: String,
     pub pipeline_lint_cmd: String,
+    pub backend: String,
     pub pipeline_admin_chat: String,
     pub release_interval_mins: u32,
     pub continuous_mode: bool,
@@ -58,6 +59,18 @@ pub struct Config {
     pub git_via_borg: bool,
 
     pub watched_repos: Vec<RepoConfig>,
+
+    // Codex
+    pub codex_api_key: String,
+    pub codex_credentials_path: String,
+
+    // Sidecar (Discord + WhatsApp)
+    pub discord_token: String,
+    pub wa_auth_dir: String,
+    pub wa_disabled: bool,
+
+    // Observer
+    pub observer_config: String,
 }
 
 fn parse_dotenv() -> HashMap<String, String> {
@@ -127,6 +140,20 @@ fn resolve_tilde(path: &str) -> String {
     path.to_string()
 }
 
+pub fn codex_has_credentials(path: &str) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    v.get("tokens")
+        .and_then(|t| t.get("access_token"))
+        .and_then(|t| t.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+}
+
 fn read_oauth_from_credentials(path: &str) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
@@ -161,6 +188,7 @@ fn parse_watched_repos(
             is_self: true,
             auto_merge: true,
             lint_cmd: pipeline_lint_cmd.to_string(),
+            backend: String::new(),
         });
     }
 
@@ -201,6 +229,7 @@ fn parse_watched_repos(
             is_self: false,
             auto_merge,
             lint_cmd: String::new(),
+            backend: String::new(),
         });
     }
 
@@ -213,10 +242,16 @@ impl Config {
 
         let home = std::env::var("HOME").unwrap_or_default();
         let default_credentials = format!("{}/.claude/.credentials.json", home);
+        let default_codex_credentials = format!("{}/.codex/auth.json", home);
 
         let credentials_path =
             get_str("CREDENTIALS_PATH", &dotenv, &default_credentials);
         let credentials_path = resolve_tilde(&credentials_path);
+
+        let codex_credentials_path =
+            get_str("CODEX_CREDENTIALS_PATH", &dotenv, &default_codex_credentials);
+        let codex_credentials_path = resolve_tilde(&codex_credentials_path);
+        let codex_api_key = get_str("OPENAI_API_KEY", &dotenv, "");
 
         // OAuth token: env/dotenv first, then credentials file
         let oauth_token = get("CLAUDE_CODE_OAUTH_TOKEN", &dotenv)
@@ -227,6 +262,7 @@ impl Config {
         let pipeline_repo = get_str("PIPELINE_REPO", &dotenv, "");
         let pipeline_test_cmd = get_str("PIPELINE_TEST_CMD", &dotenv, "");
         let pipeline_lint_cmd = get_str("PIPELINE_LINT_CMD", &dotenv, "");
+        let backend = get_str("BACKEND", &dotenv, "claude");
         let pipeline_mode = get_str("PIPELINE_MODE", &dotenv, "sweborg");
         let watched_raw = get_str("WATCHED_REPOS", &dotenv, "");
 
@@ -245,13 +281,14 @@ impl Config {
             trigger_pattern: get_str("TRIGGER_PATTERN", &dotenv, "@Borg"),
             data_dir: get_str("DATA_DIR", &dotenv, "store"),
             container_image: get_str("CONTAINER_IMAGE", &dotenv, "borg-agent"),
-            model: get_str("MODEL", &dotenv, "claude-opus-4-5"),
+            model: get_str("MODEL", &dotenv, "claude-sonnet-4-6"),
             credentials_path,
             session_max_age_hours: get_i64("SESSION_MAX_AGE_HOURS", &dotenv, 24),
             max_consecutive_errors: get_u32("MAX_CONSECUTIVE_ERRORS", &dotenv, 3),
             pipeline_repo,
             pipeline_test_cmd,
             pipeline_lint_cmd,
+            backend,
             pipeline_admin_chat: get_str("PIPELINE_ADMIN_CHAT", &dotenv, ""),
             release_interval_mins: get_u32("RELEASE_INTERVAL_MINS", &dotenv, 180),
             continuous_mode: get_bool("CONTINUOUS_MODE", &dotenv, false),
@@ -298,6 +335,12 @@ impl Config {
             git_committer_email: get_str("GIT_COMMITTER_EMAIL", &dotenv, ""),
             git_via_borg: get_bool("GIT_VIA_BORG", &dotenv, false),
             watched_repos,
+            codex_api_key,
+            codex_credentials_path,
+            discord_token: get_str("DISCORD_TOKEN", &dotenv, ""),
+            wa_auth_dir: get_str("WA_AUTH_DIR", &dotenv, ""),
+            wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
+            observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
     }
 }

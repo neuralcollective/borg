@@ -38,41 +38,6 @@ impl ClaudeBackend {
         self
     }
 
-    fn build_instruction(&self, task: &Task, phase: &PhaseConfig, ctx: &PhaseContext) -> String {
-        let mut instruction = String::new();
-
-        if phase.include_task_context {
-            instruction.push_str(&format!("Task: {}\n\n{}\n\n---\n\n", task.title, task.description));
-        }
-
-        instruction.push_str(&phase.instruction);
-
-        if phase.include_file_listing {
-            let git = borg_core::git::Git::new(&ctx.worktree_path);
-            if let Ok(files) = git.ls_files(&ctx.worktree_path) {
-                if !files.is_empty() {
-                    instruction.push_str("\n\n---\n\nFiles in repository:\n```\n");
-                    instruction.push_str(&files);
-                    instruction.push_str("```\n");
-                }
-            }
-        }
-
-        if !task.last_error.is_empty() && !phase.error_instruction.is_empty() {
-            let error_section = phase.error_instruction.replace("{ERROR}", &task.last_error);
-            instruction.push('\n');
-            instruction.push_str(&error_section);
-        }
-
-        if !ctx.pending_messages.is_empty() {
-            instruction.push_str("\n\n---\nThe following messages were sent by the user or director while this task was queued:\n");
-            for (role, content) in &ctx.pending_messages {
-                instruction.push_str(&format!("\n[{}]: {}", role, content));
-            }
-        }
-
-        instruction
-    }
 }
 
 #[async_trait]
@@ -83,7 +48,13 @@ impl AgentBackend for ClaudeBackend {
         phase: &PhaseConfig,
         ctx: PhaseContext,
     ) -> Result<PhaseOutput> {
-        let instruction = self.build_instruction(task, phase, &ctx);
+        let file_listing = if phase.include_file_listing {
+            let git = borg_core::git::Git::new(&ctx.worktree_path);
+            git.ls_files(&ctx.worktree_path).ok()
+        } else {
+            None
+        };
+        let instruction = crate::instruction::build_instruction(task, phase, &ctx, file_listing.as_deref());
 
         let allowed_tools = if phase.allowed_tools.is_empty() {
             "Read,Glob,Grep,Write,Edit,Bash".to_string()

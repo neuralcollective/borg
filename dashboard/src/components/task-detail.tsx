@@ -1,4 +1,4 @@
-import { useTaskDetail, useTaskStream, retryTask } from "@/lib/api";
+import { useTaskDetail, useTaskStream, retryTask, setTaskBackend } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
@@ -99,6 +99,22 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
           </span>
           <span>
             <span className="text-zinc-600">at</span> {task.created_at}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="text-zinc-600">backend</span>
+            <select
+              value={task.backend || ""}
+              onChange={async (e) => {
+                await setTaskBackend(task.id, e.target.value);
+                queryClient.invalidateQueries({ queryKey: ["task", task.id] });
+              }}
+              className="rounded border border-white/[0.06] bg-transparent py-0 text-[11px] text-zinc-400 outline-none hover:border-white/[0.12] focus:border-blue-500/40"
+            >
+              <option value="">default</option>
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="local">local</option>
+            </select>
           </span>
         </div>
       </div>

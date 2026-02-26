@@ -84,6 +84,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at: parse_ts(&created_at_str),
         session_id: row.get(12)?,
         mode: row.get(13)?,
+        backend: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
     })
 }
 
@@ -197,7 +198,7 @@ impl Db {
             .query_row(
                 "SELECT id, title, description, repo_path, branch, status, attempt, \
                  max_attempts, last_error, created_by, notify_chat, created_at, \
-                 session_id, mode \
+                 session_id, mode, backend \
                  FROM pipeline_tasks WHERE id = ?1",
                 params![id],
                 row_to_task,
@@ -212,7 +213,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, title, description, repo_path, branch, status, attempt, \
              max_attempts, last_error, created_by, notify_chat, created_at, \
-             session_id, mode \
+             session_id, mode, backend \
              FROM pipeline_tasks \
              WHERE status NOT IN ('done', 'merged', 'failed') \
              ORDER BY id ASC",
@@ -230,8 +231,8 @@ impl Db {
         conn.execute(
             "INSERT INTO pipeline_tasks \
              (title, description, repo_path, branch, status, attempt, max_attempts, \
-              last_error, created_by, notify_chat, created_at, session_id, mode) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              last_error, created_by, notify_chat, created_at, session_id, mode, backend) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 task.title,
                 task.description,
@@ -246,6 +247,7 @@ impl Db {
                 created_at,
                 task.session_id,
                 task.mode,
+                if task.backend.is_empty() { None } else { Some(task.backend.as_str()) },
             ],
         )
         .context("insert_task")?;
@@ -291,6 +293,16 @@ impl Db {
             params![id],
         )
         .context("increment_attempt")?;
+        Ok(())
+    }
+
+    pub fn update_task_backend(&self, id: i64, backend: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE pipeline_tasks SET backend = ?1 WHERE id = ?2",
+            params![if backend.is_empty() { None } else { Some(backend) }, id],
+        )
+        .context("update_task_backend")?;
         Ok(())
     }
 
@@ -632,6 +644,16 @@ impl Db {
         Ok(result)
     }
 
+    pub fn update_repo_backend(&self, id: i64, backend: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE repos SET backend = ?1 WHERE id = ?2",
+            params![if backend.is_empty() { None } else { Some(backend) }, id],
+        )
+        .context("update_repo_backend")?;
+        Ok(())
+    }
+
     // ── Pipeline Events ───────────────────────────────────────────────────
 
     pub fn log_event(
@@ -719,7 +741,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let sql = "SELECT id, title, description, repo_path, branch, status, attempt, \
                    max_attempts, last_error, created_by, notify_chat, created_at, \
-                   session_id, mode \
+                   session_id, mode, backend \
                    FROM pipeline_tasks \
                    WHERE (?1 IS NULL OR repo_path = ?1) \
                    ORDER BY id DESC";
