@@ -6,7 +6,7 @@ use borg_core::{
     types::{PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Runs Codex (openai/codex) as the agent backend.
 ///
@@ -116,7 +116,7 @@ impl AgentBackend for CodexBackend {
                             if Self::is_warning_stderr(&l) {
                                 warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
                             } else {
-                                info!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                                debug!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
                             }
                         }
                     }
@@ -129,7 +129,7 @@ impl AgentBackend for CodexBackend {
                 if Self::is_warning_stderr(&l) {
                     warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
                 } else {
-                    info!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                    debug!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
                 }
             }
         }
