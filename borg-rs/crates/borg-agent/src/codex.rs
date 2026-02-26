@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 /// Runs Codex (openai/codex) as the agent backend.
 ///
-/// Codex is invoked via the `codex` CLI with `--full-auto` mode.
+/// Codex is invoked via `codex exec` in non-interactive mode.
 /// The codex app-server JSON-RPC protocol is planned but not yet wired up.
 pub struct CodexBackend {
     pub api_key: String,
@@ -43,6 +43,13 @@ impl CodexBackend {
             .unwrap_or(false)
     }
 
+    fn is_warning_stderr(line: &str) -> bool {
+        let l = line.trim().to_ascii_lowercase();
+        l.starts_with("error:")
+            || l.contains("failed")
+            || l.contains("fatal")
+            || l.contains("panic")
+    }
 }
 
 #[async_trait]
@@ -67,10 +74,10 @@ impl AgentBackend for CodexBackend {
         );
 
         let mut cmd = tokio::process::Command::new(&self.codex_bin);
-        cmd.arg("--model")
+        cmd.arg("exec")
+            .arg("--model")
             .arg(&self.model)
-            .arg("--approval-mode")
-            .arg("full-auto")
+            .arg("--full-auto")
             .arg(&instruction)
             .current_dir(&ctx.worktree_path)
             .stdout(Stdio::piped())
@@ -106,7 +113,11 @@ impl AgentBackend for CodexBackend {
                 line = stderr_reader.next_line() => {
                     if let Ok(Some(l)) = line {
                         if !l.is_empty() {
-                            warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                            if Self::is_warning_stderr(&l) {
+                                warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                            } else {
+                                info!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                            }
                         }
                     }
                 }
@@ -115,7 +126,11 @@ impl AgentBackend for CodexBackend {
 
         while let Ok(Some(l)) = stderr_reader.next_line().await {
             if !l.is_empty() {
-                warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                if Self::is_warning_stderr(&l) {
+                    warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                } else {
+                    info!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
+                }
             }
         }
 

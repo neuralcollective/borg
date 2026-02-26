@@ -160,13 +160,19 @@ const categoryColors: Record<string, string> = {
   pipeline: "text-cyan-400/70",
 };
 
+function safeText(v: unknown, fallback: string) {
+  return typeof v === "string" && v.length > 0 ? v : fallback;
+}
+
 function LogLine({ log }: { log: LogEvent }) {
   const ts = new Date(log.ts * 1000).toLocaleTimeString("en-GB", { hour12: false });
+  const level = safeText((log as unknown as { level?: unknown }).level, "info");
+  const message = safeText((log as unknown as { message?: unknown }).message, "");
   return (
     <div className="whitespace-pre-wrap break-all py-px font-mono text-[12px] md:text-[11px] leading-relaxed">
       <span className="text-zinc-600">{ts}</span>{" "}
-      <span className={levelColors[log.level] ?? "text-zinc-500"}>{log.level.padEnd(4)}</span>{" "}
-      <span className="text-zinc-300">{log.message}</span>
+      <span className={levelColors[level] ?? "text-zinc-500"}>{level.padEnd(4)}</span>{" "}
+      <span className="text-zinc-300">{message}</span>
     </div>
   );
 }
@@ -177,18 +183,21 @@ function EventLine({ event }: { event: DbEvent }) {
     day: "2-digit",
     month: "short",
   });
+  const level = safeText((event as unknown as { level?: unknown }).level, "info");
+  const category = safeText((event as unknown as { category?: unknown }).category, "system");
+  const message = safeText((event as unknown as { message?: unknown }).message, "");
   return (
     <div className="whitespace-pre-wrap break-all py-px font-mono text-[12px] md:text-[11px] leading-relaxed">
       <span className="text-zinc-600">
         {date} {ts}
       </span>{" "}
-      <span className={levelColors[event.level] ?? "text-zinc-500"}>
-        {event.level.padEnd(5)}
+      <span className={levelColors[level] ?? "text-zinc-500"}>
+        {level.padEnd(5)}
       </span>{" "}
-      <span className={categoryColors[event.category] ?? "text-zinc-500"}>
-        [{event.category}]
+      <span className={categoryColors[category] ?? "text-zinc-500"}>
+        [{category}]
       </span>{" "}
-      <span className="text-zinc-300">{event.message}</span>
+      <span className="text-zinc-300">{message}</span>
       {event.metadata && (
         <span className="text-zinc-600 ml-1">{event.metadata}</span>
       )}
