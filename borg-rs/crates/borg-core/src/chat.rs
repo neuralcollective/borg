@@ -12,6 +12,8 @@ pub enum ChatState {
     Collecting { window_deadline: Instant, messages: Vec<String> },
     /// Agent is running for this chat.
     Running,
+    /// Post-agent cooldown; no new messages dispatched until deadline.
+    Cooldown { deadline: Instant },
 }
 
 /// An incoming message from any transport.
@@ -31,6 +33,8 @@ pub struct ChatCollector {
     state: Arc<Mutex<HashMap<String, ChatState>>>,
     /// Collection window duration. 0 = immediate dispatch.
     window_ms: u64,
+    /// Post-agent cooldown duration. 0 = no cooldown.
+    cooldown_ms: u64,
     /// Max agents running concurrently.
     max_agents: u32,
     /// Current running agent count.
@@ -45,10 +49,11 @@ pub struct MessageBatch {
 }
 
 impl ChatCollector {
-    pub fn new(window_ms: u64, max_agents: u32) -> Self {
+    pub fn new(window_ms: u64, max_agents: u32, cooldown_ms: u64) -> Self {
         Self {
             state: Arc::new(Mutex::new(HashMap::new())),
             window_ms,
+            cooldown_ms,
             max_agents,
             running: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
@@ -65,6 +70,11 @@ impl ChatCollector {
             ChatState::Running => {
                 // Agent already running — drop message
                 debug!("Chat {} has running agent, dropping message", chat_key);
+                None
+            }
+
+            ChatState::Cooldown { .. } => {
+                debug!("Chat {} in cooldown, dropping message", chat_key);
                 None
             }
 
@@ -106,7 +116,7 @@ impl ChatCollector {
         }
     }
 
-    /// Call periodically to flush expired collection windows.
+    /// Call periodically to flush expired collection windows and cooldowns.
     /// Returns all batches ready to dispatch.
     pub async fn flush_expired(&self) -> Vec<MessageBatch> {
         let mut state = self.state.lock().await;
@@ -114,27 +124,42 @@ impl ChatCollector {
         let mut ready = Vec::new();
 
         for (chat_key, chat_state) in state.iter_mut() {
-            if let ChatState::Collecting { window_deadline, messages } = chat_state {
-                if now >= *window_deadline {
-                    let batch = MessageBatch {
-                        chat_key: chat_key.clone(),
-                        messages: std::mem::take(messages),
-                    };
-                    *chat_state = ChatState::Running;
-                    ready.push(batch);
+            match chat_state {
+                ChatState::Collecting { window_deadline, messages } => {
+                    if now >= *window_deadline {
+                        let batch = MessageBatch {
+                            chat_key: chat_key.clone(),
+                            messages: std::mem::take(messages),
+                        };
+                        *chat_state = ChatState::Running;
+                        ready.push(batch);
+                    }
                 }
+                ChatState::Cooldown { deadline } => {
+                    if now >= *deadline {
+                        *chat_state = ChatState::Idle;
+                        debug!("Chat {} cooldown expired", chat_key);
+                    }
+                }
+                _ => {}
             }
         }
 
         ready
     }
 
-    /// Mark a chat as done (agent finished). Returns it to IDLE.
+    /// Mark a chat as done (agent finished). Enters Cooldown if configured, else Idle.
     pub async fn mark_done(&self, chat_key: &str) {
         let mut state = self.state.lock().await;
-        state.insert(chat_key.to_string(), ChatState::Idle);
+        if self.cooldown_ms > 0 {
+            let deadline = Instant::now() + Duration::from_millis(self.cooldown_ms);
+            state.insert(chat_key.to_string(), ChatState::Cooldown { deadline });
+            debug!("Chat {} entering cooldown ({}ms)", chat_key, self.cooldown_ms);
+        } else {
+            state.insert(chat_key.to_string(), ChatState::Idle);
+            debug!("Chat {} returned to IDLE", chat_key);
+        }
         self.running.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        debug!("Chat {} returned to IDLE", chat_key);
     }
 
     /// Check if we can dispatch more agents.

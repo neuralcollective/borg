@@ -184,7 +184,7 @@ impl Db {
     }
 
     pub fn migrate(&mut self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch(SCHEMA_SQL)
             .context("failed to apply schema migrations")?;
         // Idempotent column additions for DBs created before these columns existed.
@@ -203,7 +203,7 @@ impl Db {
     // ── Pipeline Tasks ────────────────────────────────────────────────────
 
     pub fn get_task(&self, id: i64) -> Result<Option<Task>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn
             .query_row(
                 "SELECT id, title, description, repo_path, branch, status, attempt, \
@@ -219,7 +219,7 @@ impl Db {
     }
 
     pub fn list_active_tasks(&self) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, title, description, repo_path, branch, status, attempt, \
              max_attempts, last_error, created_by, notify_chat, created_at, \
@@ -236,7 +236,7 @@ impl Db {
     }
 
     pub fn insert_task(&self, task: &Task) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = task.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
         conn.execute(
             "INSERT INTO pipeline_tasks \
@@ -265,7 +265,7 @@ impl Db {
     }
 
     pub fn update_task_status(&self, id: i64, status: &str, error: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let updated_at = now_str();
         conn.execute(
             "UPDATE pipeline_tasks SET status = ?1, last_error = COALESCE(?2, last_error), \
@@ -277,7 +277,7 @@ impl Db {
     }
 
     pub fn update_task_branch(&self, id: i64, branch: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE pipeline_tasks SET branch = ?1 WHERE id = ?2",
             params![branch, id],
@@ -287,7 +287,7 @@ impl Db {
     }
 
     pub fn update_task_session(&self, id: i64, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE pipeline_tasks SET session_id = ?1 WHERE id = ?2",
             params![session_id, id],
@@ -297,7 +297,7 @@ impl Db {
     }
 
     pub fn increment_attempt(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE pipeline_tasks SET attempt = attempt + 1 WHERE id = ?1",
             params![id],
@@ -307,7 +307,7 @@ impl Db {
     }
 
     pub fn update_task_backend(&self, id: i64, backend: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE pipeline_tasks SET backend = ?1 WHERE id = ?2",
             params![if backend.is_empty() { None } else { Some(backend) }, id],
@@ -319,7 +319,7 @@ impl Db {
     // ── Proposals ─────────────────────────────────────────────────────────
 
     pub fn list_proposals(&self, repo_path: &str) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -334,7 +334,7 @@ impl Db {
     }
 
     pub fn list_all_proposals(&self, repo_path: Option<&str>) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -351,7 +351,7 @@ impl Db {
     }
 
     pub fn get_proposal(&self, id: i64) -> Result<Option<Proposal>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn
             .query_row(
                 "SELECT id, repo_path, title, description, rationale, status, created_at, \
@@ -367,7 +367,7 @@ impl Db {
     }
 
     pub fn task_stats(&self) -> Result<(i64, i64, i64, i64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM pipeline_tasks", [], |r| r.get(0))
             .context("task_stats total")?;
@@ -396,7 +396,7 @@ impl Db {
     }
 
     pub fn insert_proposal(&self, proposal: &Proposal) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = proposal.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
         conn.execute(
             "INSERT INTO proposals \
@@ -424,7 +424,7 @@ impl Db {
     }
 
     pub fn update_proposal_status(&self, id: i64, status: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE proposals SET status = ?1 WHERE id = ?2",
             params![status, id],
@@ -443,7 +443,7 @@ impl Db {
         effort: i64,
         reasoning: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE proposals SET triage_score=?1, triage_impact=?2, triage_feasibility=?3, \
              triage_risk=?4, triage_effort=?5, triage_reasoning=?6 WHERE id=?7",
@@ -454,7 +454,7 @@ impl Db {
     }
 
     pub fn list_untriaged_proposals(&self) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -471,7 +471,7 @@ impl Db {
     // ── Merge Queue ───────────────────────────────────────────────────────
 
     pub fn list_queue(&self) -> Result<Vec<QueueEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, task_id, branch, repo_path, status, queued_at, pr_number \
              FROM integration_queue WHERE status = 'queued' ORDER BY id ASC",
@@ -484,7 +484,7 @@ impl Db {
     }
 
     pub fn enqueue(&self, task_id: i64, branch: &str, repo_path: &str, pr_number: i64) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let queued_at = now_str();
         conn.execute(
             "INSERT INTO integration_queue (task_id, branch, repo_path, status, queued_at, pr_number) \
@@ -496,7 +496,7 @@ impl Db {
     }
 
     pub fn update_queue_status(&self, id: i64, status: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE integration_queue SET status = ?1 WHERE id = ?2",
             params![status, id],
@@ -515,7 +515,7 @@ impl Db {
         raw_stream: &str,
         exit_code: i64,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = now_str();
         conn.execute(
             "INSERT INTO task_outputs (task_id, phase, output, raw_stream, exit_code, created_at) \
@@ -527,7 +527,7 @@ impl Db {
     }
 
     pub fn get_task_outputs(&self, task_id: i64) -> Result<Vec<TaskOutput>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, task_id, phase, output, raw_stream, exit_code, created_at \
              FROM task_outputs WHERE task_id = ?1 ORDER BY id ASC",
@@ -542,7 +542,7 @@ impl Db {
     // ── Task Messages ─────────────────────────────────────────────────────
 
     pub fn insert_task_message(&self, task_id: i64, role: &str, content: &str) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = now_str();
         conn.execute(
             "INSERT INTO task_messages (task_id, role, content, created_at) \
@@ -554,7 +554,7 @@ impl Db {
     }
 
     pub fn get_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, task_id, role, content, created_at, delivered_phase \
              FROM task_messages WHERE task_id = ?1 ORDER BY id ASC",
@@ -567,7 +567,7 @@ impl Db {
     }
 
     pub fn get_pending_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, task_id, role, content, created_at, delivered_phase \
              FROM task_messages WHERE task_id = ?1 AND delivered_phase IS NULL ORDER BY id ASC",
@@ -580,7 +580,7 @@ impl Db {
     }
 
     pub fn mark_messages_delivered(&self, task_id: i64, phase: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE task_messages SET delivered_phase = ?1 \
              WHERE task_id = ?2 AND delivered_phase IS NULL",
@@ -602,7 +602,7 @@ impl Db {
         auto_merge: bool,
         backend: Option<&str>,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let auto_merge_int: i64 = if auto_merge { 1 } else { 0 };
         conn.execute(
             "INSERT INTO repos (path, name, mode, test_cmd, prompt_file, auto_merge, backend) \
@@ -628,7 +628,7 @@ impl Db {
     }
 
     pub fn list_repos(&self) -> Result<Vec<RepoRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge \
              FROM repos ORDER BY id ASC",
@@ -641,7 +641,7 @@ impl Db {
     }
 
     pub fn get_repo_by_path(&self, path: &str) -> Result<Option<RepoRow>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn
             .query_row(
                 "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge \
@@ -655,7 +655,7 @@ impl Db {
     }
 
     pub fn update_repo_backend(&self, id: i64, backend: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE repos SET backend = ?1 WHERE id = ?2",
             params![if backend.is_empty() { None } else { Some(backend) }, id],
@@ -673,7 +673,7 @@ impl Db {
         kind: &str,
         payload: &serde_json::Value,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let payload_str = payload.to_string();
         let created_at = now_str();
         conn.execute(
@@ -688,7 +688,7 @@ impl Db {
     // ── Config ────────────────────────────────────────────────────────────
 
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn
             .query_row(
                 "SELECT value FROM config WHERE key = ?1",
@@ -701,7 +701,7 @@ impl Db {
     }
 
     pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let updated_at = now_str();
         conn.execute(
             "INSERT INTO config (key, value, updated_at) VALUES (?1, ?2, ?3) \
@@ -721,7 +721,7 @@ impl Db {
         message: &str,
         metadata: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let ts = Utc::now().timestamp();
         conn.execute(
             "INSERT INTO events (ts, level, category, message, metadata) \
@@ -733,7 +733,7 @@ impl Db {
     }
 
     pub fn get_recent_events(&self, limit: i64) -> Result<Vec<LegacyEvent>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, ts, level, category, message, metadata \
              FROM events ORDER BY ts DESC, id DESC LIMIT ?1",
@@ -748,7 +748,7 @@ impl Db {
     // ── Full Task List ────────────────────────────────────────────────────
 
     pub fn list_all_tasks(&self, repo_path: Option<&str>) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sql = "SELECT id, title, description, repo_path, branch, status, attempt, \
                    max_attempts, last_error, created_by, notify_chat, created_at, \
                    session_id, mode, backend \

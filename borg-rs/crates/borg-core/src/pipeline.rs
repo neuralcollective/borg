@@ -57,24 +57,23 @@ impl Pipeline {
     // ── Backend resolution ────────────────────────────────────────────────
 
     /// Select the agent backend for a task: task override → repo override → global → any.
-    fn resolve_backend(&self, task: &Task) -> Arc<dyn AgentBackend> {
+    fn resolve_backend(&self, task: &Task) -> Option<Arc<dyn AgentBackend>> {
         if !task.backend.is_empty() {
             if let Some(b) = self.backends.get(&task.backend) {
-                return Arc::clone(b);
+                return Some(Arc::clone(b));
             }
         }
         if let Some(repo) = self.config.watched_repos.iter().find(|r| r.path == task.repo_path) {
             if !repo.backend.is_empty() {
                 if let Some(b) = self.backends.get(&repo.backend) {
-                    return Arc::clone(b);
+                    return Some(Arc::clone(b));
                 }
             }
         }
         if let Some(b) = self.backends.get(&self.config.backend) {
-            return Arc::clone(b);
+            return Some(Arc::clone(b));
         }
         self.backends.values().next().map(Arc::clone)
-            .expect("no backends configured")
     }
 
     // ── Small helpers ─────────────────────────────────────────────────────
@@ -131,10 +130,21 @@ impl Pipeline {
         let current = self.db.get_task(task.id)?.unwrap_or_else(|| task.clone());
         if current.attempt >= current.max_attempts {
             self.db.update_task_status(task.id, "failed", Some(error))?;
+            self.cleanup_worktree(task);
         } else {
             self.db.update_task_status(task.id, retry_status, Some(error))?;
         }
         Ok(())
+    }
+
+    /// Remove the git worktree for a task (best-effort, silent on error).
+    fn cleanup_worktree(&self, task: &Task) {
+        let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
+        let git = Git::new(&task.repo_path);
+        let _ = git.remove_worktree(&wt_path);
+        std::fs::remove_dir_all(&wt_path).ok();
+        let _ = git.exec(&task.repo_path, &["worktree", "prune"]);
+        info!("cleaned up worktree {} for task #{}", wt_path, task.id);
     }
 
     /// Git author pair from config, or None if not configured.
@@ -156,18 +166,15 @@ impl Pipeline {
         let mut dispatched = 0usize;
 
         for task in tasks {
-            let in_flight_count = self.in_flight.lock().await.len();
-            if in_flight_count >= max_agents {
+            let mut guard = self.in_flight.lock().await;
+            if guard.len() >= max_agents {
                 break;
             }
-
-            {
-                let mut guard = self.in_flight.lock().await;
-                if guard.contains(&task.id) {
-                    continue;
-                }
-                guard.insert(task.id);
+            if guard.contains(&task.id) {
+                continue;
             }
+            guard.insert(task.id);
+            drop(guard);
 
             dispatched += 1;
             let pipeline = Arc::clone(&self);
@@ -274,11 +281,11 @@ impl Pipeline {
 
         let branch = format!("task-{}", task.id);
         let wt_dir = format!("{}/.worktrees", task.repo_path);
-        std::fs::create_dir_all(&wt_dir).ok();
+        tokio::fs::create_dir_all(&wt_dir).await.ok();
         let wt_path = format!("{wt_dir}/task-{}", task.id);
 
         let _ = git.remove_worktree(&wt_path);
-        std::fs::remove_dir_all(&wt_path).ok();
+        tokio::fs::remove_dir_all(&wt_path).await.ok();
         let _ = git.exec(&task.repo_path, &["worktree", "prune"]);
         let _ = git.exec(&task.repo_path, &["branch", "-D", &branch]);
 
@@ -326,7 +333,7 @@ impl Pipeline {
         };
 
         let session_dir = format!("store/sessions/task-{}", task.id);
-        std::fs::create_dir_all(&session_dir).ok();
+        tokio::fs::create_dir_all(&session_dir).await.ok();
 
         let pending_messages = self
             .db
@@ -342,8 +349,14 @@ impl Pipeline {
 
         info!("running {} phase for task #{}", phase.name, task.id);
 
-        let result = self
-            .resolve_backend(task)
+        let backend = match self.resolve_backend(task) {
+            Some(b) => b,
+            None => {
+                warn!("task #{}: no backend configured, skipping phase {}", task.id, phase.name);
+                return Ok(());
+            }
+        };
+        let result = backend
             .run_phase(task, phase, ctx)
             .await
             .unwrap_or_else(|e| {
@@ -352,16 +365,22 @@ impl Pipeline {
             });
 
         if let Some(ref sid) = result.new_session_id {
-            self.db.update_task_session(task.id, sid).ok();
+            if let Err(e) = self.db.update_task_session(task.id, sid) {
+                warn!("task #{}: update_task_session: {e}", task.id);
+            }
         }
         if had_pending {
-            self.db.mark_messages_delivered(task.id, &phase.name).ok();
+            if let Err(e) = self.db.mark_messages_delivered(task.id, &phase.name) {
+                warn!("task #{}: mark_messages_delivered: {e}", task.id);
+            }
         }
 
         let exit_code: i64 = if result.success { 0 } else { 1 };
-        self.db
-            .insert_task_output(task.id, &phase.name, &result.output, &result.raw_stream, exit_code)
-            .ok();
+        if let Err(e) = self.db.insert_task_output(
+            task.id, &phase.name, &result.output, &result.raw_stream, exit_code,
+        ) {
+            warn!("task #{}: insert_task_output: {e}", task.id);
+        }
 
         self.emit(PipelineEvent {
             kind: "task_output".into(),
@@ -444,8 +463,10 @@ impl Pipeline {
                     let session_dir = format!("store/sessions/task-{}", task.id);
                     let ctx = self.make_context(task, wt_path.clone(), session_dir, Vec::new());
 
-                    if let Err(fix_err) = self.resolve_backend(task).run_phase(task, &fix_phase, ctx).await {
-                        warn!("task #{} fix agent error: {fix_err}", task.id);
+                    if let Some(backend) = self.resolve_backend(task) {
+                        if let Err(fix_err) = backend.run_phase(task, &fix_phase, ctx).await {
+                            warn!("task #{} fix agent error: {fix_err}", task.id);
+                        }
                     }
 
                     if let Ok(()) = git.rebase_onto_main(&wt_path) {
@@ -513,14 +534,17 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
             let ctx = self.make_context(task, wt_path.clone(), session_dir.clone(), Vec::new());
 
-            let agent_result = self
-                .resolve_backend(task)
-                .run_phase(task, &fix_phase, ctx)
-                .await
-                .unwrap_or_else(|e| {
+            let agent_result = match self.resolve_backend(task) {
+                Some(b) => b.run_phase(task, &fix_phase, ctx).await.unwrap_or_else(|e| {
                     error!("lint-fix agent for task #{}: {e}", task.id);
                     PhaseOutput::failed(String::new())
-                });
+                }),
+                None => {
+                    warn!("task #{}: no backend, skipping lint fix attempt {}", task.id, fix_attempt);
+                    self.advance_phase(task, phase, mode)?;
+                    return Ok(());
+                }
+            };
 
             if let Some(ref sid) = agent_result.new_session_id {
                 self.db.update_task_session(task.id, sid).ok();
@@ -571,6 +595,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 } else {
                     info!("task #{} done, queued for integration", task.id);
                 }
+            } else if mode.uses_git_worktrees {
+                self.cleanup_worktree(task);
             }
         } else {
             self.db.update_task_status(task.id, next, None)?;
@@ -665,7 +691,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
     async fn run_seed(&self, repo: &RepoConfig, mode_name: &str, seed_cfg: &crate::types::SeedConfig) -> Result<()> {
         let session_dir = "store/sessions/seed".to_string();
-        std::fs::create_dir_all(&session_dir).ok();
+        tokio::fs::create_dir_all(&session_dir).await.ok();
 
         let task = Task {
             id: 0,
@@ -697,7 +723,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let ctx = self.make_context(&task, repo.path.clone(), session_dir, Vec::new());
 
         info!("running seed '{}' for {}", seed_cfg.name, repo.path);
-        let result = self.resolve_backend(&task).run_phase(&task, &phase, ctx).await?;
+        let backend = self.resolve_backend(&task)
+            .ok_or_else(|| anyhow::anyhow!("no backends configured for seed"))?;
+        let result = backend.run_phase(&task, &phase, ctx).await?;
 
         self.parse_seed_output(&result.output, &repo.path, mode_name, seed_cfg.output_type)?;
         Ok(())
