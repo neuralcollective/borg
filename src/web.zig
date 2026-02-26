@@ -1362,6 +1362,7 @@ pub const WebServer = struct {
         .{ .key = "agent_timeout_s", .kind = .int_val },
         .{ .key = "pipeline_seed_cooldown_s", .kind = .int_val },
         .{ .key = "pipeline_tick_s", .kind = .int_val },
+        .{ .key = "proposal_promote_threshold", .kind = .int_val },
         .{ .key = "model", .kind = .str_val },
         .{ .key = "container_memory_mb", .kind = .int_val },
         .{ .key = "assistant_name", .kind = .str_val },
@@ -1374,7 +1375,7 @@ pub const WebServer = struct {
         const w = fbs.writer();
         var esc_model: [128]u8 = undefined;
         var esc_name: [128]u8 = undefined;
-        w.print("{{\"continuous_mode\":{s},\"release_interval_mins\":{d},\"pipeline_max_backlog\":{d},\"agent_timeout_s\":{d},\"pipeline_seed_cooldown_s\":{d},\"pipeline_tick_s\":{d},\"model\":\"{s}\",\"container_memory_mb\":{d},\"assistant_name\":\"{s}\",\"pipeline_max_agents\":{d}}}", .{
+        w.print("{{\"continuous_mode\":{s},\"release_interval_mins\":{d},\"pipeline_max_backlog\":{d},\"agent_timeout_s\":{d},\"pipeline_seed_cooldown_s\":{d},\"pipeline_tick_s\":{d},\"model\":\"{s}\",\"container_memory_mb\":{d},\"assistant_name\":\"{s}\",\"pipeline_max_agents\":{d},\"proposal_promote_threshold\":{d}}}", .{
             if (self.config.continuous_mode) "true" else "false",
             self.config.release_interval_mins,
             self.config.pipeline_max_backlog,
@@ -1385,6 +1386,7 @@ pub const WebServer = struct {
             self.config.container_memory_mb,
             jsonEscape(&esc_name, self.config.assistant_name),
             self.config.pipeline_max_agents,
+            self.config.proposal_promote_threshold,
         }) catch return;
         self.sendJson(stream, fbs.getWritten());
     }
@@ -1458,6 +1460,8 @@ pub const WebServer = struct {
             self.config.container_memory_mb = std.fmt.parseInt(u64, val, 10) catch return;
         } else if (std.mem.eql(u8, key, "pipeline_max_agents")) {
             self.config.pipeline_max_agents = std.fmt.parseInt(u32, val, 10) catch return;
+        } else if (std.mem.eql(u8, key, "proposal_promote_threshold")) {
+            self.config.proposal_promote_threshold = std.fmt.parseInt(i64, val, 10) catch return;
         } else if (std.mem.eql(u8, key, "model")) {
             self.config.model = self.config.allocator.dupe(u8, val) catch return;
         } else if (std.mem.eql(u8, key, "assistant_name")) {

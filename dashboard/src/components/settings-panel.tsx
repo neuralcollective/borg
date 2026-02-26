@@ -122,6 +122,14 @@ export function SettingsPanel() {
             min={5}
             max={300}
           />
+          <NumberField
+            label="Proposal Threshold"
+            desc="Minimum triage score (1–10) to auto-promote a proposal to a task"
+            value={effective.proposal_promote_threshold}
+            onChange={(v) => update("proposal_promote_threshold", v)}
+            min={1}
+            max={10}
+          />
         </Section>
 
         {/* Agent Settings */}
