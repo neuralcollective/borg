@@ -125,7 +125,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
 
       {/* Completed phase outputs */}
       {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
-        <OutputSelector outputs={task.outputs} />
+        <OutputSelector key={task.outputs.length} outputs={task.outputs} />
       ) : !isActive && !streaming ? (
         <div className="flex flex-1 items-center justify-center text-xs text-zinc-700">
           No agent outputs yet
