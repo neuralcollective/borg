@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 pub struct CodexBackend {
     pub api_key: String,
     pub model: String,
+    pub reasoning_effort: String,
     pub codex_bin: String,
 }
 
@@ -23,8 +24,14 @@ impl CodexBackend {
         Self {
             api_key: api_key.into(),
             model: model.into(),
+            reasoning_effort: "medium".into(),
             codex_bin: "codex".into(),
         }
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = effort.into();
+        self
     }
 
     pub fn with_bin(mut self, bin: impl Into<String>) -> Self {
@@ -46,9 +53,14 @@ impl CodexBackend {
     fn is_warning_stderr(line: &str) -> bool {
         let l = line.trim().to_ascii_lowercase();
         l.starts_with("error:")
-            || l.contains("failed")
-            || l.contains("fatal")
-            || l.contains("panic")
+            || l.starts_with("error ")
+            || l.starts_with("fatal:")
+            || l.contains("unexpected status")
+            || l.contains("unauthorized")
+            || l.contains("failed to")
+            || l.contains("panic!")
+            || l.contains("panicked at")
+            || (l.contains("thread '") && l.contains(" panicked"))
     }
 }
 
@@ -77,6 +89,8 @@ impl AgentBackend for CodexBackend {
         cmd.arg("exec")
             .arg("--model")
             .arg(&self.model)
+            .arg("-c")
+            .arg(format!("model_reasoning_effort=\"{}\"", self.reasoning_effort))
             .arg("--full-auto")
             .arg(&instruction)
             .current_dir(&ctx.worktree_path)

@@ -8,6 +8,29 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
+function normalizeLogEvent(raw: unknown): LogEvent | null {
+  if (!raw || typeof raw !== "object") return null;
+  const data = raw as Record<string, unknown>;
+  const level = typeof data.level === "string" && data.level.length > 0 ? data.level : "info";
+  const message = typeof data.message === "string" ? data.message : "";
+
+  let ts: number | null = null;
+  if (typeof data.ts === "number" && Number.isFinite(data.ts)) ts = data.ts;
+  if (typeof data.ts === "string") {
+    const parsed = Number(data.ts);
+    if (Number.isFinite(parsed)) ts = parsed;
+  }
+  if (ts === null) ts = Math.floor(Date.now() / 1000);
+
+  return {
+    level,
+    message,
+    ts,
+    category: typeof data.category === "string" ? data.category : undefined,
+    metadata: typeof data.metadata === "string" ? data.metadata : undefined,
+  };
+}
+
 export function useTasks() {
   return useQuery<Task[]>({
     queryKey: ["tasks"],
@@ -203,7 +226,8 @@ export function useLogs() {
     es.onerror = () => setConnected(false);
     es.onmessage = (e) => {
       try {
-        const d: LogEvent = JSON.parse(e.data);
+        const d = normalizeLogEvent(JSON.parse(e.data));
+        if (!d) return;
         setLogs((prev) => {
           const next = [...prev, d];
           return next.length > 500 ? next.slice(-500) : next;

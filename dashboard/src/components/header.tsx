@@ -43,8 +43,9 @@ export function Header({
     return (
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#09090b] px-4">
         <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-white">
-            <span className="text-[10px] font-black text-black">B</span>
+          <div className="flex h-5 w-5 flex-col items-center justify-center bg-orange-500 leading-none overflow-visible">
+            <span className="text-[9px] font-black text-black leading-[0.72]">bo</span>
+            <span className="text-[9px] font-black text-black leading-[0.72] -mt-[1px]">rg</span>
           </div>
           <span className="text-[13px] font-semibold tracking-tight text-white">Borg</span>
         </div>

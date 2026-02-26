@@ -164,25 +164,46 @@ function safeText(v: unknown, fallback: string) {
   return typeof v === "string" && v.length > 0 ? v : fallback;
 }
 
+function safeTimestamp(ts: unknown): number | null {
+  if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) return ts;
+  if (typeof ts === "string") {
+    const parsed = Number(ts);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function formatTime(ts: unknown): string {
+  const seconds = safeTimestamp(ts);
+  if (seconds === null) return "--:--:--";
+  return new Date(seconds * 1000).toLocaleTimeString("en-GB", { hour12: false });
+}
+
+function formatDate(ts: unknown): string {
+  const seconds = safeTimestamp(ts);
+  if (seconds === null) return "-- ---";
+  return new Date(seconds * 1000).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+  });
+}
+
 function LogLine({ log }: { log: LogEvent }) {
-  const ts = new Date(log.ts * 1000).toLocaleTimeString("en-GB", { hour12: false });
+  const ts = formatTime((log as unknown as { ts?: unknown }).ts);
   const level = safeText((log as unknown as { level?: unknown }).level, "info");
   const message = safeText((log as unknown as { message?: unknown }).message, "");
   return (
     <div className="whitespace-pre-wrap break-all py-px font-mono text-[12px] md:text-[11px] leading-relaxed">
       <span className="text-zinc-600">{ts}</span>{" "}
-      <span className={levelColors[level] ?? "text-zinc-500"}>{level.padEnd(4)}</span>{" "}
+      <span className={levelColors[level] ?? "text-zinc-500"}>{`${level}`.padEnd(4)}</span>{" "}
       <span className="text-zinc-300">{message}</span>
     </div>
   );
 }
 
 function EventLine({ event }: { event: DbEvent }) {
-  const ts = new Date(event.ts * 1000).toLocaleTimeString("en-GB", { hour12: false });
-  const date = new Date(event.ts * 1000).toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-  });
+  const ts = formatTime((event as unknown as { ts?: unknown }).ts);
+  const date = formatDate((event as unknown as { ts?: unknown }).ts);
   const level = safeText((event as unknown as { level?: unknown }).level, "info");
   const category = safeText((event as unknown as { category?: unknown }).category, "system");
   const message = safeText((event as unknown as { message?: unknown }).message, "");
@@ -192,7 +213,7 @@ function EventLine({ event }: { event: DbEvent }) {
         {date} {ts}
       </span>{" "}
       <span className={levelColors[level] ?? "text-zinc-500"}>
-        {level.padEnd(5)}
+        {`${level}`.padEnd(5)}
       </span>{" "}
       <span className={categoryColors[category] ?? "text-zinc-500"}>
         [{category}]

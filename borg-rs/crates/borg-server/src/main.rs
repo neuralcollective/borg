@@ -141,9 +141,24 @@ async fn main() -> anyhow::Result<()> {
     if !config.codex_api_key.is_empty()
         || borg_core::config::codex_has_credentials(&config.codex_credentials_path)
     {
+        let codex_model = db
+            .get_config("codex_model")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "gpt-5.3-codex".to_string());
+        let codex_reasoning_effort = db
+            .get_config("codex_reasoning_effort")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "medium".to_string());
         backends.insert(
             "codex".into(),
-            Arc::new(CodexBackend::new(config.codex_api_key.clone(), "gpt-5.3-codex")),
+            Arc::new(
+                CodexBackend::new(config.codex_api_key.clone(), codex_model)
+                    .with_reasoning_effort(codex_reasoning_effort),
+            ),
         );
     }
     // Local model via Ollama — enabled by setting OLLAMA_URL or LOCAL_MODEL
