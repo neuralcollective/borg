@@ -57,6 +57,10 @@ pub struct Config {
     pub git_committer_name: String,
     pub git_committer_email: String,
     pub git_via_borg: bool,
+    /// When false (default), tell agent not to add Co-Authored-By Claude trailers.
+    pub git_claude_coauthor: bool,
+    /// If set, append Co-Authored-By: <value> to every pipeline commit.
+    pub git_user_coauthor: String,
 
     pub watched_repos: Vec<RepoConfig>,
 
@@ -334,6 +338,8 @@ impl Config {
             git_committer_name: get_str("GIT_COMMITTER_NAME", &dotenv, ""),
             git_committer_email: get_str("GIT_COMMITTER_EMAIL", &dotenv, ""),
             git_via_borg: get_bool("GIT_VIA_BORG", &dotenv, false),
+            git_claude_coauthor: get_bool("GIT_CLAUDE_COAUTHOR", &dotenv, false),
+            git_user_coauthor: get_str("GIT_USER_COAUTHOR", &dotenv, ""),
             watched_repos,
             codex_api_key,
             codex_credentials_path,

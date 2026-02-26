@@ -45,6 +45,9 @@ install-service:
     cp borg.service ~/.config/systemd/user/borg.service
     systemctl --user daemon-reload
 
-# Check status via API
+# Check service status (systemd if available, else API, else not running)
 status:
-    curl -s http://127.0.0.1:3131/api/status | jq .
+    systemctl --user status borg 2>/dev/null || \
+    docker compose ps borg 2>/dev/null || \
+    curl -sf http://127.0.0.1:3131/api/status 2>/dev/null | jq . || \
+    echo "borg is not running"

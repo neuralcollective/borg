@@ -1201,6 +1201,8 @@ async fn triage_proposals(
                 oauth_token: oauth.clone(),
                 model: model.clone(),
                 pending_messages: Vec::new(),
+                system_prompt_suffix: String::new(),
+                user_coauthor: String::new(),
             };
 
             std::fs::create_dir_all(&ctx.session_dir).ok();
@@ -1278,6 +1280,8 @@ const SETTINGS_KEYS: &[&str] = &[
     "pipeline_max_agents",
     "proposal_promote_threshold",
     "backend",
+    "git_claude_coauthor",
+    "git_user_coauthor",
 ];
 
 const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -1293,6 +1297,8 @@ const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("pipeline_max_agents", "3"),
     ("proposal_promote_threshold", "70"),
     ("backend", "claude"),
+    ("git_claude_coauthor", "false"),
+    ("git_user_coauthor", ""),
 ];
 
 async fn get_settings(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
@@ -1305,7 +1311,7 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> Result<Json<Value>,
             .map(|(_, v)| *v)
             .unwrap_or("");
         let s = val.as_deref().unwrap_or(default);
-        let json_val = if *key == "continuous_mode" {
+        let json_val = if matches!(*key, "continuous_mode" | "git_claude_coauthor") {
             json!(s == "true")
         } else if matches!(
             *key,

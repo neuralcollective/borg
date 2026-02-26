@@ -73,6 +73,19 @@ impl AgentBackend for ClaudeBackend {
             "200".to_string(),
         ];
 
+        // Build combined system prompt from phase + config-derived suffix
+        let mut system_prompt = phase.system_prompt.clone();
+        if !ctx.system_prompt_suffix.is_empty() {
+            if !system_prompt.is_empty() {
+                system_prompt.push('\n');
+            }
+            system_prompt.push_str(&ctx.system_prompt_suffix);
+        }
+        if !system_prompt.is_empty() {
+            claude_args.push("--append-system-prompt".to_string());
+            claude_args.push(system_prompt);
+        }
+
         let session_id = ctx.task.session_id.clone();
         if !session_id.is_empty() && !phase.fresh_session {
             claude_args.push("--resume".to_string());

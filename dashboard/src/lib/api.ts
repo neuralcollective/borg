@@ -70,6 +70,8 @@ export interface Settings {
   assistant_name: string;
   pipeline_max_agents: number;
   proposal_promote_threshold: number;
+  git_claude_coauthor: boolean;
+  git_user_coauthor: string;
 }
 
 export function useSettings() {
