@@ -1080,9 +1080,11 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         self.db.update_task_status(entry.task_id, "merged", None)?;
                         merged_branches.push(entry.branch.clone());
                         // Clean up worktree and local branch (gh --squash doesn't do local cleanup)
-                        let wt_path = git.worktree_path(&entry.branch);
-                        if let Err(e) = git.remove_worktree(&wt_path) {
-                            warn!("remove_worktree {} after merge: {e}", entry.branch);
+                        let wt_path = format!("{}/.worktrees/{}", repo_path, entry.branch);
+                        if std::path::Path::new(&wt_path).exists() {
+                            if let Err(e) = git.remove_worktree(&wt_path) {
+                                warn!("remove_worktree {} after merge: {e}", entry.branch);
+                            }
                         }
                         let _ = git.delete_branch(&entry.branch);
                         if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
