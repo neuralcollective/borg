@@ -242,6 +242,7 @@ export interface StreamEvent {
   name?: string;
   content?: unknown;
   output?: unknown;
+  phase?: string;
 }
 
 export function useTaskMessages(taskId: number | null) {

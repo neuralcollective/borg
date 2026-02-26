@@ -8,7 +8,7 @@ interface LiveTerminalProps {
 }
 
 interface TermLine {
-  type: "system" | "text" | "tool" | "result" | "tool_result";
+  type: "system" | "text" | "tool" | "result" | "tool_result" | "phase_result";
   tool?: string;
   label?: string;
   content: string;
@@ -103,6 +103,11 @@ function parseEvents(events: StreamEvent[]): TermLine[] {
     } else if (ev.type === "result") {
       if (ev.result) {
         lines.push({ type: "result", content: ev.result });
+      }
+    } else if (ev.type === "phase_result") {
+      const content = typeof ev.content === "string" ? ev.content : "";
+      if (content.trim()) {
+        lines.push({ type: "phase_result", label: ev.phase || "", content });
       }
     }
   }
@@ -210,6 +215,17 @@ function TermLineView({ line }: { line: TermLine }) {
       <div className="text-emerald-400/80 pt-1 border-t border-emerald-500/10 mt-1">
         <span className="text-emerald-500/50 text-[9px] uppercase tracking-wider">result</span>
         <div className="whitespace-pre-wrap break-words">{line.content}</div>
+      </div>
+    );
+  }
+
+  if (line.type === "phase_result") {
+    return (
+      <div className="rounded border border-emerald-500/30 bg-emerald-950/20 px-3 py-2 my-1">
+        <div className="text-emerald-400/60 text-[9px] uppercase tracking-wider mb-1">
+          Phase result{line.label ? `: ${line.label}` : ""}
+        </div>
+        <div className="text-emerald-300/80 text-[11px] whitespace-pre-wrap break-words">{line.content}</div>
       </div>
     );
   }

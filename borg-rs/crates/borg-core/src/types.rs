@@ -283,6 +283,41 @@ impl Default for PhaseConfig {
     }
 }
 
+// ── Pipeline Events ──────────────────────────────────────────────────────
+
+/// Broadcast event emitted after each significant pipeline state change.
+#[derive(Debug, Clone)]
+pub enum PipelineEvent {
+    Phase { task_id: Option<i64>, message: String },
+    Output { task_id: Option<i64>, message: String },
+    Notify { chat_id: String, message: String },
+    PhaseResult { task_id: i64, phase: String, content: String, chat_id: String },
+}
+
+impl PipelineEvent {
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Phase { .. } => "task_phase",
+            Self::Output { .. } => "task_output",
+            Self::Notify { .. } => "notify",
+            Self::PhaseResult { .. } => "phase_result",
+        }
+    }
+    pub fn task_id(&self) -> Option<i64> {
+        match self {
+            Self::Phase { task_id, .. } | Self::Output { task_id, .. } => *task_id,
+            Self::Notify { .. } => None,
+            Self::PhaseResult { task_id, .. } => Some(*task_id),
+        }
+    }
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Phase { message, .. } | Self::Output { message, .. } | Self::Notify { message, .. } => message,
+            Self::PhaseResult { content, .. } => content,
+        }
+    }
+}
+
 // ── Phase Execution ──────────────────────────────────────────────────────
 
 /// Runtime context passed to a phase executor.
