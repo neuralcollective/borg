@@ -27,9 +27,13 @@ sidecar:
 # Full setup: build everything
 setup: image sidecar dash b
 
-# Restart the service — kills the process and lets systemd restart it (no sudo needed)
+# Restart/start the user service and verify API comes up.
 restart:
-    pkill -x borg-server || true
+    systemctl --user daemon-reload
+    systemctl --user enable borg >/dev/null 2>&1 || true
+    systemctl --user restart borg 2>/dev/null || systemctl --user start borg
+    for i in $(seq 1 20); do curl -sf http://127.0.0.1:3131/api/status >/dev/null && break; sleep 1; done
+    curl -sf http://127.0.0.1:3131/api/status >/dev/null || (echo "borg did not come up on :3131"; systemctl --user --no-pager status borg; exit 1)
 
 # Build release and restart service
 deploy: b restart
@@ -44,6 +48,7 @@ install-service:
     mkdir -p ~/.config/systemd/user
     cp borg.service ~/.config/systemd/user/borg.service
     systemctl --user daemon-reload
+    systemctl --user enable borg >/dev/null 2>&1 || true
 
 # Check service status
 status:
