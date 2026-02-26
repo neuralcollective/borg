@@ -115,11 +115,17 @@ impl Git {
     }
 
     pub fn pull(&self) -> Result<()> {
-        let result = self.exec(&self.repo_path, &["pull", "origin", "main"])?;
-        if !result.success() {
+        // Try fast-forward first; if diverged, reset hard to origin/main
+        let result = self.exec(&self.repo_path, &["pull", "--ff-only", "origin", "main"])?;
+        if result.success() {
+            return Ok(());
+        }
+        // Diverged: discard local commits and follow origin
+        let reset = self.exec(&self.repo_path, &["reset", "--hard", "origin/main"])?;
+        if !reset.success() {
             return Err(anyhow!(
-                "git pull failed: {}",
-                result.combined_output()
+                "git pull --ff-only then reset --hard both failed: {}",
+                reset.combined_output()
             ));
         }
         Ok(())
