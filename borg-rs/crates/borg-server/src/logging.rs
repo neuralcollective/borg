@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
+
 use tokio::sync::broadcast;
 
 pub(crate) struct BroadcastLayer {
@@ -48,14 +48,17 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BroadcastLayer {
         let target = event.metadata().target();
         let category = if target.contains("pipeline") {
             "pipeline"
-        } else if target.contains("agent") || target.contains("claude") || target.contains("codex") {
+        } else if target.contains("agent") || target.contains("claude") || target.contains("codex")
+        {
             "agent"
         } else {
             "system"
         };
 
         let mut message = String::new();
-        event.record(&mut MessageVisitor { message: &mut message });
+        event.record(&mut MessageVisitor {
+            message: &mut message,
+        });
 
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

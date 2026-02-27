@@ -12,7 +12,6 @@
 ///      the mention from `text`, stripping the leading '@', and comparing
 ///      case-insensitively to `bot_username`.
 ///   3. Return false when neither condition holds.
-
 use borg_core::telegram::check_mentions_bot;
 use serde_json::json;
 

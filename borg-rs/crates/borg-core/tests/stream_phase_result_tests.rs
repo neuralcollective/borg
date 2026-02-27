@@ -14,8 +14,7 @@
 //   AC7: PipelineEvent::PhaseResult variant is constructible with the right fields.
 //   EC9: the phase_result event appears before stream_end in the history.
 
-use borg_core::stream::TaskStreamManager;
-use borg_core::types::PipelineEvent;
+use borg_core::{stream::TaskStreamManager, types::PipelineEvent};
 
 // =============================================================================
 // AC7: PipelineEvent::PhaseResult variant is constructible
@@ -30,7 +29,13 @@ fn test_pipeline_event_phase_result_variant_exists() {
         chat_id: "tg:-1234".to_string(),
     };
     // Verify the fields round-trip correctly.
-    if let PipelineEvent::PhaseResult { task_id, phase, content, chat_id } = event {
+    if let PipelineEvent::PhaseResult {
+        task_id,
+        phase,
+        content,
+        chat_id,
+    } = event
+    {
         assert_eq!(task_id, 1);
         assert_eq!(phase, "spec");
         assert_eq!(content, "Summary text.");
@@ -64,10 +69,15 @@ async fn test_push_phase_result_injects_into_history() {
     let task_id: i64 = 42;
     manager.start(task_id).await;
 
-    manager.push_phase_result(task_id, "spec", "Here is the specification.").await;
+    manager
+        .push_phase_result(task_id, "spec", "Here is the specification.")
+        .await;
 
     let (history, _rx) = manager.subscribe(task_id).await;
-    assert!(!history.is_empty(), "history must contain at least one entry");
+    assert!(
+        !history.is_empty(),
+        "history must contain at least one entry"
+    );
 }
 
 #[tokio::test]
@@ -76,7 +86,9 @@ async fn test_push_phase_result_history_contains_phase_result_type() {
     let task_id: i64 = 43;
     manager.start(task_id).await;
 
-    manager.push_phase_result(task_id, "qa", "QA summary.").await;
+    manager
+        .push_phase_result(task_id, "qa", "QA summary.")
+        .await;
 
     let (history, _rx) = manager.subscribe(task_id).await;
     let joined = history.join("\n");
@@ -96,7 +108,10 @@ async fn test_push_phase_result_history_contains_phase_name() {
 
     let (history, _rx) = manager.subscribe(task_id).await;
     let joined = history.join("\n");
-    assert!(joined.contains("qa_fix"), "history must contain phase name 'qa_fix', got: {joined}");
+    assert!(
+        joined.contains("qa_fix"),
+        "history must contain phase name 'qa_fix', got: {joined}"
+    );
 }
 
 #[tokio::test]
@@ -105,7 +120,9 @@ async fn test_push_phase_result_history_contains_content() {
     let task_id: i64 = 45;
     manager.start(task_id).await;
 
-    manager.push_phase_result(task_id, "spec", "UniqueSentinel_ABC_987").await;
+    manager
+        .push_phase_result(task_id, "spec", "UniqueSentinel_ABC_987")
+        .await;
 
     let (history, _rx) = manager.subscribe(task_id).await;
     let joined = history.join("\n");
@@ -136,12 +153,17 @@ async fn test_phase_result_appears_before_stream_end() {
     let task_id: i64 = 50;
     manager.start(task_id).await;
 
-    manager.push_phase_result(task_id, "spec", "Summary before end.").await;
+    manager
+        .push_phase_result(task_id, "spec", "Summary before end.")
+        .await;
 
     // Verify phase_result is in history before end_task is called.
     let (history_before, _rx) = manager.subscribe(task_id).await;
     let joined_before = history_before.join("\n");
-    assert!(joined_before.contains("phase_result"), "phase_result must be in history before end");
+    assert!(
+        joined_before.contains("phase_result"),
+        "phase_result must be in history before end"
+    );
     assert!(
         !joined_before.contains("stream_end"),
         "stream_end must not be in history before end_task is called"
@@ -172,8 +194,12 @@ async fn test_multiple_push_phase_result_both_in_history() {
     let task_id: i64 = 60;
     manager.start(task_id).await;
 
-    manager.push_phase_result(task_id, "spec", "First_UniqueABC").await;
-    manager.push_phase_result(task_id, "qa", "Second_UniqueXYZ").await;
+    manager
+        .push_phase_result(task_id, "spec", "First_UniqueABC")
+        .await;
+    manager
+        .push_phase_result(task_id, "qa", "Second_UniqueXYZ")
+        .await;
 
     let (history, _rx) = manager.subscribe(task_id).await;
     let joined = history.join("\n");
@@ -193,7 +219,9 @@ async fn test_push_phase_result_only_affects_specified_task() {
     manager.start(task_a).await;
     manager.start(task_b).await;
 
-    manager.push_phase_result(task_a, "spec", "Only for task A.").await;
+    manager
+        .push_phase_result(task_a, "spec", "Only for task A.")
+        .await;
 
     let (history_a, _) = manager.subscribe(task_a).await;
     let (history_b, _) = manager.subscribe(task_b).await;

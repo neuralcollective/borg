@@ -11,10 +11,11 @@ function formatUptime(seconds: number) {
   return `${m}m`;
 }
 
-type View = "tasks" | "proposals" | "logs" | "queue" | "chat" | "settings";
+type View = "tasks" | "projects" | "proposals" | "logs" | "queue" | "chat" | "settings";
 
 const VIEW_TITLES: Record<View, string> = {
   tasks: "Pipeline Tasks",
+  projects: "Projects",
   proposals: "Proposals",
   logs: "System Logs",
   queue: "Integration Queue",

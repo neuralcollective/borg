@@ -1,7 +1,16 @@
-use crate::types::{IntegrationType, PhaseConfig, PhaseType, PipelineMode, SeedConfig, SeedOutputType};
+use crate::types::{
+    IntegrationType, PhaseConfig, PhaseType, PipelineMode, SeedConfig, SeedOutputType,
+};
 
 pub fn all_modes() -> Vec<PipelineMode> {
-    vec![swe_mode(), legal_mode(), web_mode(), crew_mode(), sales_mode(), data_mode()]
+    vec![
+        swe_mode(),
+        legal_mode(),
+        web_mode(),
+        crew_mode(),
+        sales_mode(),
+        data_mode(),
+    ]
 }
 
 pub fn get_mode(name: &str) -> Option<PipelineMode> {
@@ -28,7 +37,14 @@ fn setup_phase(next: &str) -> PhaseConfig {
 
 /// Create a standard agent phase with the six most common fields.
 /// Callers override additional fields via struct update syntax.
-fn agent_phase(name: &str, label: &str, system: &str, instruction: &str, tools: &str, next: &str) -> PhaseConfig {
+fn agent_phase(
+    name: &str,
+    label: &str,
+    system: &str,
+    instruction: &str,
+    tools: &str,
+    next: &str,
+) -> PhaseConfig {
     PhaseConfig {
         name: name.into(),
         label: label.into(),
@@ -142,14 +158,28 @@ pub fn swe_mode() -> PipelineMode {
                 include_file_listing: true,
                 check_artifact: Some("spec.md".into()),
                 use_docker: true,
-                ..agent_phase("spec", "Specification", SWE_SPEC_SYSTEM, SWE_SPEC_INSTRUCTION, "Read,Glob,Grep,Write", "qa")
+                ..agent_phase(
+                    "spec",
+                    "Specification",
+                    SWE_SPEC_SYSTEM,
+                    SWE_SPEC_INSTRUCTION,
+                    "Read,Glob,Grep,Write",
+                    "qa",
+                )
             },
             PhaseConfig {
                 use_docker: true,
                 commits: true,
                 commit_message: "test: add tests from QA agent".into(),
                 allow_no_changes: true,
-                ..agent_phase("qa", "Testing", SWE_QA_SYSTEM, SWE_QA_INSTRUCTION, "Read,Glob,Grep,Write", "impl")
+                ..agent_phase(
+                    "qa",
+                    "Testing",
+                    SWE_QA_SYSTEM,
+                    SWE_QA_INSTRUCTION,
+                    "Read,Glob,Grep,Write",
+                    "impl",
+                )
             },
             PhaseConfig {
                 error_instruction: SWE_QA_FIX_ERROR.into(),
@@ -158,7 +188,14 @@ pub fn swe_mode() -> PipelineMode {
                 commit_message: "test: fix tests from QA agent".into(),
                 allow_no_changes: true,
                 fresh_session: true,
-                ..agent_phase("qa_fix", "Test Fix", SWE_QA_SYSTEM, SWE_QA_INSTRUCTION, "Read,Glob,Grep,Write", "impl")
+                ..agent_phase(
+                    "qa_fix",
+                    "Test Fix",
+                    SWE_QA_SYSTEM,
+                    SWE_QA_INSTRUCTION,
+                    "Read,Glob,Grep,Write",
+                    "impl",
+                )
             },
             PhaseConfig {
                 error_instruction: SWE_IMPL_RETRY.into(),
@@ -167,7 +204,14 @@ pub fn swe_mode() -> PipelineMode {
                 commit_message: "impl: implementation from worker agent".into(),
                 runs_tests: true,
                 has_qa_fix_routing: true,
-                ..agent_phase("impl", "Implementation", SWE_WORKER_SYSTEM, SWE_IMPL_INSTRUCTION, IMPL_TOOLS, "lint_fix")
+                ..agent_phase(
+                    "impl",
+                    "Implementation",
+                    SWE_WORKER_SYSTEM,
+                    SWE_IMPL_INSTRUCTION,
+                    IMPL_TOOLS,
+                    "lint_fix",
+                )
             },
             PhaseConfig {
                 error_instruction: SWE_IMPL_RETRY.into(),
@@ -176,7 +220,14 @@ pub fn swe_mode() -> PipelineMode {
                 commit_message: "impl: implementation from worker agent".into(),
                 runs_tests: true,
                 has_qa_fix_routing: true,
-                ..agent_phase("retry", "Retry", SWE_WORKER_SYSTEM, SWE_IMPL_INSTRUCTION, IMPL_TOOLS, "lint_fix")
+                ..agent_phase(
+                    "retry",
+                    "Retry",
+                    SWE_WORKER_SYSTEM,
+                    SWE_IMPL_INSTRUCTION,
+                    IMPL_TOOLS,
+                    "lint_fix",
+                )
             },
             lint_phase("rebase"),
             rebase_phase(),
@@ -269,7 +320,14 @@ pub fn web_mode() -> PipelineMode {
                 include_file_listing: true,
                 check_artifact: Some("audit.md".into()),
                 use_docker: true,
-                ..agent_phase("audit", "Audit", WEB_AUDIT_SYSTEM, WEB_AUDIT_INSTRUCTION, "Read,Glob,Grep,Write", "improve")
+                ..agent_phase(
+                    "audit",
+                    "Audit",
+                    WEB_AUDIT_SYSTEM,
+                    WEB_AUDIT_INSTRUCTION,
+                    "Read,Glob,Grep,Write",
+                    "improve",
+                )
             },
             PhaseConfig {
                 error_instruction: WEB_IMPROVE_RETRY.into(),
@@ -277,7 +335,14 @@ pub fn web_mode() -> PipelineMode {
                 commits: true,
                 commit_message: "improve: frontend improvements from web agent".into(),
                 runs_tests: true,
-                ..agent_phase("improve", "Improve", WEB_IMPROVE_SYSTEM, WEB_IMPROVE_INSTRUCTION, "Read,Glob,Grep,Write,Edit,Bash", "lint_fix")
+                ..agent_phase(
+                    "improve",
+                    "Improve",
+                    WEB_IMPROVE_SYSTEM,
+                    WEB_IMPROVE_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit,Bash",
+                    "lint_fix",
+                )
             },
             lint_phase("rebase"),
             rebase_phase(),
@@ -337,17 +402,38 @@ pub fn crew_mode() -> PipelineMode {
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("candidates.md".into()),
-                ..agent_phase("source", "Sourcing", CREW_SOURCE_SYSTEM, CREW_SOURCE_INSTRUCTION, "Read,Glob,Grep,Write,WebSearch,WebFetch", "evaluate")
+                ..agent_phase(
+                    "source",
+                    "Sourcing",
+                    CREW_SOURCE_SYSTEM,
+                    CREW_SOURCE_INSTRUCTION,
+                    "Read,Glob,Grep,Write,WebSearch,WebFetch",
+                    "evaluate",
+                )
             },
             PhaseConfig {
                 commits: true,
                 commit_message: "eval: candidate evaluations from crew agent".into(),
-                ..agent_phase("evaluate", "Evaluation", CREW_EVALUATE_SYSTEM, CREW_EVALUATE_INSTRUCTION, "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch", "rank")
+                ..agent_phase(
+                    "evaluate",
+                    "Evaluation",
+                    CREW_EVALUATE_SYSTEM,
+                    CREW_EVALUATE_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "rank",
+                )
             },
             PhaseConfig {
                 commits: true,
                 commit_message: "rank: prioritized shortlist from crew agent".into(),
-                ..agent_phase("rank", "Ranking", CREW_RANK_SYSTEM, CREW_RANK_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
+                ..agent_phase(
+                    "rank",
+                    "Ranking",
+                    CREW_RANK_SYSTEM,
+                    CREW_RANK_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit",
+                    "done",
+                )
             },
         ],
         seed_modes: vec![
@@ -394,18 +480,39 @@ pub fn sales_mode() -> PipelineMode {
             PhaseConfig {
                 include_task_context: true,
                 check_artifact: Some("prospect.md".into()),
-                ..agent_phase("research", "Prospect Research", SALES_RESEARCH_SYSTEM, SALES_RESEARCH_INSTRUCTION, "Read,Glob,Grep,Write,WebSearch,WebFetch", "draft")
+                ..agent_phase(
+                    "research",
+                    "Prospect Research",
+                    SALES_RESEARCH_SYSTEM,
+                    SALES_RESEARCH_INSTRUCTION,
+                    "Read,Glob,Grep,Write,WebSearch,WebFetch",
+                    "draft",
+                )
             },
             PhaseConfig {
                 commits: true,
                 commit_message: "draft: outreach from sales agent".into(),
-                ..agent_phase("draft", "Outreach Draft", SALES_DRAFT_SYSTEM, SALES_DRAFT_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "review")
+                ..agent_phase(
+                    "draft",
+                    "Outreach Draft",
+                    SALES_DRAFT_SYSTEM,
+                    SALES_DRAFT_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit",
+                    "review",
+                )
             },
             PhaseConfig {
                 error_instruction: SALES_REVIEW_RETRY.into(),
                 commits: true,
                 commit_message: "review: revisions from sales review agent".into(),
-                ..agent_phase("review", "Review", SALES_REVIEW_SYSTEM, SALES_REVIEW_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
+                ..agent_phase(
+                    "review",
+                    "Review",
+                    SALES_REVIEW_SYSTEM,
+                    SALES_REVIEW_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit",
+                    "done",
+                )
             },
         ],
         seed_modes: vec![
@@ -453,18 +560,39 @@ pub fn data_mode() -> PipelineMode {
                 include_task_context: true,
                 include_file_listing: true,
                 check_artifact: Some("data.md".into()),
-                ..agent_phase("ingest", "Data Ingestion", DATA_INGEST_SYSTEM, DATA_INGEST_INSTRUCTION, "Read,Glob,Grep,Write,Bash,WebSearch,WebFetch", "analyze")
+                ..agent_phase(
+                    "ingest",
+                    "Data Ingestion",
+                    DATA_INGEST_SYSTEM,
+                    DATA_INGEST_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Bash,WebSearch,WebFetch",
+                    "analyze",
+                )
             },
             PhaseConfig {
                 error_instruction: DATA_ANALYZE_RETRY.into(),
                 commits: true,
                 commit_message: "analyze: data analysis from databorg agent".into(),
-                ..agent_phase("analyze", "Analysis", DATA_ANALYZE_SYSTEM, DATA_ANALYZE_INSTRUCTION, "Read,Glob,Grep,Write,Edit,Bash", "report")
+                ..agent_phase(
+                    "analyze",
+                    "Analysis",
+                    DATA_ANALYZE_SYSTEM,
+                    DATA_ANALYZE_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit,Bash",
+                    "report",
+                )
             },
             PhaseConfig {
                 commits: true,
                 commit_message: "report: findings from databorg agent".into(),
-                ..agent_phase("report", "Report", DATA_REPORT_SYSTEM, DATA_REPORT_INSTRUCTION, "Read,Glob,Grep,Write,Edit", "done")
+                ..agent_phase(
+                    "report",
+                    "Report",
+                    DATA_REPORT_SYSTEM,
+                    DATA_REPORT_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit",
+                    "done",
+                )
             },
         ],
         seed_modes: vec![
@@ -512,14 +640,14 @@ const SWE_QA_FIX_ERROR: &str = "\n\nYour tests from the previous QA pass have bu
 
 const SWE_IMPL_INSTRUCTION: &str = "Read spec.md and the test files.\nWrite implementation code that makes all tests pass.\nOnly modify files listed in spec.md. Do not modify test files.";
 
-const SWE_IMPL_RETRY: &str = "\n\nPrevious attempt failed. Test output:\n```\n{ERROR}\n```\nFix the failures.";
+const SWE_IMPL_RETRY: &str =
+    "\n\nPrevious attempt failed. Test output:\n```\n{ERROR}\n```\nFix the failures.";
 
 const SWE_REBASE_INSTRUCTION: &str = "This branch has merge conflicts with main.\nRebase onto origin/main, resolve all conflicts, and ensure tests pass.\nRead spec.md for context on what this branch does.";
 
 const SWE_REBASE_ERROR: &str = "\n\nPrevious error context:\n```\n{ERROR}\n```";
 
 const SWE_REBASE_FIX: &str = "The git rebase onto origin/main failed with conflicts:\n\n{ERROR}\n\nYou are in the worktree where the rebase is paused. Resolve all conflicts:\n- For 'deleted by us' files (files removed from main): run `git rm <file>` for each one\n- For content conflicts (<<<< markers): edit the file to resolve, then `git add <file>`\nAfter resolving all conflicts, run `git rebase --continue`.\nDo NOT run `git rebase --abort`.";
-
 
 const LEGAL_RESEARCH_SYSTEM: &str = "You are the research agent in an autonomous legal pipeline.\nAnalyze the legal issue, research relevant law, precedent, and context,\nthen produce a research memo (research.md) at the workspace root.\nDo not draft legal documents yet — focus on thorough analysis.";
 
@@ -543,7 +671,8 @@ const WEB_IMPROVE_SYSTEM: &str = "You are a frontend performance and UX expert i
 
 const WEB_IMPROVE_INSTRUCTION: &str = "Read audit.md and implement the action items listed under \"Prioritized action items\".\nMake targeted, surgical edits. Verify changes compile/build correctly.";
 
-const WEB_IMPROVE_RETRY: &str = "\n\nPrevious attempt failed. Error output:\n```\n{ERROR}\n```\nFix the issue.";
+const WEB_IMPROVE_RETRY: &str =
+    "\n\nPrevious attempt failed. Error output:\n```\n{ERROR}\n```\nFix the issue.";
 
 const SEED_REFACTOR: &str = "Identify 1-3 concrete, small improvements in code quality. Look for:\
 \n- Dead code: unused functions, variables, imports, exports, or branches\
@@ -556,7 +685,8 @@ const SEED_REFACTOR: &str = "Identify 1-3 concrete, small improvements in code q
 \n\nEach task should be self-contained and safe to merge independently.\
 \nDo not suggest new features. Skip cosmetic-only changes with no real benefit.";
 
-const SEED_SECURITY: &str = "Audit for bugs, security vulnerabilities, and reliability issues. Look for:\
+const SEED_SECURITY: &str =
+    "Audit for bugs, security vulnerabilities, and reliability issues. Look for:\
 \n- Race conditions and unsafe concurrent access\
 \n- Resource leaks: memory, file handles, connections not released on all paths\
 \n- Silenced errors (empty catch blocks, ignored return values)\
@@ -577,16 +707,19 @@ const SEED_TESTS: &str = "Identify gaps in test coverage that matter for correct
 \ndescription of what cases to cover and why they matter. Skip trivial\
 \ngetters, boilerplate, and tests that would only assert mocks.";
 
-const SEED_FEATURES: &str = "Suggest 1-3 concrete features that would meaningfully improve this project.\
+const SEED_FEATURES: &str =
+    "Suggest 1-3 concrete features that would meaningfully improve this project.\
 \nBase your suggestions on actual gaps you found while exploring the code.";
 
-const SEED_ARCHITECTURE: &str = "Identify 1-2 significant structural improvements. Think big: module\
+const SEED_ARCHITECTURE: &str =
+    "Identify 1-2 significant structural improvements. Think big: module\
 \nreorganization, API redesigns, performance overhauls, major refactors\
 \nthat span multiple files, or replacing approaches that have outgrown\
 \ntheir original design.\
 \n\nEach proposal should be a multi-day project, not a quick fix.";
 
-const SEED_CROSS_POLLINATE: &str = "Study this codebase to understand its patterns, features, and architecture.\
+const SEED_CROSS_POLLINATE: &str =
+    "Study this codebase to understand its patterns, features, and architecture.\
 \nThen suggest 1-3 ideas inspired by what you see here that could be adapted\
 \nor ported to a DIFFERENT project (not this one).\
 \n\nFocus on: elegant abstractions worth copying, clever approaches to common\
@@ -596,7 +729,8 @@ const SEED_CROSS_POLLINATE: &str = "Study this codebase to understand its patter
 
 // ── CrewBorg prompts ──────────────────────────────────────────────────────
 
-const CREW_SOURCE_SYSTEM: &str = "You are a talent sourcing agent. Your job is to find real, verifiable\
+const CREW_SOURCE_SYSTEM: &str =
+    "You are a talent sourcing agent. Your job is to find real, verifiable\
 \ncandidates that match the brief. Use web search to locate profiles,\
 \nportfolios, GitHub accounts, LinkedIn, personal sites, and relevant\
 \ncommunities. Do not invent candidates — only record those you can verify.";
@@ -608,7 +742,8 @@ const CREW_SOURCE_INSTRUCTION: &str = "Read the task brief and search for matchi
 \n3. Candidate list — for each: name, profile URL(s), location, and why they match\
 \nAim for 10-20 candidates. Prefer quality over quantity.";
 
-const CREW_EVALUATE_SYSTEM: &str = "You are a talent evaluation agent. Read candidates.md and do deeper\
+const CREW_EVALUATE_SYSTEM: &str =
+    "You are a talent evaluation agent. Read candidates.md and do deeper\
 \nresearch on each candidate. Assess fit against the brief criteria.\
 \nBe honest about gaps and uncertainties. Do not inflate scores.";
 
@@ -640,17 +775,20 @@ const CREW_SEED_REFRESH: &str = "Check candidates in the existing shortlist for 
 \nSearch for any whose profiles or availability may have changed\
 \nsince last evaluated. Create a task to re-evaluate those candidates.";
 
-const CREW_SEED_CRITERIA: &str = "Review the search briefs and evaluation criteria in this repository.\
+const CREW_SEED_CRITERIA: &str =
+    "Review the search briefs and evaluation criteria in this repository.\
 \nSuggest 1-2 improvements: criteria that are too vague, missing signals\
 \nthat would better predict fit, or sourcing channels not yet tried.";
 
 // ── SalesBorg prompts ─────────────────────────────────────────────────────
 
-const SALES_RESEARCH_SYSTEM: &str = "You are a sales research agent. Research the prospect thoroughly\
+const SALES_RESEARCH_SYSTEM: &str =
+    "You are a sales research agent. Research the prospect thoroughly\
 \nbefore any outreach is drafted. Find recent news, product focus, team\
 \nsize, funding, pain points, and relevant context. Do not fabricate facts.";
 
-const SALES_RESEARCH_INSTRUCTION: &str = "Research the prospect described in the task and write prospect.md:\
+const SALES_RESEARCH_INSTRUCTION: &str =
+    "Research the prospect described in the task and write prospect.md:\
 \n1. Company/person overview (what they do, size, stage)\
 \n2. Recent news and signals (funding, launches, hires, press)\
 \n3. Likely pain points relevant to our offering\
@@ -670,7 +808,8 @@ const SALES_DRAFT_INSTRUCTION: &str = "Read prospect.md and draft outreach.md co
 \n3. LinkedIn message variant (under 300 chars)\
 \n4. Notes on timing or personalisation to add before sending";
 
-const SALES_REVIEW_SYSTEM: &str = "You are a senior sales reviewer. Read prospect.md and outreach.md.\
+const SALES_REVIEW_SYSTEM: &str =
+    "You are a senior sales reviewer. Read prospect.md and outreach.md.\
 \nAssess the outreach for relevance, tone, personalisation, and clarity.\
 \nFix weak spots directly in outreach.md. Do not just list issues.";
 
@@ -682,7 +821,8 @@ const SALES_REVIEW_INSTRUCTION: &str = "Review outreach.md against prospect.md. 
 \n5. Length: email under 200 words, LinkedIn under 300 chars\
 \nFix any issues directly. Leave a brief review note at the top of outreach.md.";
 
-const SALES_REVIEW_RETRY: &str = "\n\nPrevious review flagged unresolved issues:\n{ERROR}\n\nAddress them.";
+const SALES_REVIEW_RETRY: &str =
+    "\n\nPrevious review flagged unresolved issues:\n{ERROR}\n\nAddress them.";
 
 const SALES_SEED_DISCOVERY: &str = "Review the prospect list in this repository.\
 \nIdentify 1-3 new leads that fit the ideal customer profile based on\
@@ -701,12 +841,14 @@ const SALES_SEED_ICP: &str = "Analyse the prospect list and outreach results in 
 
 // ── DataBorg prompts ──────────────────────────────────────────────────────
 
-const DATA_INGEST_SYSTEM: &str = "You are a data ingestion agent. Your job is to understand the raw data\
+const DATA_INGEST_SYSTEM: &str =
+    "You are a data ingestion agent. Your job is to understand the raw data\
 \nin this repository — schemas, formats, quality, and coverage — and produce\
 \na clear summary so downstream agents can work with it effectively.\
 \nDo not draw conclusions yet. Focus on accurate characterisation.";
 
-const DATA_INGEST_INSTRUCTION: &str = "Explore the data files in this repository and write data.md:\
+const DATA_INGEST_INSTRUCTION: &str =
+    "Explore the data files in this repository and write data.md:\
 \n1. Data inventory — files/tables, formats, row counts, date ranges\
 \n2. Schema summary — key fields, types, nullability, relationships\
 \n3. Quality issues — missing values, outliers, encoding problems, duplicates\
@@ -722,13 +864,16 @@ const DATA_ANALYZE_INSTRUCTION: &str = "Read data.md and the task description, t
 \n2. Run the code and capture output — include key numbers and results inline\
 \n3. Note any assumptions made or data limitations that affect conclusions";
 
-const DATA_ANALYZE_RETRY: &str = "\n\nPrevious attempt failed. Error:\n```\n{ERROR}\n```\nFix the issue.";
+const DATA_ANALYZE_RETRY: &str =
+    "\n\nPrevious attempt failed. Error:\n```\n{ERROR}\n```\nFix the issue.";
 
-const DATA_REPORT_SYSTEM: &str = "You are a data reporting agent. Read the analysis outputs and produce\
+const DATA_REPORT_SYSTEM: &str =
+    "You are a data reporting agent. Read the analysis outputs and produce\
 \na clear, concise report. Lead with findings, not methodology.\
 \nWrite for a non-technical reader unless the task specifies otherwise.";
 
-const DATA_REPORT_INSTRUCTION: &str = "Read data.md and the analysis outputs, then write report.md:\
+const DATA_REPORT_INSTRUCTION: &str =
+    "Read data.md and the analysis outputs, then write report.md:\
 \n1. Key findings (3-5 bullet points, concrete numbers)\
 \n2. Methodology summary (1 short paragraph — what was done and why)\
 \n3. Detailed results — tables, trends, comparisons as appropriate\

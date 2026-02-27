@@ -31,7 +31,6 @@ impl OllamaBackend {
         self.timeout_secs = secs;
         self
     }
-
 }
 
 #[derive(Serialize)]
@@ -114,7 +113,7 @@ impl AgentBackend for OllamaBackend {
                     raw_stream: String::new(),
                     success: false,
                 });
-            }
+            },
             Err(e) => {
                 warn!(task_id = task.id, phase = %phase.name, "ollama request failed: {}", e);
                 return Ok(PhaseOutput {
@@ -123,7 +122,7 @@ impl AgentBackend for OllamaBackend {
                     raw_stream: String::new(),
                     success: false,
                 });
-            }
+            },
         };
 
         let status = response.status();
@@ -154,7 +153,7 @@ impl AgentBackend for OllamaBackend {
                     raw_stream: String::new(),
                     success: false,
                 });
-            }
+            },
         };
 
         let output = parsed.message.content;

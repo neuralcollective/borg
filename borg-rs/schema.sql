@@ -140,6 +140,26 @@ CREATE TABLE IF NOT EXISTS proposals (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- ── Projects (document workspaces) ───────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'general',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  file_name TEXT NOT NULL,
+  stored_path TEXT NOT NULL,
+  mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
+
 -- ── Unified event log ─────────────────────────────────────────────────────
 -- Append-only. Never UPDATE or DELETE rows.
 -- kind taxonomy and payload shapes are documented in schema_notes.md.

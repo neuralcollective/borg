@@ -1,3 +1,5 @@
+use std::process::Stdio;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use borg_core::{
@@ -5,9 +7,10 @@ use borg_core::{
     sandbox::{Sandbox, SandboxMode},
     types::{PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
-use std::process::Stdio;
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+};
 use tracing::{info, warn};
 
 pub const PHASE_RESULT_START: &str = "---PHASE_RESULT_START---";
@@ -51,7 +54,11 @@ pub struct ClaudeBackend {
 }
 
 impl ClaudeBackend {
-    pub fn new(claude_bin: impl Into<String>, sandbox_mode: SandboxMode, docker_image: impl Into<String>) -> Self {
+    pub fn new(
+        claude_bin: impl Into<String>,
+        sandbox_mode: SandboxMode,
+        docker_image: impl Into<String>,
+    ) -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         Self {
             claude_bin: claude_bin.into(),
@@ -87,7 +94,8 @@ impl AgentBackend for ClaudeBackend {
         } else {
             None
         };
-        let instruction = crate::instruction::build_instruction(task, phase, &ctx, file_listing.as_deref());
+        let instruction =
+            crate::instruction::build_instruction(task, phase, &ctx, file_listing.as_deref());
 
         let allowed_tools = if phase.allowed_tools.is_empty() {
             "Read,Glob,Grep,Write,Edit,Bash".to_string()
@@ -160,7 +168,7 @@ impl AgentBackend for ClaudeBackend {
                     .stderr(Stdio::piped())
                     .spawn()
                     .context("failed to spawn bwrap")?
-            }
+            },
             SandboxMode::Docker => {
                 let mut binds = vec![
                     (ctx.worktree_path.as_str(), ctx.worktree_path.as_str()),
@@ -177,12 +185,14 @@ impl AgentBackend for ClaudeBackend {
                     .stderr(Stdio::piped())
                     .spawn()
                     .context("failed to spawn docker")?
-            }
+            },
             SandboxMode::Direct => {
                 let path = std::env::var("PATH").unwrap_or_default();
                 let augmented_path = format!(
                     "{path}:/home/{}/.local/bin:/usr/local/bin",
-                    std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_default()
+                    std::env::var("USER")
+                        .or_else(|_| std::env::var("LOGNAME"))
+                        .unwrap_or_default()
                 );
                 Command::new(&self.claude_bin)
                     .args(&full_cmd[1..])
@@ -195,7 +205,7 @@ impl AgentBackend for ClaudeBackend {
                     .stderr(Stdio::piped())
                     .spawn()
                     .with_context(|| format!("failed to spawn claude: {}", self.claude_bin))?
-            }
+            },
         };
 
         let stdout = child.stdout.take().context("failed to take stdout")?;
@@ -257,7 +267,7 @@ impl AgentBackend for ClaudeBackend {
                         raw_stream: String::new(),
                         success: false,
                     });
-                }
+                },
             }
         } else {
             io_future.await?

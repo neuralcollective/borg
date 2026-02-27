@@ -1,3 +1,5 @@
+use std::path::Path;
+
 /// Integration tests for pipeline-state snapshot files (spec.md).
 ///
 /// All tests in this file reference types and DB methods that do not exist
@@ -9,7 +11,6 @@ use borg_core::{
     types::{PhaseHistoryEntry, PipelineStateSnapshot, Task},
 };
 use chrono::Utc;
-use std::path::Path;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -91,9 +92,18 @@ fn test_pipeline_state_snapshot_serialization() {
     assert_eq!(restored.pr_url, original.pr_url);
     assert_eq!(restored.pending_approvals, original.pending_approvals);
     assert_eq!(restored.phase_history.len(), original.phase_history.len());
-    assert_eq!(restored.phase_history[0].phase, original.phase_history[0].phase);
-    assert_eq!(restored.phase_history[0].success, original.phase_history[0].success);
-    assert_eq!(restored.phase_history[0].output, original.phase_history[0].output);
+    assert_eq!(
+        restored.phase_history[0].phase,
+        original.phase_history[0].phase
+    );
+    assert_eq!(
+        restored.phase_history[0].success,
+        original.phase_history[0].success
+    );
+    assert_eq!(
+        restored.phase_history[0].output,
+        original.phase_history[0].output
+    );
 }
 
 // ── AC #2 ─────────────────────────────────────────────────────────────────────
@@ -198,7 +208,9 @@ fn test_get_queue_entries_for_task_returns_all_statuses() {
     let entry_id = db.enqueue(task_id, "task-1", "/repo", 0).expect("enqueue");
     db.update_queue_status(entry_id, "pending_review")
         .expect("update to pending_review");
-    let _other_id = db.enqueue(task_id, "task-1-retry", "/repo", 0).expect("enqueue other");
+    let _other_id = db
+        .enqueue(task_id, "task-1-retry", "/repo", 0)
+        .expect("enqueue other");
 
     let entries = db
         .get_queue_entries_for_task(task_id)
@@ -212,8 +224,12 @@ fn test_pending_approvals_contains_pending_review_branches() {
     let db = open_db();
     let task_id = make_task(&db);
 
-    let queued_id = db.enqueue(task_id, "task-1", "/repo", 0).expect("enqueue queued");
-    let review_id = db.enqueue(task_id, "task-1-v2", "/repo", 0).expect("enqueue review");
+    let queued_id = db
+        .enqueue(task_id, "task-1", "/repo", 0)
+        .expect("enqueue queued");
+    let review_id = db
+        .enqueue(task_id, "task-1-v2", "/repo", 0)
+        .expect("enqueue review");
     db.update_queue_status(review_id, "pending_review")
         .expect("set pending_review");
 
@@ -251,7 +267,10 @@ fn test_pending_approvals_empty_when_no_queue_entries() {
         .filter(|e| e.status == "pending_review")
         .collect();
 
-    assert!(pending.is_empty(), "no queue entries → empty pending_approvals");
+    assert!(
+        pending.is_empty(),
+        "no queue entries → empty pending_approvals"
+    );
 }
 
 #[test]
@@ -346,7 +365,10 @@ fn test_snapshot_overwritten_on_retry() {
 
     let content = std::fs::read_to_string(&path).unwrap();
     let restored: PipelineStateSnapshot = serde_json::from_str(&content).unwrap();
-    assert_eq!(restored.phase, "retry", "stale snapshot must be overwritten");
+    assert_eq!(
+        restored.phase, "retry",
+        "stale snapshot must be overwritten"
+    );
 }
 
 // Edge case: no prior phase outputs → phase_history is empty.
@@ -442,8 +464,14 @@ fn test_task_status_unchanged_after_snapshot_write_failure() {
 
     // Simulate a failed snapshot write (e.g., read-only dir) by doing nothing
     // to the DB. The task status must remain "impl" (as inserted).
-    let task = db.get_task(task_id).expect("get_task").expect("task exists");
-    assert_eq!(task.status, "impl", "task status must not change on snapshot error");
+    let task = db
+        .get_task(task_id)
+        .expect("get_task")
+        .expect("task exists");
+    assert_eq!(
+        task.status, "impl",
+        "task status must not change on snapshot error"
+    );
 }
 
 // ── PhaseHistoryEntry: field-level checks ────────────────────────────────────
@@ -470,9 +498,12 @@ fn test_get_queue_entries_for_task_returns_in_insertion_order() {
     let db = open_db();
     let task_id = make_task(&db);
 
-    db.enqueue(task_id, "first", "/repo", 0).expect("enqueue first");
-    db.enqueue(task_id, "second", "/repo", 0).expect("enqueue second");
-    db.enqueue(task_id, "third", "/repo", 0).expect("enqueue third");
+    db.enqueue(task_id, "first", "/repo", 0)
+        .expect("enqueue first");
+    db.enqueue(task_id, "second", "/repo", 0)
+        .expect("enqueue second");
+    db.enqueue(task_id, "third", "/repo", 0)
+        .expect("enqueue third");
 
     let entries = db
         .get_queue_entries_for_task(task_id)

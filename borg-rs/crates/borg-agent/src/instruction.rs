@@ -20,7 +20,10 @@ pub fn build_instruction(
     }
 
     if phase.include_task_context {
-        s.push_str(&format!("Task: {}\n\n{}\n\n---\n\n", task.title, task.description));
+        s.push_str(&format!(
+            "Task: {}\n\n{}\n\n---\n\n",
+            task.title, task.description
+        ));
     }
 
     s.push_str(&phase.instruction);
@@ -71,7 +74,8 @@ fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
 
     // 3. .borg/prompt.md in the repo root (skip if same path as worktree)
     if ctx.repo_config.path != ctx.worktree_path {
-        if let IpcReadResult::Ok(content) = ipc::read_file(&ctx.repo_config.path, ".borg/prompt.md") {
+        if let IpcReadResult::Ok(content) = ipc::read_file(&ctx.repo_config.path, ".borg/prompt.md")
+        {
             let trimmed = content.trim().to_string();
             if !trimmed.is_empty() {
                 return Some(trimmed);

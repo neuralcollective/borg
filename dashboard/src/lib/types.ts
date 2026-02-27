@@ -120,6 +120,22 @@ export interface PipelineMode {
   phases: PhaseInfo[];
 }
 
+export interface Project {
+  id: number;
+  name: string;
+  mode: string;
+  created_at: string;
+}
+
+export interface ProjectFile {
+  id: number;
+  project_id: number;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
 // sweborg phases (default fallback)
 const SWE_DISPLAY_PHASES = ["backlog", "spec", "qa", "impl", "done", "merged"] as const;
 const SWE_PHASE_LABELS: Record<string, string> = {

@@ -1,5 +1,8 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
+
 use tokio::sync::{broadcast, Mutex};
 
 const MAX_HISTORY_LINES: usize = 10_000;
@@ -29,11 +32,14 @@ impl TaskStreamManager {
     pub async fn start(&self, task_id: i64) {
         let (tx, _) = broadcast::channel(512);
         let mut map = self.streams.lock().await;
-        map.insert(task_id, TaskStream {
-            tx,
-            history: VecDeque::new(),
-            ended: false,
-        });
+        map.insert(
+            task_id,
+            TaskStream {
+                tx,
+                history: VecDeque::new(),
+                ended: false,
+            },
+        );
     }
 
     /// Push an NDJSON line to the task's stream.
@@ -83,9 +89,13 @@ impl TaskStreamManager {
         match map.get(&task_id) {
             Some(s) => {
                 let history: Vec<String> = s.history.iter().cloned().collect();
-                let rx = if !s.ended { Some(s.tx.subscribe()) } else { None };
+                let rx = if !s.ended {
+                    Some(s.tx.subscribe())
+                } else {
+                    None
+                };
                 (history, rx)
-            }
+            },
             None => (Vec::new(), None),
         }
     }

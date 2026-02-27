@@ -1,7 +1,8 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::Value;
-use std::sync::atomic::{AtomicI64, Ordering};
 use tracing::{info, warn};
 
 /// An incoming Telegram message.
@@ -217,19 +218,16 @@ pub fn check_mentions_bot(bot_username: &str, text: &str, entities: &[Value]) ->
         return false;
     }
     let utf16: Vec<u16> = text.encode_utf16().collect();
-    entities
-        .iter()
-        .filter(|e| e["type"] == "mention")
-        .any(|e| {
-            let offset = e["offset"].as_u64().unwrap_or(0) as usize;
-            let length = e["length"].as_u64().unwrap_or(0) as usize;
-            if length == 0 || offset >= utf16.len() {
-                return false;
-            }
-            let end = (offset + length).min(utf16.len());
-            let mention = String::from_utf16_lossy(&utf16[offset..end]);
-            mention.trim_start_matches('@').to_lowercase() == bot_username.to_lowercase()
-        })
+    entities.iter().filter(|e| e["type"] == "mention").any(|e| {
+        let offset = e["offset"].as_u64().unwrap_or(0) as usize;
+        let length = e["length"].as_u64().unwrap_or(0) as usize;
+        if length == 0 || offset >= utf16.len() {
+            return false;
+        }
+        let end = (offset + length).min(utf16.len());
+        let mention = String::from_utf16_lossy(&utf16[offset..end]);
+        mention.trim_start_matches('@').to_lowercase() == bot_username.to_lowercase()
+    })
 }
 
 fn split_text(text: &str, limit: usize) -> Vec<String> {

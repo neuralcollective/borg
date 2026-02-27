@@ -1,8 +1,9 @@
+use std::sync::Mutex;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json;
-use std::sync::Mutex;
 
 use crate::types::{Proposal, QueueEntry, Task};
 
@@ -87,6 +88,25 @@ pub struct ChatAgentRun {
     pub last_msg_timestamp: String,
     pub started_at: String,
     pub completed_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ProjectRow {
+    pub id: i64,
+    pub name: String,
+    pub mode: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ProjectFileRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub file_name: String,
+    pub stored_path: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub created_at: DateTime<Utc>,
 }
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────
@@ -223,6 +243,29 @@ fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent>
     })
 }
 
+fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
+    let created_at_str: String = row.get(3)?;
+    Ok(ProjectRow {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        mode: row.get(2)?,
+        created_at: parse_ts(&created_at_str),
+    })
+}
+
+fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileRow> {
+    let created_at_str: String = row.get(6)?;
+    Ok(ProjectFileRow {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        file_name: row.get(2)?,
+        stored_path: row.get(3)?,
+        mime_type: row.get(4)?,
+        size_bytes: row.get(5)?,
+        created_at: parse_ts(&created_at_str),
+    })
+}
+
 // ── Db impl ───────────────────────────────────────────────────────────────
 
 impl Db {
@@ -321,7 +364,11 @@ impl Db {
                 created_at,
                 task.session_id,
                 task.mode,
-                if task.backend.is_empty() { None } else { Some(task.backend.as_str()) },
+                if task.backend.is_empty() {
+                    None
+                } else {
+                    Some(task.backend.as_str())
+                },
             ],
         )
         .context("insert_task")?;
@@ -374,7 +421,14 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE pipeline_tasks SET backend = ?1 WHERE id = ?2",
-            params![if backend.is_empty() { None } else { Some(backend) }, id],
+            params![
+                if backend.is_empty() {
+                    None
+                } else {
+                    Some(backend)
+                },
+                id
+            ],
         )
         .context("update_task_backend")?;
         Ok(())
@@ -517,6 +571,95 @@ impl Db {
         Ok(())
     }
 
+    // ── Projects ──────────────────────────────────────────────────────────
+
+    pub fn list_projects(&self) -> Result<Vec<ProjectRow>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt =
+            conn.prepare("SELECT id, name, mode, created_at FROM projects ORDER BY id DESC")?;
+        let projects = stmt
+            .query_map([], row_to_project)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_projects")?;
+        Ok(projects)
+    }
+
+    pub fn get_project(&self, id: i64) -> Result<Option<ProjectRow>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let project = conn
+            .query_row(
+                "SELECT id, name, mode, created_at FROM projects WHERE id=?1",
+                params![id],
+                row_to_project,
+            )
+            .optional()
+            .context("get_project")?;
+        Ok(project)
+    }
+
+    pub fn insert_project(&self, name: &str, mode: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let created_at = now_str();
+        conn.execute(
+            "INSERT INTO projects (name, mode, created_at) VALUES (?1, ?2, ?3)",
+            params![name, mode, created_at],
+        )
+        .context("insert_project")?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_project_files(&self, project_id: i64) -> Result<Vec<ProjectFileRow>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, created_at \
+             FROM project_files WHERE project_id=?1 ORDER BY id ASC",
+        )?;
+        let files = stmt
+            .query_map(params![project_id], row_to_project_file)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_project_files")?;
+        Ok(files)
+    }
+
+    pub fn insert_project_file(
+        &self,
+        project_id: i64,
+        file_name: &str,
+        stored_path: &str,
+        mime_type: &str,
+        size_bytes: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let created_at = now_str();
+        conn.execute(
+            "INSERT INTO project_files \
+             (project_id, file_name, stored_path, mime_type, size_bytes, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                project_id,
+                file_name,
+                stored_path,
+                mime_type,
+                size_bytes,
+                created_at
+            ],
+        )
+        .context("insert_project_file")?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn total_project_file_bytes(&self, project_id: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let total = conn
+            .query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM project_files WHERE project_id=?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .context("total_project_file_bytes")?;
+        Ok(total)
+    }
+
     pub fn get_top_scored_proposals(&self, threshold: i64, limit: i64) -> Result<Vec<Proposal>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
@@ -573,7 +716,13 @@ impl Db {
         Ok(entries)
     }
 
-    pub fn enqueue(&self, task_id: i64, branch: &str, repo_path: &str, pr_number: i64) -> Result<i64> {
+    pub fn enqueue(
+        &self,
+        task_id: i64,
+        branch: &str,
+        repo_path: &str,
+        pr_number: i64,
+    ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let queued_at = now_str();
         conn.execute(
@@ -589,7 +738,12 @@ impl Db {
         self.update_queue_status_with_error(id, status, "")
     }
 
-    pub fn update_queue_status_with_error(&self, id: i64, status: &str, error_msg: &str) -> Result<()> {
+    pub fn update_queue_status_with_error(
+        &self,
+        id: i64,
+        status: &str,
+        error_msg: &str,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE integration_queue SET status = ?1, error_msg = ?2 WHERE id = ?3",
@@ -764,7 +918,15 @@ impl Db {
                prompt_file = excluded.prompt_file, \
                auto_merge = excluded.auto_merge, \
                backend = excluded.backend",
-            params![path, name, mode, test_cmd, prompt_file, auto_merge_int, backend],
+            params![
+                path,
+                name,
+                mode,
+                test_cmd,
+                prompt_file,
+                auto_merge_int,
+                backend
+            ],
         )
         .context("upsert_repo")?;
         let id: i64 = conn
@@ -808,7 +970,14 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE repos SET backend = ?1 WHERE id = ?2",
-            params![if backend.is_empty() { None } else { Some(backend) }, id],
+            params![
+                if backend.is_empty() {
+                    None
+                } else {
+                    Some(backend)
+                },
+                id
+            ],
         )
         .context("update_repo_backend")?;
         Ok(())
@@ -910,7 +1079,15 @@ impl Db {
              (title, description, repo_path, status, attempt, max_attempts, last_error, \
               created_by, notify_chat, created_at, session_id, mode, backend) \
              VALUES (?1, ?2, ?3, 'backlog', 0, 5, '', ?4, ?5, ?6, '', ?7, '')",
-            params![title, description, repo_path, source, notify_chat, Utc::now().to_rfc3339(), mode],
+            params![
+                title,
+                description,
+                repo_path,
+                source,
+                notify_chat,
+                Utc::now().to_rfc3339(),
+                mode
+            ],
         )
         .context("create_pipeline_task")?;
         Ok(conn.last_insert_rowid())
@@ -976,12 +1153,13 @@ impl Db {
 
     pub fn recycle_failed_tasks(&self, repo_path: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let n = conn.execute(
-            "UPDATE pipeline_tasks SET status='backlog', attempt=0, last_error='' \
+        let n = conn
+            .execute(
+                "UPDATE pipeline_tasks SET status='backlog', attempt=0, last_error='' \
              WHERE status='failed' AND repo_path=?1",
-            params![repo_path],
-        )
-        .context("recycle_failed_tasks")?;
+                params![repo_path],
+            )
+            .context("recycle_failed_tasks")?;
         Ok(n)
     }
 
@@ -1034,7 +1212,7 @@ impl Db {
             Some(t) => {
                 let outputs = self.get_task_outputs(id)?;
                 Ok(Some((t, outputs)))
-            }
+            },
         }
     }
 
@@ -1122,7 +1300,9 @@ impl Db {
                     jid: row.get(0)?,
                     name: row.get(1)?,
                     folder: row.get(2)?,
-                    trigger_pattern: row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "@Borg".into()),
+                    trigger_pattern: row
+                        .get::<_, Option<String>>(3)?
+                        .unwrap_or_else(|| "@Borg".into()),
                     requires_trigger: row.get::<_, i32>(4)? != 0,
                 })
             })?
@@ -1131,7 +1311,14 @@ impl Db {
         Ok(groups)
     }
 
-    pub fn register_group(&self, jid: &str, name: &str, folder: &str, trigger_pattern: &str, requires_trigger: bool) -> Result<()> {
+    pub fn register_group(
+        &self,
+        jid: &str,
+        name: &str,
+        folder: &str,
+        trigger_pattern: &str,
+        requires_trigger: bool,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO registered_groups (jid, name, folder, trigger_pattern, requires_trigger) \
@@ -1177,17 +1364,25 @@ impl Db {
 
     pub fn expire_sessions(&self, max_age_hours: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let n = conn.execute(
-            "DELETE FROM sessions WHERE created_at < datetime('now', ?1)",
-            params![format!("-{max_age_hours} hours")],
-        )
-        .context("expire_sessions")?;
+        let n = conn
+            .execute(
+                "DELETE FROM sessions WHERE created_at < datetime('now', ?1)",
+                params![format!("-{max_age_hours} hours")],
+            )
+            .context("expire_sessions")?;
         Ok(n)
     }
 
     // ── Chat agent runs ───────────────────────────────────────────────────
 
-    pub fn create_chat_agent_run(&self, jid: &str, transport: &str, original_id: &str, trigger_msg_id: &str, folder: &str) -> Result<i64> {
+    pub fn create_chat_agent_run(
+        &self,
+        jid: &str,
+        transport: &str,
+        original_id: &str,
+        trigger_msg_id: &str,
+        folder: &str,
+    ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT INTO chat_agent_runs (jid, status, transport, original_id, trigger_msg_id, folder) \
@@ -1198,7 +1393,13 @@ impl Db {
         Ok(conn.last_insert_rowid())
     }
 
-    pub fn complete_chat_agent_run(&self, id: i64, output: &str, new_session_id: &str, last_msg_timestamp: &str) -> Result<()> {
+    pub fn complete_chat_agent_run(
+        &self,
+        id: i64,
+        output: &str,
+        new_session_id: &str,
+        last_msg_timestamp: &str,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE chat_agent_runs SET status='completed', output=?1, new_session_id=?2, \
@@ -1235,15 +1436,21 @@ impl Db {
 
     pub fn abandon_running_agents(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let n = conn.execute(
-            "UPDATE chat_agent_runs SET status='abandoned' WHERE status='running'",
-            [],
-        )
-        .context("abandon_running_agents")?;
+        let n = conn
+            .execute(
+                "UPDATE chat_agent_runs SET status='abandoned' WHERE status='running'",
+                [],
+            )
+            .context("abandon_running_agents")?;
         Ok(n)
     }
 
-    pub fn get_messages_since(&self, chat_jid: &str, since_ts: &str, limit: i64) -> Result<Vec<ChatMessage>> {
+    pub fn get_messages_since(
+        &self,
+        chat_jid: &str,
+        since_ts: &str,
+        limit: i64,
+    ) -> Result<Vec<ChatMessage>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message \
@@ -1286,7 +1493,10 @@ impl Db {
              ORDER BY ts DESC, id DESC LIMIT ?4",
         )?;
         let events = stmt
-            .query_map(params![category, level, since_ts, limit], row_to_legacy_event)?
+            .query_map(
+                params![category, level, since_ts, limit],
+                row_to_legacy_event,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("get_events_filtered")?;
         Ok(events)

@@ -31,8 +31,8 @@ pub fn validate_filename(name: &str) -> anyhow::Result<()> {
             Component::ParentDir => anyhow::bail!("path traversal not allowed: {name}"),
             Component::RootDir | Component::Prefix(_) => {
                 anyhow::bail!("absolute path not allowed: {name}")
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     Ok(())
@@ -99,7 +99,7 @@ fn secure_read(full_path: &str, basename: &str, quarantine_dir: &str) -> IpcRead
         Err(e) => {
             warn!("ipc: lstat {full_path}: {e}");
             return IpcReadResult::NotFound;
-        }
+        },
         Ok(m) => m,
     };
 
@@ -117,8 +117,13 @@ fn secure_read(full_path: &str, basename: &str, quarantine_dir: &str) -> IpcRead
     let file = match open_nofollow(full_path) {
         Err(e) => {
             warn!("ipc: open {full_path}: {e}");
-            return do_quarantine(full_path, basename, quarantine_dir, "open failed (possible symlink race)");
-        }
+            return do_quarantine(
+                full_path,
+                basename,
+                quarantine_dir,
+                "open failed (possible symlink race)",
+            );
+        },
         Ok(f) => f,
     };
 
@@ -127,15 +132,25 @@ fn secure_read(full_path: &str, basename: &str, quarantine_dir: &str) -> IpcRead
         Err(e) => {
             warn!("ipc: fstat {full_path}: {e}");
             return IpcReadResult::Quarantined("fstat failed".to_string());
-        }
+        },
         Ok(m) => m,
     };
 
     if !fstat.is_file() {
-        return do_quarantine(full_path, basename, quarantine_dir, "non-regular (post-open fstat)");
+        return do_quarantine(
+            full_path,
+            basename,
+            quarantine_dir,
+            "non-regular (post-open fstat)",
+        );
     }
     if fstat.len() > MAX_IPC_FILE_BYTES {
-        return do_quarantine(full_path, basename, quarantine_dir, "oversized (post-open fstat)");
+        return do_quarantine(
+            full_path,
+            basename,
+            quarantine_dir,
+            "oversized (post-open fstat)",
+        );
     }
 
     // Step 4: read with a take-guard one byte above cap to detect growth.
@@ -144,11 +159,16 @@ fn secure_read(full_path: &str, basename: &str, quarantine_dir: &str) -> IpcRead
         Err(e) => {
             warn!("ipc: read {full_path}: {e}");
             return IpcReadResult::Quarantined("read error".to_string());
-        }
+        },
         Ok(n) if n as u64 > MAX_IPC_FILE_BYTES => {
-            return do_quarantine(full_path, basename, quarantine_dir, "grew beyond cap during read");
-        }
-        Ok(_) => {}
+            return do_quarantine(
+                full_path,
+                basename,
+                quarantine_dir,
+                "grew beyond cap during read",
+            );
+        },
+        Ok(_) => {},
     }
 
     // Step 5: UTF-8 validation.
@@ -181,27 +201,32 @@ fn open_nofollow(path: &str) -> std::io::Result<std::fs::File> {
 ///
 /// Guards against `quarantine_dir` itself being a symlink; falls back to
 /// `remove_file` when rename fails (e.g. cross-device).
-fn do_quarantine(full_path: &str, basename: &str, quarantine_dir: &str, reason: &str) -> IpcReadResult {
+fn do_quarantine(
+    full_path: &str,
+    basename: &str,
+    quarantine_dir: &str,
+    reason: &str,
+) -> IpcReadResult {
     // Ensure quarantine_dir is a real directory, not a symlink.
     match std::fs::symlink_metadata(quarantine_dir) {
         Ok(m) if m.file_type().is_symlink() => {
             warn!("ipc: quarantine dir {quarantine_dir:?} is a symlink — skipping move for {full_path} ({reason})");
             let _ = std::fs::remove_file(full_path);
             return IpcReadResult::Quarantined(reason.to_string());
-        }
-        Ok(_) => {} // real directory (or other non-symlink entry)
+        },
+        Ok(_) => {}, // real directory (or other non-symlink entry)
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if let Err(ce) = std::fs::create_dir_all(quarantine_dir) {
                 warn!("ipc: could not create quarantine dir {quarantine_dir}: {ce}");
                 let _ = std::fs::remove_file(full_path);
                 return IpcReadResult::Quarantined(reason.to_string());
             }
-        }
+        },
         Err(e) => {
             warn!("ipc: stat quarantine dir {quarantine_dir}: {e}");
             let _ = std::fs::remove_file(full_path);
             return IpcReadResult::Quarantined(reason.to_string());
-        }
+        },
     }
 
     let ts = std::time::SystemTime::now()
@@ -211,9 +236,7 @@ fn do_quarantine(full_path: &str, basename: &str, quarantine_dir: &str, reason: 
 
     let mut dest = format!("{quarantine_dir}/{basename}.{ts}");
     let mut counter = 0u32;
-    while std::path::Path::new(&dest).exists()
-        || std::fs::symlink_metadata(&dest).is_ok()
-    {
+    while std::path::Path::new(&dest).exists() || std::fs::symlink_metadata(&dest).is_ok() {
         counter += 1;
         dest = format!("{quarantine_dir}/{basename}.{ts}.{counter}");
     }

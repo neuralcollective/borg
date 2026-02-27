@@ -1,6 +1,17 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useCallback, useState } from "react";
-import type { Task, TaskDetail, QueueEntry, Status, LogEvent, Proposal, PipelineMode, TaskMessage } from "./types";
+import type {
+  Task,
+  TaskDetail,
+  QueueEntry,
+  Status,
+  LogEvent,
+  Proposal,
+  PipelineMode,
+  TaskMessage,
+  Project,
+  ProjectFile,
+} from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -267,6 +278,70 @@ export interface StreamEvent {
   content?: unknown;
   output?: unknown;
   phase?: string;
+}
+
+export function useProjects() {
+  return useQuery<Project[]>({
+    queryKey: ["projects"],
+    queryFn: () => fetchJson("/api/projects"),
+    refetchInterval: 30_000,
+  });
+}
+
+export async function createProject(
+  name: string,
+  mode = "general"
+): Promise<{ id: number }> {
+  const res = await fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mode }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export function useProjectFiles(projectId: number | null) {
+  return useQuery<ProjectFile[]>({
+    queryKey: ["project_files", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}/files`),
+    enabled: projectId !== null,
+    refetchInterval: 30_000,
+  });
+}
+
+export async function uploadProjectFiles(
+  projectId: number,
+  files: FileList | File[]
+): Promise<{ uploaded: ProjectFile[] }> {
+  const form = new FormData();
+  Array.from(files).forEach((file) => form.append("files", file));
+  const res = await fetch(`/api/projects/${projectId}/files/upload`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function getProjectChatMessages(
+  projectId: number
+): Promise<Array<{ role: "user" | "assistant"; sender?: string; text: string; ts: string | number; thread?: string }>> {
+  return fetchJson(`/api/projects/${projectId}/chat/messages`);
+}
+
+export async function sendProjectChat(
+  projectId: number,
+  text: string,
+  sender = "web-user"
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/projects/${projectId}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, sender }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
 }
 
 export function useTaskMessages(taskId: number | null) {

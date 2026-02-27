@@ -9,8 +9,7 @@
 //! Set `SANDBOX_BACKEND=auto|bwrap|docker|none` in the environment.
 //! Default is `auto` (bwrap if available, else docker, else direct).
 
-use std::path::Path;
-use std::process::Stdio;
+use std::{path::Path, process::Stdio};
 
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -100,7 +99,11 @@ impl Sandbox {
     /// 8. `--proc /proc`     — fresh procfs for PID namespace
     /// 9. `--chdir`          — working directory inside sandbox
     /// 10. `--`              — command separator
-    pub fn bwrap_args(writable_dirs: &[&str], working_dir: &str, command: &[String]) -> Vec<String> {
+    pub fn bwrap_args(
+        writable_dirs: &[&str],
+        working_dir: &str,
+        command: &[String],
+    ) -> Vec<String> {
         let mut args: Vec<String> = Vec::new();
 
         args.extend(["--ro-bind", "/", "/", "--dev", "/dev"].map(str::to_string));
@@ -116,8 +119,14 @@ impl Sandbox {
         args.extend(["--bind", "/tmp", "/tmp"].map(str::to_string));
 
         args.extend(
-            ["--unshare-pid", "--new-session", "--die-with-parent", "--proc", "/proc"]
-                .map(str::to_string),
+            [
+                "--unshare-pid",
+                "--new-session",
+                "--die-with-parent",
+                "--proc",
+                "/proc",
+            ]
+            .map(str::to_string),
         );
 
         args.extend(["--chdir", working_dir].map(str::to_string));
@@ -152,10 +161,14 @@ impl Sandbox {
             "run".to_string(),
             "--rm".to_string(),
             "-i".to_string(),
-            "--pids-limit".to_string(), "256".to_string(),
-            "--security-opt".to_string(), "no-new-privileges:true".to_string(),
-            "--cap-drop".to_string(), "ALL".to_string(),
-            "--network".to_string(), "host".to_string(),
+            "--pids-limit".to_string(),
+            "256".to_string(),
+            "--security-opt".to_string(),
+            "no-new-privileges:true".to_string(),
+            "--cap-drop".to_string(),
+            "ALL".to_string(),
+            "--network".to_string(),
+            "host".to_string(),
         ];
 
         for (host, container) in binds {

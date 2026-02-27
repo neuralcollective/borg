@@ -81,7 +81,11 @@ impl Observer {
     pub fn load(config_path: &str, api_key: &str, telegram_token: &str) -> Self {
         let entries = load_entries(config_path);
         if !entries.is_empty() {
-            info!("Observer: loaded {} entry/entries from {}", entries.len(), config_path);
+            info!(
+                "Observer: loaded {} entry/entries from {}",
+                entries.len(),
+                config_path
+            );
         }
         Self {
             entries,
@@ -104,12 +108,21 @@ impl Observer {
                 }
                 entry.last_run = now;
                 let last_triggered = entry.last_triggered;
-                match run_entry(&client, entry, &api_key, &telegram_token, now, last_triggered).await {
+                match run_entry(
+                    &client,
+                    entry,
+                    &api_key,
+                    &telegram_token,
+                    now,
+                    last_triggered,
+                )
+                .await
+                {
                     Ok(triggered) => {
                         if triggered {
                             entry.last_triggered = now;
                         }
-                    }
+                    },
                     Err(e) => warn!("Observer [{}]: {}", entry.name, e),
                 }
             }
@@ -157,7 +170,12 @@ async fn run_entry(
     Ok(true)
 }
 
-async fn analyze(client: &Client, entry: &Entry, logs: &str, api_key: &str) -> Result<AnalysisResult> {
+async fn analyze(
+    client: &Client,
+    entry: &Entry,
+    logs: &str,
+    api_key: &str,
+) -> Result<AnalysisResult> {
     let log_slice = if logs.len() > MAX_LOG_BYTES {
         &logs[logs.len() - MAX_LOG_BYTES..]
     } else {
@@ -236,7 +254,7 @@ async fn execute_action(
                 .json(&serde_json::json!({"chat_id": raw_id, "text": msg}))
                 .send()
                 .await?;
-        }
+        },
         Action::Command { cmd } => {
             tokio::process::Command::new("/bin/sh")
                 .args(["-c", cmd])
@@ -245,7 +263,7 @@ async fn execute_action(
                 .spawn()?
                 .wait()
                 .await?;
-        }
+        },
         Action::Webhook { url } => {
             let body = serde_json::json!({
                 "observer": name,
@@ -254,7 +272,7 @@ async fn execute_action(
                 "recommendation": result.recommendation,
             });
             client.post(url).json(&body).send().await?;
-        }
+        },
     }
     Ok(())
 }
@@ -264,19 +282,26 @@ async fn collect_logs(entry: &Entry) -> Result<String> {
     let mut cmd = match &entry.source {
         Source::Journalctl { unit } => {
             let mut c = tokio::process::Command::new("journalctl");
-            c.args(["-u", unit, "-n", &lines_str, "--no-pager", "--output=short-precise"]);
+            c.args([
+                "-u",
+                unit,
+                "-n",
+                &lines_str,
+                "--no-pager",
+                "--output=short-precise",
+            ]);
             c
-        }
+        },
         Source::FileTail { path } => {
             let mut c = tokio::process::Command::new("tail");
             c.args(["-n", &lines_str, path]);
             c
-        }
+        },
         Source::Command { cmd } => {
             let mut c = tokio::process::Command::new("/bin/sh");
             c.args(["-c", cmd]);
             c
-        }
+        },
     };
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::null());
@@ -308,21 +333,21 @@ fn load_entries(path: &str) -> Vec<Entry> {
         Err(e) => {
             warn!("Observer: can't read {}: {}", path, e);
             return vec![];
-        }
+        },
     };
     let v: Value = match serde_json::from_str(&data) {
         Ok(v) => v,
         Err(e) => {
             warn!("Observer: invalid JSON in {}: {}", path, e);
             return vec![];
-        }
+        },
     };
     let arr = match v.as_array() {
         Some(a) => a,
         None => {
             warn!("Observer: config must be a JSON array");
             return vec![];
-        }
+        },
     };
 
     arr.iter()
@@ -331,26 +356,43 @@ fn load_entries(path: &str) -> Vec<Entry> {
             Err(err) => {
                 warn!("Observer: skipping invalid entry: {}", err);
                 None
-            }
+            },
         })
         .collect()
 }
 
 fn parse_entry(v: &Value) -> Result<Entry> {
-    let name = v["name"].as_str().ok_or_else(|| anyhow::anyhow!("missing name"))?.to_string();
-    let prompt = v["prompt"].as_str().ok_or_else(|| anyhow::anyhow!("missing prompt"))?.to_string();
+    let name = v["name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing name"))?
+        .to_string();
+    let prompt = v["prompt"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing prompt"))?
+        .to_string();
 
     let src = &v["source"];
-    let src_type = src["type"].as_str().ok_or_else(|| anyhow::anyhow!("missing source.type"))?;
+    let src_type = src["type"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing source.type"))?;
     let source = match src_type {
         "journalctl" => Source::Journalctl {
-            unit: src["unit"].as_str().ok_or_else(|| anyhow::anyhow!("missing unit"))?.to_string(),
+            unit: src["unit"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing unit"))?
+                .to_string(),
         },
         "file_tail" => Source::FileTail {
-            path: src["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing path"))?.to_string(),
+            path: src["path"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing path"))?
+                .to_string(),
         },
         "command" => Source::Command {
-            cmd: src["cmd"].as_str().ok_or_else(|| anyhow::anyhow!("missing cmd"))?.to_string(),
+            cmd: src["cmd"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing cmd"))?
+                .to_string(),
         },
         other => anyhow::bail!("unknown source type: {}", other),
     };
@@ -362,9 +404,15 @@ fn parse_entry(v: &Value) -> Result<Entry> {
         .filter_map(|av| {
             let atype = av["type"].as_str()?;
             match atype {
-                "alert" => Some(Action::Alert { chat_id: av["chat_id"].as_str()?.to_string() }),
-                "command" => Some(Action::Command { cmd: av["cmd"].as_str()?.to_string() }),
-                "webhook" => Some(Action::Webhook { url: av["url"].as_str()?.to_string() }),
+                "alert" => Some(Action::Alert {
+                    chat_id: av["chat_id"].as_str()?.to_string(),
+                }),
+                "command" => Some(Action::Command {
+                    cmd: av["cmd"].as_str()?.to_string(),
+                }),
+                "webhook" => Some(Action::Webhook {
+                    url: av["url"].as_str()?.to_string(),
+                }),
                 _ => None,
             }
         })
@@ -377,7 +425,9 @@ fn parse_entry(v: &Value) -> Result<Entry> {
         interval_s: v["interval_s"].as_i64().unwrap_or(60),
         prompt,
         cooldown_s: v["cooldown_s"].as_i64().unwrap_or(300),
-        severity_threshold: Severity::from_str(v["severity_threshold"].as_str().unwrap_or("medium")),
+        severity_threshold: Severity::from_str(
+            v["severity_threshold"].as_str().unwrap_or("medium"),
+        ),
         actions,
         last_run: 0,
         last_triggered: 0,
@@ -407,7 +457,10 @@ mod tests {
 
     #[test]
     fn strip_fences_plain() {
-        assert_eq!(strip_fences(r#"{"triggered":false}"#), r#"{"triggered":false}"#);
+        assert_eq!(
+            strip_fences(r#"{"triggered":false}"#),
+            r#"{"triggered":false}"#
+        );
     }
 
     #[test]
@@ -418,7 +471,8 @@ mod tests {
 
     #[test]
     fn parse_entry_valid() {
-        let v: Value = serde_json::from_str(r#"{
+        let v: Value = serde_json::from_str(
+            r#"{
             "name": "test",
             "source": {"type": "journalctl", "unit": "myservice"},
             "prompt": "Check for errors",
@@ -430,7 +484,9 @@ mod tests {
                 {"type": "alert", "chat_id": "-123456"},
                 {"type": "webhook", "url": "https://example.com/hook"}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let entry = parse_entry(&v).unwrap();
         assert_eq!(entry.name, "test");
@@ -441,7 +497,9 @@ mod tests {
 
     #[test]
     fn parse_entry_missing_name_errors() {
-        let v: Value = serde_json::from_str(r#"{"source":{"type":"command","cmd":"ls"},"prompt":"x"}"#).unwrap();
+        let v: Value =
+            serde_json::from_str(r#"{"source":{"type":"command","cmd":"ls"},"prompt":"x"}"#)
+                .unwrap();
         assert!(parse_entry(&v).is_err());
     }
 

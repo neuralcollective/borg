@@ -288,10 +288,24 @@ impl Default for PhaseConfig {
 /// Broadcast event emitted after each significant pipeline state change.
 #[derive(Debug, Clone)]
 pub enum PipelineEvent {
-    Phase { task_id: Option<i64>, message: String },
-    Output { task_id: Option<i64>, message: String },
-    Notify { chat_id: String, message: String },
-    PhaseResult { task_id: i64, phase: String, content: String, chat_id: String },
+    Phase {
+        task_id: Option<i64>,
+        message: String,
+    },
+    Output {
+        task_id: Option<i64>,
+        message: String,
+    },
+    Notify {
+        chat_id: String,
+        message: String,
+    },
+    PhaseResult {
+        task_id: i64,
+        phase: String,
+        content: String,
+        chat_id: String,
+    },
 }
 
 impl PipelineEvent {
@@ -312,7 +326,9 @@ impl PipelineEvent {
     }
     pub fn message(&self) -> &str {
         match self {
-            Self::Phase { message, .. } | Self::Output { message, .. } | Self::Notify { message, .. } => message,
+            Self::Phase { message, .. }
+            | Self::Output { message, .. }
+            | Self::Notify { message, .. } => message,
             Self::PhaseResult { content, .. } => content,
         }
     }
@@ -352,6 +368,11 @@ pub struct PhaseOutput {
 
 impl PhaseOutput {
     pub fn failed(output: impl Into<String>) -> Self {
-        Self { output: output.into(), new_session_id: None, raw_stream: String::new(), success: false }
+        Self {
+            output: output.into(),
+            new_session_id: None,
+            raw_stream: String::new(),
+            success: false,
+        }
     }
 }

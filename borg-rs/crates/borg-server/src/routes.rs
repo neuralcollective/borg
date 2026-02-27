@@ -1,5 +1,7 @@
+use std::{collections::HashMap, sync::Arc};
+
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -8,7 +10,7 @@ use axum::{
 };
 use borg_core::{
     config::Config,
-    db::{Db, LegacyEvent, TaskMessage, TaskOutput},
+    db::{Db, LegacyEvent, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
     modes::all_modes,
     pipeline::PipelineEvent,
     types::{PhaseConfig, PhaseContext, RepoConfig, Task},
@@ -16,11 +18,11 @@ use borg_core::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex as TokioMutex};
-use tokio_stream::wrappers::{BroadcastStream, UnboundedReceiverStream};
-use tokio_stream::StreamExt;
+use tokio_stream::{
+    wrappers::{BroadcastStream, UnboundedReceiverStream},
+    StreamExt,
+};
 
 use crate::AppState;
 
@@ -83,6 +85,17 @@ pub(crate) struct ChatPostBody {
     pub thread: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct CreateProjectBody {
+    pub name: String,
+    pub mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ProjectFilesQuery {
+    pub limit: Option<i64>,
+}
+
 // ── Serializable wrappers ─────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -131,6 +144,48 @@ impl From<TaskMessage> for TaskMessageJson {
     }
 }
 
+#[derive(Serialize)]
+pub(crate) struct ProjectJson {
+    pub id: i64,
+    pub name: String,
+    pub mode: String,
+    pub created_at: String,
+}
+
+impl From<ProjectRow> for ProjectJson {
+    fn from(p: ProjectRow) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            mode: p.mode,
+            created_at: p.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct ProjectFileJson {
+    pub id: i64,
+    pub project_id: i64,
+    pub file_name: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub created_at: String,
+}
+
+impl From<ProjectFileRow> for ProjectFileJson {
+    fn from(f: ProjectFileRow) -> Self {
+        Self {
+            id: f.id,
+            project_id: f.project_id,
+            file_name: f.file_name,
+            mime_type: f.mime_type,
+            size_bytes: f.size_bytes,
+            created_at: f.created_at.to_rfc3339(),
+        }
+    }
+}
+
 // ── Settings constants ────────────────────────────────────────────────────
 
 pub(crate) const SETTINGS_KEYS: &[&str] = &[
@@ -171,8 +226,112 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
 
 fn sanitize_chat_key(key: &str) -> String {
     key.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
+}
+
+fn sanitize_upload_name(name: &str) -> String {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("upload.bin");
+    let mut out = String::with_capacity(base.len());
+    for c in base.chars() {
+        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "upload.bin".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn project_chat_key(project_id: i64) -> String {
+    format!("project:{project_id}")
+}
+
+fn rand_suffix() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    (nanos as u64) & 0xFFFFF
+}
+
+fn parse_project_chat_key(chat_key: &str) -> Option<i64> {
+    chat_key.strip_prefix("project:")?.parse::<i64>().ok()
+}
+
+fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+
+    const MAX_CONTEXT_BYTES: usize = 120_000;
+    const MAX_FILE_PREVIEW_BYTES: usize = 12_000;
+    let mut remaining = MAX_CONTEXT_BYTES;
+
+    let mut context = format!(
+        "Project context:\nProject: {} (mode: {})\nFiles: {}\n\n",
+        project.name,
+        project.mode,
+        files.len()
+    );
+    if context.len() >= remaining {
+        return context;
+    }
+    remaining -= context.len();
+
+    for file in files {
+        if remaining < 256 {
+            break;
+        }
+        let header = format!(
+            "--- FILE: {} ({} bytes, {}) ---\n",
+            file.file_name, file.size_bytes, file.mime_type
+        );
+        if header.len() >= remaining {
+            break;
+        }
+        context.push_str(&header);
+        remaining -= header.len();
+
+        let preview_budget = remaining.min(MAX_FILE_PREVIEW_BYTES);
+        let preview = match std::fs::read(&file.stored_path) {
+            Ok(raw) => {
+                let clipped = &raw[..raw.len().min(preview_budget)];
+                String::from_utf8_lossy(clipped).to_string()
+            },
+            Err(_) => "[file unavailable]\n".to_string(),
+        };
+        let preview = preview.replace('\0', "");
+        if preview.len() > remaining {
+            context.push_str(&preview[..remaining]);
+            break;
+        } else {
+            context.push_str(&preview);
+            remaining -= preview.len();
+        }
+
+        if remaining >= 2 {
+            context.push('\n');
+            context.push('\n');
+            remaining -= 2;
+        }
+    }
+
+    context
 }
 
 /// Run claude as a conversational chat agent with session continuity.
@@ -186,7 +345,11 @@ pub(crate) async fn run_chat_agent(
     db: &Arc<Db>,
     chat_event_tx: &broadcast::Sender<String>,
 ) -> anyhow::Result<String> {
-    let session_dir = format!("{}/sessions/chat-{}", config.data_dir, sanitize_chat_key(chat_key));
+    let session_dir = format!(
+        "{}/sessions/chat-{}",
+        config.data_dir,
+        sanitize_chat_key(chat_key)
+    );
     std::fs::create_dir_all(&session_dir)?;
 
     // Store each incoming message
@@ -194,8 +357,13 @@ pub(crate) async fn run_chat_agent(
     for (i, msg) in messages.iter().enumerate() {
         let msg_id = format!("{}-{}-{}", chat_key, ts_secs, i);
         let _ = db.insert_chat_message(
-            &msg_id, chat_key, Some(sender_name), Some(sender_name),
-            msg, false, false,
+            &msg_id,
+            chat_key,
+            Some(sender_name),
+            Some(sender_name),
+            msg,
+            false,
+            false,
         );
         let event = json!({
             "role": "user",
@@ -203,7 +371,8 @@ pub(crate) async fn run_chat_agent(
             "text": msg,
             "ts": ts_secs,
             "thread": chat_key,
-        }).to_string();
+        })
+        .to_string();
         let _ = chat_event_tx.send(event);
     }
 
@@ -212,6 +381,22 @@ pub(crate) async fn run_chat_agent(
     } else {
         let joined: Vec<String> = messages.iter().map(|m| format!("- {m}")).collect();
         format!("{} says:\n{}", sender_name, joined.join("\n"))
+    };
+    let prompt = if let Some(project_id) = parse_project_chat_key(chat_key) {
+        match db.get_project(project_id) {
+            Ok(Some(project)) => {
+                let files = db.list_project_files(project_id).unwrap_or_default();
+                let ctx = build_project_context(&project, &files);
+                if ctx.is_empty() {
+                    prompt
+                } else {
+                    format!("{ctx}\n\nUser request:\n{prompt}")
+                }
+            },
+            _ => prompt,
+        }
+    } else {
+        prompt
     };
 
     let mut args = vec![
@@ -257,8 +442,13 @@ pub(crate) async fn run_chat_agent(
         let reply_ts = Utc::now().timestamp();
         let reply_id = format!("{}-bot-{}", chat_key, reply_ts);
         let _ = db.insert_chat_message(
-            &reply_id, chat_key, Some("borg"), Some("borg"),
-            &text, true, true,
+            &reply_id,
+            chat_key,
+            Some("borg"),
+            Some("borg"),
+            &text,
+            true,
+            true,
         );
         let event = json!({
             "role": "assistant",
@@ -266,7 +456,8 @@ pub(crate) async fn run_chat_agent(
             "text": &text,
             "ts": reply_ts,
             "thread": chat_key,
-        }).to_string();
+        })
+        .to_string();
         let _ = chat_event_tx.send(event);
     }
 
@@ -291,15 +482,15 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str) -> bool {
             let err = std::process::Command::new(&bin).args(&args[1..]).exec();
             tracing::error!("execve failed: {err}");
             false
-        }
+        },
         Ok(_) => {
             tracing::error!("Release build failed");
             false
-        }
+        },
         Err(e) => {
             tracing::error!("Failed to run cargo: {e}");
             false
-        }
+        },
     }
 }
 
@@ -307,6 +498,108 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str) -> bool {
 
 pub(crate) async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+// Projects
+
+pub(crate) async fn list_projects(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let projects = state.db.list_projects().map_err(internal)?;
+    let out: Vec<ProjectJson> = projects.into_iter().map(ProjectJson::from).collect();
+    Ok(Json(json!(out)))
+}
+
+pub(crate) async fn create_project(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateProjectBody>,
+) -> Result<(StatusCode, Json<Value>), StatusCode> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mode = body.mode.unwrap_or_else(|| "general".to_string());
+    let id = state.db.insert_project(name, &mode).map_err(internal)?;
+    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+}
+
+pub(crate) async fn list_project_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.db.get_project(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let files = state.db.list_project_files(id).map_err(internal)?;
+    let out: Vec<ProjectFileJson> = files.into_iter().map(ProjectFileJson::from).collect();
+    Ok(Json(json!(out)))
+}
+
+pub(crate) async fn upload_project_files(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, StatusCode> {
+    const MAX_PROJECT_BYTES: i64 = 100 * 1024 * 1024;
+    if state.db.get_project(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let mut total_bytes = state.db.total_project_file_bytes(id).map_err(internal)?;
+    let mut uploaded: Vec<ProjectFileJson> = Vec::new();
+    let files_dir = format!("{}/projects/{}/files", state.config.data_dir, id);
+    tokio::fs::create_dir_all(&files_dir)
+        .await
+        .map_err(internal)?;
+
+    while let Some(field) = multipart.next_field().await.map_err(internal)? {
+        let raw_name = field
+            .file_name()
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| "upload.bin".to_string());
+        let file_name = sanitize_upload_name(&raw_name);
+        let mime_type = field
+            .content_type()
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let bytes = field.bytes().await.map_err(internal)?;
+        let file_size = bytes.len() as i64;
+        if file_size == 0 {
+            continue;
+        }
+        if total_bytes + file_size > MAX_PROJECT_BYTES {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+
+        let unique_name = format!(
+            "{}_{}_{}",
+            Utc::now().timestamp_millis(),
+            rand_suffix(),
+            file_name
+        );
+        let stored_path = format!("{}/{}", files_dir, unique_name);
+        tokio::fs::write(&stored_path, &bytes)
+            .await
+            .map_err(internal)?;
+
+        let file_id = state
+            .db
+            .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size)
+            .map_err(internal)?;
+        total_bytes += file_size;
+
+        let inserted = state
+            .db
+            .list_project_files(id)
+            .map_err(internal)?
+            .into_iter()
+            .find(|f| f.id == file_id);
+        if let Some(row) = inserted {
+            uploaded.push(ProjectFileJson::from(row));
+        }
+    }
+
+    Ok(Json(json!({ "uploaded": uploaded })))
 }
 
 // Tasks
@@ -339,7 +632,7 @@ pub(crate) async fn get_task(
                 );
             }
             Ok(Json(v))
-        }
+        },
     }
 }
 
@@ -385,7 +678,7 @@ pub(crate) async fn retry_task(
                 .update_task_status(id, "backlog", None)
                 .map_err(internal)?;
             Ok(StatusCode::OK)
-        }
+        },
     }
 }
 
@@ -402,7 +695,7 @@ pub(crate) async fn get_task_messages(
             let messages_json: Vec<TaskMessageJson> =
                 messages.into_iter().map(TaskMessageJson::from).collect();
             Ok(Json(json!({ "messages": messages_json })))
-        }
+        },
     }
 }
 
@@ -423,20 +716,24 @@ pub(crate) async fn post_task_message(
                 message: body.content.clone(),
             });
             Ok(StatusCode::CREATED)
-        }
+        },
     }
 }
 
 // Queue
 
-pub(crate) async fn list_queue(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
+pub(crate) async fn list_queue(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
     let entries = state.db.list_queue().map_err(internal)?;
     Ok(Json(json!(entries)))
 }
 
 // Status
 
-pub(crate) async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
+pub(crate) async fn get_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
     let uptime_s = state.start_time.elapsed().as_secs();
 
     let repos = state.db.list_repos().map_err(internal)?;
@@ -559,7 +856,7 @@ pub(crate) async fn dismiss_proposal(
                 .update_proposal_status(id, "dismissed")
                 .map_err(internal)?;
             Ok(StatusCode::OK)
-        }
+        },
     }
 }
 
@@ -575,7 +872,7 @@ pub(crate) async fn reopen_proposal(
                 .update_proposal_status(id, "proposed")
                 .map_err(internal)?;
             Ok(StatusCode::OK)
-        }
+        },
     }
 }
 
@@ -585,7 +882,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
         Err(e) => {
             tracing::error!("list_untriaged_proposals: {e}");
             return Json(json!({ "scored": 0 }));
-        }
+        },
     };
     let count = proposals.len();
     if count == 0 {
@@ -594,7 +891,11 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
 
     let db = Arc::clone(&state.db);
     let backend = state.default_backend("claude");
-    let model = db.get_config("model").ok().flatten().unwrap_or_else(|| "claude-sonnet-4-6".into());
+    let model = db
+        .get_config("model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "claude-sonnet-4-6".into());
     let oauth = std::env::var("ANTHROPIC_API_KEY")
         .or_else(|_| std::env::var("CLAUDE_CODE_OAUTH_TOKEN"))
         .unwrap_or_default();
@@ -671,16 +972,25 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                                 let effort = v["effort"].as_i64().unwrap_or(0);
                                 let reasoning = v["reasoning"].as_str().unwrap_or("").to_string();
                                 if let Err(e) = db.update_proposal_triage(
-                                    proposal.id, score, impact, feasibility, risk, effort, &reasoning,
+                                    proposal.id,
+                                    score,
+                                    impact,
+                                    feasibility,
+                                    risk,
+                                    effort,
+                                    &reasoning,
                                 ) {
                                     tracing::error!("update_proposal_triage #{}: {e}", proposal.id);
                                 } else {
-                                    tracing::info!("triaged proposal #{}: score={score}", proposal.id);
+                                    tracing::info!(
+                                        "triaged proposal #{}: score={score}",
+                                        proposal.id
+                                    );
                                 }
                             }
                         }
                     }
-                }
+                },
                 Err(e) => tracing::error!("triage agent for proposal #{}: {e}", proposal.id),
             }
         }
@@ -712,7 +1022,9 @@ pub(crate) async fn get_modes() -> Json<Value> {
 
 // Settings
 
-pub(crate) async fn get_settings(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
+pub(crate) async fn get_settings(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
     let mut obj = serde_json::Map::new();
     for key in SETTINGS_KEYS {
         let val = state.db.get_config(key).map_err(internal)?;
@@ -768,7 +1080,9 @@ pub(crate) async fn put_settings(
 
 // Focus
 
-pub(crate) async fn get_focus(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
+pub(crate) async fn get_focus(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
     let text = state
         .db
         .get_config("focus")
@@ -786,7 +1100,9 @@ pub(crate) async fn post_focus(
     Ok(StatusCode::OK)
 }
 
-pub(crate) async fn delete_focus(State(state): State<Arc<AppState>>) -> Result<StatusCode, StatusCode> {
+pub(crate) async fn delete_focus(
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
     state.db.set_config("focus", "").map_err(internal)?;
     Ok(StatusCode::OK)
 }
@@ -808,12 +1124,18 @@ pub(crate) async fn sse_logs(
         .collect();
     tokio::spawn(async move {
         for line in history {
-            if tx.send(line).is_err() { return; }
+            if tx.send(line).is_err() {
+                return;
+            }
         }
         let mut live_rx = live_rx;
         loop {
             match live_rx.recv().await {
-                Ok(line) => { if tx.send(line).is_err() { return; } }
+                Ok(line) => {
+                    if tx.send(line).is_err() {
+                        return;
+                    }
+                },
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(_) => break,
             }
@@ -859,13 +1181,19 @@ pub(crate) async fn sse_task_stream(
         };
 
         for line in history {
-            if tx.send(line).is_err() { return; }
+            if tx.send(line).is_err() {
+                return;
+            }
         }
 
         if let Some(mut live_rx) = live_rx {
             loop {
                 match live_rx.recv().await {
-                    Ok(line) => { if tx.send(line).is_err() { return; } }
+                    Ok(line) => {
+                        if tx.send(line).is_err() {
+                            return;
+                        }
+                    },
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(_) => break,
                 }
@@ -884,7 +1212,9 @@ pub(crate) async fn sse_task_stream(
 // Release
 
 pub(crate) async fn post_release(State(state): State<Arc<AppState>>) -> Json<Value> {
-    state.force_restart.store(true, std::sync::atomic::Ordering::Relaxed);
+    state
+        .force_restart
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     tracing::info!("Force restart requested via /api/release");
     Json(json!({ "ok": true }))
 }
@@ -945,29 +1275,111 @@ pub(crate) async fn get_chat_messages(
         .map_err(internal)?;
     let v: Vec<Value> = msgs
         .iter()
-        .map(|m| json!({
-            "role": if m.is_from_me { "assistant" } else { "user" },
-            "sender": m.sender_name,
-            "text": m.content,
-            "ts": m.timestamp,
-            "thread": m.chat_jid,
-        }))
+        .map(|m| {
+            json!({
+                "role": if m.is_from_me { "assistant" } else { "user" },
+                "sender": m.sender_name,
+                "text": m.content,
+                "ts": m.timestamp,
+                "thread": m.chat_jid,
+            })
+        })
         .collect();
     Ok(Json(json!(v)))
+}
+
+pub(crate) async fn get_project_chat_messages(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Query(q): Query<ProjectFilesQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.db.get_project(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let thread = project_chat_key(id);
+    let msgs = state
+        .db
+        .get_chat_messages(&thread, q.limit.unwrap_or(200))
+        .map_err(internal)?;
+    let v: Vec<Value> = msgs
+        .iter()
+        .map(|m| {
+            json!({
+                "role": if m.is_from_me { "assistant" } else { "user" },
+                "sender": m.sender_name,
+                "text": m.content,
+                "ts": m.timestamp,
+                "thread": m.chat_jid,
+            })
+        })
+        .collect();
+    Ok(Json(json!(v)))
+}
+
+pub(crate) async fn post_project_chat(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<ChatPostBody>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.db.get_project(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let thread = project_chat_key(id);
+    let sender = body
+        .sender
+        .clone()
+        .unwrap_or_else(|| "web-user".to_string());
+
+    let state2 = Arc::clone(&state);
+    let thread2 = thread.clone();
+    let sender2 = sender.clone();
+    let text2 = body.text.clone();
+    tokio::spawn(async move {
+        match run_chat_agent(
+            &thread2,
+            &sender2,
+            &[text2],
+            &state2.web_sessions,
+            &state2.config,
+            &state2.db,
+            &state2.chat_event_tx,
+        )
+        .await
+        {
+            Ok(_) => {},
+            Err(e) => tracing::warn!("project chat agent error: {e}"),
+        }
+    });
+
+    Ok(Json(json!({ "ok": true })))
 }
 
 pub(crate) async fn post_chat(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ChatPostBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    let thread = body.thread.clone().unwrap_or_else(|| "web:dashboard".to_string());
-    let sender = body.sender.clone().unwrap_or_else(|| "web-user".to_string());
+    let thread = body
+        .thread
+        .clone()
+        .unwrap_or_else(|| "web:dashboard".to_string());
+    let sender = body
+        .sender
+        .clone()
+        .unwrap_or_else(|| "web-user".to_string());
     let ts = Utc::now().timestamp();
     let msg_id = format!("{}-{}", thread, ts);
 
     state
         .db
-        .insert_chat_message(&msg_id, &thread, Some(&sender), Some(&sender), &body.text, false, false)
+        .insert_chat_message(
+            &msg_id,
+            &thread,
+            Some(&sender),
+            Some(&sender),
+            &body.text,
+            false,
+            false,
+        )
         .map_err(internal)?;
 
     let event = json!({
@@ -997,7 +1409,7 @@ pub(crate) async fn post_chat(
         )
         .await
         {
-            Ok(_) => {}
+            Ok(_) => {},
             Err(e) => tracing::warn!("web chat agent error: {e}"),
         }
     });
@@ -1013,7 +1425,10 @@ pub(crate) async fn put_task_backend(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<Value>, StatusCode> {
     let backend = body["backend"].as_str().unwrap_or("").to_string();
-    state.db.update_task_backend(id, &backend).map_err(internal)?;
+    state
+        .db
+        .update_task_backend(id, &backend)
+        .map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1044,7 +1459,10 @@ pub(crate) async fn put_repo_backend(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<Value>, StatusCode> {
     let backend = body["backend"].as_str().unwrap_or("").to_string();
-    state.db.update_repo_backend(id, &backend).map_err(internal)?;
+    state
+        .db
+        .update_repo_backend(id, &backend)
+        .map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1059,6 +1477,6 @@ pub(crate) async fn get_task_outputs_handler(
             let outputs_json: Vec<TaskOutputJson> =
                 outputs.into_iter().map(TaskOutputJson::from).collect();
             Ok(Json(json!({ "outputs": outputs_json })))
-        }
+        },
     }
 }

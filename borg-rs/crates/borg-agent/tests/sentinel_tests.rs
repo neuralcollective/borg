@@ -117,14 +117,19 @@ fn test_empty_content_between_markers_returns_none() {
 
 #[test]
 fn test_multiple_pairs_last_wins() {
-    let text = format!(
-        "{START}\nFirst attempt.\n{END}\n\n{START}\nRevised summary — final one.\n{END}"
-    );
+    let text =
+        format!("{START}\nFirst attempt.\n{END}\n\n{START}\nRevised summary — final one.\n{END}");
     let result = extract_phase_result(&text);
     assert!(result.is_some());
     let r = result.unwrap();
-    assert!(r.contains("Revised summary"), "expected revised summary, got: {r}");
-    assert!(!r.contains("First attempt"), "should not contain first attempt, got: {r}");
+    assert!(
+        r.contains("Revised summary"),
+        "expected revised summary, got: {r}"
+    );
+    assert!(
+        !r.contains("First attempt"),
+        "should not contain first attempt, got: {r}"
+    );
 }
 
 #[test]

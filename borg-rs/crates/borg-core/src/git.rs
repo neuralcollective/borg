@@ -1,5 +1,4 @@
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -29,7 +28,9 @@ pub struct Git {
 
 impl Git {
     pub fn new(repo_path: impl Into<String>) -> Self {
-        Self { repo_path: repo_path.into() }
+        Self {
+            repo_path: repo_path.into(),
+        }
     }
 
     pub fn worktree_path(&self, branch: &str) -> String {
@@ -168,7 +169,10 @@ impl Git {
     pub fn stash_pop(&self) -> Result<()> {
         let result = self.exec(&self.repo_path, &["stash", "pop"])?;
         if !result.success() {
-            return Err(anyhow!("git stash pop failed: {}", result.combined_output()));
+            return Err(anyhow!(
+                "git stash pop failed: {}",
+                result.combined_output()
+            ));
         }
         Ok(())
     }

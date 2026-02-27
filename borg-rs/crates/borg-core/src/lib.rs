@@ -1,9 +1,9 @@
 pub mod agent;
 pub mod chat;
-pub mod ipc;
 pub mod config;
 pub mod db;
 pub mod git;
+pub mod ipc;
 pub mod modes;
 pub mod observer;
 pub mod pipeline;

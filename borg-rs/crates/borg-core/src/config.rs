@@ -1,6 +1,8 @@
-use crate::{db::Db, types::RepoConfig};
-use anyhow::Result;
 use std::collections::HashMap;
+
+use anyhow::Result;
+
+use crate::{db::Db, types::RepoConfig};
 
 /// Full application configuration.
 /// Non-sensitive fields are seeded to and loaded from the DB `config` table.
@@ -288,16 +290,28 @@ impl Config {
             ("data_dir", self.data_dir.clone()),
             ("container_image", self.container_image.clone()),
             ("model", self.model.clone()),
-            ("session_max_age_hours", self.session_max_age_hours.to_string()),
-            ("max_consecutive_errors", self.max_consecutive_errors.to_string()),
+            (
+                "session_max_age_hours",
+                self.session_max_age_hours.to_string(),
+            ),
+            (
+                "max_consecutive_errors",
+                self.max_consecutive_errors.to_string(),
+            ),
             ("pipeline_repo", self.pipeline_repo.clone()),
             ("pipeline_test_cmd", self.pipeline_test_cmd.clone()),
             ("pipeline_lint_cmd", self.pipeline_lint_cmd.clone()),
             ("backend", self.backend.clone()),
             ("pipeline_admin_chat", self.pipeline_admin_chat.clone()),
-            ("release_interval_mins", self.release_interval_mins.to_string()),
+            (
+                "release_interval_mins",
+                self.release_interval_mins.to_string(),
+            ),
             ("continuous_mode", self.continuous_mode.to_string()),
-            ("chat_collection_window_ms", self.chat_collection_window_ms.to_string()),
+            (
+                "chat_collection_window_ms",
+                self.chat_collection_window_ms.to_string(),
+            ),
             ("chat_cooldown_ms", self.chat_cooldown_ms.to_string()),
             ("agent_timeout_s", self.agent_timeout_s.to_string()),
             ("max_chat_agents", self.max_chat_agents.to_string()),
@@ -309,11 +323,23 @@ impl Config {
             ("container_setup", self.container_setup.clone()),
             ("container_memory_mb", self.container_memory_mb.to_string()),
             ("sandbox_backend", self.sandbox_backend.clone()),
-            ("pipeline_max_backlog", self.pipeline_max_backlog.to_string()),
-            ("pipeline_seed_cooldown_s", self.pipeline_seed_cooldown_s.to_string()),
-            ("proposal_promote_threshold", self.proposal_promote_threshold.to_string()),
+            (
+                "pipeline_max_backlog",
+                self.pipeline_max_backlog.to_string(),
+            ),
+            (
+                "pipeline_seed_cooldown_s",
+                self.pipeline_seed_cooldown_s.to_string(),
+            ),
+            (
+                "proposal_promote_threshold",
+                self.proposal_promote_threshold.to_string(),
+            ),
             ("pipeline_tick_s", self.pipeline_tick_s.to_string()),
-            ("remote_check_interval_s", self.remote_check_interval_s.to_string()),
+            (
+                "remote_check_interval_s",
+                self.remote_check_interval_s.to_string(),
+            ),
             ("git_author_name", self.git_author_name.clone()),
             ("git_author_email", self.git_author_email.clone()),
             ("git_committer_name", self.git_committer_name.clone()),
@@ -341,21 +367,36 @@ impl Config {
         let mut c = self.clone();
         let get = |key: &str| db.get_config(key).ok().flatten();
         let get_str = |key: &str, cur: &str| get(key).unwrap_or_else(|| cur.to_string());
-        let get_bool = |key: &str, cur: bool| {
-            get(key).map(|v| v == "true" || v == "1").unwrap_or(cur)
-        };
-        macro_rules! load_i64 { ($key:expr, $field:expr) => {
-            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
-        }}
-        macro_rules! load_u32 { ($key:expr, $field:expr) => {
-            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
-        }}
-        macro_rules! load_u64 { ($key:expr, $field:expr) => {
-            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
-        }}
-        macro_rules! load_u16 { ($key:expr, $field:expr) => {
-            if let Some(v) = get($key).and_then(|s| s.parse().ok()) { $field = v; }
-        }}
+        let get_bool =
+            |key: &str, cur: bool| get(key).map(|v| v == "true" || v == "1").unwrap_or(cur);
+        macro_rules! load_i64 {
+            ($key:expr, $field:expr) => {
+                if let Some(v) = get($key).and_then(|s| s.parse().ok()) {
+                    $field = v;
+                }
+            };
+        }
+        macro_rules! load_u32 {
+            ($key:expr, $field:expr) => {
+                if let Some(v) = get($key).and_then(|s| s.parse().ok()) {
+                    $field = v;
+                }
+            };
+        }
+        macro_rules! load_u64 {
+            ($key:expr, $field:expr) => {
+                if let Some(v) = get($key).and_then(|s| s.parse().ok()) {
+                    $field = v;
+                }
+            };
+        }
+        macro_rules! load_u16 {
+            ($key:expr, $field:expr) => {
+                if let Some(v) = get($key).and_then(|s| s.parse().ok()) {
+                    $field = v;
+                }
+            };
+        }
         c.assistant_name = get_str("assistant_name", &c.assistant_name);
         c.trigger_pattern = get_str("trigger_pattern", &c.trigger_pattern);
         c.data_dir = get_str("data_dir", &c.data_dir);
@@ -407,12 +448,14 @@ impl Config {
         let default_credentials = format!("{}/.claude/.credentials.json", home);
         let default_codex_credentials = format!("{}/.codex/auth.json", home);
 
-        let credentials_path =
-            get_str("CREDENTIALS_PATH", &dotenv, &default_credentials);
+        let credentials_path = get_str("CREDENTIALS_PATH", &dotenv, &default_credentials);
         let credentials_path = resolve_tilde(&credentials_path);
 
-        let codex_credentials_path =
-            get_str("CODEX_CREDENTIALS_PATH", &dotenv, &default_codex_credentials);
+        let codex_credentials_path = get_str(
+            "CODEX_CREDENTIALS_PATH",
+            &dotenv,
+            &default_codex_credentials,
+        );
         let codex_credentials_path = resolve_tilde(&codex_credentials_path);
         let codex_api_key = get_str("OPENAI_API_KEY", &dotenv, "");
 
@@ -455,11 +498,7 @@ impl Config {
             pipeline_admin_chat: get_str("PIPELINE_ADMIN_CHAT", &dotenv, ""),
             release_interval_mins: get_u32("RELEASE_INTERVAL_MINS", &dotenv, 180),
             continuous_mode: get_bool("CONTINUOUS_MODE", &dotenv, false),
-            chat_collection_window_ms: get_i64(
-                "CHAT_COLLECTION_WINDOW_MS",
-                &dotenv,
-                3000,
-            ),
+            chat_collection_window_ms: get_i64("CHAT_COLLECTION_WINDOW_MS", &dotenv, 3000),
             chat_cooldown_ms: get_i64("CHAT_COOLDOWN_MS", &dotenv, 5000),
             agent_timeout_s: get_i64("AGENT_TIMEOUT_S", &dotenv, 1000),
             max_chat_agents: get_u32("MAX_CHAT_AGENTS", &dotenv, 4),
@@ -467,31 +506,15 @@ impl Config {
             pipeline_max_agents: get_u32("PIPELINE_MAX_AGENTS", &dotenv, 4),
             web_bind: get_str("WEB_BIND", &dotenv, "127.0.0.1"),
             web_port: get_u16("WEB_PORT", &dotenv, 3131),
-            dashboard_dist_dir: get_str(
-                "DASHBOARD_DIST_DIR",
-                &dotenv,
-                "dashboard/dist",
-            ),
+            dashboard_dist_dir: get_str("DASHBOARD_DIST_DIR", &dotenv, "dashboard/dist"),
             container_setup: get_str("CONTAINER_SETUP", &dotenv, ""),
             container_memory_mb: get_u64("CONTAINER_MEMORY_MB", &dotenv, 1024),
             sandbox_backend: get_str("SANDBOX_BACKEND", &dotenv, "auto"),
             pipeline_max_backlog: get_u32("PIPELINE_MAX_BACKLOG", &dotenv, 5),
-            pipeline_seed_cooldown_s: get_i64(
-                "PIPELINE_SEED_COOLDOWN_S",
-                &dotenv,
-                3600,
-            ),
-            proposal_promote_threshold: get_i64(
-                "PIPELINE_PROPOSAL_THRESHOLD",
-                &dotenv,
-                8,
-            ),
+            pipeline_seed_cooldown_s: get_i64("PIPELINE_SEED_COOLDOWN_S", &dotenv, 3600),
+            proposal_promote_threshold: get_i64("PIPELINE_PROPOSAL_THRESHOLD", &dotenv, 8),
             pipeline_tick_s: get_u64("PIPELINE_TICK_S", &dotenv, 30),
-            remote_check_interval_s: get_i64(
-                "REMOTE_CHECK_INTERVAL_S",
-                &dotenv,
-                300,
-            ),
+            remote_check_interval_s: get_i64("REMOTE_CHECK_INTERVAL_S", &dotenv, 300),
             git_author_name: get_str("GIT_AUTHOR_NAME", &dotenv, ""),
             git_author_email: get_str("GIT_AUTHOR_EMAIL", &dotenv, ""),
             git_committer_name: get_str("GIT_COMMITTER_NAME", &dotenv, ""),

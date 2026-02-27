@@ -1,4 +1,5 @@
 use std::process::Stdio;
+
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use borg_core::{
@@ -90,7 +91,10 @@ impl AgentBackend for CodexBackend {
             .arg("--model")
             .arg(&self.model)
             .arg("-c")
-            .arg(format!("model_reasoning_effort=\"{}\"", self.reasoning_effort))
+            .arg(format!(
+                "model_reasoning_effort=\"{}\"",
+                self.reasoning_effort
+            ))
             .arg("--full-auto")
             .arg(&instruction)
             .current_dir(&ctx.worktree_path)
@@ -148,7 +152,10 @@ impl AgentBackend for CodexBackend {
             }
         }
 
-        let exit_status = child.wait().await.context("failed to wait for codex process")?;
+        let exit_status = child
+            .wait()
+            .await
+            .context("failed to wait for codex process")?;
         let output = output_lines.join("\n");
 
         info!(

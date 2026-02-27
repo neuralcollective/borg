@@ -2,13 +2,14 @@
 // These tests reference borg_core::ipc which does not exist yet;
 // they will fail to compile until the implementation is added.
 
-use std::fs;
-use std::io::{Seek, SeekFrom, Write};
-use std::os::unix::fs as unix_fs;
-
-use tempfile::TempDir;
+use std::{
+    fs,
+    io::{Seek, SeekFrom, Write},
+    os::unix::fs as unix_fs,
+};
 
 use borg_core::ipc::{self, IpcReadResult, MAX_IPC_FILE_BYTES};
+use tempfile::TempDir;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -114,7 +115,10 @@ fn symlink_quarantine_lands_in_errors_dir() {
     let _ = ipc::read_file(&base(&dir), "spec.md");
     let after = errors_entry_count(&dir);
 
-    assert!(after > before, "errors/ should have gained an entry after quarantine");
+    assert!(
+        after > before,
+        "errors/ should have gained an entry after quarantine"
+    );
 }
 
 // ── AC3: TOCTOU / O_NOFOLLOW ─────────────────────────────────────────────────
@@ -173,7 +177,10 @@ fn file_one_byte_over_cap_is_quarantined() {
         matches!(result, IpcReadResult::Quarantined(_)),
         "file one byte over MAX_IPC_FILE_BYTES must be quarantined"
     );
-    assert!(errors_entry_count(&dir) > 0, "oversize file must appear in errors/");
+    assert!(
+        errors_entry_count(&dir) > 0,
+        "oversize file must appear in errors/"
+    );
 }
 
 // ── AC5: non-regular files ────────────────────────────────────────────────────
@@ -212,7 +219,10 @@ fn named_pipe_at_artifact_path_is_quarantined() {
 #[test]
 fn errors_dir_is_created_on_first_quarantine() {
     let dir = TempDir::new().unwrap();
-    assert!(!errors_dir(&dir).exists(), "precondition: errors/ should not exist");
+    assert!(
+        !errors_dir(&dir).exists(),
+        "precondition: errors/ should not exist"
+    );
 
     // Trigger a quarantine via a symlink
     let real = dir.path().join("r.txt");
@@ -220,7 +230,10 @@ fn errors_dir_is_created_on_first_quarantine() {
     unix_fs::symlink(&real, dir.path().join("spec.md")).unwrap();
     let _ = ipc::read_file(&base(&dir), "spec.md");
 
-    assert!(errors_dir(&dir).is_dir(), "errors/ directory should be created after quarantine");
+    assert!(
+        errors_dir(&dir).is_dir(),
+        "errors/ directory should be created after quarantine"
+    );
 }
 
 #[test]
@@ -239,7 +252,10 @@ fn quarantined_file_has_timestamped_name() {
     let fname = entry.file_name();
     let name = fname.to_string_lossy();
     // Expected pattern: "spec.md.<timestamp>" or "spec.md.<timestamp>.<counter>"
-    assert!(name.starts_with("spec.md."), "quarantined file name should start with 'spec.md.', got {name}");
+    assert!(
+        name.starts_with("spec.md."),
+        "quarantined file name should start with 'spec.md.', got {name}"
+    );
 }
 
 // ── AC6 edge: errors/ is itself a symlink ────────────────────────────────────
@@ -275,7 +291,7 @@ fn regular_file_under_cap_returned_as_ok() {
     match result {
         IpcReadResult::Ok(contents) => {
             assert_eq!(contents, "# Spec\n\nHello world\n");
-        }
+        },
         other => panic!("expected Ok, got {:?}", other),
     }
 }
@@ -286,7 +302,10 @@ fn subdirectory_file_returned_as_ok() {
     write_file(&dir, ".borg/prompt.md", b"project context\n");
 
     let result = ipc::read_file(&base(&dir), ".borg/prompt.md");
-    assert!(matches!(result, IpcReadResult::Ok(_)), "subdirectory file should be accepted");
+    assert!(
+        matches!(result, IpcReadResult::Ok(_)),
+        "subdirectory file should be accepted"
+    );
 }
 
 // ── AC8: check_artifact ───────────────────────────────────────────────────────
@@ -317,7 +336,10 @@ fn check_artifact_returns_false_for_symlink_and_quarantines() {
         "check_artifact must return false for a symlinked artifact"
     );
     // and it must have been quarantined
-    assert!(errors_entry_count(&dir) > 0, "symlinked artifact must be quarantined");
+    assert!(
+        errors_entry_count(&dir) > 0,
+        "symlinked artifact must be quarantined"
+    );
 }
 
 #[test]
@@ -332,7 +354,10 @@ fn check_artifact_returns_false_for_traversal_name() {
 #[test]
 fn read_file_not_found_for_absent_file() {
     let dir = TempDir::new().unwrap();
-    assert!(matches!(ipc::read_file(&base(&dir), "missing.md"), IpcReadResult::NotFound));
+    assert!(matches!(
+        ipc::read_file(&base(&dir), "missing.md"),
+        IpcReadResult::NotFound
+    ));
 }
 
 #[test]

@@ -1,6 +1,9 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -9,11 +12,16 @@ use tracing::debug;
 pub enum ChatState {
     Idle,
     /// Collecting messages; window expires at this instant.
-    Collecting { window_deadline: Instant, messages: Vec<String> },
+    Collecting {
+        window_deadline: Instant,
+        messages: Vec<String>,
+    },
     /// Agent is running for this chat.
     Running,
     /// Post-agent cooldown; no new messages dispatched until deadline.
-    Cooldown { deadline: Instant },
+    Cooldown {
+        deadline: Instant,
+    },
 }
 
 /// An incoming message from any transport.
@@ -71,12 +79,12 @@ impl ChatCollector {
                 // Agent already running — drop message
                 debug!("Chat {} has running agent, dropping message", chat_key);
                 None
-            }
+            },
 
             ChatState::Cooldown { .. } => {
                 debug!("Chat {} in cooldown, dropping message", chat_key);
                 None
-            }
+            },
 
             ChatState::Idle => {
                 if self.window_ms == 0 {
@@ -88,31 +96,37 @@ impl ChatCollector {
                     })
                 } else {
                     let deadline = Instant::now() + Duration::from_millis(self.window_ms);
-                    state.insert(chat_key, ChatState::Collecting {
-                        window_deadline: deadline,
-                        messages: vec![msg.text],
-                    });
+                    state.insert(
+                        chat_key,
+                        ChatState::Collecting {
+                            window_deadline: deadline,
+                            messages: vec![msg.text],
+                        },
+                    );
                     None
                 }
-            }
+            },
 
-            ChatState::Collecting { window_deadline, mut messages } => {
+            ChatState::Collecting {
+                window_deadline,
+                mut messages,
+            } => {
                 messages.push(msg.text);
 
                 if Instant::now() >= window_deadline {
                     state.insert(chat_key.clone(), ChatState::Running);
-                    Some(MessageBatch {
-                        chat_key,
-                        messages,
-                    })
+                    Some(MessageBatch { chat_key, messages })
                 } else {
-                    state.insert(chat_key, ChatState::Collecting {
-                        window_deadline,
-                        messages,
-                    });
+                    state.insert(
+                        chat_key,
+                        ChatState::Collecting {
+                            window_deadline,
+                            messages,
+                        },
+                    );
                     None
                 }
-            }
+            },
         }
     }
 
@@ -125,7 +139,10 @@ impl ChatCollector {
 
         for (chat_key, chat_state) in state.iter_mut() {
             match chat_state {
-                ChatState::Collecting { window_deadline, messages } => {
+                ChatState::Collecting {
+                    window_deadline,
+                    messages,
+                } => {
                     if now >= *window_deadline {
                         let batch = MessageBatch {
                             chat_key: chat_key.clone(),
@@ -134,14 +151,14 @@ impl ChatCollector {
                         *chat_state = ChatState::Running;
                         ready.push(batch);
                     }
-                }
+                },
                 ChatState::Cooldown { deadline } => {
                     if now >= *deadline {
                         *chat_state = ChatState::Idle;
                         debug!("Chat {} cooldown expired", chat_key);
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -154,12 +171,16 @@ impl ChatCollector {
         if self.cooldown_ms > 0 {
             let deadline = Instant::now() + Duration::from_millis(self.cooldown_ms);
             state.insert(chat_key.to_string(), ChatState::Cooldown { deadline });
-            debug!("Chat {} entering cooldown ({}ms)", chat_key, self.cooldown_ms);
+            debug!(
+                "Chat {} entering cooldown ({}ms)",
+                chat_key, self.cooldown_ms
+            );
         } else {
             state.insert(chat_key.to_string(), ChatState::Idle);
             debug!("Chat {} returned to IDLE", chat_key);
         }
-        self.running.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.running
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Check if we can dispatch more agents.
@@ -169,7 +190,8 @@ impl ChatCollector {
 
     /// Mark dispatch started.
     pub fn mark_dispatched(&self) {
-        self.running.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.running
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn active_count(&self) -> u32 {

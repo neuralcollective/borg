@@ -1,13 +1,18 @@
 mod logging;
 mod routes;
 
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::Instant,
+};
+
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Router,
 };
-use borg_agent::claude::ClaudeBackend;
-use borg_agent::codex::CodexBackend;
-use borg_agent::ollama::OllamaBackend;
+use borg_agent::{claude::ClaudeBackend, codex::CodexBackend, ollama::OllamaBackend};
 use borg_core::{
     chat::ChatCollector,
     config::Config,
@@ -21,9 +26,6 @@ use borg_core::{
 };
 use chrono::Utc;
 use serde_json::json;
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{broadcast, Mutex as TokioMutex};
 use tower_http::{cors::CorsLayer, services::ServeDir};
 use tracing::info;
@@ -65,13 +67,17 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(500)));
     let (chat_event_tx, _) = broadcast::channel::<String>(256);
 
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "borg_server=info,borg_core=info,borg_agent=info,tower_http=warn".into());
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        "borg_server=info,borg_core=info,borg_agent=info,tower_http=warn".into()
+    });
 
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(logging::BroadcastLayer { tx: log_tx.clone(), ring: Arc::clone(&log_ring) })
+        .with(logging::BroadcastLayer {
+            tx: log_tx.clone(),
+            ring: Arc::clone(&log_ring),
+        })
         .init();
 
     let env_config = Config::from_env()?;
@@ -115,10 +121,17 @@ async fn main() -> anyhow::Result<()> {
         let resumable = active
             .iter()
             .filter(|t| !t.session_id.is_empty())
-            .filter(|t| matches!(t.status.as_str(), "spec" | "qa" | "qa_fix" | "impl" | "retry" | "lint_fix" | "rebase"))
+            .filter(|t| {
+                matches!(
+                    t.status.as_str(),
+                    "spec" | "qa" | "qa_fix" | "impl" | "retry" | "lint_fix" | "rebase"
+                )
+            })
             .count();
         if resumable > 0 {
-            tracing::info!("restart recovery: {resumable} active pipeline tasks have resumable sessions");
+            tracing::info!(
+                "restart recovery: {resumable} active pipeline tasks have resumable sessions"
+            );
         }
     }
 
@@ -165,7 +178,10 @@ async fn main() -> anyhow::Result<()> {
     if std::env::var("OLLAMA_URL").is_ok() || std::env::var("LOCAL_MODEL").is_ok() {
         let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
         let model = std::env::var("LOCAL_MODEL").unwrap_or_else(|_| "llama3.2".into());
-        backends.insert("local".into(), Arc::new(OllamaBackend::new(url, model).with_timeout(300)));
+        backends.insert(
+            "local".into(),
+            Arc::new(OllamaBackend::new(url, model).with_timeout(300)),
+        );
         info!("local backend registered (Ollama)");
     }
 
@@ -220,11 +236,7 @@ async fn main() -> anyhow::Result<()> {
                             // Strip leading @mention
                             let text = msg.text.trim().to_string();
                             let text = if text.starts_with('@') {
-                                text.splitn(2, ' ')
-                                    .nth(1)
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string()
+                                text.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string()
                             } else {
                                 text
                             };
@@ -233,7 +245,10 @@ async fn main() -> anyhow::Result<()> {
                             if text_lower.starts_with("task:") || text_lower.starts_with("task ") {
                                 let title_part = text[5..].trim().to_string();
                                 let (title, desc) = if let Some(nl) = title_part.find('\n') {
-                                    (title_part[..nl].to_string(), title_part[nl + 1..].to_string())
+                                    (
+                                        title_part[..nl].to_string(),
+                                        title_part[nl + 1..].to_string(),
+                                    )
                                 } else {
                                     (title_part.clone(), title_part.clone())
                                 };
@@ -273,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
                                         let _ = tg2
                                             .send_message(msg.chat_id, &reply, Some(msg.message_id))
                                             .await;
-                                    }
+                                    },
                                     Err(e) => tracing::error!("insert_task from telegram: {e}"),
                                 }
                             } else {
@@ -304,14 +319,14 @@ async fn main() -> anyhow::Result<()> {
                                             let _ = tg2
                                                 .send_message(chat_id, &reply, Some(message_id))
                                                 .await;
-                                        }
-                                        Ok(_) => {}
+                                        },
+                                        Ok(_) => {},
                                         Err(e) => tracing::warn!("Telegram chat agent error: {e}"),
                                     }
                                 });
                             }
                         }
-                    }
+                    },
                     Err(e) => tracing::warn!("Telegram poll error: {e}"),
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -364,7 +379,9 @@ async fn main() -> anyhow::Result<()> {
                     // If build failed, we retry this same remote_head next loop.
                     last_head = remote_head;
                 } else {
-                    tracing::warn!("Self-update rebuild failed; keeping previous last_head for retry");
+                    tracing::warn!(
+                        "Self-update rebuild failed; keeping previous last_head for retry"
+                    );
                 }
             }
         });
@@ -412,7 +429,8 @@ async fn main() -> anyhow::Result<()> {
                             let chat_tx2 = chat_tx_flush.clone();
                             let collector2 = Arc::clone(&collector_flush);
                             let is_discord = batch.chat_key.starts_with("discord:");
-                            let chat_id = batch.chat_key
+                            let chat_id = batch
+                                .chat_key
                                 .splitn(2, ':')
                                 .nth(1)
                                 .unwrap_or("")
@@ -436,8 +454,8 @@ async fn main() -> anyhow::Result<()> {
                                         } else {
                                             sidecar2.send_whatsapp(&chat_id, &reply, None);
                                         }
-                                    }
-                                    Ok(_) => {}
+                                    },
+                                    Ok(_) => {},
                                     Err(e) => tracing::warn!("Sidecar flush agent error: {e}"),
                                 }
                                 collector2.mark_done(&batch.chat_key).await;
@@ -460,7 +478,11 @@ async fn main() -> anyhow::Result<()> {
                         if msg.is_group && !msg.mentions_bot {
                             continue;
                         }
-                        let prefix = if msg.source == Source::Discord { "discord" } else { "whatsapp" };
+                        let prefix = if msg.source == Source::Discord {
+                            "discord"
+                        } else {
+                            "whatsapp"
+                        };
                         let chat_key = format!("{}:{}", prefix, msg.chat_id);
                         let incoming = borg_core::chat::IncomingMessage {
                             chat_key: chat_key.clone(),
@@ -503,8 +525,8 @@ async fn main() -> anyhow::Result<()> {
                                         } else {
                                             sidecar2.send_whatsapp(&chat_id, &reply, Some(&msg_id));
                                         }
-                                    }
-                                    Ok(_) => {}
+                                    },
+                                    Ok(_) => {},
                                     Err(e) => tracing::warn!("Sidecar chat agent error: {e}"),
                                 }
                                 collector2.mark_done(&batch.chat_key).await;
@@ -512,7 +534,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 });
-            }
+            },
         }
     }
 
@@ -535,11 +557,17 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 match rx.recv().await {
                     Ok(evt) => {
-                        if let PipelineEvent::Notify { ref chat_id, ref message } = evt {
+                        if let PipelineEvent::Notify {
+                            ref chat_id,
+                            ref message,
+                        } = evt
+                        {
                             if !tg_token_notify.is_empty() {
-                                let raw_id = chat_id.strip_prefix("tg:").unwrap_or(chat_id.as_str());
+                                let raw_id =
+                                    chat_id.strip_prefix("tg:").unwrap_or(chat_id.as_str());
                                 if let Ok(chat_id_i64) = raw_id.parse::<i64>() {
-                                    let tg = borg_core::telegram::Telegram::new(tg_token_notify.clone());
+                                    let tg =
+                                        borg_core::telegram::Telegram::new(tg_token_notify.clone());
                                     let _ = tg.send_message(chat_id_i64, message, None).await;
                                 }
                             }
@@ -551,7 +579,7 @@ async fn main() -> anyhow::Result<()> {
                         })
                         .to_string();
                         let _ = log_tx_fwd.send(data);
-                    }
+                    },
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(_) => break,
                 }
@@ -576,10 +604,9 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let dashboard_dir = config.dashboard_dist_dir.clone();
-    let serve_dir = ServeDir::new(&dashboard_dir)
-        .fallback(tower_http::services::ServeFile::new(
-            format!("{dashboard_dir}/index.html"),
-        ));
+    let serve_dir = ServeDir::new(&dashboard_dir).fallback(tower_http::services::ServeFile::new(
+        format!("{dashboard_dir}/index.html"),
+    ));
 
     let app = Router::new()
         // Health
@@ -589,7 +616,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/create", post(routes::create_task))
         .route("/api/tasks/:id", get(routes::get_task))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
-        .route("/api/tasks/:id/outputs", get(routes::get_task_outputs_handler))
+        .route(
+            "/api/tasks/:id/outputs",
+            get(routes::get_task_outputs_handler),
+        )
         .route("/api/tasks/:id/stream", get(routes::sse_task_stream))
         // Task messages
         .route("/api/tasks/:id/messages", get(routes::get_task_messages))
@@ -604,6 +634,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/proposals/:id/approve", post(routes::approve_proposal))
         .route("/api/proposals/:id/dismiss", post(routes::dismiss_proposal))
         .route("/api/proposals/:id/reopen", post(routes::reopen_proposal))
+        // Projects
+        .route("/api/projects", get(routes::list_projects))
+        .route("/api/projects", post(routes::create_project))
+        .route("/api/projects/:id/files", get(routes::list_project_files))
+        .route(
+            "/api/projects/:id/files/upload",
+            post(routes::upload_project_files).layer(DefaultBodyLimit::max(110 * 1024 * 1024)),
+        )
+        .route(
+            "/api/projects/:id/chat/messages",
+            get(routes::get_project_chat_messages),
+        )
+        .route("/api/projects/:id/chat", post(routes::post_project_chat))
         // Modes
         .route("/api/modes", get(routes::get_modes))
         // Settings

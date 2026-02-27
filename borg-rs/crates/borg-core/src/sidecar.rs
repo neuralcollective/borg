@@ -1,9 +1,12 @@
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::Command,
+    sync::mpsc,
+};
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,14 +82,16 @@ impl Sidecar {
                         died_rx.await.ok();
                         *cmd_tx_arc2.lock().unwrap_or_else(|e| e.into_inner()) = None;
                         warn!("Sidecar process exited, restarting in 5s");
-                    }
+                    },
                     Err(e) => {
                         attempt += 1;
                         let delay = (5u64 * attempt as u64).min(60);
-                        warn!("Sidecar spawn failed (attempt {attempt}): {e}, retrying in {delay}s");
+                        warn!(
+                            "Sidecar spawn failed (attempt {attempt}): {e}, retrying in {delay}s"
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
                         continue;
-                    }
+                    },
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
@@ -109,9 +114,8 @@ impl Sidecar {
 
     pub fn send_whatsapp(&self, jid: &str, text: &str, quote_id: Option<&str>) {
         let escaped = json_escape(text);
-        let mut cmd = format!(
-            r#"{{"target":"whatsapp","cmd":"send","jid":"{jid}","text":"{escaped}""#
-        );
+        let mut cmd =
+            format!(r#"{{"target":"whatsapp","cmd":"send","jid":"{jid}","text":"{escaped}""#);
         if let Some(id) = quote_id {
             cmd.push_str(&format!(r#","quote_id":"{id}""#));
         }
@@ -146,7 +150,10 @@ async fn spawn_once(
     wa_auth_dir: &str,
     wa_disabled: bool,
     event_tx: mpsc::UnboundedSender<SidecarEvent>,
-) -> Result<(mpsc::UnboundedSender<String>, tokio::sync::oneshot::Receiver<()>)> {
+) -> Result<(
+    mpsc::UnboundedSender<String>,
+    tokio::sync::oneshot::Receiver<()>,
+)> {
     let mut cmd = Command::new("bun");
     cmd.args(["sidecar/bridge.js", assistant_name]);
     cmd.stdin(std::process::Stdio::piped());
@@ -182,20 +189,20 @@ async fn spawn_once(
             match &event {
                 SidecarEvent::DiscordReady { bot_id } => {
                     info!("Discord connected as bot {}", bot_id);
-                }
+                },
                 SidecarEvent::WaConnected { jid } => {
                     info!("WhatsApp connected as {}", jid);
-                }
+                },
                 SidecarEvent::WaQr { .. } => {
                     info!("WhatsApp QR code generated - scan with phone");
-                }
+                },
                 SidecarEvent::Disconnected { source, reason } => {
                     warn!("Sidecar {:?} disconnected: {}", source, reason);
-                }
+                },
                 SidecarEvent::Error { source, message } => {
                     warn!("Sidecar {:?} error: {}", source, message);
-                }
-                _ => {}
+                },
+                _ => {},
             }
             let _ = event_tx.send(event);
         }
@@ -266,10 +273,16 @@ fn parse_event(line: &str) -> Option<SidecarEvent> {
                 }
             };
             SidecarEvent::Message(msg)
-        }
-        "ready" => SidecarEvent::DiscordReady { bot_id: str_val(&v, "bot_id") },
-        "connected" => SidecarEvent::WaConnected { jid: str_val(&v, "jid") },
-        "qr" => SidecarEvent::WaQr { data: str_val(&v, "data") },
+        },
+        "ready" => SidecarEvent::DiscordReady {
+            bot_id: str_val(&v, "bot_id"),
+        },
+        "connected" => SidecarEvent::WaConnected {
+            jid: str_val(&v, "jid"),
+        },
+        "qr" => SidecarEvent::WaQr {
+            data: str_val(&v, "data"),
+        },
         "disconnected" => SidecarEvent::Disconnected {
             source,
             reason: str_val(&v, "reason"),
@@ -307,7 +320,9 @@ mod tests {
     fn parse_discord_message() {
         let line = r#"{"source":"discord","event":"message","message_id":"m1","channel_id":"ch1","sender_id":"u1","sender_name":"Alice","text":"hello","timestamp":1234,"is_dm":false,"mentions_bot":true}"#;
         let ev = parse_event(line).unwrap();
-        let SidecarEvent::Message(msg) = ev else { panic!("expected Message") };
+        let SidecarEvent::Message(msg) = ev else {
+            panic!("expected Message")
+        };
         assert_eq!(msg.source, Source::Discord);
         assert_eq!(msg.chat_id, "ch1");
         assert_eq!(msg.sender_name, "Alice");
@@ -319,7 +334,9 @@ mod tests {
     fn parse_whatsapp_message() {
         let line = r#"{"source":"whatsapp","event":"message","id":"wa1","jid":"12345@g.us","sender":"56789","sender_name":"Bob","text":"yo","timestamp":5678,"is_group":true,"mentions_bot":false}"#;
         let ev = parse_event(line).unwrap();
-        let SidecarEvent::Message(msg) = ev else { panic!("expected Message") };
+        let SidecarEvent::Message(msg) = ev else {
+            panic!("expected Message")
+        };
         assert_eq!(msg.source, Source::WhatsApp);
         assert_eq!(msg.chat_id, "12345@g.us");
         assert_eq!(msg.text, "yo");
@@ -329,7 +346,9 @@ mod tests {
     fn parse_discord_ready() {
         let line = r#"{"source":"discord","event":"ready","bot_id":"bot123"}"#;
         let ev = parse_event(line).unwrap();
-        let SidecarEvent::DiscordReady { bot_id } = ev else { panic!() };
+        let SidecarEvent::DiscordReady { bot_id } = ev else {
+            panic!()
+        };
         assert_eq!(bot_id, "bot123");
     }
 
@@ -337,7 +356,9 @@ mod tests {
     fn parse_wa_connected() {
         let line = r#"{"source":"whatsapp","event":"connected","jid":"me@s.whatsapp.net"}"#;
         let ev = parse_event(line).unwrap();
-        let SidecarEvent::WaConnected { jid } = ev else { panic!() };
+        let SidecarEvent::WaConnected { jid } = ev else {
+            panic!()
+        };
         assert_eq!(jid, "me@s.whatsapp.net");
     }
 

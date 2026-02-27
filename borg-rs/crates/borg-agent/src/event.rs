@@ -119,7 +119,7 @@ pub fn parse_stream(data: &str) -> (String, Option<String>) {
                 if let Some(sid) = e.session_id {
                     session_id = Some(sid);
                 }
-            }
+            },
             AgentEvent::Assistant(e) => {
                 if let Some(msg) = e.message {
                     if let Some(blocks) = msg.content {
@@ -133,7 +133,7 @@ pub fn parse_stream(data: &str) -> (String, Option<String>) {
                         }
                     }
                 }
-            }
+            },
             AgentEvent::Result(e) => {
                 if let Some(sid) = e.session_id {
                     session_id = Some(sid);
@@ -141,8 +141,8 @@ pub fn parse_stream(data: &str) -> (String, Option<String>) {
                 if let Some(text) = e.result {
                     output = text;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
