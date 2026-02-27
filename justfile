@@ -35,6 +35,11 @@ restart:
     for i in $(seq 1 20); do curl -sf http://127.0.0.1:3131/api/status >/dev/null && break; sleep 1; done
     curl -sf http://127.0.0.1:3131/api/status >/dev/null || (echo "borg did not come up on :3131"; systemctl --user --no-pager status borg; exit 1)
 
+# Stop the user service
+stop:
+    systemctl --user stop borg
+    systemctl --user is-active borg || true
+
 # Build release and restart service
 deploy: b restart
 
