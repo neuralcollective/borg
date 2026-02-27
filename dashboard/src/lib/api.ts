@@ -11,6 +11,7 @@ import type {
   TaskMessage,
   Project,
   ProjectFile,
+  PipelineModeFull,
 } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -89,6 +90,40 @@ export function useModes() {
     queryFn: () => fetchJson("/api/modes"),
     staleTime: 300_000,
   });
+}
+
+export function useFullModes() {
+  return useQuery<PipelineModeFull[]>({
+    queryKey: ["modes_full"],
+    queryFn: () => fetchJson("/api/modes/full"),
+    staleTime: 30_000,
+  });
+}
+
+export function useCustomModes() {
+  return useQuery<PipelineModeFull[]>({
+    queryKey: ["modes_custom"],
+    queryFn: () => fetchJson("/api/modes/custom"),
+    staleTime: 30_000,
+  });
+}
+
+export async function saveCustomMode(mode: PipelineModeFull): Promise<{ ok: boolean }> {
+  const res = await fetch("/api/modes/custom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(mode),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function removeCustomMode(name: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/modes/custom/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
 }
 
 export interface Settings {

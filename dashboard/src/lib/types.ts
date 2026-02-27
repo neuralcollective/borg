@@ -120,6 +120,54 @@ export interface PipelineMode {
   phases: PhaseInfo[];
 }
 
+export type PhaseType = "setup" | "agent" | "rebase" | "lint_fix";
+export type IntegrationType = "git_pr" | "none";
+export type SeedOutputType = "task" | "proposal";
+
+export interface PhaseConfigFull {
+  name: string;
+  label: string;
+  phase_type: PhaseType;
+  system_prompt: string;
+  instruction: string;
+  error_instruction: string;
+  allowed_tools: string;
+  use_docker: boolean;
+  include_task_context: boolean;
+  include_file_listing: boolean;
+  runs_tests: boolean;
+  commits: boolean;
+  commit_message: string;
+  check_artifact: string | null;
+  allow_no_changes: boolean;
+  next: string;
+  has_qa_fix_routing: boolean;
+  fresh_session: boolean;
+  fix_instruction: string;
+}
+
+export interface SeedConfigFull {
+  name: string;
+  label: string;
+  prompt: string;
+  output_type: SeedOutputType;
+  allowed_tools: string;
+  target_primary_repo: boolean;
+}
+
+export interface PipelineModeFull {
+  name: string;
+  label: string;
+  phases: PhaseConfigFull[];
+  seed_modes: SeedConfigFull[];
+  initial_status: string;
+  uses_git_worktrees: boolean;
+  uses_docker: boolean;
+  uses_test_cmd: boolean;
+  integration: IntegrationType;
+  default_max_attempts: number;
+}
+
 export interface Project {
   id: number;
   name: string;

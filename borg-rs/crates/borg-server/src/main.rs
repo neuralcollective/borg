@@ -649,6 +649,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/:id/chat", post(routes::post_project_chat))
         // Modes
         .route("/api/modes", get(routes::get_modes))
+        .route("/api/modes/full", get(routes::get_full_modes))
+        .route("/api/modes/custom", get(routes::list_custom_modes))
+        .route("/api/modes/custom", post(routes::upsert_custom_mode))
+        .route(
+            "/api/modes/custom/:name",
+            delete(routes::delete_custom_mode),
+        )
         // Settings
         .route("/api/settings", get(routes::get_settings))
         .route("/api/settings", put(routes::put_settings))

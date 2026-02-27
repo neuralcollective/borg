@@ -11,8 +11,9 @@ import { QueuePanel } from "@/components/queue-panel";
 import { ProposalsPanel } from "@/components/proposals-panel";
 import { ChatPanel } from "@/components/chat-panel";
 import { ProjectsPanel } from "@/components/projects-panel";
+import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { SettingsPanel } from "@/components/settings-panel";
-import { ListTodo, Terminal, GitMerge, MessageSquare, Lightbulb, Settings, FolderOpen } from "lucide-react";
+import { ListTodo, Terminal, GitMerge, MessageSquare, Lightbulb, Settings, FolderOpen, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -39,7 +40,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-type View = "tasks" | "projects" | "proposals" | "logs" | "queue" | "chat" | "settings";
+type View = "tasks" | "projects" | "creator" | "proposals" | "logs" | "queue" | "chat" | "settings";
 type MobileTab = "tasks" | "logs" | "queue" | "chat";
 
 function useIsMobile() {
@@ -58,6 +59,7 @@ function useIsMobile() {
 const ALL_NAV_ITEMS = [
   { key: "tasks" as const, label: "Tasks", Icon: ListTodo, minimalVisible: true },
   { key: "projects" as const, label: "Projects", Icon: FolderOpen, minimalVisible: true },
+  { key: "creator" as const, label: "Creator", Icon: Wrench, minimalVisible: true },
   { key: "proposals" as const, label: "Proposals", Icon: Lightbulb, minimalVisible: true },
   { key: "logs" as const, label: "Logs", Icon: Terminal, minimalVisible: false },
   { key: "queue" as const, label: "Queue", Icon: GitMerge, minimalVisible: false },
@@ -278,6 +280,7 @@ function AppInner() {
           )}
 
           {view === "projects" && <ProjectsPanel />}
+          {view === "creator" && <ModeCreatorPanel />}
           {view === "proposals" && <ProposalsPanel repoFilter={repoFilter} />}
           {view === "logs" && <LogViewer logs={logs} />}
           {view === "queue" && <QueuePanel repoFilter={repoFilter} />}

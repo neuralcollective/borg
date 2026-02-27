@@ -59,6 +59,24 @@ struct GithubIssue {
 }
 
 impl Pipeline {
+    fn custom_modes_from_db(&self) -> Vec<PipelineMode> {
+        let raw = match self.db.get_config("custom_modes") {
+            Ok(Some(v)) => v,
+            _ => return Vec::new(),
+        };
+        serde_json::from_str::<Vec<PipelineMode>>(&raw).unwrap_or_default()
+    }
+
+    fn resolve_mode(&self, name: &str) -> Option<PipelineMode> {
+        get_mode(name)
+            .or_else(|| {
+                self.custom_modes_from_db()
+                    .into_iter()
+                    .find(|m| m.name == name)
+            })
+            .or_else(|| get_mode("sweborg"))
+    }
+
     pub fn new(
         db: Arc<Db>,
         backends: HashMap<String, Arc<dyn AgentBackend>>,
@@ -227,7 +245,7 @@ impl Pipeline {
         // Re-enqueue any "done" tasks that lost their queue entry (e.g. after restart)
         if let Ok(orphans) = self.db.list_done_tasks_without_queue() {
             for task in orphans {
-                if let Some(mode) = get_mode(&task.mode).or_else(|| get_mode("sweborg")) {
+                if let Some(mode) = self.resolve_mode(&task.mode) {
                     if mode.integration == IntegrationType::GitPr {
                         let branch = format!("task-{}", task.id);
                         if let Err(e) = self.db.enqueue(task.id, &branch, &task.repo_path, 0) {
@@ -303,8 +321,8 @@ impl Pipeline {
 
     /// Process a single task through its current phase.
     async fn process_task(self: Arc<Self>, task: Task) -> Result<()> {
-        let mode = get_mode(&task.mode)
-            .or_else(|| get_mode("sweborg"))
+        let mode = self
+            .resolve_mode(&task.mode)
             .ok_or_else(|| anyhow::anyhow!("no pipeline mode found for task #{}", task.id))?;
 
         let phase = match mode.get_phase(&task.status) {
@@ -1412,7 +1430,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 }
             }
 
-            let mode = match get_mode(&repo.mode).or_else(|| get_mode("sweborg")) {
+            let mode = match self.resolve_mode(&repo.mode) {
                 Some(m) => m,
                 None => continue,
             };
@@ -1449,8 +1467,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             return Ok(());
         }
 
-        let mode_name = get_mode(&repo.mode)
-            .or_else(|| get_mode("sweborg"))
+        let mode_name = self
+            .resolve_mode(&repo.mode)
             .map(|m| m.name)
             .unwrap_or_else(|| "sweborg".to_string());
 
