@@ -117,6 +117,7 @@ export interface PhaseInfo {
 export interface PipelineMode {
   name: string;
   label: string;
+  category?: string;
   phases: PhaseInfo[];
 }
 
@@ -158,6 +159,7 @@ export interface SeedConfigFull {
 export interface PipelineModeFull {
   name: string;
   label: string;
+  category?: string;
   phases: PhaseConfigFull[];
   seed_modes: SeedConfigFull[];
   initial_status: string;

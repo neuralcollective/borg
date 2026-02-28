@@ -1,32 +1,23 @@
-import { useMemo, useState } from "react";
+import { useReducer, useMemo, useState, useCallback } from "react";
 import { removeCustomMode, saveCustomMode, useCustomModes, useFullModes } from "@/lib/api";
 import type { PipelineModeFull } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { ModeSidebar } from "./mode-creator/mode-sidebar";
+import { ModeSettings } from "./mode-creator/mode-settings";
+import { PhaseStrip } from "./mode-creator/phase-strip";
+import { PhaseDetail } from "./mode-creator/phase-detail";
+import { SeedList } from "./mode-creator/seed-list";
+import { editorReducer, INITIAL_STATE, blankMode } from "./mode-creator/reducer";
 
-function cloneMode(mode: PipelineModeFull): PipelineModeFull {
-  return JSON.parse(JSON.stringify(mode)) as PipelineModeFull;
-}
-
-function pretty(mode: PipelineModeFull): string {
-  return JSON.stringify(mode, null, 2);
-}
-
-function parseMode(text: string): PipelineModeFull {
-  return JSON.parse(text) as PipelineModeFull;
-}
+const TABS = ["phases", "seeds", "json"] as const;
 
 export function ModeCreatorPanel() {
   const { data: allModes = [], refetch: refetchAll } = useFullModes();
   const { data: customModes = [], refetch: refetchCustom } = useCustomModes();
-  const [templateName, setTemplateName] = useState<string>("sweborg");
-  const [modeName, setModeName] = useState("");
-  const [editorText, setEditorText] = useState("");
+  const [state, dispatch] = useReducer(editorReducer, INITIAL_STATE);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string>("");
+  const [msg, setMsg] = useState("");
 
-  const template = useMemo(
-    () => allModes.find((m) => m.name === templateName) ?? allModes[0] ?? null,
-    [allModes, templateName]
-  );
   const customNameSet = useMemo(
     () => new Set(customModes.map((m) => m.name)),
     [customModes]
@@ -36,153 +27,188 @@ export function ModeCreatorPanel() {
     [allModes, customNameSet]
   );
 
-  function loadTemplate() {
-    if (!template) return;
-    const next = cloneMode(template);
-    if (modeName.trim()) {
-      next.name = modeName.trim();
-      next.label = modeName.trim();
-    }
-    setEditorText(pretty(next));
+  const handleSelect = useCallback((mode: PipelineModeFull, readOnly: boolean) => {
+    dispatch({ type: "LOAD_MODE", mode, readOnly });
     setMsg("");
-  }
+  }, []);
 
-  async function handleSave() {
+  const handleNew = useCallback(() => {
+    dispatch({ type: "LOAD_MODE", mode: blankMode(), readOnly: false });
+    setMsg("");
+  }, []);
+
+  const handleFork = useCallback(() => {
+    const forkName = `${state.mode.name}_custom`;
+    dispatch({ type: "FORK", newName: forkName });
+    setMsg("");
+  }, [state.mode.name]);
+
+  const handleSave = useCallback(async () => {
     if (busy) return;
     setBusy(true);
     setMsg("");
     try {
-      const parsed = parseMode(editorText);
-      if (modeName.trim()) {
-        parsed.name = modeName.trim();
-        if (!parsed.label?.trim()) parsed.label = modeName.trim();
-      }
-      await saveCustomMode(parsed);
-      setModeName(parsed.name);
-      setEditorText(pretty(parsed));
+      await saveCustomMode(state.mode);
       await Promise.all([refetchAll(), refetchCustom()]);
-      setMsg(`Saved mode '${parsed.name}'`);
+      dispatch({ type: "LOAD_MODE", mode: state.mode, readOnly: false });
+      setMsg(`Saved '${state.mode.name}'`);
     } catch (err) {
-      const text = err instanceof Error ? err.message : "save failed";
-      setMsg(`Save failed (${text})`);
+      setMsg(`Save failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setBusy(false);
     }
-  }
+  }, [busy, state.mode, refetchAll, refetchCustom]);
 
-  async function handleDelete(name: string) {
+  const handleDiscard = useCallback(() => {
+    const orig = JSON.parse(state.original) as PipelineModeFull;
+    dispatch({ type: "LOAD_MODE", mode: orig, readOnly: state.isReadOnly });
+    setMsg("");
+  }, [state.original, state.isReadOnly]);
+
+  const handleDelete = useCallback(async (name: string) => {
     if (busy) return;
     setBusy(true);
     setMsg("");
     try {
       await removeCustomMode(name);
       await Promise.all([refetchAll(), refetchCustom()]);
-      setMsg(`Deleted mode '${name}'`);
-      if (modeName === name) setModeName("");
+      if (state.mode.name === name) {
+        dispatch({ type: "LOAD_MODE", mode: blankMode(), readOnly: false });
+      }
+      setMsg(`Deleted '${name}'`);
     } catch (err) {
-      const text = err instanceof Error ? err.message : "delete failed";
-      setMsg(`Delete failed (${text})`);
+      setMsg(`Delete failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setBusy(false);
     }
-  }
+  }, [busy, state.mode.name, refetchAll, refetchCustom]);
+
+  const { mode, selectedPhaseIndex, expandedSeedIndex, activeTab, isDirty, isReadOnly } = state;
+  const selectedPhase = selectedPhaseIndex !== null ? mode.phases[selectedPhaseIndex] : null;
+  const phaseNames = mode.phases.map((p) => p.name);
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-[300px] shrink-0 border-r border-white/[0.06] p-3">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">Custom Borg Creator</div>
-        <div className="mt-3 space-y-2">
-          <label className="block text-[11px] text-zinc-500">Mode Name</label>
-          <input
-            value={modeName}
-            onChange={(e) => setModeName(e.target.value)}
-            placeholder="myborg"
-            className="w-full rounded border border-white/[0.08] bg-white/[0.03] px-2 py-1.5 text-[12px] text-zinc-200 outline-none"
+      <ModeSidebar
+        builtIn={builtInModes}
+        custom={customModes}
+        activeName={mode.name}
+        onSelect={handleSelect}
+        onNew={handleNew}
+        onDelete={handleDelete}
+      />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Mode settings */}
+        <div className="shrink-0 border-b border-white/[0.06] p-3">
+          <ModeSettings
+            mode={mode}
+            readOnly={isReadOnly}
+            onChange={(key, value) => dispatch({ type: "UPDATE_MODE", key, value })}
+            onFork={handleFork}
           />
-
-          <label className="mt-2 block text-[11px] text-zinc-500">Template</label>
-          <select
-            value={templateName}
-            onChange={(e) => setTemplateName(e.target.value)}
-            className="w-full rounded border border-white/[0.08] bg-white/[0.03] px-2 py-1.5 text-[12px] text-zinc-300 outline-none"
-          >
-            {builtInModes.length > 0 && (
-              <optgroup label="Built-in Modes">
-                {builtInModes.map((m) => (
-                  <option key={m.name} value={m.name}>
-                    {m.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {customModes.length > 0 && (
-              <optgroup label="Custom Modes">
-                {customModes.map((m) => (
-                  <option key={m.name} value={m.name}>
-                    {m.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-          <button
-            onClick={loadTemplate}
-            className="w-full rounded bg-white/[0.06] px-2 py-1.5 text-[12px] text-zinc-300 hover:bg-white/[0.1]"
-          >
-            Load Template Into Editor
-          </button>
         </div>
 
-        <div className="mt-4 border-t border-white/[0.06] pt-3">
-          <div className="mb-2 text-[11px] text-zinc-500">Existing Custom Modes</div>
-          <div className="space-y-1">
-            {customModes.map((m) => (
-              <div key={m.name} className="flex items-center gap-1">
+        {/* Tab bar */}
+        <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.06] px-3 pt-1">
+          {TABS.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => dispatch({ type: "SET_TAB", tab })}
+              className={cn(
+                "rounded-t-md px-3 py-1.5 text-[11px] font-medium capitalize transition-colors",
+                activeTab === tab
+                  ? "border border-b-0 border-white/[0.08] bg-white/[0.04] text-zinc-200"
+                  : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              {tab}
+              {tab === "phases" && <span className="ml-1.5 text-zinc-600">{mode.phases.length}</span>}
+              {tab === "seeds" && <span className="ml-1.5 text-zinc-600">{mode.seed_modes.length}</span>}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        <div className="flex-1 overflow-y-auto p-3">
+          {activeTab === "phases" && (
+            <div className="space-y-3">
+              <PhaseStrip
+                phases={mode.phases}
+                selectedIndex={selectedPhaseIndex}
+                readOnly={isReadOnly}
+                onSelect={(i) => dispatch({ type: "SELECT_PHASE", index: i })}
+                onAdd={(after) => dispatch({ type: "ADD_PHASE", afterIndex: after })}
+                onRemove={(i) => dispatch({ type: "REMOVE_PHASE", index: i })}
+                onMove={(from, to) => dispatch({ type: "MOVE_PHASE", from, to })}
+              />
+              {selectedPhase && selectedPhaseIndex !== null && (
+                <PhaseDetail
+                  phase={selectedPhase}
+                  phaseNames={phaseNames}
+                  readOnly={isReadOnly}
+                  onChange={(patch) => dispatch({ type: "UPDATE_PHASE", index: selectedPhaseIndex, patch })}
+                />
+              )}
+              {!selectedPhase && mode.phases.length > 0 && (
+                <div className="rounded-lg border border-dashed border-white/[0.08] p-8 text-center text-[12px] text-zinc-600">
+                  Select a phase above to edit its configuration
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "seeds" && (
+            <SeedList
+              seeds={mode.seed_modes}
+              expandedIndex={expandedSeedIndex}
+              readOnly={isReadOnly}
+              onExpand={(i) => dispatch({ type: "EXPAND_SEED", index: i })}
+              onUpdate={(i, patch) => dispatch({ type: "UPDATE_SEED", index: i, patch })}
+              onAdd={() => dispatch({ type: "ADD_SEED" })}
+              onRemove={(i) => dispatch({ type: "REMOVE_SEED", index: i })}
+            />
+          )}
+
+          {activeTab === "json" && (
+            <div className="relative">
+              <pre className="min-h-[200px] rounded-lg border border-white/[0.06] bg-black/30 p-3 font-mono text-[11px] text-zinc-300 overflow-auto">
+                {JSON.stringify(mode, null, 2)}
+              </pre>
+              <button
+                onClick={() => navigator.clipboard.writeText(JSON.stringify(mode, null, 2))}
+                className="absolute right-2 top-2 rounded-md bg-white/[0.06] px-2 py-1 text-[10px] text-zinc-500 hover:bg-white/[0.1] hover:text-zinc-300"
+              >
+                Copy
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Sticky save bar */}
+        {(isDirty || msg) && (
+          <div className="sticky bottom-0 flex shrink-0 items-center gap-2 border-t border-white/[0.08] bg-zinc-900/95 px-3 py-2 backdrop-blur">
+            {isDirty && !isReadOnly && (
+              <>
                 <button
-                  onClick={() => {
-                    setModeName(m.name);
-                    setEditorText(pretty(m));
-                    setMsg("");
-                  }}
-                  className="flex-1 rounded bg-white/[0.04] px-2 py-1 text-left text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+                  onClick={handleDiscard}
+                  disabled={busy}
+                  className="rounded-md bg-white/[0.06] px-3 py-1.5 text-[12px] text-zinc-400 hover:bg-white/[0.1] disabled:opacity-50"
                 >
-                  {m.name}
+                  Discard
                 </button>
                 <button
-                  onClick={() => handleDelete(m.name)}
-                  className="rounded bg-red-500/20 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/30"
+                  onClick={handleSave}
+                  disabled={busy || !mode.name.trim()}
+                  className="rounded-md bg-blue-500/20 px-3 py-1.5 text-[12px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 hover:bg-blue-500/30 disabled:opacity-50"
                 >
-                  Del
+                  {busy ? "Saving..." : "Save"}
                 </button>
-              </div>
-            ))}
-            {customModes.length === 0 && (
-              <div className="text-[11px] text-zinc-600">No custom modes yet.</div>
+              </>
             )}
+            {msg && <span className="ml-auto text-[11px] text-zinc-500">{msg}</span>}
           </div>
-        </div>
-      </div>
-
-      <div className="flex min-w-0 flex-1 flex-col p-3">
-        <div className="mb-2 text-[11px] text-zinc-500">
-          Edit full pipeline JSON: phases, prompts, tools, integration, seeds.
-        </div>
-        <textarea
-          value={editorText}
-          onChange={(e) => setEditorText(e.target.value)}
-          placeholder="Load a template, then edit JSON..."
-          className="min-h-0 flex-1 resize-none rounded border border-white/[0.08] bg-black/30 p-3 font-mono text-[11px] text-zinc-200 outline-none"
-        />
-        <div className="mt-2 flex items-center gap-2">
-          <button
-            onClick={handleSave}
-            disabled={busy || !editorText.trim()}
-            className="rounded bg-blue-500/20 px-3 py-1.5 text-[12px] text-blue-300 disabled:cursor-not-allowed disabled:text-zinc-600"
-          >
-            Save Custom Mode
-          </button>
-          {msg && <span className="text-[11px] text-zinc-500">{msg}</span>}
-        </div>
+        )}
       </div>
     </div>
   );

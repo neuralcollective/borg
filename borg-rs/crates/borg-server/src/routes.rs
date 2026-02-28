@@ -1039,6 +1039,7 @@ pub(crate) async fn get_modes(State(state): State<Arc<AppState>>) -> Json<Value>
             json!({
                 "name": m.name,
                 "label": m.label,
+                "category": m.category,
                 "phases": phases,
             })
         })

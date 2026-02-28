@@ -145,6 +145,7 @@ pub fn swe_mode() -> PipelineMode {
     PipelineMode {
         name: "sweborg".into(),
         label: "Software Engineering".into(),
+        category: "Engineering".into(),
         initial_status: "backlog".into(),
         uses_git_worktrees: true,
         uses_docker: true,
@@ -240,6 +241,7 @@ pub fn legal_mode() -> PipelineMode {
     PipelineMode {
         name: "lawborg".into(),
         label: "Legal".into(),
+        category: "Professional Services".into(),
         initial_status: "backlog".into(),
         uses_git_worktrees: true,
         uses_docker: false,
@@ -307,6 +309,7 @@ pub fn web_mode() -> PipelineMode {
     PipelineMode {
         name: "webborg".into(),
         label: "Frontend".into(),
+        category: "Engineering".into(),
         initial_status: "backlog".into(),
         uses_git_worktrees: true,
         uses_docker: true,
@@ -390,6 +393,7 @@ pub fn crew_mode() -> PipelineMode {
     PipelineMode {
         name: "crewborg".into(),
         label: "Talent Search".into(),
+        category: "People & Ops".into(),
         initial_status: "backlog".into(),
         uses_git_worktrees: true,
         uses_docker: false,
@@ -469,6 +473,7 @@ pub fn sales_mode() -> PipelineMode {
     PipelineMode {
         name: "salesborg".into(),
         label: "Sales Outreach".into(),
+        category: "Professional Services".into(),
         initial_status: "backlog".into(),
         uses_git_worktrees: true,
         uses_docker: false,
@@ -548,6 +553,7 @@ pub fn data_mode() -> PipelineMode {
     PipelineMode {
         name: "databorg".into(),
         label: "Data Analysis".into(),
+        category: "Data & Analytics".into(),
         initial_status: "backlog".into(),
         uses_git_worktrees: true,
         uses_docker: false,
