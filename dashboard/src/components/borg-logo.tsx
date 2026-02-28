@@ -30,7 +30,7 @@ function randomShift(): { x: number; y: number } {
 type Offsets = { x: number; y: number }[];
 
 function BorgLogo({ size = "desktop" }: { size?: "desktop" | "mobile" }) {
-  const textSize = size === "desktop" ? "text-[13px]" : "text-[9px]";
+  const textSize = size === "desktop" ? "text-[15px]" : "text-[11px]";
   const [cells, setCells] = useState(LETTERS);
   const [offsets, setOffsets] = useState<Offsets>(() =>
     LETTERS.map(() => ({ x: 0, y: 0 }))

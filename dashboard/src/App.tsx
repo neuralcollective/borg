@@ -213,7 +213,7 @@ function AppInner() {
           <BorgLogo />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
             {"BORG".split("").map((c, i) => (
-              <span key={i} className="flex items-center justify-center text-[13px]">{c}</span>
+              <span key={i} className="flex items-center justify-center text-[15px]">{c}</span>
             ))}
           </div>
         </div>

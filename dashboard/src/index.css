@@ -142,11 +142,22 @@
 .borg-logo {
   position: relative;
   isolation: isolate;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Chakra Petch', sans-serif;
 }
 
 .borg-logo span {
-  transform: scaleX(2);
+  font-weight: 700;
+  color: #000;
+  text-shadow:
+    0.5px -0.5px 0 #491700,
+    1px -1px 0 #491700,
+    1.5px -1.5px 0 #491700,
+    2px -2px 0 #491700,
+    2.5px -2.5px 0 #491700,
+    3px -3px 0 #491700,
+    3.5px -3.5px 0 #491700;
+  -webkit-text-stroke: 0.3px rgba(255,255,255,0.15);
+  paint-order: stroke fill;
 }
 
 .borg-logo-text {
