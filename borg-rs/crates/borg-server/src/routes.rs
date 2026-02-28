@@ -199,6 +199,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "container_memory_mb",
     "assistant_name",
     "pipeline_max_agents",
+    "pipeline_agent_cooldown_s",
     "proposal_promote_threshold",
     "backend",
     "git_claude_coauthor",
@@ -216,6 +217,7 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("container_memory_mb", "2048"),
     ("assistant_name", "Borg"),
     ("pipeline_max_agents", "3"),
+    ("pipeline_agent_cooldown_s", "120"),
     ("proposal_promote_threshold", "70"),
     ("backend", "claude"),
     ("git_claude_coauthor", "false"),
@@ -1118,6 +1120,7 @@ pub(crate) async fn get_settings(
                 | "pipeline_tick_s"
                 | "container_memory_mb"
                 | "pipeline_max_agents"
+                | "pipeline_agent_cooldown_s"
                 | "proposal_promote_threshold"
         ) {
             s.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(s))

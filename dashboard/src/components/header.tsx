@@ -45,9 +45,17 @@ export function Header({
     return (
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#09090b] px-4">
         <div className="flex items-center gap-2">
-          <div className="flex h-5 w-5 flex-col items-center justify-center bg-orange-500 leading-none overflow-visible">
-            <span className="text-[9px] font-black text-black leading-[0.72]">bo</span>
-            <span className="text-[9px] font-black text-black leading-[0.72] -mt-[1px]">rg</span>
+          <div className="borg-logo h-6 w-6 bg-orange-500">
+            <div className="borg-logo-text grid h-full w-full grid-cols-2 grid-rows-2">
+              {"BORG".split("").map((c) => (
+                <span key={c} className="flex items-center justify-center text-[8px] font-black text-black">{c}</span>
+              ))}
+            </div>
+            <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
+              {"BORG".split("").map((c, i) => (
+                <span key={i} className="flex items-center justify-center text-[8px] font-black">{c}</span>
+              ))}
+            </div>
           </div>
           <span className="text-[13px] font-semibold tracking-tight text-white">Borg</span>
         </div>

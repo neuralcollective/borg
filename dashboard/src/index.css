@@ -119,6 +119,49 @@
   50% { opacity: 0; }
 }
 
+@keyframes borg-scramble {
+  0%, 100% { clip-path: inset(0 0 0 0); }
+  4%       { clip-path: inset(0 0 60% 0); }
+  5%       { clip-path: inset(0 0 0 0); }
+  48%      { clip-path: inset(0 0 0 0); }
+  49%      { clip-path: inset(40% 0 0 0); }
+  50%      { clip-path: inset(0 0 0 0); }
+  93%      { clip-path: inset(0 0 0 0); }
+  94%      { clip-path: inset(0 0 0 40%); transform: translateX(1px); }
+  95%      { clip-path: inset(0 0 0 0); transform: translateX(0); }
+}
+
+@keyframes borg-glitch-r {
+  0%, 100% { transform: translate(0, 0); opacity: 0; }
+  4%       { transform: translate(2px, -1px); opacity: 0.6; }
+  5%       { transform: translate(0, 0); opacity: 0; }
+  49%      { transform: translate(-1px, 1px); opacity: 0.5; }
+  50%      { transform: translate(0, 0); opacity: 0; }
+}
+
+.borg-logo {
+  position: relative;
+  isolation: isolate;
+}
+
+.borg-logo-text {
+  animation: borg-scramble 8s steps(1, end) infinite;
+}
+
+.borg-logo-ghost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #ff4400;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: borg-glitch-r 8s steps(1, end) infinite;
+  opacity: 0;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -45,9 +45,16 @@ impl Git {
     }
 
     pub fn exec(&self, dir: &str, args: &[&str]) -> Result<ExecResult> {
+        self.exec_env(dir, args, &[])
+    }
+
+    pub fn exec_env(&self, dir: &str, args: &[&str], env: &[(&str, &str)]) -> Result<ExecResult> {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(dir);
         cmd.args(args);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
 
         let output = cmd
             .output()

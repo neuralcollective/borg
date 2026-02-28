@@ -38,6 +38,8 @@ pub struct Pipeline {
     last_self_update_secs: std::sync::atomic::AtomicI64,
     startup_heads: HashMap<String, String>,
     in_flight: Mutex<HashSet<i64>>,
+    /// Per-task last agent dispatch timestamp (epoch seconds) for rate limiting.
+    last_agent_dispatch: Mutex<HashMap<i64, i64>>,
     /// Serializes git worktree creation to avoid .git/config lock contention.
     worktree_create_lock: Mutex<()>,
 }
@@ -105,6 +107,7 @@ impl Pipeline {
             last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
             startup_heads,
             in_flight: Mutex::new(HashSet::new()),
+            last_agent_dispatch: Mutex::new(HashMap::new()),
             worktree_create_lock: Mutex::new(()),
         };
         (p, rx)
@@ -335,6 +338,27 @@ impl Pipeline {
                 return Ok(());
             },
         };
+
+        // Rate-limit agent phases (anything that spawns a Claude subprocess).
+        // Setup phases are cheap git ops — no cooldown needed.
+        if phase.phase_type != PhaseType::Setup {
+            let cooldown = self.config.pipeline_agent_cooldown_s;
+            if cooldown > 0 {
+                let now = Utc::now().timestamp();
+                let mut map = self.last_agent_dispatch.lock().await;
+                if let Some(&last) = map.get(&task.id) {
+                    let elapsed = now - last;
+                    if elapsed < cooldown {
+                        info!(
+                            "task #{} [{}] rate-limited ({elapsed}s/{cooldown}s), skipping",
+                            task.id, task.status
+                        );
+                        return Ok(());
+                    }
+                }
+                map.insert(task.id, now);
+            }
+        }
 
         info!(
             "pipeline dispatching task #{} [{}] in {}: {}",
@@ -649,6 +673,12 @@ impl Pipeline {
 
         git.fetch_origin().ok();
 
+        // Abort any stale rebase left from a previous attempt
+        if git.rebase_in_progress(&wt_path).unwrap_or(false) {
+            info!("task #{} aborting stale in-progress rebase", task.id);
+            git.rebase_abort(&wt_path).ok();
+        }
+
         match git.rebase_onto_main(&wt_path) {
             Ok(()) => {
                 self.db.update_task_status(task.id, &phase.next, None)?;
@@ -687,18 +717,33 @@ impl Pipeline {
                         }
                     }
 
+                    // If the fix agent didn't complete the rebase, try --continue
                     if git.rebase_in_progress(&wt_path).unwrap_or(false) {
-                        if let Ok(cont) = git.exec(&wt_path, &["rebase", "--continue"]) {
-                            if !cont.success() {
+                        let cont = git.exec_env(
+                            &wt_path,
+                            &["rebase", "--continue"],
+                            &[("GIT_EDITOR", "true")],
+                        );
+                        match cont {
+                            Ok(r) if r.success() => {
+                                self.db.update_task_status(task.id, &phase.next, None)?;
+                                info!("task #{} rebase succeeded after fix (--continue)", task.id);
+                                return Ok(());
+                            },
+                            Ok(r) => {
                                 warn!(
                                     "task #{} rebase --continue failed: {}",
                                     task.id,
-                                    cont.combined_output()
+                                    r.combined_output()
                                 );
-                            }
+                            },
+                            Err(e) => warn!("task #{} rebase --continue error: {e}", task.id),
                         }
+                        // --continue failed, abort and retry fresh
+                        git.rebase_abort(&wt_path).ok();
                     }
 
+                    // Rebase completed or was aborted — try once more from clean state
                     match git.rebase_onto_main(&wt_path) {
                         Ok(()) => {
                             self.db.update_task_status(task.id, &phase.next, None)?;
@@ -707,31 +752,11 @@ impl Pipeline {
                         },
                         Err(e2) => {
                             rebase_err = e2.to_string();
+                            // Clean up any rebase state from the failed retry
+                            if git.rebase_in_progress(&wt_path).unwrap_or(false) {
+                                git.rebase_abort(&wt_path).ok();
+                            }
                         },
-                    }
-
-                    let mut aborted = false;
-                    if git.rebase_in_progress(&wt_path).unwrap_or(false) {
-                        if let Err(abort_err) = git.rebase_abort(&wt_path) {
-                            warn!(
-                                "task #{} rebase abort after failed fix: {abort_err}",
-                                task.id
-                            );
-                        }
-                        aborted = true;
-                    }
-
-                    if aborted {
-                        match git.rebase_onto_main(&wt_path) {
-                            Ok(()) => {
-                                self.db.update_task_status(task.id, &phase.next, None)?;
-                                info!("task #{} rebase succeeded after fix", task.id);
-                                return Ok(());
-                            },
-                            Err(e3) => {
-                                rebase_err = e3.to_string();
-                            },
-                        }
                     }
                 }
 

@@ -208,10 +208,16 @@ function AppInner() {
     <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
       {/* Sidebar nav */}
       <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] py-3">
-        <div className="mb-4 flex flex-col items-center">
-          <div className="flex h-5 w-5 flex-col items-center justify-center bg-orange-500 leading-none overflow-visible">
-            <span className="text-[9px] font-black text-black leading-[0.72]">bo</span>
-            <span className="text-[9px] font-black text-black leading-[0.72] -mt-[1px]">rg</span>
+        <div className="borg-logo mb-3 w-full bg-orange-500 aspect-square">
+          <div className="borg-logo-text grid h-full w-full grid-cols-2 grid-rows-2">
+            {"BORG".split("").map((c) => (
+              <span key={c} className="flex items-center justify-center text-[11px] font-black text-black">{c}</span>
+            ))}
+          </div>
+          <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
+            {"BORG".split("").map((c, i) => (
+              <span key={i} className="flex items-center justify-center text-[11px] font-black">{c}</span>
+            ))}
           </div>
         </div>
 

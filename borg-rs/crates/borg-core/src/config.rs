@@ -54,6 +54,8 @@ pub struct Config {
     pub proposal_promote_threshold: i64,
     pub pipeline_tick_s: u64,
     pub remote_check_interval_s: i64,
+    /// Min seconds between automated agent spawns per task (default 120).
+    pub pipeline_agent_cooldown_s: i64,
 
     // Git attribution
     pub git_author_name: String,
@@ -515,6 +517,7 @@ impl Config {
             proposal_promote_threshold: get_i64("PIPELINE_PROPOSAL_THRESHOLD", &dotenv, 8),
             pipeline_tick_s: get_u64("PIPELINE_TICK_S", &dotenv, 30),
             remote_check_interval_s: get_i64("REMOTE_CHECK_INTERVAL_S", &dotenv, 300),
+            pipeline_agent_cooldown_s: get_i64("PIPELINE_AGENT_COOLDOWN_S", &dotenv, 120),
             git_author_name: get_str("GIT_AUTHOR_NAME", &dotenv, ""),
             git_author_email: get_str("GIT_AUTHOR_EMAIL", &dotenv, ""),
             git_committer_name: get_str("GIT_COMMITTER_NAME", &dotenv, ""),
