@@ -297,20 +297,40 @@ fn parse_project_chat_key(chat_key: &str) -> Option<i64> {
     chat_key.strip_prefix("project:")?.parse::<i64>().ok()
 }
 
-fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow]) -> String {
+fn is_binary_mime(mime: &str) -> bool {
+    mime.starts_with("application/pdf")
+        || mime.starts_with("image/")
+        || mime.starts_with("audio/")
+        || mime.starts_with("video/")
+        || mime.starts_with("application/zip")
+        || mime.starts_with("application/octet-stream")
+}
+
+fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
+    let dest_dir = format!("{session_dir}/project_files");
+    let _ = std::fs::create_dir_all(&dest_dir);
+    for file in files {
+        let dest = format!("{dest_dir}/{}", file.file_name);
+        let _ = std::fs::copy(&file.stored_path, &dest);
+    }
+}
+
+fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session_dir: &str) -> String {
     if files.is_empty() {
         return String::new();
     }
+
+    stage_project_files(session_dir, files);
 
     const MAX_CONTEXT_BYTES: usize = 120_000;
     const MAX_FILE_PREVIEW_BYTES: usize = 12_000;
     let mut remaining = MAX_CONTEXT_BYTES;
 
+    let files_dir = format!("{session_dir}/project_files");
+
     let mut context = format!(
-        "Project context:\nProject: {} (mode: {})\nFiles: {}\n\n",
-        project.name,
-        project.mode,
-        files.len()
+        "Project context:\nProject: {} (mode: {})\nFiles: {} (available in {}/)\n\n",
+        project.name, project.mode, files.len(), files_dir,
     );
     if context.len() >= remaining {
         return context;
@@ -321,6 +341,22 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow]) -> Stri
         if remaining < 256 {
             break;
         }
+
+        let file_path = format!("{files_dir}/{}", file.file_name);
+
+        if is_binary_mime(&file.mime_type) {
+            let note = format!(
+                "--- FILE: {} ({} bytes, {}) ---\n[Binary file — use Read tool on: {}]\n\n",
+                file.file_name, file.size_bytes, file.mime_type, file_path,
+            );
+            if note.len() >= remaining {
+                break;
+            }
+            context.push_str(&note);
+            remaining -= note.len();
+            continue;
+        }
+
         let header = format!(
             "--- FILE: {} ({} bytes, {}) ---\n",
             file.file_name, file.size_bytes, file.mime_type
@@ -410,7 +446,7 @@ pub(crate) async fn run_chat_agent(
         match db.get_project(project_id) {
             Ok(Some(project)) => {
                 let files = db.list_project_files(project_id).unwrap_or_default();
-                let ctx = build_project_context(&project, &files);
+                let ctx = build_project_context(&project, &files, &session_dir);
                 if ctx.is_empty() {
                     prompt
                 } else {
@@ -430,7 +466,7 @@ pub(crate) async fn run_chat_agent(
         "stream-json".to_string(),
         "--verbose".to_string(),
         "--allowedTools".to_string(),
-        "none".to_string(),
+        "Read".to_string(),
         "--max-turns".to_string(),
         "10".to_string(),
     ];

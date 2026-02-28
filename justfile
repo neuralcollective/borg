@@ -46,7 +46,7 @@ deploy: b restart
 # Test, build, and restart service
 s: t b install-service restart
 
-ship: s
+ship: dash s
 
 # Install/update the systemd user service file
 install-service:
