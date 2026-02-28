@@ -407,6 +407,18 @@ impl Db {
         Ok(())
     }
 
+    pub fn requeue_task(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let updated_at = now_str();
+        conn.execute(
+            "UPDATE pipeline_tasks SET status = 'backlog', attempt = 0, \
+             session_id = '', last_error = '', updated_at = ?1 WHERE id = ?2",
+            params![updated_at, id],
+        )
+        .context("requeue_task")?;
+        Ok(())
+    }
+
     pub fn increment_attempt(&self, id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(

@@ -616,6 +616,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/create", post(routes::create_task))
         .route("/api/tasks/:id", get(routes::get_task))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
+        .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))
         .route(
             "/api/tasks/:id/outputs",
             get(routes::get_task_outputs_handler),
