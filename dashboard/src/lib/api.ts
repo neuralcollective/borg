@@ -210,6 +210,11 @@ export async function retryTask(id: number): Promise<void> {
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+export async function retryAllFailed(): Promise<void> {
+  const res = await fetch("/api/tasks/retry-all-failed", { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 export async function setTaskBackend(id: number, backend: string): Promise<void> {
   const res = await fetch(`/api/tasks/${id}/backend`, {
     method: "PUT",

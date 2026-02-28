@@ -1,4 +1,6 @@
-import { useTasks, useStatus } from "@/lib/api";
+import { useState } from "react";
+import { useTasks, useStatus, retryAllFailed } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
 import { isActiveStatus, repoName } from "@/lib/types";
 import { useUIMode } from "@/lib/ui-mode";
 import { StatusBadge } from "./status-badge";
@@ -13,7 +15,9 @@ interface TaskListProps {
 export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   const { data: tasks } = useTasks();
   const { data: status } = useStatus();
+  const queryClient = useQueryClient();
   const multiRepo = (status?.watched_repos?.length ?? 0) > 1;
+  const [retryingAll, setRetryingAll] = useState(false);
 
   const filtered = repoFilter
     ? tasks?.filter((t) => t.repo_path === repoFilter)
@@ -28,6 +32,24 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
         <Stat value={status?.active_tasks ?? 0} label="Active" color="text-blue-400" />
         <Stat value={status?.merged_tasks ?? 0} label="Merged" color="text-emerald-400" />
         <Stat value={status?.failed_tasks ?? 0} label="Failed" color="text-red-400" />
+        {(status?.failed_tasks ?? 0) > 0 && (
+          <button
+            onClick={async () => {
+              setRetryingAll(true);
+              try {
+                await retryAllFailed();
+                await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+                await queryClient.invalidateQueries({ queryKey: ["status"] });
+              } finally {
+                setRetryingAll(false);
+              }
+            }}
+            disabled={retryingAll}
+            className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] text-zinc-500 hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-50 transition-colors"
+          >
+            {retryingAll ? "..." : "Retry all"}
+          </button>
+        )}
         <span className="ml-auto rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] tabular-nums text-zinc-600">
           {filtered?.length ?? 0}
         </span>

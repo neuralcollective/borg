@@ -740,13 +740,24 @@ pub(crate) async fn retry_task(
     match state.db.get_task(id).map_err(internal)? {
         None => Err(StatusCode::NOT_FOUND),
         Some(_) => {
-            state
-                .db
-                .update_task_status(id, "backlog", None)
-                .map_err(internal)?;
+            state.db.requeue_task(id).map_err(internal)?;
             Ok(StatusCode::OK)
         },
     }
+}
+
+pub(crate) async fn retry_all_failed(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let tasks = state.db.list_all_tasks(None).map_err(internal)?;
+    let mut count = 0;
+    for task in &tasks {
+        if task.status == "failed" {
+            state.db.requeue_task(task.id).map_err(internal)?;
+            count += 1;
+        }
+    }
+    Ok(Json(json!({ "requeued": count })))
 }
 
 // Task messages
