@@ -9,6 +9,8 @@ import {
   useProjects,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -257,7 +259,13 @@ export function ProjectsPanel() {
                       {msg.role !== "user" && (
                         <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "director"}</div>
                       )}
-                      <div className="whitespace-pre-wrap break-words">{msg.text}</div>
+                      {msg.role === "user" ? (
+                        <div className="whitespace-pre-wrap break-words">{msg.text}</div>
+                      ) : (
+                        <div className="prose prose-invert prose-sm max-w-none break-words [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-[14px] [&_h2]:text-[13px] [&_h3]:text-[12px] [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1 [&_code]:text-[11px] [&_code]:bg-white/[0.08] [&_code]:px-1 [&_code]:rounded [&_pre]:bg-white/[0.06] [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-[11px] [&_hr]:border-white/[0.08] [&_strong]:text-zinc-200 [&_a]:text-blue-400">
+                          <Markdown remarkPlugins={[remarkGfm]}>{msg.text}</Markdown>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
