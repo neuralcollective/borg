@@ -233,6 +233,8 @@ pub struct SeedConfig {
 pub struct PipelineMode {
     pub name: String,
     pub label: String,
+    #[serde(default)]
+    pub category: String,
     pub phases: Vec<PhaseConfig>,
     pub seed_modes: Vec<SeedConfig>,
     pub initial_status: String,

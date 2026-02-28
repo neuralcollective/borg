@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useModes, useStatus, createTask } from "@/lib/api";
-import { repoName } from "@/lib/types";
+import { repoName, type PipelineMode } from "@/lib/types";
 import { Plus, X } from "lucide-react";
 
 export function TaskCreator() {
@@ -17,6 +17,22 @@ export function TaskCreator() {
   const { data: status } = useStatus();
 
   const repos = status?.watched_repos ?? [];
+
+  const groupedModes = useMemo(() => {
+    if (!modes) return [];
+    const groups: { category: string; modes: PipelineMode[] }[] = [];
+    const seen = new Map<string, number>();
+    for (const m of modes) {
+      const cat = m.category || "Other";
+      if (seen.has(cat)) {
+        groups[seen.get(cat)!].modes.push(m);
+      } else {
+        seen.set(cat, groups.length);
+        groups.push({ category: cat, modes: [m] });
+      }
+    }
+    return groups;
+  }, [modes]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -87,9 +103,15 @@ export function TaskCreator() {
                 onChange={(e) => setMode(e.target.value)}
                 className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
               >
-                {modes?.map((m) => (
-                  <option key={m.name} value={m.name}>{m.label}</option>
-                )) ?? <option value="sweborg">Software Engineering</option>}
+                {groupedModes.length > 0
+                  ? groupedModes.map((g) => (
+                      <optgroup key={g.category} label={g.category}>
+                        {g.modes.map((m) => (
+                          <option key={m.name} value={m.name}>{m.label}</option>
+                        ))}
+                      </optgroup>
+                    ))
+                  : <option value="sweborg">Software Engineering</option>}
               </select>
             </div>
 
