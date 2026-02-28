@@ -42,6 +42,8 @@ pub struct Pipeline {
     last_agent_dispatch: Mutex<HashMap<i64, i64>>,
     /// Serializes git worktree creation to avoid .git/config lock contention.
     worktree_create_lock: Mutex<()>,
+    /// Prevents overlapping seed runs (seeding is spawned in background).
+    seeding_active: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +111,7 @@ impl Pipeline {
             in_flight: Mutex::new(HashSet::new()),
             last_agent_dispatch: Mutex::new(HashMap::new()),
             worktree_create_lock: Mutex::new(()),
+            seeding_active: std::sync::atomic::AtomicBool::new(false),
         };
         (p, rx)
     }
@@ -291,8 +294,24 @@ impl Pipeline {
             });
         }
 
-        if dispatched == 0 && self.in_flight.lock().await.is_empty() {
-            self.seed_if_idle().await?;
+        if dispatched == 0
+            && self.in_flight.lock().await.is_empty()
+            && !self
+                .seeding_active
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let pipeline = Arc::clone(&self);
+            tokio::spawn(async move {
+                pipeline
+                    .seeding_active
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Err(e) = pipeline.seed_if_idle().await {
+                    warn!("seed_if_idle error: {e}");
+                }
+                pipeline
+                    .seeding_active
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            });
         }
 
         // Periodic background work (each is internally throttled)
@@ -1460,6 +1479,18 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 None => continue,
             };
             for seed_cfg in mode.seed_modes.clone() {
+                // Non-primary repos only get proposal seeds — skip task seeds to avoid
+                // creating automated pipeline tasks for repos we don't auto-merge.
+                if !repo.is_self && seed_cfg.output_type == SeedOutputType::Task {
+                    continue;
+                }
+                // Re-check backlog limit between seeds to avoid blocking for ages
+                if let Ok(active) = self.db.list_active_tasks() {
+                    if active.len() as u32 >= self.config.pipeline_max_backlog {
+                        info!("seed: backlog full, stopping seed scan early");
+                        return Ok(());
+                    }
+                }
                 let key = (repo.path.clone(), seed_cfg.name.clone());
                 {
                     let cooldowns = self.seed_cooldowns.lock().await;
