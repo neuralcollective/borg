@@ -173,6 +173,7 @@ pub fn swe_mode() -> PipelineMode {
                 commits: true,
                 commit_message: "test: add tests from QA agent".into(),
                 allow_no_changes: true,
+                compile_check: true,
                 ..agent_phase(
                     "qa",
                     "Testing",
@@ -636,15 +637,15 @@ const SWE_SPEC_SYSTEM: &str = "You are the spec-writing agent in an autonomous e
 
 const SWE_QA_SYSTEM: &str = "You are the test-writing agent in an autonomous engineering pipeline.\nRead spec.md and write test files only.\nDo not write implementation code or modify non-test files.";
 
-const SWE_WORKER_SYSTEM: &str = "You are the implementation agent in an autonomous engineering pipeline.\nRead spec.md and tests, write code to make all tests pass.\nDo not modify test files.";
+const SWE_WORKER_SYSTEM: &str = "You are the implementation agent in an autonomous engineering pipeline.\nRead spec.md and tests, write code to make all tests pass.\nPrefer not to modify test files, but if tests reference APIs or types that don't exist in the codebase, fix the tests to match reality before implementing.";
 
-const SWE_SPEC_INSTRUCTION: &str = "Write spec.md containing:\n1. Task summary (2-3 sentences)\n2. Files to modify and create (exact paths)\n3. Function/type signatures for new or changed code\n4. Acceptance criteria (testable assertions)\n5. Edge cases";
+const SWE_SPEC_INSTRUCTION: &str = "Write spec.md containing:\n1. Task summary (2-3 sentences)\n2. Files to modify and create (exact paths — verify each exists with Glob)\n3. Function/type signatures for new or changed code (verify existing ones with Grep)\n4. Acceptance criteria (testable assertions)\n5. Edge cases\n\nBefore finalizing: verify every file path you reference actually exists (unless it's a new file to create). Verify every function or type you reference is real. Remove any references to code that doesn't exist.";
 
-const SWE_QA_INSTRUCTION: &str = "Read spec.md and write test files covering every acceptance criterion.\nOnly create/modify test files (*_test.* or tests/ directory).\nTests should FAIL initially since features are not yet implemented.";
+const SWE_QA_INSTRUCTION: &str = "Read spec.md and write test files covering every acceptance criterion.\nOnly create/modify test files (*_test.* or tests/ directory).\nTests should FAIL initially since features are not yet implemented.\n\nBefore writing tests, verify that the APIs and types referenced in spec.md actually exist in the codebase. If spec.md references something that doesn't exist, write tests against the real API instead.";
 
-const SWE_QA_FIX_ERROR: &str = "\n\nYour tests from the previous QA pass have bugs that prevent them from passing.\nThe implementation agent tried multiple times but the test code itself is broken.\n\nTest output showing the failures:\n```\n{ERROR}\n```\n\nFix the test files. Common issues: use-after-free in test setup, wrong allocator\nusage, compile errors, missing defer/errdefer, incorrect test assertions.\nDo NOT weaken tests or remove test cases — fix the test code so it correctly\nvalidates the behavior described in spec.md.";
+const SWE_QA_FIX_ERROR: &str = "\n\nYour tests from the previous QA pass have issues that prevent them from passing.\nThe implementation agent tried multiple times but the test code itself is broken.\n\nTest output showing the failures:\n```\n{ERROR}\n```\n\nFix the test files. Common issues:\n- Tests reference functions, types, or fields that don't exist in the codebase\n- Compile errors from wrong API assumptions\n- use-after-free in test setup, wrong allocator usage\n- Missing defer/errdefer, incorrect test assertions\nDo NOT weaken tests or remove test cases — fix the test code so it correctly\nvalidates the behavior described in spec.md, using only APIs that actually exist.";
 
-const SWE_IMPL_INSTRUCTION: &str = "Read spec.md and the test files.\nWrite implementation code that makes all tests pass.\nOnly modify files listed in spec.md. Do not modify test files.";
+const SWE_IMPL_INSTRUCTION: &str = "Read spec.md and the test files.\nWrite implementation code that makes all tests pass.\nPrefer to only modify files listed in spec.md.\nIf tests reference APIs, types, or fields that don't exist in the codebase, fix them to match reality — keep the test intent but correct wrong API assumptions.";
 
 const SWE_IMPL_RETRY: &str =
     "\n\nPrevious attempt failed. Test output:\n```\n{ERROR}\n```\nFix the failures.";
@@ -689,7 +690,8 @@ const SEED_REFACTOR: &str = "Identify 1-3 concrete, small improvements in code q
 \n- Error handling that silently swallows failures\
 \n- Magic numbers or strings that should be named constants\
 \n\nEach task should be self-contained and safe to merge independently.\
-\nDo not suggest new features. Skip cosmetic-only changes with no real benefit.";
+\nDo not suggest new features. Skip cosmetic-only changes with no real benefit.\
+\nOnly target code that actually exists. Verify file paths and function names by reading the source.";
 
 const SEED_SECURITY: &str =
     "Audit for bugs, security vulnerabilities, and reliability issues. Look for:\
@@ -702,13 +704,17 @@ const SEED_SECURITY: &str =
 \n- Type safety gaps: unsafe casts, missing null checks, wrong assumptions\
 \n- Undefined behaviour that passes tests but can corrupt state\
 \n\nCreate a task for each real, confirmed issue. Skip false positives and\
-\ntheoretical risks that have no realistic exploit path.";
+\ntheoretical risks that have no realistic exploit path.\
+\nOnly target code that actually exists. Verify file paths and function names by reading the source.";
 
 const SEED_TESTS: &str = "Identify gaps in test coverage that matter for correctness. Look for:\
 \n- Core logic with no tests at all\
 \n- Edge cases not covered: empty input, zero, max values, error paths\
 \n- Functions that are tested only via integration, never in isolation\
 \n- Recent changes or complex code paths with no regression tests\
+\n\nIMPORTANT: Only target functions, types, and fields that ALREADY EXIST in the\
+\ncodebase. Verify by reading the actual source. Do not suggest tests for\
+\nhypothetical or planned features.\
 \n\nEach task should target a specific function or module with a clear\
 \ndescription of what cases to cover and why they matter. Skip trivial\
 \ngetters, boilerplate, and tests that would only assert mocks.";

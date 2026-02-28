@@ -436,6 +436,15 @@ impl Pipeline {
         format!("{message}\n\nCo-Authored-By: {user_coauthor}")
     }
 
+    fn derive_compile_check(test_cmd: &str) -> Option<String> {
+        let trimmed = test_cmd.trim();
+        if trimmed.contains("cargo test") {
+            Some(format!("{trimmed} --no-run"))
+        } else {
+            None
+        }
+    }
+
     // ── Phase handlers ────────────────────────────────────────────────────
 
     /// Setup phase: create git worktree and advance to first agent phase.
@@ -646,6 +655,24 @@ impl Pipeline {
                     }
                 },
                 Err(e) => warn!("commit_all for task #{}: {}", task.id, e),
+            }
+        }
+
+        if phase.compile_check && !test_cmd.is_empty() {
+            if let Some(check_cmd) = Self::derive_compile_check(&test_cmd) {
+                match self.run_test_command(&wt_path, &check_cmd).await {
+                    Ok(ref out) if out.exit_code != 0 => {
+                        let msg = format!(
+                            "Compile check failed — tests don't compile against the current \
+                             codebase. Fix tests to only reference APIs that exist.\n\n{}\n{}",
+                            out.stdout, out.stderr
+                        );
+                        self.fail_or_retry(task, &phase.name, &msg)?;
+                        return Ok(());
+                    },
+                    Err(e) => warn!("compile check error for task #{}: {e}", task.id),
+                    _ => {},
+                }
             }
         }
 
@@ -2046,11 +2073,14 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             },
         };
         for p in proposals {
-            let mode = self
-                .config
-                .watched_repos
-                .iter()
-                .find(|r| r.path == p.repo_path)
+            let repo_cfg = self.config.watched_repos.iter().find(|r| r.path == p.repo_path);
+            // Only auto-promote for repos that allow auto-merge
+            if let Some(repo) = repo_cfg {
+                if !repo.auto_merge {
+                    continue;
+                }
+            }
+            let mode = repo_cfg
                 .map(|r| r.mode.as_str())
                 .unwrap_or("sweborg");
             let task = crate::types::Task {

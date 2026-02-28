@@ -200,6 +200,8 @@ pub struct PhaseConfig {
     /// File that must exist after phase completes.
     pub check_artifact: Option<String>,
     pub allow_no_changes: bool,
+    /// Run a compile-only check after agent + commit (before tests).
+    pub compile_check: bool,
 
     // Transitions
     pub next: String,
@@ -277,6 +279,7 @@ impl Default for PhaseConfig {
             commit_message: String::new(),
             check_artifact: None,
             allow_no_changes: false,
+            compile_check: false,
             next: "done".into(),
             has_qa_fix_routing: false,
             fresh_session: false,
