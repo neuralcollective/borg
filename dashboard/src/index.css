@@ -142,6 +142,11 @@
 .borg-logo {
   position: relative;
   isolation: isolate;
+  font-family: 'Share Tech Mono', monospace;
+}
+
+.borg-logo span {
+  transform: scaleX(2);
 }
 
 .borg-logo-text {
