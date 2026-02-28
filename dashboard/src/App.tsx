@@ -208,12 +208,12 @@ function AppInner() {
   return (
     <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
       {/* Sidebar nav */}
-      <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] py-3">
+      <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] pb-3">
         <div className="borg-logo mb-3 w-full bg-orange-500 aspect-square">
           <BorgLogo />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
             {"BORG".split("").map((c, i) => (
-              <span key={i} className="flex items-center justify-center text-[15px]">{c}</span>
+              <span key={i} className="flex items-center justify-center text-[22px]">{c}</span>
             ))}
           </div>
         </div>

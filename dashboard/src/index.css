@@ -145,23 +145,30 @@
   font-family: 'Chakra Petch', sans-serif;
 }
 
+.borg-logo .borg-logo-text,
+.borg-logo .borg-logo-ghost {
+  gap: 0;
+  margin: 0;
+  padding: 16.67%;
+}
+
 .borg-logo span {
   font-weight: 700;
-  color: #000;
+  color: #fff;
   text-shadow:
-    0.5px -0.5px 0 #491700,
-    1px -1px 0 #491700,
-    1.5px -1.5px 0 #491700,
-    2px -2px 0 #491700,
-    2.5px -2.5px 0 #491700,
-    3px -3px 0 #491700,
-    3.5px -3.5px 0 #491700;
+    -0.5px 0.5px 0 rgba(160,90,70,0.55),
+    -1px 1px 0 rgba(160,90,70,0.55),
+    -1.5px 1.5px 0 rgba(160,90,70,0.55),
+    -2px 2px 0 rgba(160,90,70,0.55),
+    -2.5px 2.5px 0 rgba(160,90,70,0.55),
+    -3px 3px 0 rgba(160,90,70,0.55),
+    -3.5px 3.5px 0 rgba(160,90,70,0.55);
   -webkit-text-stroke: 0.3px rgba(255,255,255,0.15);
   paint-order: stroke fill;
 }
 
 .borg-logo-text {
-  animation: borg-scramble 8s steps(1, end) infinite;
+  animation: borg-scramble 16s steps(1, end) infinite;
 }
 
 .borg-logo-ghost {
@@ -174,7 +181,7 @@
   color: #ff4400;
   mix-blend-mode: screen;
   pointer-events: none;
-  animation: borg-glitch-r 8s steps(1, end) infinite;
+  animation: borg-glitch-r 16s steps(1, end) infinite;
   opacity: 0;
 }
 
