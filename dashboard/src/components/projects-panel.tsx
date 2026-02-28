@@ -133,10 +133,6 @@ export function ProjectsPanel() {
     if (!text) return;
     setMessageInput("");
     setSending(true);
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", sender: "web-user", text, ts: Date.now() / 1000, thread: `project:${activeProjectId}` },
-    ]);
     try {
       await sendProjectChat(activeProjectId, text);
     } catch {
