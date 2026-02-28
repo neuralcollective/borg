@@ -428,6 +428,7 @@ pub(crate) async fn run_chat_agent(
         config.model.clone(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        "--verbose".to_string(),
         "--allowedTools".to_string(),
         "none".to_string(),
         "--max-turns".to_string(),
@@ -450,9 +451,14 @@ pub(crate) async fn run_chat_agent(
         .env("ANTHROPIC_API_KEY", &config.oauth_token)
         .env("CLAUDE_CODE_OAUTH_TOKEN", &config.oauth_token)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .output()
         .await?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        tracing::warn!("chat agent failed ({}): {}", chat_key, stderr.chars().take(500).collect::<String>());
+    }
 
     let raw = String::from_utf8_lossy(&out.stdout).into_owned();
     let (text, new_session_id) = borg_agent::event::parse_stream(&raw);
