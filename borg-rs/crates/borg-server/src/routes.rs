@@ -9,7 +9,7 @@ use axum::{
     },
 };
 use borg_core::{
-    config::Config,
+    config::{refresh_oauth_token, Config},
     db::{Db, LegacyEvent, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
     modes::all_modes,
     pipeline::PipelineEvent,
@@ -444,12 +444,13 @@ pub(crate) async fn run_chat_agent(
     args.push("--print".to_string());
     args.push(prompt);
 
+    let token = refresh_oauth_token(&config.credentials_path, &config.oauth_token);
+
     let out = tokio::process::Command::new("claude")
         .args(&args)
         .current_dir(&session_dir)
         .env("HOME", &session_dir)
-        .env("ANTHROPIC_API_KEY", &config.oauth_token)
-        .env("CLAUDE_CODE_OAUTH_TOKEN", &config.oauth_token)
+        .env("CLAUDE_CODE_OAUTH_TOKEN", &token)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
