@@ -183,9 +183,10 @@ impl ChatCollector {
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Check if we can dispatch more agents.
+    /// Check if we can dispatch more agents. 0 = unlimited.
     pub fn can_dispatch(&self) -> bool {
-        self.running.load(std::sync::atomic::Ordering::Relaxed) < self.max_agents
+        self.max_agents == 0
+            || self.running.load(std::sync::atomic::Ordering::Relaxed) < self.max_agents
     }
 
     /// Mark dispatch started.

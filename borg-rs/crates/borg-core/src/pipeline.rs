@@ -630,10 +630,10 @@ impl Pipeline {
 
         if let Some(ref artifact) = phase.check_artifact {
             if !crate::ipc::check_artifact(&wt_path, artifact) && result.output.is_empty() {
-                self.db.update_task_status(
-                    task.id,
-                    "failed",
-                    Some(&format!("missing artifact: {artifact}")),
+                self.fail_or_retry(
+                    task,
+                    &phase.name,
+                    &format!("missing artifact: {artifact}"),
                 )?;
                 return Ok(());
             }
@@ -646,11 +646,7 @@ impl Pipeline {
             match git.commit_all(&wt_path, &commit_msg, self.git_author()) {
                 Ok(changed) => {
                     if !changed && !phase.allow_no_changes {
-                        self.db.update_task_status(
-                            task.id,
-                            "failed",
-                            Some("agent made no changes"),
-                        )?;
+                        self.fail_or_retry(task, &phase.name, "agent made no changes")?;
                         return Ok(());
                     }
                 },
@@ -662,13 +658,19 @@ impl Pipeline {
             if let Some(check_cmd) = Self::derive_compile_check(&test_cmd) {
                 match self.run_test_command(&wt_path, &check_cmd).await {
                     Ok(ref out) if out.exit_code != 0 => {
-                        let msg = format!(
-                            "Compile check failed — tests don't compile against the current \
-                             codebase. Fix tests to only reference APIs that exist.\n\n{}\n{}",
-                            out.stdout, out.stderr
-                        );
-                        self.fail_or_retry(task, &phase.name, &msg)?;
-                        return Ok(());
+                        let compile_err = format!("{}\n{}", out.stdout, out.stderr);
+                        info!("task #{} compile check failed, running fix agent", task.id);
+                        if !self
+                            .run_compile_fix(task, &wt_path, &check_cmd, &compile_err)
+                            .await?
+                        {
+                            let msg = format!(
+                                "Compile fix failed after 2 attempts\n\n{}",
+                                compile_err.chars().take(2000).collect::<String>()
+                            );
+                            self.fail_or_retry(task, &phase.name, &msg)?;
+                            return Ok(());
+                        }
                     },
                     Err(e) => warn!("compile check error for task #{}: {e}", task.id),
                     _ => {},
@@ -935,6 +937,88 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let error_msg = format!("{}\n{}", lint_out.stdout, lint_out.stderr);
         self.fail_or_retry(task, "lint_fix", error_msg.trim())?;
         Ok(())
+    }
+
+    /// Inline compile-fix agent: tries up to 2 times to fix compile errors.
+    /// Returns true if the compile check passes after fixing.
+    async fn run_compile_fix(
+        &self,
+        task: &Task,
+        wt_path: &str,
+        check_cmd: &str,
+        initial_errors: &str,
+    ) -> Result<bool> {
+        let session_dir_rel = format!("store/sessions/task-{}", task.id);
+        let session_dir = std::fs::canonicalize(&session_dir_rel)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
+            .to_string_lossy()
+            .to_string();
+
+        let mut errors = initial_errors.to_string();
+
+        for attempt in 0..2u32 {
+            info!(
+                "task #{} compile_fix: attempt {}",
+                task.id,
+                attempt + 1
+            );
+
+            let fix_phase = PhaseConfig {
+                name: format!("compile_fix_{attempt}"),
+                label: "Compile Fix".into(),
+                system_prompt: "You are a compile-error fix agent. Fix compile errors with minimal changes.".into(),
+                instruction: format!(
+                    "The code does not compile. Fix the compile errors below.\n\
+                     Make only the minimal changes needed to fix the errors.\n\
+                     Do not refactor, rename, or change logic.\n\n\
+                     ```\n{}\n```",
+                    errors.chars().take(4000).collect::<String>()
+                ),
+                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
+                use_docker: true,
+                allow_no_changes: true,
+                fresh_session: true,
+                ..PhaseConfig::default()
+            };
+
+            let ctx = self.make_context(task, wt_path.to_string(), session_dir.clone(), Vec::new());
+
+            let result = match self.resolve_backend(task) {
+                Some(b) => b.run_phase(task, &fix_phase, ctx).await.unwrap_or_else(|e| {
+                    error!("compile-fix agent for task #{}: {e}", task.id);
+                    PhaseOutput::failed(String::new())
+                }),
+                None => return Ok(false),
+            };
+
+            if let Some(ref sid) = result.new_session_id {
+                self.db.update_task_session(task.id, sid).ok();
+            }
+            self.db
+                .insert_task_output(task.id, &fix_phase.name, &result.output, &result.raw_stream, if result.success { 0 } else { 1 })
+                .ok();
+
+            let git = Git::new(&task.repo_path);
+            let (_, user_coauthor) = self.git_coauthor_settings();
+            let msg = Self::with_user_coauthor("fix: compile errors", &user_coauthor);
+            let _ = git.commit_all(wt_path, &msg, self.git_author());
+
+            match self.run_test_command(wt_path, check_cmd).await {
+                Ok(ref out) if out.exit_code == 0 => {
+                    info!("task #{} compile_fix: resolved after {} attempt(s)", task.id, attempt + 1);
+                    return Ok(true);
+                },
+                Ok(ref out) => {
+                    errors = format!("{}\n{}", out.stdout, out.stderr);
+                },
+                Err(e) => {
+                    warn!("task #{} compile_fix: check command error: {e}", task.id);
+                    return Ok(false);
+                },
+            }
+        }
+
+        Ok(false)
     }
 
     // ── Phase transition ──────────────────────────────────────────────────
