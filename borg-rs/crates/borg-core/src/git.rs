@@ -111,8 +111,31 @@ impl Git {
         Ok(result.stdout.trim().to_string())
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.exec(&self.repo_path, &["status", "--porcelain"])
+            .map(|r| !r.stdout.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    fn auto_stash(&self) -> bool {
+        if !self.is_dirty() {
+            return false;
+        }
+        tracing::warn!("dirty working tree in {}, stashing before git operation", self.repo_path);
+        let _ = self.exec(&self.repo_path, &["stash", "push", "-m", "borg-auto-stash"]);
+        true
+    }
+
+    fn auto_unstash(&self) {
+        let _ = self.exec(&self.repo_path, &["stash", "pop"]);
+    }
+
     pub fn checkout(&self, branch: &str) -> Result<()> {
+        let stashed = self.auto_stash();
         let result = self.exec(&self.repo_path, &["checkout", branch])?;
+        if stashed {
+            self.auto_unstash();
+        }
         if !result.success() {
             return Err(anyhow!(
                 "git checkout {branch} failed: {}",
@@ -123,13 +146,20 @@ impl Git {
     }
 
     pub fn pull(&self) -> Result<()> {
+        let stashed = self.auto_stash();
         // Try fast-forward first; if diverged, reset hard to origin/main
         let result = self.exec(&self.repo_path, &["pull", "--ff-only", "origin", "main"])?;
         if result.success() {
+            if stashed {
+                self.auto_unstash();
+            }
             return Ok(());
         }
         // Diverged: discard local commits and follow origin
         let reset = self.exec(&self.repo_path, &["reset", "--hard", "origin/main"])?;
+        if stashed {
+            self.auto_unstash();
+        }
         if !reset.success() {
             return Err(anyhow!(
                 "git pull --ff-only then reset --hard both failed: {}",
