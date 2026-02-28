@@ -2,6 +2,7 @@ import { useStatus } from "@/lib/api";
 import { useUIMode } from "@/lib/ui-mode";
 import { TaskCreator } from "./task-creator";
 import { FocusPicker } from "./focus-picker";
+import { BorgLogo } from "./borg-logo";
 import { repoName } from "@/lib/types";
 
 function formatUptime(seconds: number) {
@@ -46,14 +47,10 @@ export function Header({
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#09090b] px-4">
         <div className="flex items-center gap-2">
           <div className="borg-logo h-6 w-6 bg-orange-500">
-            <div className="borg-logo-text grid h-full w-full grid-cols-2 grid-rows-2">
-              {"BORG".split("").map((c) => (
-                <span key={c} className="flex items-center justify-center text-[8px] font-black text-black">{c}</span>
-              ))}
-            </div>
+            <BorgLogo size="mobile" />
             <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
               {"BORG".split("").map((c, i) => (
-                <span key={i} className="flex items-center justify-center text-[8px] font-black">{c}</span>
+                <span key={i} className="flex items-center justify-center text-[9px]">{c}</span>
               ))}
             </div>
           </div>

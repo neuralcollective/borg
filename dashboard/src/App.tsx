@@ -13,6 +13,7 @@ import { ChatPanel } from "@/components/chat-panel";
 import { ProjectsPanel } from "@/components/projects-panel";
 import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { SettingsPanel } from "@/components/settings-panel";
+import { BorgLogo } from "@/components/borg-logo";
 import { ListTodo, Terminal, GitMerge, MessageSquare, Lightbulb, Settings, FolderOpen, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -209,14 +210,10 @@ function AppInner() {
       {/* Sidebar nav */}
       <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] py-3">
         <div className="borg-logo mb-3 w-full bg-orange-500 aspect-square">
-          <div className="borg-logo-text grid h-full w-full grid-cols-2 grid-rows-2">
-            {"BORG".split("").map((c) => (
-              <span key={c} className="flex items-center justify-center text-[11px] font-black text-black">{c}</span>
-            ))}
-          </div>
+          <BorgLogo />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
             {"BORG".split("").map((c, i) => (
-              <span key={i} className="flex items-center justify-center text-[11px] font-black">{c}</span>
+              <span key={i} className="flex items-center justify-center text-[13px]">{c}</span>
             ))}
           </div>
         </div>
