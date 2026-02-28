@@ -50,7 +50,7 @@ export function Header({
             <BorgLogo size="mobile" />
             <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
               {"BORG".split("").map((c, i) => (
-                <span key={i} className="flex items-center justify-center text-[11px]">{c}</span>
+                <span key={i} className="flex items-center justify-center text-[16px]">{c}</span>
               ))}
             </div>
           </div>

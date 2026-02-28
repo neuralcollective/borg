@@ -30,41 +30,50 @@ function randomShift(): { x: number; y: number } {
 type Offsets = { x: number; y: number }[];
 
 function BorgLogo({ size = "desktop" }: { size?: "desktop" | "mobile" }) {
-  const textSize = size === "desktop" ? "text-[15px]" : "text-[11px]";
+  const textSize = size === "desktop" ? "text-[22px]" : "text-[16px]";
   const [cells, setCells] = useState(LETTERS);
   const [offsets, setOffsets] = useState<Offsets>(() =>
     LETTERS.map(() => ({ x: 0, y: 0 }))
   );
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // Letter flicker
+  // Letter flicker — picks 1-4 letters per tick with decreasing probability
   useEffect(() => {
-    function scheduleFlicker(idx: number) {
-      const delay = 2000 + Math.random() * 6000;
+    function scheduleFlicker() {
+      const delay = 6000 + Math.random() * 18000;
       const timer = setTimeout(() => {
-        const others = LETTERS.filter((_, i) => i !== idx);
-        const glitch = others[Math.floor(Math.random() * others.length)];
+        // Weighted pick: 1 letter 60%, 2 30%, 3 8%, 4 2%
+        const r = Math.random();
+        const count = r < 0.6 ? 1 : r < 0.9 ? 2 : r < 0.98 ? 3 : 4;
+
+        // Pick `count` unique random indices
+        const indices = [0, 1, 2, 3].sort(() => Math.random() - 0.5).slice(0, count);
+
         setCells((prev) => {
           const next = [...prev];
-          next[idx] = glitch;
+          for (const idx of indices) {
+            const others = LETTERS.filter((_, i) => i !== idx);
+            next[idx] = others[Math.floor(Math.random() * others.length)];
+          }
           return next;
         });
+
         const restore = setTimeout(() => {
           setCells((prev) => {
             const next = [...prev];
-            next[idx] = LETTERS[idx];
+            for (const idx of indices) {
+              next[idx] = LETTERS[idx];
+            }
             return next;
           });
         }, 60 + Math.random() * 80);
         timers.current.push(restore);
-        scheduleFlicker(idx);
+        scheduleFlicker();
       }, delay);
       timers.current.push(timer);
     }
 
-    for (let i = 0; i < LETTERS.length; i++) {
-      scheduleFlicker(i);
-    }
+    scheduleFlicker();
     return () => timers.current.forEach(clearTimeout);
   }, []);
 
@@ -73,7 +82,7 @@ function BorgLogo({ size = "desktop" }: { size?: "desktop" | "mobile" }) {
     const shiftTimers: ReturnType<typeof setTimeout>[] = [];
 
     function scheduleShift() {
-      const delay = 1500 + Math.random() * 4000;
+      const delay = 3000 + Math.random() * 8000;
       const t = setTimeout(() => {
         const group = GROUPS[Math.floor(Math.random() * GROUPS.length)];
         const shift = randomShift();
@@ -96,7 +105,7 @@ function BorgLogo({ size = "desktop" }: { size?: "desktop" | "mobile" }) {
             }
             return next;
           });
-        }, 120 + Math.random() * 200);
+        }, 30 + Math.random() * 20);
         shiftTimers.push(restore);
 
         scheduleShift();
@@ -113,7 +122,7 @@ function BorgLogo({ size = "desktop" }: { size?: "desktop" | "mobile" }) {
       {cells.map((c, i) => (
         <span
           key={i}
-          className={`flex items-center justify-center ${textSize} text-black`}
+          className={`flex items-center justify-center ${textSize} text-white`}
           style={{
             transform: `translate(${offsets[i].x}px, ${offsets[i].y}px)`,
             transition: "transform 80ms steps(1, end)",
