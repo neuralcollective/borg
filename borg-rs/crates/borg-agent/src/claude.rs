@@ -188,11 +188,9 @@ impl AgentBackend for ClaudeBackend {
             },
             SandboxMode::Direct => {
                 let path = std::env::var("PATH").unwrap_or_default();
+                let home = std::env::var("HOME").unwrap_or_default();
                 let augmented_path = format!(
-                    "{path}:/home/{}/.local/bin:/usr/local/bin",
-                    std::env::var("USER")
-                        .or_else(|_| std::env::var("LOGNAME"))
-                        .unwrap_or_default()
+                    "{path}:{home}/.local/bin:/usr/local/bin"
                 );
                 Command::new(&self.claude_bin)
                     .args(&full_cmd[1..])

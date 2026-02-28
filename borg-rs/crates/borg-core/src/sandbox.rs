@@ -63,6 +63,10 @@ impl Sandbox {
     }
 
     pub async fn bwrap_available() -> bool {
+        // bwrap relies on Linux namespaces; skip detection on other platforms
+        if cfg!(not(target_os = "linux")) {
+            return false;
+        }
         Command::new("bwrap")
             .arg("--version")
             .stdout(Stdio::null())
@@ -163,13 +167,16 @@ impl Sandbox {
             "-i".to_string(),
             "--pids-limit".to_string(),
             "256".to_string(),
-            "--security-opt".to_string(),
-            "no-new-privileges:true".to_string(),
-            "--cap-drop".to_string(),
-            "ALL".to_string(),
-            "--network".to_string(),
-            "host".to_string(),
         ];
+
+        // Linux-only security hardening and host networking
+        if cfg!(target_os = "linux") {
+            args.extend([
+                "--security-opt", "no-new-privileges:true",
+                "--cap-drop", "ALL",
+                "--network", "host",
+            ].map(str::to_string));
+        }
 
         for (host, container) in binds {
             args.push("-v".to_string());
