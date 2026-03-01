@@ -107,6 +107,21 @@ fn test_no_mode_uses_old_spec_qa_impl_phases() {
 }
 
 #[test]
+fn test_chef_mode_has_implement_review() {
+    let mode = borg_domains::chef::chef_mode();
+    assert_eq!(mode.name, "chefborg");
+    let names: Vec<&str> = mode.phases.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, &["backlog", "implement", "review"]);
+}
+
+#[test]
+fn test_chef_review_is_fresh_session() {
+    let mode = borg_domains::chef::chef_mode();
+    let review = mode.get_phase("review").unwrap();
+    assert!(review.fresh_session);
+}
+
+#[test]
 fn test_swe_signal_instructions_in_prompt() {
     let mode = borg_domains::swe::swe_mode();
     let implement = mode.get_phase("implement").unwrap();

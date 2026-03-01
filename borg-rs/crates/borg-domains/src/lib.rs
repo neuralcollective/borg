@@ -1,3 +1,4 @@
+pub mod chef;
 pub mod crew;
 pub mod data;
 pub mod legal;
@@ -16,6 +17,7 @@ pub fn all_modes() -> Vec<PipelineMode> {
         crew::crew_mode(),
         sales::sales_mode(),
         data::data_mode(),
+        chef::chef_mode(),
     ]
 }
 
@@ -24,6 +26,7 @@ pub fn get_mode(name: &str) -> Option<PipelineMode> {
     match name {
         "swe" => get_mode("sweborg"),
         "legal" => get_mode("lawborg"),
+        "chef" => get_mode("chefborg"),
         _ => all_modes().into_iter().find(|m| m.name == name),
     }
 }
