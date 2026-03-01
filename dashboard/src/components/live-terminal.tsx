@@ -1,124 +1,12 @@
 import { useRef, useEffect, useMemo } from "react";
 import type { StreamEvent } from "@/lib/api";
+import { parseStreamEvents, type TermLine } from "@/lib/stream-utils";
 import { cn } from "@/lib/utils";
-
-interface LiveTerminalProps {
-  events: StreamEvent[];
-  streaming: boolean;
-}
-
-interface TermLine {
-  type: "system" | "text" | "tool" | "result" | "tool_result" | "phase_result";
-  tool?: string;
-  label?: string;
-  content: string;
-}
-
-function formatToolInput(tool: string, input: unknown): { label: string; content: string } {
-  if (typeof input === "string") return { label: "", content: input };
-  if (!input || typeof input !== "object") return { label: "", content: "" };
-
-  const obj = input as Record<string, unknown>;
-
-  if (tool === "Bash") {
-    const desc = (obj.description as string) || "";
-    const cmd = (obj.command as string) || "";
-    return { label: desc, content: cmd };
-  }
-
-  if (tool === "Read") {
-    const fp = (obj.file_path as string) || "";
-    const range = obj.offset ? `  lines ${obj.offset}–${(obj.offset as number) + ((obj.limit as number) || 200)}` : "";
-    return { label: fp + range, content: "" };
-  }
-
-  if (tool === "Write") {
-    return { label: (obj.file_path as string) || "", content: "" };
-  }
-
-  if (tool === "Edit") {
-    const fp = (obj.file_path as string) || "";
-    const old = (obj.old_string as string) || "";
-    const preview = old.length > 60 ? old.slice(0, 60) + "..." : old;
-    return { label: fp, content: preview ? `replacing: ${preview}` : "" };
-  }
-
-  if (tool === "Glob" || tool === "Grep") {
-    const pat = (obj.pattern as string) || "";
-    const path = (obj.path as string) || "";
-    return { label: pat, content: path || "" };
-  }
-
-  if (tool === "WebSearch") return { label: (obj.query as string) || "", content: "" };
-  if (tool === "WebFetch") return { label: (obj.url as string) || "", content: "" };
-
-  if (tool === "Task") return { label: (obj.description as string) || "", content: (obj.prompt as string)?.slice(0, 120) || "" };
-
-  const json = JSON.stringify(input);
-  const preview = json.length > 200 ? json.slice(0, 200) + "..." : json;
-  return { label: "", content: preview };
-}
-
-function parseEvents(events: StreamEvent[]): TermLine[] {
-  const lines: TermLine[] = [];
-
-  for (const ev of events) {
-    if (!ev.type) continue;
-
-    if (ev.type === "system") {
-      if (ev.session_id) {
-        lines.push({ type: "system", content: `session ${ev.session_id}` });
-      }
-    } else if (ev.type === "assistant") {
-      const msg = ev.message;
-      if (!msg?.content) continue;
-      if (typeof msg.content === "string") {
-        if (msg.content.trim()) lines.push({ type: "text", content: msg.content });
-      } else if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === "text" && block.text?.trim()) {
-            lines.push({ type: "text", content: block.text });
-          } else if (block.type === "tool_use") {
-            const name = block.name || "";
-            const { label, content } = formatToolInput(name, block.input);
-            lines.push({ type: "tool", tool: name, label, content });
-          }
-        }
-      }
-    } else if (ev.type === "tool_result" || ev.type === "tool") {
-      const raw = ev.content ?? ev.output ?? "";
-      const text = typeof raw === "string"
-        ? raw
-        : Array.isArray(raw)
-          ? raw.map((c: { text?: string }) => c.text || "").join("\n")
-          : JSON.stringify(raw);
-      if (text.trim()) {
-        const preview = text.length > 300 ? text.slice(0, 300) + "..." : text;
-        lines.push({
-          type: "tool_result",
-          tool: ev.tool_name || ev.name || "",
-          content: preview,
-        });
-      }
-    } else if (ev.type === "result") {
-      if (ev.result) {
-        lines.push({ type: "result", content: ev.result });
-      }
-    } else if (ev.type === "phase_result") {
-      const content = typeof ev.content === "string" ? ev.content : "";
-      if (content.trim()) {
-        lines.push({ type: "phase_result", label: ev.phase || "", content });
-      }
-    }
-  }
-
-  return lines;
-}
 
 export function LiveTerminal({ events, streaming }: LiveTerminalProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const lines = useMemo(() => parseEvents(events), [events]);
+  const lines = useMemo(() => parseStreamEvents(events), [events]);
 
   useEffect(() => {
     if (bottomRef.current) {

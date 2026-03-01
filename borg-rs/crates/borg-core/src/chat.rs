@@ -35,18 +35,21 @@ pub struct IncomingMessage {
     pub reply_to_message_id: Option<String>,
 }
 
+/// All mutable state behind a single lock to avoid split-state races.
+struct CollectorInner {
+    chats: HashMap<String, ChatState>,
+    running: u32,
+}
+
 /// Manages per-chat collection windows.
 pub struct ChatCollector {
-    /// Per-chat state. Key = chat_key.
-    state: Arc<Mutex<HashMap<String, ChatState>>>,
+    state: Arc<Mutex<CollectorInner>>,
     /// Collection window duration. 0 = immediate dispatch.
     window_ms: u64,
     /// Post-agent cooldown duration. 0 = no cooldown.
     cooldown_ms: u64,
     /// Max agents running concurrently.
     max_agents: u32,
-    /// Current running agent count.
-    running: Arc<std::sync::atomic::AtomicU32>,
 }
 
 /// A batch of messages ready to be dispatched to an agent.
@@ -59,24 +62,49 @@ pub struct MessageBatch {
 impl ChatCollector {
     pub fn new(window_ms: u64, max_agents: u32, cooldown_ms: u64) -> Self {
         Self {
-            state: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(CollectorInner {
+                chats: HashMap::new(),
+                running: 0,
+            })),
             window_ms,
             cooldown_ms,
             max_agents,
-            running: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
+    }
+
+    fn can_dispatch_inner(&self, inner: &CollectorInner) -> bool {
+        self.max_agents == 0 || inner.running < self.max_agents
+    }
+
+    /// Transition a chat to Running and bump the running count atomically.
+    /// Returns None if we're at the concurrency limit.
+    fn try_dispatch(
+        &self,
+        inner: &mut CollectorInner,
+        chat_key: String,
+        messages: Vec<String>,
+    ) -> Option<MessageBatch> {
+        if !self.can_dispatch_inner(inner) {
+            debug!(
+                "At max agents ({}/{}), deferring chat {}",
+                inner.running, self.max_agents, chat_key
+            );
+            return None;
+        }
+        inner.chats.insert(chat_key.clone(), ChatState::Running);
+        inner.running += 1;
+        Some(MessageBatch { chat_key, messages })
     }
 
     /// Process an incoming message. Returns Some(batch) if ready to dispatch.
     pub async fn process(&self, msg: IncomingMessage) -> Option<MessageBatch> {
-        let mut state = self.state.lock().await;
+        let mut inner = self.state.lock().await;
         let chat_key = msg.chat_key.clone();
 
-        let current = state.get(&chat_key).cloned().unwrap_or(ChatState::Idle);
+        let current = inner.chats.get(&chat_key).cloned().unwrap_or(ChatState::Idle);
 
         match current {
             ChatState::Running => {
-                // Agent already running — drop message
                 debug!("Chat {} has running agent, dropping message", chat_key);
                 None
             },
@@ -88,15 +116,10 @@ impl ChatCollector {
 
             ChatState::Idle => {
                 if self.window_ms == 0 {
-                    // Immediate dispatch
-                    state.insert(chat_key.clone(), ChatState::Running);
-                    Some(MessageBatch {
-                        chat_key,
-                        messages: vec![msg.text],
-                    })
+                    self.try_dispatch(&mut inner, chat_key, vec![msg.text])
                 } else {
                     let deadline = Instant::now() + Duration::from_millis(self.window_ms);
-                    state.insert(
+                    inner.chats.insert(
                         chat_key,
                         ChatState::Collecting {
                             window_deadline: deadline,
@@ -114,10 +137,9 @@ impl ChatCollector {
                 messages.push(msg.text);
 
                 if Instant::now() >= window_deadline {
-                    state.insert(chat_key.clone(), ChatState::Running);
-                    Some(MessageBatch { chat_key, messages })
+                    self.try_dispatch(&mut inner, chat_key, messages)
                 } else {
-                    state.insert(
+                    inner.chats.insert(
                         chat_key,
                         ChatState::Collecting {
                             window_deadline,
@@ -133,17 +155,19 @@ impl ChatCollector {
     /// Call periodically to flush expired collection windows and cooldowns.
     /// Returns all batches ready to dispatch.
     pub async fn flush_expired(&self) -> Vec<MessageBatch> {
-        let mut state = self.state.lock().await;
+        let mut inner = self.state.lock().await;
         let now = Instant::now();
         let mut ready = Vec::new();
 
-        for (chat_key, chat_state) in state.iter_mut() {
+        let can_dispatch = self.can_dispatch_inner(&inner);
+
+        for (chat_key, chat_state) in inner.chats.iter_mut() {
             match chat_state {
                 ChatState::Collecting {
                     window_deadline,
                     messages,
                 } => {
-                    if now >= *window_deadline {
+                    if now >= *window_deadline && can_dispatch {
                         let batch = MessageBatch {
                             chat_key: chat_key.clone(),
                             messages: std::mem::take(messages),
@@ -162,40 +186,40 @@ impl ChatCollector {
             }
         }
 
+        inner.running += ready.len() as u32;
+
         ready
     }
 
     /// Mark a chat as done (agent finished). Enters Cooldown if configured, else Idle.
     pub async fn mark_done(&self, chat_key: &str) {
-        let mut state = self.state.lock().await;
+        let mut inner = self.state.lock().await;
         if self.cooldown_ms > 0 {
             let deadline = Instant::now() + Duration::from_millis(self.cooldown_ms);
-            state.insert(chat_key.to_string(), ChatState::Cooldown { deadline });
+            inner
+                .chats
+                .insert(chat_key.to_string(), ChatState::Cooldown { deadline });
             debug!(
                 "Chat {} entering cooldown ({}ms)",
                 chat_key, self.cooldown_ms
             );
         } else {
-            state.insert(chat_key.to_string(), ChatState::Idle);
+            inner
+                .chats
+                .insert(chat_key.to_string(), ChatState::Idle);
             debug!("Chat {} returned to IDLE", chat_key);
         }
-        self.running
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        inner.running = inner.running.saturating_sub(1);
     }
 
     /// Check if we can dispatch more agents. 0 = unlimited.
-    pub fn can_dispatch(&self) -> bool {
-        self.max_agents == 0
-            || self.running.load(std::sync::atomic::Ordering::Relaxed) < self.max_agents
+    pub async fn can_dispatch(&self) -> bool {
+        let inner = self.state.lock().await;
+        self.can_dispatch_inner(&inner)
     }
 
-    /// Mark dispatch started.
-    pub fn mark_dispatched(&self) {
-        self.running
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn active_count(&self) -> u32 {
-        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    pub async fn active_count(&self) -> u32 {
+        let inner = self.state.lock().await;
+        inner.running
     }
 }

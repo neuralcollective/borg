@@ -1001,7 +1001,10 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
     }
 
     let db = Arc::clone(&state.db);
-    let backend = state.default_backend("claude");
+    let Some(backend) = state.default_backend("claude") else {
+        tracing::error!("triage_proposals: no backends configured");
+        return Json(json!({ "scored": 0 }));
+    };
     let model = db
         .get_config("model")
         .ok()

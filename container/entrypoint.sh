@@ -9,12 +9,16 @@ if [ -f /workspace/setup.sh ]; then
     source /workspace/setup.sh
 fi
 
-# Read all stdin into a temp file
-cat > /tmp/input.json
+# Read all stdin into a private temp file
+INPUT_FILE=$(mktemp /tmp/borg-input.XXXXXX)
+chmod 600 "$INPUT_FILE"
+trap 'rm -f "$INPUT_FILE"' EXIT
+
+cat > "$INPUT_FILE"
 
 # Parse input JSON
 eval "$(bun -e "
-const d=JSON.parse(require('fs').readFileSync('/tmp/input.json','utf8'));
+const d=JSON.parse(require('fs').readFileSync('$INPUT_FILE','utf8'));
 const esc = s => s.replace(/'/g, \"'\\\\''\");
 console.log('PROMPT=\'' + esc(d.prompt||'') + '\'');
 console.log('MODEL=\'' + esc(d.model||'claude-sonnet-4-6') + '\'');
@@ -25,9 +29,20 @@ console.log('ALLOWED_TOOLS=\'' + esc(d.allowedTools||'') + '\'');
 console.log('WORKDIR=\'' + esc(d.workdir||'') + '\'');
 ")"
 
-# Change to workdir if specified
-if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
-    cd "$WORKDIR"
+# Change to workdir if specified (must be under /workspace)
+if [ -n "$WORKDIR" ]; then
+    case "$WORKDIR" in
+        /workspace|/workspace/*)
+            if [ -d "$WORKDIR" ]; then
+                cd "$WORKDIR"
+            else
+                echo "Warning: WORKDIR $WORKDIR does not exist, staying in $(pwd)" >&2
+            fi
+            ;;
+        *)
+            echo "Warning: WORKDIR $WORKDIR is not under /workspace, ignoring" >&2
+            ;;
+    esac
 fi
 
 # Build claude args
@@ -64,11 +79,14 @@ else
     FULL_PROMPT="$PROMPT"
 fi
 
-# Run Claude Code — capture stderr for diagnostics
-echo "$FULL_PROMPT" | claude "${CLAUDE_ARGS[@]}" 2>/tmp/claude_stderr.log || true
+# Run Claude Code — capture exit code and stderr for diagnostics
+exitcode=0
+echo "$FULL_PROMPT" | claude "${CLAUDE_ARGS[@]}" 2>/tmp/claude_stderr.log || exitcode=$?
 
 # If no stdout was produced, dump stderr so the pipeline can see what went wrong
 if [ ! -s /dev/stdout ] && [ -s /tmp/claude_stderr.log ]; then
     echo '{"type":"error","message":"Claude CLI produced no output. Stderr:"}'
     cat /tmp/claude_stderr.log >&2
 fi
+
+exit "$exitcode"

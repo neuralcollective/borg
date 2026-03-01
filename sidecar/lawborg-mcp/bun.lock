@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "legal-mcp",
+      "name": "lawborg-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
       },

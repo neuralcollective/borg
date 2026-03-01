@@ -34,10 +34,16 @@ export function ChatPanel() {
   const esRef = useRef<EventSource | null>(null);
   const lastTsRef = useRef<number>(0);
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const fetchMessages = useCallback(() => {
-    fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`)
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((msgs: ChatMessage[]) => {
+        if (controller.signal.aborted) return;
         setMessages(msgs);
         if (msgs.length > 0) {
           lastTsRef.current = Math.max(...msgs.map((m) => Number(m.ts) || 0));
@@ -62,18 +68,19 @@ export function ChatPanel() {
   }, [thread, fetchMessages, fetchThreads]);
 
   // SSE for real-time updates
+  const sseRetriesRef = useRef(0);
   const connect = useCallback(() => {
     if (esRef.current) esRef.current.close();
     const es = new EventSource("/api/chat/events");
     esRef.current = es;
 
+    es.onopen = () => { sseRetriesRef.current = 0; };
+
     es.onmessage = (e) => {
       try {
         const msg: ChatMessage = JSON.parse(e.data);
-        // Only show messages for the current thread
         const msgThread = msg.thread || "web:dashboard";
         if (msgThread !== thread) return;
-        // Skip user echoes
         if (msg.role === "user") return;
         setMessages((prev) => [...prev, msg]);
         lastTsRef.current = Math.max(lastTsRef.current, Number(msg.ts) || 0);
@@ -84,7 +91,13 @@ export function ChatPanel() {
     };
 
     es.onerror = () => {
-      setTimeout(() => connect(), 3000);
+      es.close();
+      esRef.current = null;
+      if (sseRetriesRef.current < 5) {
+        const delay = Math.min(1000 * Math.pow(2, sseRetriesRef.current), 30000);
+        sseRetriesRef.current++;
+        setTimeout(() => connect(), delay);
+      }
     };
   }, [thread]);
 

@@ -113,8 +113,10 @@ async function startWhatsApp() {
 
   const AUTH_DIR = process.env.WA_AUTH_DIR || 'whatsapp/auth';
   const logger = pino({ level: 'silent' });
+  let waRetries = 0;
 
   async function connect() {
+    waRetries = 0;
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     waSock = makeWASocket({
@@ -135,8 +137,17 @@ async function startWhatsApp() {
         const code = lastDisconnect?.error?.output?.statusCode;
         const reason = lastDisconnect?.error?.message || 'unknown';
         emit('whatsapp', { event: 'disconnected', reason });
-        if (code !== DisconnectReason.loggedOut) setTimeout(connect, 3000);
-        else process.exit(0);
+        if (code !== DisconnectReason.loggedOut) {
+          if (waRetries < 10) {
+            const delay = Math.min(1000 * Math.pow(2, waRetries) + Math.random() * 1000, 30000);
+            waRetries++;
+            setTimeout(connect, delay);
+          } else {
+            emit('whatsapp', { event: 'error', message: 'max reconnection attempts exceeded' });
+          }
+        } else {
+          process.exit(0);
+        }
       }
 
       if (connection === 'open') {
@@ -230,12 +241,20 @@ function startAgentSession(session_id, cmd) {
 
   args.push('--print', instruction);
 
-  const env = {
-    ...process.env,
-    HOME: session_dir || process.env.HOME,
-    ANTHROPIC_API_KEY: oauth_token || process.env.ANTHROPIC_API_KEY || '',
-    CLAUDE_CODE_OAUTH_TOKEN: oauth_token || process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
-  };
+  const envWhitelist = [
+    'PATH', 'HOME', 'SHELL', 'LANG', 'LC_ALL', 'TERM', 'USER',
+    'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
+    'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
+    'ANTHROPIC_MODEL', 'GOOGLE_CLOUD_PROJECT', 'CLOUD_ML_REGION',
+  ];
+  const env = {};
+  for (const k of envWhitelist) {
+    if (process.env[k] !== undefined) env[k] = process.env[k];
+  }
+  env.HOME = session_dir || process.env.HOME;
+  env.ANTHROPIC_API_KEY = oauth_token || process.env.ANTHROPIC_API_KEY || '';
+  env.CLAUDE_CODE_OAUTH_TOKEN = oauth_token || process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
 
   const proc = spawn('claude', args, {
     cwd: worktree_path || process.cwd(),
@@ -273,7 +292,9 @@ function startAgentSession(session_id, cmd) {
         if (obj.type === 'result' && obj.result) output = obj.result;
         if (obj.type === 'system' && obj.session_id) new_session_id = obj.session_id;
         if (obj.type === 'result' && obj.session_id) new_session_id = obj.session_id;
-      } catch {}
+      } catch (e) {
+        emit('agent', { event: 'parse_warning', session_id, error: e.message });
+      }
     }
 
     emit('agent', { event: 'complete', session_id, output, new_session_id, exit_code: code ?? 0 });

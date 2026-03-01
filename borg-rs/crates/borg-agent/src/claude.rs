@@ -136,7 +136,7 @@ impl AgentBackend for ClaudeBackend {
             std::fs::create_dir_all(&mcp_dir).ok();
             let legal_mcp_server =
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../sidecar/legal-mcp/server.js")
+                    .join("../../sidecar/lawborg-mcp/server.js")
                     .canonicalize()
                     .unwrap_or_default();
             let mut env_vars = serde_json::Map::new();

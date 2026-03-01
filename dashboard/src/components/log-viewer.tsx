@@ -62,7 +62,7 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
           <div className="flex gap-1">
             <button
               className={cn(
-                "rounded-md px-2.5 py-1 text-[11px] md:text-[10px] font-medium transition-colors",
+                "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
                 viewMode === "live"
                   ? "bg-white/[0.08] text-zinc-200"
                   : "text-zinc-600 hover:text-zinc-400"
@@ -73,7 +73,7 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
             </button>
             <button
               className={cn(
-                "rounded-md px-2.5 py-1 text-[11px] md:text-[10px] font-medium transition-colors",
+                "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
                 viewMode === "events"
                   ? "bg-white/[0.08] text-zinc-200"
                   : "text-zinc-600 hover:text-zinc-400"
@@ -88,7 +88,7 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
               <button
                 key={f}
                 className={cn(
-                  "rounded-md px-2.5 py-1.5 md:py-1 text-[11px] md:text-[10px] font-medium uppercase tracking-wide transition-colors",
+                  "rounded-md px-2.5 py-1.5 md:py-1 text-[11px] font-medium uppercase tracking-wide transition-colors",
                   levelFilter === f
                     ? "bg-white/[0.08] text-zinc-200"
                     : "text-zinc-600 hover:text-zinc-400"

@@ -56,6 +56,11 @@ All config is in `.env` (or process environment). Key variables:
 - **Per-repo prompts**: Pipeline agents receive repo-specific context via `.borg/prompt.md` or explicit `prompt_file` in WATCHED_REPOS.
 - **Self-update**: Pipeline detects merges to main on the primary repo, rebuilds, and restarts via `execve`.
 
+## Agent Behavior
+
+- **Plan mode**: Never enter plan mode without asking the user first. Default to creating task lists instead. Only use plan mode if the task genuinely requires it and the user agrees.
+- **Subagents**: Default to Sonnet 4.6 (`model: "sonnet"`) for subagents. Use Haiku for very lightweight tasks (simple file lookups, trivial searches). The main agent runs Opus (user-specified, changeable by user).
+
 ## Code Style
 
 - No slop comment prefixes (`AUDIT:`, `SECURITY:`, `NOTE:`). `TODO:` is fine.

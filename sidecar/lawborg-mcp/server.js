@@ -39,6 +39,38 @@ const CLIO_BASE = process.env.CLIO_BASE_URL || "https://app.clio.com/api/v4";
 const IMANAGE_BASE = process.env.IMANAGE_BASE_URL || "https://cloudimanage.com/work/api/v2";
 const NETDOCS_BASE = process.env.NETDOCUMENTS_BASE_URL || "https://api.vault.netvoyage.com/v2";
 
+// ── Rate limiting ────────────────────────────────────────────────────
+class RateLimiter {
+  constructor(maxRequests, windowMs) {
+    this.max = maxRequests;
+    this.window = windowMs;
+    this.timestamps = [];
+  }
+  check(label) {
+    const now = Date.now();
+    this.timestamps = this.timestamps.filter(t => now - t < this.window);
+    if (this.timestamps.length >= this.max) {
+      throw new Error(`Rate limit exceeded for ${label} (${this.max} requests per ${this.window / 1000}s)`);
+    }
+    this.timestamps.push(now);
+  }
+}
+
+const rateLimiters = [
+  { test: url => url.includes("courtlistener.com"),  limiter: new RateLimiter(5000, 3600000), label: "CourtListener" },
+  { test: url => url.includes("sec.gov"),             limiter: new RateLimiter(10, 1000),      label: "EDGAR/SEC" },
+  { test: url => url.includes("regulations.gov"),     limiter: new RateLimiter(500, 3600000),   label: "regulations.gov" },
+  { test: url => url.includes("congress.gov"),         limiter: new RateLimiter(1000, 3600000),  label: "Congress.gov" },
+  { test: url => url.includes("canlii.org"),           limiter: new RateLimiter(300, 3600000),   label: "CanLII" },
+  { test: url => url.includes("openstates.org"),       limiter: new RateLimiter(600, 3600000),   label: "Open States" },
+];
+
+function checkRateLimit(url) {
+  for (const { test, limiter, label } of rateLimiters) {
+    if (test(url)) { limiter.check(label); return; }
+  }
+}
+
 // ── Simple LRU cache ───────────────────────────────────────────────────
 const cache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10 min
@@ -68,6 +100,7 @@ function setCache(key, val) {
 const UA = "LegalMCP/0.2 (borg-legal-agent; contact@neuralcollective.ai)";
 
 async function fetchJSON(url, opts = {}) {
+  checkRateLimit(url);
   const headers = { "User-Agent": UA, Accept: "application/json", ...opts.headers };
   const resp = await fetch(url, { ...opts, headers });
   if (!resp.ok) {
@@ -97,8 +130,27 @@ function qs(params) {
   return p.toString();
 }
 
-function requireKey(name, key) {
-  if (!key) throw new Error(`${name} API key not configured. Add it in the dashboard under Settings > API Keys.`);
+function requireKey(name, key, signupUrl) {
+  if (!key) {
+    const msg = signupUrl
+      ? `${name} API key not configured. Get a free key at ${signupUrl}`
+      : `${name} API key not configured. Add it in the dashboard under Settings > API Keys.`;
+    throw new Error(msg);
+  }
+}
+
+function buildParams(args, fields) {
+  const params = {};
+  for (const f of fields) {
+    const [src, dst] = Array.isArray(f) ? f : [f, f];
+    if (args[src] !== undefined && args[src] !== null) params[dst] = args[src];
+  }
+  return params;
+}
+
+function validateId(id) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(String(id))) throw new Error(`Invalid ID: ${id}`);
+  return id;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1234,7 +1286,7 @@ async function handleTool(name, args) {
       break;
     }
     case "courtlistener_get_opinion":
-      result = await fetchJSON(`${COURTLISTENER}/clusters/${args.id}/`);
+      result = await fetchJSON(`${COURTLISTENER}/clusters/${validateId(args.id)}/`);
       break;
     case "courtlistener_search_dockets": {
       const params = { q: args.q, type: "d" };
@@ -1247,7 +1299,7 @@ async function handleTool(name, args) {
       break;
     }
     case "courtlistener_get_docket":
-      result = await fetchJSON(`${COURTLISTENER}/dockets/${args.id}/`);
+      result = await fetchJSON(`${COURTLISTENER}/dockets/${validateId(args.id)}/`);
       break;
     case "courtlistener_search_judges": {
       const params = { q: args.q, type: "p" };
@@ -1257,7 +1309,7 @@ async function handleTool(name, args) {
       break;
     }
     case "courtlistener_get_judge":
-      result = await fetchJSON(`${COURTLISTENER}/people/${args.id}/`);
+      result = await fetchJSON(`${COURTLISTENER}/people/${validateId(args.id)}/`);
       break;
     case "courtlistener_search_oral_arguments": {
       const params = { q: args.q, type: "oa" };
@@ -1293,7 +1345,7 @@ async function handleTool(name, args) {
       break;
     }
     case "edgar_company_filings": {
-      const cik = args.cik.padStart(10, "0");
+      const cik = validateId(args.cik).padStart(10, "0");
       const params = {};
       if (args.type) params.type = args.type;
       if (args.count) params.count = args.count;
@@ -1301,13 +1353,13 @@ async function handleTool(name, args) {
       break;
     }
     case "edgar_company_facts": {
-      const cik = args.cik.padStart(10, "0");
+      const cik = validateId(args.cik).padStart(10, "0");
       result = await fetchJSON(`${EDGAR_DATA}/api/xbrl/companyfacts/CIK${cik}.json`);
       break;
     }
     case "edgar_company_concept": {
-      const cik = args.cik.padStart(10, "0");
-      result = await fetchJSON(`${EDGAR_DATA}/api/xbrl/companyconcept/CIK${cik}/${args.taxonomy}/${args.concept}.json`);
+      const cik = validateId(args.cik).padStart(10, "0");
+      result = await fetchJSON(`${EDGAR_DATA}/api/xbrl/companyconcept/CIK${cik}/${validateId(args.taxonomy)}/${validateId(args.concept)}.json`);
       break;
     }
     case "edgar_resolve_ticker": {
@@ -1337,17 +1389,17 @@ async function handleTool(name, args) {
       break;
     }
     case "federal_register_get_document":
-      result = await fetchJSON(`${FED_REGISTER}/documents/${args.document_number}`);
+      result = await fetchJSON(`${FED_REGISTER}/documents/${validateId(args.document_number)}`);
       break;
     case "federal_register_get_agency":
-      result = await fetchJSON(`${FED_REGISTER}/agencies/${args.slug}`);
+      result = await fetchJSON(`${FED_REGISTER}/agencies/${validateId(args.slug)}`);
       break;
 
     // ── regulations.gov ────────────────────────────────────────────
     case "regulations_search_documents": {
       const apiKey = REGULATIONS_KEY;
       if (!apiKey) throw new Error("regulations.gov API key not configured. Get a free key at https://api.data.gov/signup/");
-      const params = new URLSearchParams({ api_key: apiKey });
+      const params = new URLSearchParams();
       const f = args.filter || {};
       if (f.searchTerm) params.set("filter[searchTerm]", f.searchTerm);
       if (f.agencyId) params.set("filter[agencyId]", f.agencyId);
@@ -1355,37 +1407,45 @@ async function handleTool(name, args) {
       if (f.postedDate) params.set("filter[postedDate]", f.postedDate);
       if (args.page) params.set("page[number]", args.page);
       if (args.pageSize) params.set("page[size]", args.pageSize);
-      result = await fetchJSON(`${REGULATIONS}/documents?${params}`);
+      result = await fetchJSON(`${REGULATIONS}/documents?${params}`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "regulations_get_document": {
       const apiKey = REGULATIONS_KEY;
       if (!apiKey) throw new Error("regulations.gov API key not configured. Get a free key at https://api.data.gov/signup/");
-      result = await fetchJSON(`${REGULATIONS}/documents/${args.documentId}?api_key=${apiKey}`);
+      result = await fetchJSON(`${REGULATIONS}/documents/${validateId(args.documentId)}`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "regulations_search_dockets": {
       const apiKey = REGULATIONS_KEY;
       if (!apiKey) throw new Error("regulations.gov API key not configured. Get a free key at https://api.data.gov/signup/");
-      const params = new URLSearchParams({ api_key: apiKey });
+      const params = new URLSearchParams();
       const f = args.filter || {};
       if (f.searchTerm) params.set("filter[searchTerm]", f.searchTerm);
       if (f.agencyId) params.set("filter[agencyId]", f.agencyId);
       if (f.docketType) params.set("filter[docketType]", f.docketType);
       if (args.page) params.set("page[number]", args.page);
-      result = await fetchJSON(`${REGULATIONS}/dockets?${params}`);
+      result = await fetchJSON(`${REGULATIONS}/dockets?${params}`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "regulations_get_comments": {
       const apiKey = REGULATIONS_KEY;
       if (!apiKey) throw new Error("regulations.gov API key not configured. Get a free key at https://api.data.gov/signup/");
-      const params = new URLSearchParams({ api_key: apiKey });
+      const params = new URLSearchParams();
       const f = args.filter || {};
       if (f.commentOnId) params.set("filter[commentOnId]", f.commentOnId);
       if (f.searchTerm) params.set("filter[searchTerm]", f.searchTerm);
       if (args.page) params.set("page[number]", args.page);
       if (args.pageSize) params.set("page[size]", args.pageSize);
-      result = await fetchJSON(`${REGULATIONS}/comments?${params}`);
+      result = await fetchJSON(`${REGULATIONS}/comments?${params}`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
 
@@ -1393,38 +1453,48 @@ async function handleTool(name, args) {
     case "congress_search_bills": {
       const apiKey = CONGRESS_KEY;
       if (!apiKey) throw new Error("Congress.gov API key not configured. Get a free key at https://api.congress.gov/sign-up/");
-      const params = { api_key: apiKey, query: args.query, format: "json" };
+      const params = { query: args.query, format: "json" };
       if (args.offset) params.offset = args.offset;
       if (args.limit) params.limit = args.limit;
-      result = await fetchJSON(`${CONGRESS}/bill?${qs(params)}`);
+      result = await fetchJSON(`${CONGRESS}/bill?${qs(params)}`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "congress_get_bill": {
       const apiKey = CONGRESS_KEY;
       if (!apiKey) throw new Error("Congress.gov API key not configured.");
-      result = await fetchJSON(`${CONGRESS}/bill/${args.congress}/${args.type}/${args.number}?api_key=${apiKey}&format=json`);
+      result = await fetchJSON(`${CONGRESS}/bill/${validateId(args.congress)}/${validateId(args.type)}/${validateId(args.number)}?format=json`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "congress_get_bill_text": {
       const apiKey = CONGRESS_KEY;
       if (!apiKey) throw new Error("Congress.gov API key not configured.");
-      result = await fetchJSON(`${CONGRESS}/bill/${args.congress}/${args.type}/${args.number}/text?api_key=${apiKey}&format=json`);
+      result = await fetchJSON(`${CONGRESS}/bill/${validateId(args.congress)}/${validateId(args.type)}/${validateId(args.number)}/text?format=json`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "congress_search_members": {
       const apiKey = CONGRESS_KEY;
       if (!apiKey) throw new Error("Congress.gov API key not configured.");
-      const params = { api_key: apiKey, query: args.query, format: "json" };
+      const params = { query: args.query, format: "json" };
       if (args.currentMember !== undefined) params.currentMember = args.currentMember;
       if (args.offset) params.offset = args.offset;
       if (args.limit) params.limit = args.limit;
-      result = await fetchJSON(`${CONGRESS}/member?${qs(params)}`);
+      result = await fetchJSON(`${CONGRESS}/member?${qs(params)}`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
     case "congress_get_member": {
       const apiKey = CONGRESS_KEY;
       if (!apiKey) throw new Error("Congress.gov API key not configured.");
-      result = await fetchJSON(`${CONGRESS}/member/${args.bioguideId}?api_key=${apiKey}&format=json`);
+      result = await fetchJSON(`${CONGRESS}/member/${validateId(args.bioguideId)}?format=json`, {
+        headers: { "X-Api-Key": apiKey },
+      });
       break;
     }
 
@@ -1440,13 +1510,13 @@ async function handleTool(name, args) {
       break;
     }
     case "uk_legislation_get": {
-      const path = args.section || "";
-      const url = `${UK_LEG}/${args.type}/${args.year}/${args.number}${path ? "/" + path : ""}/data.json`;
+      const section = args.section ? "/" + args.section.split("/").map(s => validateId(s)).join("/") : "";
+      const url = `${UK_LEG}/${validateId(args.type)}/${validateId(args.year)}/${validateId(args.number)}${section}/data.json`;
       result = await fetchJSON(url);
       break;
     }
     case "uk_legislation_changes": {
-      result = await fetchJSON(`${UK_LEG}/${args.type}/${args.year}/${args.number}/changes/data.json`);
+      result = await fetchJSON(`${UK_LEG}/${validateId(args.type)}/${validateId(args.year)}/${validateId(args.number)}/changes/data.json`);
       break;
     }
 
@@ -1468,8 +1538,8 @@ async function handleTool(name, args) {
       break;
     }
     case "eurlex_get_document": {
-      const lang = args.language || "EN";
-      const url = `https://eur-lex.europa.eu/legal-content/${lang}/TXT/HTML/?uri=CELEX:${args.celex}`;
+      const lang = validateId(args.language || "EN");
+      const url = `https://eur-lex.europa.eu/legal-content/${lang}/TXT/HTML/?uri=CELEX:${validateId(args.celex)}`;
       const resp = await fetch(url, { headers: { "User-Agent": UA } });
       if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
       const html = await resp.text();
@@ -1497,7 +1567,7 @@ async function handleTool(name, args) {
     case "openstates_get_bill": {
       if (!OPENSTATES_KEY) throw new Error("Open States API key not configured.");
       result = await fetchJSON(
-        `${OPENSTATES}/bills/${args.jurisdiction}/${args.session}/${encodeURIComponent(args.identifier)}`,
+        `${OPENSTATES}/bills/${validateId(args.jurisdiction)}/${validateId(args.session)}/${encodeURIComponent(args.identifier)}`,
         { headers: { "X-API-KEY": OPENSTATES_KEY } },
       );
       break;
@@ -1514,7 +1584,7 @@ async function handleTool(name, args) {
       break;
     }
 
-    // ── CanLII ─────────────────────────────────────────────────────
+    // ── CanLII (query param auth only — no header auth supported) ──
     case "canlii_search": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured. Request access at https://www.canlii.org/en/tools/api.html");
       const params = { api_key: CANLII_KEY, query: args.query };
@@ -1526,18 +1596,18 @@ async function handleTool(name, args) {
     }
     case "canlii_get_case": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured.");
-      result = await fetchJSON(`${CANLII_BASE}/caseBrowse/${args.databaseId}/${args.caseId}?api_key=${CANLII_KEY}`);
+      result = await fetchJSON(`${CANLII_BASE}/caseBrowse/${validateId(args.databaseId)}/${validateId(args.caseId)}?api_key=${CANLII_KEY}`);
       break;
     }
     case "canlii_case_citations": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured.");
       const type = args.type || "citedCases";
-      result = await fetchJSON(`${CANLII_BASE}/caseCitator/${args.databaseId}/${args.caseId}/${type}?api_key=${CANLII_KEY}`);
+      result = await fetchJSON(`${CANLII_BASE}/caseCitator/${validateId(args.databaseId)}/${validateId(args.caseId)}/${validateId(type)}?api_key=${CANLII_KEY}`);
       break;
     }
     case "canlii_get_legislation": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured.");
-      result = await fetchJSON(`${CANLII_BASE}/legislationBrowse/${args.databaseId}/${args.legislationId}?api_key=${CANLII_KEY}`);
+      result = await fetchJSON(`${CANLII_BASE}/legislationBrowse/${validateId(args.databaseId)}/${validateId(args.legislationId)}?api_key=${CANLII_KEY}`);
       break;
     }
 
@@ -1548,7 +1618,7 @@ async function handleTool(name, args) {
       break;
     }
     case "uspto_get_patent":
-      result = await fetchJSON(`${USPTO}/application/${args.patentNumber}`);
+      result = await fetchJSON(`${USPTO}/application/${validateId(args.patentNumber)}`);
       break;
     case "uspto_search_trademarks": {
       const params = new URLSearchParams();
@@ -1567,7 +1637,7 @@ async function handleTool(name, args) {
       break;
     case "lexis_retrieve":
       requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXIS_BASE, `/documents/${args.document_id}`, LEXIS_KEY);
+      result = await authedCall(LEXIS_BASE, `/documents/${validateId(args.document_id)}`, LEXIS_KEY);
       break;
     case "lexis_shepards":
       requireKey("LexisNexis", LEXIS_KEY);
@@ -1579,7 +1649,7 @@ async function handleTool(name, args) {
       break;
     case "statenet_get_bill":
       requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(STATENET_BASE, `/bills/${args.bill_id}`, LEXIS_KEY);
+      result = await authedCall(STATENET_BASE, `/bills/${validateId(args.bill_id)}`, LEXIS_KEY);
       break;
     case "statenet_search_regulations":
       requireKey("LexisNexis", LEXIS_KEY);
@@ -1595,11 +1665,11 @@ async function handleTool(name, args) {
       break;
     case "lexmachina_case_details":
       requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/cases/${args.case_id}`, LEXIS_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/cases/${validateId(args.case_id)}`, LEXIS_KEY);
       break;
     case "lexmachina_judge_profile":
       requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/judges/${args.judge_id}`, LEXIS_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/judges/${validateId(args.judge_id)}`, LEXIS_KEY);
       break;
     case "lexmachina_party_history": {
       requireKey("LexisNexis", LEXIS_KEY);
@@ -1612,9 +1682,10 @@ async function handleTool(name, args) {
       break;
     case "intelligize_get_filing": {
       requireKey("LexisNexis", LEXIS_KEY);
+      const fid = validateId(args.filing_id);
       const path = args.section
-        ? `/filings/${args.filing_id}?section=${encodeURIComponent(args.section)}`
-        : `/filings/${args.filing_id}`;
+        ? `/filings/${fid}?section=${encodeURIComponent(args.section)}`
+        : `/filings/${fid}`;
       result = await authedCall(INTELLIGIZE_BASE, path, LEXIS_KEY);
       break;
     }
@@ -1650,7 +1721,7 @@ async function handleTool(name, args) {
       break;
     case "westlaw_get_document":
       requireKey("Westlaw", WESTLAW_KEY);
-      result = await authedCall(WESTLAW_BASE, `/documents/${args.document_id}`, WESTLAW_KEY);
+      result = await authedCall(WESTLAW_BASE, `/documents/${validateId(args.document_id)}`, WESTLAW_KEY);
       break;
     case "westlaw_keycite":
       requireKey("Westlaw", WESTLAW_KEY);
@@ -1666,7 +1737,7 @@ async function handleTool(name, args) {
       break;
     case "westlaw_litigation_analytics":
       requireKey("Westlaw", WESTLAW_KEY);
-      result = await authedCall(WESTLAW_BASE, `/analytics/${args.query_type}`, WESTLAW_KEY, "POST", args);
+      result = await authedCall(WESTLAW_BASE, `/analytics/${validateId(args.query_type)}`, WESTLAW_KEY, "POST", args);
       break;
 
     // ── Clio (BYOK) ───────────────────────────────────────────────
@@ -1681,7 +1752,7 @@ async function handleTool(name, args) {
     }
     case "clio_get_matter":
       requireKey("Clio", CLIO_KEY);
-      result = await authedCall(CLIO_BASE, `/matters/${args.id}`, CLIO_KEY);
+      result = await authedCall(CLIO_BASE, `/matters/${validateId(args.id)}`, CLIO_KEY);
       break;
     case "clio_create_time_entry":
       requireKey("Clio", CLIO_KEY);
@@ -1732,25 +1803,25 @@ async function handleTool(name, args) {
       break;
     case "imanage_get_document":
       requireKey("iManage", IMANAGE_KEY);
-      result = await authedCall(IMANAGE_BASE, `/documents/${args.document_id}`, IMANAGE_KEY);
+      result = await authedCall(IMANAGE_BASE, `/documents/${validateId(args.document_id)}`, IMANAGE_KEY);
       break;
     case "imanage_get_document_content":
       requireKey("iManage", IMANAGE_KEY);
-      result = await authedCall(IMANAGE_BASE, `/documents/${args.document_id}/download`, IMANAGE_KEY);
+      result = await authedCall(IMANAGE_BASE, `/documents/${validateId(args.document_id)}/download`, IMANAGE_KEY);
       break;
     case "imanage_upload":
       requireKey("iManage", IMANAGE_KEY);
-      result = await authedCall(IMANAGE_BASE, `/workspaces/${args.workspace_id}/documents`, IMANAGE_KEY, "POST", {
+      result = await authedCall(IMANAGE_BASE, `/workspaces/${validateId(args.workspace_id)}/documents`, IMANAGE_KEY, "POST", {
         name: args.name, content: args.content, doc_class: args.doc_class,
       });
       break;
     case "imanage_checkout":
       requireKey("iManage", IMANAGE_KEY);
-      result = await authedCall(IMANAGE_BASE, `/documents/${args.document_id}/lock`, IMANAGE_KEY, "POST");
+      result = await authedCall(IMANAGE_BASE, `/documents/${validateId(args.document_id)}/lock`, IMANAGE_KEY, "POST");
       break;
     case "imanage_checkin":
       requireKey("iManage", IMANAGE_KEY);
-      result = await authedCall(IMANAGE_BASE, `/documents/${args.document_id}`, IMANAGE_KEY, "PUT", {
+      result = await authedCall(IMANAGE_BASE, `/documents/${validateId(args.document_id)}`, IMANAGE_KEY, "PUT", {
         content: args.content, comment: args.comment,
       });
       break;
@@ -1768,15 +1839,15 @@ async function handleTool(name, args) {
     }
     case "netdocuments_get_document":
       requireKey("NetDocuments", NETDOCUMENTS_KEY);
-      result = await authedCall(NETDOCS_BASE, `/documents/${args.id}`, NETDOCUMENTS_KEY);
+      result = await authedCall(NETDOCS_BASE, `/documents/${validateId(args.id)}`, NETDOCUMENTS_KEY);
       break;
     case "netdocuments_get_content":
       requireKey("NetDocuments", NETDOCUMENTS_KEY);
-      result = await authedCall(NETDOCS_BASE, `/documents/${args.id}/content`, NETDOCUMENTS_KEY);
+      result = await authedCall(NETDOCS_BASE, `/documents/${validateId(args.id)}/content`, NETDOCUMENTS_KEY);
       break;
     case "netdocuments_upload":
       requireKey("NetDocuments", NETDOCUMENTS_KEY);
-      result = await authedCall(NETDOCS_BASE, `/cabinets/${args.cabinet}/documents`, NETDOCUMENTS_KEY, "POST", {
+      result = await authedCall(NETDOCS_BASE, `/cabinets/${validateId(args.cabinet)}/documents`, NETDOCUMENTS_KEY, "POST", {
         name: args.name, content: args.content, profile: args.profile,
       });
       break;
@@ -1824,7 +1895,7 @@ function getAvailableTools() {
 // ═══════════════════════════════════════════════════════════════════════
 
 const server = new Server(
-  { name: "legal-mcp", version: "0.2.0" },
+  { name: "lawborg-mcp", version: "0.2.0" },
   { capabilities: { tools: {} } },
 );
 

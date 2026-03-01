@@ -13,6 +13,17 @@ import type {
   ProjectFile,
   PipelineModeFull,
 } from "./types";
+import {
+  MAX_LOG_BUFFER,
+  MAX_STREAM_EVENTS,
+  REFETCH_TASKS,
+  REFETCH_TASK_DETAIL,
+  REFETCH_QUEUE,
+  REFETCH_STATUS,
+  REFETCH_PROPOSALS,
+  REFETCH_PROJECTS,
+  REFETCH_TASK_MESSAGES,
+} from "./constants";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -47,7 +58,7 @@ export function useTasks() {
   return useQuery<Task[]>({
     queryKey: ["tasks"],
     queryFn: () => fetchJson("/api/tasks"),
-    refetchInterval: 30_000,
+    refetchInterval: REFETCH_TASKS,
   });
 }
 
@@ -56,7 +67,7 @@ export function useTaskDetail(id: number | null) {
     queryKey: ["task", id],
     queryFn: () => fetchJson(`/api/tasks/${id}`),
     enabled: id !== null,
-    refetchInterval: 15_000,
+    refetchInterval: REFETCH_TASK_DETAIL,
   });
 }
 
@@ -64,7 +75,7 @@ export function useQueue() {
   return useQuery<QueueEntry[]>({
     queryKey: ["queue"],
     queryFn: () => fetchJson("/api/queue"),
-    refetchInterval: 30_000,
+    refetchInterval: REFETCH_QUEUE,
   });
 }
 
@@ -72,7 +83,7 @@ export function useStatus() {
   return useQuery<Status>({
     queryKey: ["status"],
     queryFn: () => fetchJson("/api/status"),
-    refetchInterval: 30_000,
+    refetchInterval: REFETCH_STATUS,
   });
 }
 
@@ -80,7 +91,7 @@ export function useProposals() {
   return useQuery<Proposal[]>({
     queryKey: ["proposals"],
     queryFn: () => fetchJson("/api/proposals"),
-    refetchInterval: 30_000,
+    refetchInterval: REFETCH_PROPOSALS,
   });
 }
 
@@ -281,7 +292,7 @@ export function useLogs() {
         if (!d) return;
         setLogs((prev) => {
           const next = [...prev, d];
-          return next.length > 500 ? next.slice(-500) : next;
+          return next.length > MAX_LOG_BUFFER ? next.slice(-MAX_LOG_BUFFER) : next;
         });
         // Debounced cache invalidation — at most once per second
         if (!invalidateTimer.current) {
@@ -324,7 +335,7 @@ export function useProjects() {
   return useQuery<Project[]>({
     queryKey: ["projects"],
     queryFn: () => fetchJson("/api/projects"),
-    refetchInterval: 30_000,
+    refetchInterval: REFETCH_PROJECTS,
   });
 }
 
@@ -346,7 +357,7 @@ export function useProjectFiles(projectId: number | null) {
     queryKey: ["project_files", projectId],
     queryFn: () => fetchJson(`/api/projects/${projectId}/files`),
     enabled: projectId !== null,
-    refetchInterval: 30_000,
+    refetchInterval: REFETCH_PROJECTS,
   });
 }
 
@@ -399,7 +410,7 @@ export function useTaskMessages(taskId: number | null) {
       }
     },
     enabled: taskId !== null,
-    refetchInterval: 10_000,
+    refetchInterval: REFETCH_TASK_MESSAGES,
   });
 }
 
@@ -458,7 +469,7 @@ export function useTaskStream(taskId: number | null, active: boolean) {
         }
         setEvents((prev) => {
           const next = [...prev, obj];
-          return next.length > 2000 ? next.slice(-2000) : next;
+          return next.length > MAX_STREAM_EVENTS ? next.slice(-MAX_STREAM_EVENTS) : next;
         });
       } catch {
         // ignore
