@@ -282,10 +282,14 @@ function startAgentSession(session_id, cmd) {
 
   let lastResult = '';
   let lastSessionId = null;
+  let stdoutBuf = '';
 
   proc.stdout.on('data', (data) => {
-    const lines = data.toString().split('\n').filter(l => l.trim());
-    for (const line of lines) {
+    stdoutBuf += data.toString();
+    const parts = stdoutBuf.split('\n');
+    stdoutBuf = parts.pop();
+    for (const line of parts) {
+      if (!line.trim()) continue;
       emit('agent', { event: 'stream_line', session_id, line });
       try {
         const obj = JSON.parse(line);
@@ -304,11 +308,13 @@ function startAgentSession(session_id, cmd) {
   });
 
   proc.on('close', (code) => {
+    if (agentSessions.get(session_id)?.process !== proc) return;
     agentSessions.delete(session_id);
     emit('agent', { event: 'complete', session_id, output: lastResult, new_session_id: lastSessionId, exit_code: code ?? 0 });
   });
 
   proc.on('error', (err) => {
+    if (agentSessions.get(session_id)?.process !== proc) return;
     agentSessions.delete(session_id);
     emit('agent', { event: 'error', session_id, message: err.message });
   });
@@ -330,6 +336,8 @@ rl.on('line', async (line) => {
 });
 
 rl.on('close', () => {
+  for (const { process: p } of agentSessions.values()) p.kill('SIGTERM');
+  agentSessions.clear();
   if (discordClient) discordClient.destroy();
   if (waSock?.ws) waSock.ws.close();
   process.exit(0);

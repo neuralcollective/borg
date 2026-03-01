@@ -302,7 +302,7 @@ const EDGAR_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        cik: { type: "string", description: "CIK number (zero-padded to 10 digits) or ticker symbol" },
+        cik: { type: "string", description: "Numeric CIK number (use edgar_resolve_ticker first to convert ticker symbols)" },
         type: { type: "string", description: "Filing type filter (e.g. '10-K', '10-Q')" },
         count: { type: "number", description: "Number of filings to return (default 20)" },
       },
@@ -1359,7 +1359,9 @@ async function handleTool(name, args) {
       break;
     }
     case "edgar_company_filings": {
-      const cik = validateId(args.cik).padStart(10, "0");
+      const raw = validateId(args.cik);
+      if (!/^\d+$/.test(raw)) throw new Error("CIK must be numeric. Use edgar_resolve_ticker to convert ticker symbols.");
+      const cik = raw.padStart(10, "0");
       const params = {};
       if (args.type) params.type = args.type;
       if (args.count) params.count = args.count;

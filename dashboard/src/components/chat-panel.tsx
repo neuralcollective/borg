@@ -115,6 +115,10 @@ export function ChatPanel() {
   }, [connect]);
 
   useEffect(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
     connect();
     return () => {
       esRef.current?.close();

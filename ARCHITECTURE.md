@@ -157,7 +157,7 @@ Key environment variables (full list in CLAUDE.md):
 | `PIPELINE_REPO` | Primary repo path |
 | `PIPELINE_TEST_CMD` | Test command for primary repo |
 | `PIPELINE_AUTO_MERGE` | Auto-merge PRs (`true`/`false`) |
-| `WATCHED_REPOS` | Additional repos (`path:cmd` or `path:cmd!manual`) |
+| `WATCHED_REPOS` | Additional repos (`path:test_cmd[:prompt_file[:mode[:lint_cmd]]]`). Append `!manual` to `test_cmd` to disable auto-merge. |
 | `CONTINUOUS_MODE` | Auto-seed tasks when pipeline is idle |
 | `DISCORD_TOKEN` | Discord bot token |
 | `WA_AUTH_DIR` | WhatsApp auth directory |
