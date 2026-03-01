@@ -192,7 +192,11 @@ impl Pipeline {
         } else {
             &task.created_by
         };
-        for provider in ["lexisnexis", "lexmachina", "intelligize"] {
+        for provider in [
+            "lexisnexis", "lexmachina", "intelligize", "westlaw",
+            "clio", "imanage", "netdocuments", "congress", "openstates",
+            "canlii", "regulations_gov",
+        ] {
             if let Ok(Some(key)) = self.db.get_api_key(key_owner, provider) {
                 api_keys.insert(provider.to_string(), key);
             }
@@ -214,6 +218,8 @@ impl Pipeline {
     }
 
     /// Increment attempt and set the retry status, or fail if attempts exhausted.
+    /// After 3 failed attempts, clears the session ID to force a fresh start and
+    /// builds a summary of previous attempts so the new session has context.
     fn fail_or_retry(&self, task: &Task, retry_status: &str, error: &str) -> Result<()> {
         self.db.increment_attempt(task.id)?;
         let current = self.db.get_task(task.id)?.unwrap_or_else(|| task.clone());
@@ -221,10 +227,41 @@ impl Pipeline {
             self.db.update_task_status(task.id, "failed", Some(error))?;
             self.cleanup_worktree(task);
         } else {
+            // After 3 attempts, force a fresh session with a summary of what was tried
+            let error_ctx = if current.attempt >= 3 {
+                self.db.update_task_session(task.id, "").ok();
+                info!(
+                    "task #{} attempt {} — clearing session for fresh start",
+                    task.id, current.attempt
+                );
+                self.build_retry_summary(task.id, error)
+            } else {
+                error.to_string()
+            };
             self.db
-                .update_task_status(task.id, retry_status, Some(error))?;
+                .update_task_status(task.id, retry_status, Some(&error_ctx))?;
         }
         Ok(())
+    }
+
+    /// Build a summary of previous failed attempts for fresh-session retries.
+    fn build_retry_summary(&self, task_id: i64, current_error: &str) -> String {
+        let outputs = self.db.get_task_outputs(task_id).unwrap_or_default();
+        let mut summary = String::from("FRESH RETRY — previous approaches failed. Summary of attempts:\n");
+        for (i, output) in outputs.iter().rev().take(3).enumerate() {
+            let truncated: String = output.output.chars().take(500).collect();
+            summary.push_str(&format!(
+                "\nAttempt {} ({}): {}\n",
+                i + 1,
+                output.phase,
+                truncated
+            ));
+        }
+        summary.push_str(&format!(
+            "\nLatest error:\n{}\n\nTry a fundamentally different approach.",
+            current_error.chars().take(2000).collect::<String>()
+        ));
+        summary
     }
 
     /// Remove the git worktree for a task (best-effort, silent on error).

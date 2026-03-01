@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS pipeline_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_status ON pipeline_tasks(status);
 
--- Statuses: backlog → spec → qa → qa_fix → impl → retry → rebase → done → release → merged
+-- Statuses: backlog → implement → validate → lint_fix → rebase → done → merged
+--           blocked (paused, awaiting human input)
 --           failed (terminal, recyclable)
 
 CREATE TABLE IF NOT EXISTS integration_queue (

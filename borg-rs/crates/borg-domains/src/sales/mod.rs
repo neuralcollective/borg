@@ -14,28 +14,17 @@ pub fn sales_mode() -> PipelineMode {
         integration: IntegrationType::None,
         default_max_attempts: 3,
         phases: vec![
-            setup_phase("research"),
+            setup_phase("implement"),
             PhaseConfig {
                 include_task_context: true,
-                check_artifact: Some("prospect.md".into()),
-                ..agent_phase(
-                    "research",
-                    "Prospect Research",
-                    SALES_RESEARCH_SYSTEM,
-                    SALES_RESEARCH_INSTRUCTION,
-                    "Read,Glob,Grep,Write,WebSearch,WebFetch",
-                    "draft",
-                )
-            },
-            PhaseConfig {
                 commits: true,
                 commit_message: "draft: outreach from sales agent".into(),
                 ..agent_phase(
-                    "draft",
-                    "Outreach Draft",
-                    SALES_DRAFT_SYSTEM,
-                    SALES_DRAFT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit",
+                    "implement",
+                    "Implement",
+                    SALES_IMPLEMENT_SYSTEM,
+                    SALES_IMPLEMENT_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
                     "review",
                 )
             },
@@ -43,6 +32,7 @@ pub fn sales_mode() -> PipelineMode {
                 error_instruction: SALES_REVIEW_RETRY.into(),
                 commits: true,
                 commit_message: "review: revisions from sales review agent".into(),
+                fresh_session: true,
                 ..agent_phase(
                     "review",
                     "Review",
@@ -82,44 +72,36 @@ pub fn sales_mode() -> PipelineMode {
     }
 }
 
-const SALES_RESEARCH_SYSTEM: &str =
-    "You are a sales research agent. Research the prospect thoroughly\
-\nbefore any outreach is drafted. Find recent news, product focus, team\
-\nsize, funding, pain points, and relevant context. Do not fabricate facts.";
+const SALES_IMPLEMENT_SYSTEM: &str = "\
+You are an autonomous sales agent. Research the prospect thoroughly, then draft \
+personalised outreach — all in one pass. Lead with insight, not a pitch. \
+Do not fabricate facts.";
 
-const SALES_RESEARCH_INSTRUCTION: &str =
-    "Research the prospect described in the task and write prospect.md:\
-\n1. Company/person overview (what they do, size, stage)\
-\n2. Recent news and signals (funding, launches, hires, press)\
-\n3. Likely pain points relevant to our offering\
-\n4. Key decision-makers and their roles\
-\n5. Recommended angle for outreach (what to lead with and why)";
+const SALES_IMPLEMENT_INSTRUCTION: &str = "\
+Handle this sales task end-to-end:
+1. Research the prospect: company overview, recent news, funding, team, pain points
+2. Identify the best angle for outreach based on your research
+3. Write prospect.md with your research findings
+4. Draft outreach.md containing:
+   - Email subject line (sharp, specific, not clickbait)
+   - Email body (3-5 short paragraphs max): hook, bridge, ask
+   - LinkedIn message variant (under 300 chars)
+   - Notes on timing or personalisation to add before sending\n\
+If the task is unclear, write {\"status\":\"blocked\",\"reason\":\"...\"} to .borg/signal.json.";
 
-const SALES_DRAFT_SYSTEM: &str = "You are a sales outreach agent. Read prospect.md and draft\
-\npersonalised, concise outreach. Lead with insight, not a pitch.\
-\nAvoid generic templates — every word should be specific to this prospect.";
+const SALES_REVIEW_SYSTEM: &str = "\
+You are a senior sales reviewer. Read prospect.md and outreach.md. \
+Assess the outreach for relevance, tone, personalisation, and clarity. \
+Fix weak spots directly in outreach.md. Do not just list issues.";
 
-const SALES_DRAFT_INSTRUCTION: &str = "Read prospect.md and draft outreach.md containing:\
-\n1. Email subject line (sharp, specific, not clickbait)\
-\n2. Email body (3-5 short paragraphs max)\
-\n   - Hook: something specific and relevant to them\
-\n   - Bridge: connect their situation to what we offer\
-\n   - Ask: one clear, low-friction call to action\
-\n3. LinkedIn message variant (under 300 chars)\
-\n4. Notes on timing or personalisation to add before sending";
-
-const SALES_REVIEW_SYSTEM: &str =
-    "You are a senior sales reviewer. Read prospect.md and outreach.md.\
-\nAssess the outreach for relevance, tone, personalisation, and clarity.\
-\nFix weak spots directly in outreach.md. Do not just list issues.";
-
-const SALES_REVIEW_INSTRUCTION: &str = "Review outreach.md against prospect.md. Check:\
-\n1. Does the hook reference something genuinely specific to the prospect?\
-\n2. Is the value prop clear and relevant to their likely pain points?\
-\n3. Is the ask concrete and easy to say yes to?\
-\n4. Tone: confident but not pushy, peer-to-peer\
-\n5. Length: email under 200 words, LinkedIn under 300 chars\
-\nFix any issues directly. Leave a brief review note at the top of outreach.md.";
+const SALES_REVIEW_INSTRUCTION: &str = "\
+Review outreach.md against prospect.md. Check:\n\
+1. Does the hook reference something genuinely specific to the prospect?\n\
+2. Is the value prop clear and relevant to their likely pain points?\n\
+3. Is the ask concrete and easy to say yes to?\n\
+4. Tone: confident but not pushy, peer-to-peer\n\
+5. Length: email under 200 words, LinkedIn under 300 chars\n\
+Fix any issues directly. Leave a brief review note at the top of outreach.md.";
 
 const SALES_REVIEW_RETRY: &str =
     "\n\nPrevious review flagged unresolved issues:\n{ERROR}\n\nAddress them.";

@@ -334,9 +334,11 @@ impl Db {
              max_attempts, last_error, created_by, notify_chat, created_at, \
              session_id, mode, backend \
              FROM pipeline_tasks \
-             WHERE status NOT IN ('done', 'merged', 'failed') \
+             WHERE status NOT IN ('done', 'merged', 'failed', 'blocked', 'pending_review') \
              ORDER BY CASE status \
                WHEN 'rebase' THEN 0 \
+               WHEN 'validate' THEN 1 \
+               WHEN 'implement' THEN 1 \
                WHEN 'impl' THEN 1 \
                WHEN 'retry' THEN 1 \
                WHEN 'qa' THEN 2 \

@@ -1,6 +1,6 @@
 use borg_core::types::{IntegrationType, PhaseConfig, PipelineMode, SeedConfig, SeedOutputType};
 
-use crate::{agent_phase, lint_phase, rebase_phase, setup_phase};
+use crate::{agent_phase, lint_phase, rebase_phase, setup_phase, validate_phase};
 use crate::swe::swe_seeds;
 
 pub fn web_mode() -> PipelineMode {
@@ -15,36 +15,24 @@ pub fn web_mode() -> PipelineMode {
         integration: IntegrationType::GitPr,
         default_max_attempts: 3,
         phases: vec![
-            setup_phase("audit"),
+            setup_phase("implement"),
             PhaseConfig {
                 include_task_context: true,
                 include_file_listing: true,
-                check_artifact: Some("audit.md".into()),
-                use_docker: true,
-                ..agent_phase(
-                    "audit",
-                    "Audit",
-                    WEB_AUDIT_SYSTEM,
-                    WEB_AUDIT_INSTRUCTION,
-                    "Read,Glob,Grep,Write",
-                    "improve",
-                )
-            },
-            PhaseConfig {
-                error_instruction: WEB_IMPROVE_RETRY.into(),
+                error_instruction: WEB_IMPLEMENT_RETRY.into(),
                 use_docker: true,
                 commits: true,
-                commit_message: "improve: frontend improvements from web agent".into(),
-                runs_tests: true,
+                commit_message: "feat: frontend improvements from web agent".into(),
                 ..agent_phase(
-                    "improve",
-                    "Improve",
-                    WEB_IMPROVE_SYSTEM,
-                    WEB_IMPROVE_INSTRUCTION,
+                    "implement",
+                    "Implement",
+                    WEB_IMPLEMENT_SYSTEM,
+                    WEB_IMPLEMENT_INSTRUCTION,
                     "Read,Glob,Grep,Write,Edit,Bash",
-                    "lint_fix",
+                    "validate",
                 )
             },
+            validate_phase("implement", "lint_fix"),
             lint_phase("rebase"),
             rebase_phase(),
         ],
@@ -89,13 +77,21 @@ pub fn web_mode() -> PipelineMode {
     }
 }
 
-const WEB_AUDIT_SYSTEM: &str = "You are a frontend performance and UX expert in an autonomous web improvement pipeline.\nAnalyze the web application codebase and identify concrete opportunities to improve\nperformance, visual design, accessibility, and user experience.\nWrite your findings to audit.md at the repository root. Do not modify source files.";
+const WEB_IMPLEMENT_SYSTEM: &str = "\
+You are an autonomous frontend engineering agent. Analyze the web application, \
+identify improvements, and implement them end-to-end. Focus on measurable wins: \
+faster loads, better visuals, improved accessibility, and better UX.";
 
-const WEB_AUDIT_INSTRUCTION: &str = "Write audit.md containing:\n1. Current state summary (tech stack, key components)\n2. Performance issues (bundle size, render bottlenecks, missing lazy loading)\n3. Visual and UX improvements (layout, spacing, typography, responsiveness)\n4. Accessibility gaps (contrast, keyboard navigation, ARIA)\n5. Prioritized action items — concrete, targeted changes for this iteration";
+const WEB_IMPLEMENT_INSTRUCTION: &str = "\
+Implement the requested frontend changes end-to-end:
+1. Audit the current state (tech stack, components, pain points)
+2. Plan targeted improvements — write audit.md for your own reference if helpful
+3. Implement changes with surgical, focused edits
+4. Verify changes compile/build correctly
+5. Commit your changes with a descriptive message
 
-const WEB_IMPROVE_SYSTEM: &str = "You are a frontend performance and UX expert in an autonomous web improvement pipeline.\nRead audit.md and implement the prioritized improvements.\nFocus on measurable wins: faster loads, better visuals, improved UX.\nDo not modify audit.md.";
+If the task is unclear or impossible, write {\"status\":\"blocked\",\"reason\":\"...\"} \
+to .borg/signal.json.";
 
-const WEB_IMPROVE_INSTRUCTION: &str = "Read audit.md and implement the action items listed under \"Prioritized action items\".\nMake targeted, surgical edits. Verify changes compile/build correctly.";
-
-const WEB_IMPROVE_RETRY: &str =
+const WEB_IMPLEMENT_RETRY: &str =
     "\n\nPrevious attempt failed. Error output:\n```\n{ERROR}\n```\nFix the issue.";

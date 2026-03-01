@@ -73,6 +73,18 @@ pub(crate) fn lint_phase(next: &str) -> PhaseConfig {
     }
 }
 
+/// Create a validate phase that runs tests/compilation and loops back on failure.
+pub(crate) fn validate_phase(retry_phase: &str, next: &str) -> PhaseConfig {
+    PhaseConfig {
+        name: "validate".into(),
+        label: "Validate".into(),
+        phase_type: PhaseType::Validate,
+        retry_phase: retry_phase.into(),
+        next: next.into(),
+        ..Default::default()
+    }
+}
+
 /// Create a standard rebase phase (shared across sweborg/webborg).
 pub(crate) fn rebase_phase() -> PhaseConfig {
     PhaseConfig {

@@ -1,9 +1,8 @@
 use borg_core::types::{IntegrationType, PhaseConfig, PipelineMode, SeedConfig, SeedOutputType};
 
-use crate::{agent_phase, lint_phase, rebase_phase, setup_phase};
+use crate::{agent_phase, lint_phase, rebase_phase, setup_phase, validate_phase};
 
 pub fn swe_mode() -> PipelineMode {
-    const IMPL_TOOLS: &str = "Read,Glob,Grep,Write,Edit,Bash";
     PipelineMode {
         name: "sweborg".into(),
         label: "Software Engineering".into(),
@@ -15,84 +14,24 @@ pub fn swe_mode() -> PipelineMode {
         integration: IntegrationType::GitPr,
         default_max_attempts: 5,
         phases: vec![
-            setup_phase("spec"),
+            setup_phase("implement"),
             PhaseConfig {
                 include_task_context: true,
                 include_file_listing: true,
-                check_artifact: Some("spec.md".into()),
-                use_docker: true,
-                ..agent_phase(
-                    "spec",
-                    "Specification",
-                    SWE_SPEC_SYSTEM,
-                    SWE_SPEC_INSTRUCTION,
-                    "Read,Glob,Grep,Write",
-                    "qa",
-                )
-            },
-            PhaseConfig {
+                error_instruction: SWE_IMPLEMENT_RETRY.into(),
                 use_docker: true,
                 commits: true,
-                commit_message: "test: add tests from QA agent".into(),
-                allow_no_changes: true,
-                compile_check: true,
+                commit_message: "feat: implementation from borg agent".into(),
                 ..agent_phase(
-                    "qa",
-                    "Testing",
-                    SWE_QA_SYSTEM,
-                    SWE_QA_INSTRUCTION,
-                    "Read,Glob,Grep,Write",
-                    "impl",
+                    "implement",
+                    "Implement",
+                    SWE_IMPLEMENT_SYSTEM,
+                    SWE_IMPLEMENT_INSTRUCTION,
+                    "Read,Glob,Grep,Write,Edit,Bash",
+                    "validate",
                 )
             },
-            PhaseConfig {
-                error_instruction: SWE_QA_FIX_ERROR.into(),
-                use_docker: true,
-                commits: true,
-                commit_message: "test: fix tests from QA agent".into(),
-                allow_no_changes: true,
-                fresh_session: true,
-                ..agent_phase(
-                    "qa_fix",
-                    "Test Fix",
-                    SWE_QA_SYSTEM,
-                    SWE_QA_INSTRUCTION,
-                    "Read,Glob,Grep,Write",
-                    "impl",
-                )
-            },
-            PhaseConfig {
-                error_instruction: SWE_IMPL_RETRY.into(),
-                use_docker: true,
-                commits: true,
-                commit_message: "impl: implementation from worker agent".into(),
-                runs_tests: true,
-                has_qa_fix_routing: true,
-                ..agent_phase(
-                    "impl",
-                    "Implementation",
-                    SWE_WORKER_SYSTEM,
-                    SWE_IMPL_INSTRUCTION,
-                    IMPL_TOOLS,
-                    "lint_fix",
-                )
-            },
-            PhaseConfig {
-                error_instruction: SWE_IMPL_RETRY.into(),
-                use_docker: true,
-                commits: true,
-                commit_message: "impl: implementation from worker agent".into(),
-                runs_tests: true,
-                has_qa_fix_routing: true,
-                ..agent_phase(
-                    "retry",
-                    "Retry",
-                    SWE_WORKER_SYSTEM,
-                    SWE_IMPL_INSTRUCTION,
-                    IMPL_TOOLS,
-                    "lint_fix",
-                )
-            },
+            validate_phase("implement", "lint_fix"),
             lint_phase("rebase"),
             rebase_phase(),
         ],
@@ -155,28 +94,52 @@ pub(crate) fn swe_seeds() -> Vec<SeedConfig> {
 
 // ── Prompt constants ─────────────────────────────────────────────────────
 
-pub(crate) const SWE_SPEC_SYSTEM: &str = "You are the spec-writing agent in an autonomous engineering pipeline.\nRead the task and codebase, then write spec.md at the repository root.\nDo not modify source files.";
+pub(crate) const SWE_IMPLEMENT_SYSTEM: &str = "\
+You are an autonomous software engineering agent. You own the full lifecycle: \
+understand the task, explore the codebase, write tests, implement, and iterate \
+until everything works. You drive your own workflow — there is no separate spec \
+or test-writing phase.";
 
-pub(crate) const SWE_QA_SYSTEM: &str = "You are the test-writing agent in an autonomous engineering pipeline.\nRead spec.md and write test files only.\nDo not write implementation code or modify non-test files.";
+pub(crate) const SWE_IMPLEMENT_INSTRUCTION: &str = "\
+Implement the requested change end-to-end:
+1. Explore the codebase to understand the relevant code, patterns, and conventions
+2. Plan your approach — optionally write spec.md for your own reference
+3. Write tests that cover the acceptance criteria and edge cases
+4. Write the implementation to make all tests pass
+5. Run the test suite yourself and iterate until green
+6. Commit your changes with a descriptive message
 
-pub const SWE_WORKER_SYSTEM: &str = "You are the implementation agent in an autonomous engineering pipeline.\nRead spec.md and tests, write code to make all tests pass.\nPrefer not to modify test files, but if tests reference APIs or types that don't exist in the codebase, fix the tests to match reality before implementing.";
+Work iteratively — if tests fail, read the errors and fix them. If your initial \
+approach doesn't work, try a different one. Verify file paths and APIs exist \
+before building on them.
 
-pub(crate) const SWE_SPEC_INSTRUCTION: &str = "Write spec.md containing:\n1. Task summary (2-3 sentences)\n2. Files to modify and create (exact paths — verify each exists with Glob)\n3. Function/type signatures for new or changed code (verify existing ones with Grep)\n4. Acceptance criteria (testable assertions)\n5. Edge cases\n\nBefore finalizing: verify every file path you reference actually exists (unless it's a new file to create). Verify every function or type you reference is real. Remove any references to code that doesn't exist.";
+If the task is unclear or impossible, write {\"status\":\"blocked\",\"reason\":\"...\"} \
+to .borg/signal.json. If you determine the task is already done or nonsensical, \
+write {\"status\":\"abandon\",\"reason\":\"...\"} to .borg/signal.json.";
 
-pub(crate) const SWE_QA_INSTRUCTION: &str = "Read spec.md and write test files covering every acceptance criterion.\nOnly create/modify test files (*_test.* or tests/ directory).\nTests should FAIL initially since features are not yet implemented.\n\nBefore writing tests, verify that the APIs and types referenced in spec.md actually exist in the codebase. If spec.md references something that doesn't exist, write tests against the real API instead.";
+pub(crate) const SWE_IMPLEMENT_RETRY: &str = "\n\n\
+Previous attempt failed. Test output:\n```\n{ERROR}\n```\n\
+Analyze the failures and fix them. If your previous approach is fundamentally \
+wrong, try a different one rather than repeating the same mistake.";
 
-pub(crate) const SWE_QA_FIX_ERROR: &str = "\n\nYour tests from the previous QA pass have issues that prevent them from passing.\nThe implementation agent tried multiple times but the test code itself is broken.\n\nTest output showing the failures:\n```\n{ERROR}\n```\n\nFix the test files. Common issues:\n- Tests reference functions, types, or fields that don't exist in the codebase\n- Compile errors from wrong API assumptions\n- use-after-free in test setup, wrong allocator usage\n- Missing defer/errdefer, incorrect test assertions\nDo NOT weaken tests or remove test cases — fix the test code so it correctly\nvalidates the behavior described in spec.md, using only APIs that actually exist.";
-
-pub(crate) const SWE_IMPL_INSTRUCTION: &str = "Read spec.md and the test files.\nWrite implementation code that makes all tests pass.\nPrefer to only modify files listed in spec.md.\nIf tests reference APIs, types, or fields that don't exist in the codebase, fix them to match reality — keep the test intent but correct wrong API assumptions.";
-
-pub(crate) const SWE_IMPL_RETRY: &str =
-    "\n\nPrevious attempt failed. Test output:\n```\n{ERROR}\n```\nFix the failures.";
-
-pub const SWE_REBASE_INSTRUCTION: &str = "This branch has merge conflicts with main.\nRebase onto origin/main, resolve all conflicts, and ensure tests pass.\nRead spec.md for context on what this branch does.";
+pub const SWE_REBASE_INSTRUCTION: &str = "\
+This branch has merge conflicts with main.\n\
+Rebase onto origin/main, resolve all conflicts, and ensure tests pass.";
 
 pub const SWE_REBASE_ERROR: &str = "\n\nPrevious error context:\n```\n{ERROR}\n```";
 
-pub const SWE_REBASE_FIX: &str = "The git rebase onto origin/main failed with conflicts:\n\n{ERROR}\n\nYou are in the worktree where the rebase is paused. Resolve all conflicts:\n- For 'deleted by us' files (files removed from main): run `git rm <file>` for each one\n- For content conflicts (<<<< markers): edit the file to resolve, then `git add <file>`\nAfter resolving all conflicts, run `git rebase --continue`.\nDo NOT run `git rebase --abort`.";
+pub const SWE_REBASE_FIX: &str = "\
+The git rebase onto origin/main failed with conflicts:\n\n{ERROR}\n\n\
+You are in the worktree where the rebase is paused. Resolve all conflicts:\n\
+- For 'deleted by us' files (files removed from main): run `git rm <file>` for each one\n\
+- For content conflicts (<<<< markers): edit the file to resolve, then `git add <file>`\n\
+After resolving all conflicts, run `git rebase --continue`.\n\
+Do NOT run `git rebase --abort`.";
+
+// Keep SWE_WORKER_SYSTEM as pub for rebase_phase reference
+pub const SWE_WORKER_SYSTEM: &str = SWE_IMPLEMENT_SYSTEM;
+
+// ── Seed prompts ─────────────────────────────────────────────────────────
 
 pub(crate) const SEED_REFACTOR: &str = "Identify 1-3 concrete, small improvements in code quality. Look for:\
 \n- Dead code: unused functions, variables, imports, exports, or branches\

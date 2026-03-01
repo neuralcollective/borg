@@ -764,6 +764,35 @@ pub(crate) async fn retry_all_failed(
     Ok(Json(json!({ "requeued": count })))
 }
 
+// Unblock a blocked task
+
+#[derive(Deserialize)]
+pub(crate) struct UnblockBody {
+    pub response: String,
+}
+
+pub(crate) async fn unblock_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<UnblockBody>,
+) -> Result<StatusCode, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(task) if task.status != "blocked" => Err(StatusCode::CONFLICT),
+        Some(_) => {
+            state
+                .db
+                .insert_task_message(id, "user", &body.response)
+                .map_err(internal)?;
+            state
+                .db
+                .update_task_status(id, "implement", None)
+                .map_err(internal)?;
+            Ok(StatusCode::OK)
+        },
+    }
+}
+
 // Task messages
 
 pub(crate) async fn get_task_messages(

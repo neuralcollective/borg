@@ -51,7 +51,7 @@ All config is in `.env` (or process environment). Key variables:
 - **Transport-agnostic messaging**: `Transport` enum (telegram/whatsapp/discord/web) + `Sender` dispatches to the right backend.
 - **Unified sidecar**: Discord and WhatsApp run in a single bun process (`sidecar/bridge.js`) via multiplexed NDJSON over stdin/stdout.
 - **Per-group state machine**: `IDLE → COLLECTING → RUNNING → COOLDOWN → IDLE`. Collection window batches messages.
-- **Pipeline phases**: `backlog → spec → qa → impl → done → release`. Each task gets a git worktree. Impl agents run in Docker containers, rebase agents run on host.
+- **Pipeline phases**: `backlog → implement → validate → lint_fix → rebase → done`. Single agent drives the full creative workflow (explore, test, implement). The pipeline validates independently (runs tests), then handles mechanical steps (lint, rebase, merge). Agents can signal back: `blocked` (pauses for human input) or `abandon` (marks failed without retrying). After 3 failed retries, sessions reset fresh with a summary of what was tried.
 - **Session persistence**: Per-task session dirs (`store/sessions/task-{id}/`) bind-mounted into Docker containers so agents resume across retries.
 - **Per-repo prompts**: Pipeline agents receive repo-specific context via `.borg/prompt.md` or explicit `prompt_file` in WATCHED_REPOS.
 - **Self-update**: Pipeline detects merges to main on the primary repo, rebuilds, and restarts via `execve`.
