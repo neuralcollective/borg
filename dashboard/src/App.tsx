@@ -28,7 +28,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
       return (
         <div className="flex h-screen items-center justify-center bg-[#09090b] text-zinc-400">
           <div className="max-w-md text-center space-y-3">
-            <p className="text-sm font-medium text-red-400">Something went wrong</p>
+            <p className="text-lg font-semibold text-orange-400">Oh, Borg!</p>
             <pre className="text-xs text-zinc-600 whitespace-pre-wrap">{(this.state.error as Error).message}</pre>
             <button onClick={() => this.setState({ error: null })} className="text-xs text-zinc-500 hover:text-zinc-300 underline">
               Try again

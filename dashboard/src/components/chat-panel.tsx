@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { Mic, MicOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDictation } from "@/lib/dictation";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -148,6 +150,10 @@ export function ChatPanel() {
     setShowThreads(false);
   }
 
+  const dictation = useDictation((transcript) => {
+    setInput((prev) => (prev ? prev + " " + transcript : transcript));
+  });
+
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -224,6 +230,20 @@ export function ChatPanel() {
               "focus:border-white/[0.15] focus:outline-none"
             )}
           />
+          {dictation.supported && (
+            <button
+              onClick={dictation.toggle}
+              title={dictation.listening ? "Stop dictation" : "Start dictation"}
+              className={cn(
+                "shrink-0 rounded-lg px-2.5 py-2.5 md:py-2 transition-colors",
+                dictation.listening
+                  ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                  : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+              )}
+            >
+              {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </button>
+          )}
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending}
