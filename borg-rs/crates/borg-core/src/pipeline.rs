@@ -429,6 +429,7 @@ impl Pipeline {
         match phase.phase_type {
             PhaseType::Setup => self.setup_branch(&task, &mode).await?,
             PhaseType::Agent => self.run_agent_phase(&task, &phase, &mode).await?,
+            PhaseType::Validate => self.run_validate_phase(&task, &phase, &mode).await?,
             PhaseType::Rebase => self.run_rebase_phase(&task, &phase, &mode).await?,
             PhaseType::LintFix => self.run_lint_fix_phase(&task, &phase, &mode).await?,
         }
@@ -654,6 +655,49 @@ impl Pipeline {
             ),
         });
 
+        // Read agent signal from .borg/signal.json (if present).
+        let signal = Self::read_agent_signal(&wt_path);
+        if !signal.reason.is_empty() {
+            info!(
+                "task #{} signal: status={} reason={}",
+                task.id, signal.status, signal.reason
+            );
+        }
+
+        // Handle abandon signal: mark failed immediately, don't burn retry budget.
+        if signal.is_abandon() {
+            let reason = if signal.reason.is_empty() {
+                "agent abandoned task".to_string()
+            } else {
+                format!("agent abandoned: {}", signal.reason)
+            };
+            self.db
+                .update_task_status(task.id, "failed", Some(&reason))?;
+            self.cleanup_worktree(task);
+            return Ok(());
+        }
+
+        // Handle blocked signal: pause task, don't retry.
+        if signal.is_blocked() {
+            let reason = if signal.reason.is_empty() {
+                "agent blocked (no reason given)".to_string()
+            } else {
+                signal.reason.clone()
+            };
+            let block_detail = if signal.question.is_empty() {
+                reason.clone()
+            } else {
+                format!("{}\n\nQuestion: {}", reason, signal.question)
+            };
+            self.db
+                .update_task_status(task.id, "blocked", Some(&block_detail))?;
+            self.emit(PipelineEvent::Phase {
+                task_id: Some(task.id),
+                message: format!("task #{} blocked: {}", task.id, reason),
+            });
+            return Ok(());
+        }
+
         // Never advance on a failed agent run; retry the same logical phase path.
         if !result.success {
             let error_msg = if result.output.trim().is_empty() {
@@ -739,6 +783,83 @@ impl Pipeline {
         }
 
         self.advance_phase(task, phase, mode)?;
+        Ok(())
+    }
+
+    /// Read `.borg/signal.json` from the worktree. Returns default (done) if missing or malformed.
+    fn read_agent_signal(wt_path: &str) -> crate::types::AgentSignal {
+        let path = format!("{wt_path}/.borg/signal.json");
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                // Clean up the signal file so it doesn't carry over to next run
+                std::fs::remove_file(&path).ok();
+                serde_json::from_str(&contents).unwrap_or_default()
+            },
+            Err(_) => crate::types::AgentSignal::default(),
+        }
+    }
+
+    /// Run a validate phase: execute test/compile commands independently, loop back on failure.
+    async fn run_validate_phase(
+        &self,
+        task: &Task,
+        phase: &PhaseConfig,
+        mode: &PipelineMode,
+    ) -> Result<()> {
+        let wt_path = if mode.uses_git_worktrees {
+            format!("{}/.worktrees/task-{}", task.repo_path, task.id)
+        } else {
+            task.repo_path.clone()
+        };
+
+        let test_cmd = self.repo_config(task).test_cmd;
+        if test_cmd.is_empty() {
+            self.advance_phase(task, phase, mode)?;
+            info!("task #{} validate: no test command, skipping", task.id);
+            return Ok(());
+        }
+
+        // Compile check first (if derivable from test command)
+        if let Some(check_cmd) = Self::derive_compile_check(&test_cmd) {
+            match self.run_test_command(&wt_path, &check_cmd).await {
+                Ok(ref out) if out.exit_code != 0 => {
+                    let error_msg = format!("{}\n{}", out.stdout, out.stderr);
+                    info!("task #{} validate: compile check failed", task.id);
+                    let retry_status = if phase.retry_phase.is_empty() {
+                        &phase.name
+                    } else {
+                        &phase.retry_phase
+                    };
+                    self.fail_or_retry(task, retry_status, error_msg.trim())?;
+                    return Ok(());
+                },
+                Err(e) => warn!("task #{} validate: compile check error: {e}", task.id),
+                _ => {},
+            }
+        }
+
+        // Run the full test suite
+        match self.run_test_command(&wt_path, &test_cmd).await {
+            Ok(ref out) if out.exit_code == 0 => {
+                info!("task #{} validate: all tests pass", task.id);
+                self.advance_phase(task, phase, mode)?;
+            },
+            Ok(out) => {
+                let error_msg = format!("{}\n{}", out.stdout, out.stderr);
+                info!("task #{} validate: tests failed", task.id);
+                let retry_status = if phase.retry_phase.is_empty() {
+                    &phase.name
+                } else {
+                    &phase.retry_phase
+                };
+                self.fail_or_retry(task, retry_status, error_msg.trim())?;
+            },
+            Err(e) => {
+                warn!("task #{} validate: test command error: {e}", task.id);
+                self.advance_phase(task, phase, mode)?;
+            },
+        }
+
         Ok(())
     }
 

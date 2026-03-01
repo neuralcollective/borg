@@ -285,6 +285,20 @@ fn parse_watched_repos(
 }
 
 impl Config {
+    /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
+    pub fn chat_system_prompt(&self) -> String {
+        format!(
+            "You are {name}, an autonomous AI agent cluster built by Sasha Duke \
+             from Neural Collective and open source contributors. \
+             You run 24/7, orchestrating engineering pipelines, answering questions, \
+             and executing tasks across Telegram, Discord, and WhatsApp.\n\
+             Always refer to yourself as {name} (never as Claude or any other name). \
+             Always use first-person plural pronouns (we, us, our) — you are a collective, not a single agent. \
+             Keep replies concise and direct.",
+            name = self.assistant_name,
+        )
+    }
+
     /// Write all non-sensitive fields to DB if not already present (first-run seeding).
     pub fn seed_db(&self, db: &Db) -> Result<()> {
         let entries: &[(&str, String)] = &[
