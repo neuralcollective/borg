@@ -207,9 +207,9 @@ function AppInner() {
   // Desktop layout
   return (
     <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
-      {/* Sidebar nav */}
-      <nav className="flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#09090b] pb-3">
-        <div className="borg-logo mb-3 w-full bg-orange-500 aspect-square">
+      {/* Sidebar nav — expands on hover */}
+      <nav className="group/nav flex w-[52px] hover:w-[160px] shrink-0 flex-col items-start border-r border-white/[0.06] bg-[#09090b] pb-3 transition-[width] duration-200 overflow-hidden">
+        <div className="borg-logo mb-3 w-[52px] shrink-0 bg-orange-500 aspect-square">
           <BorgLogo />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
             {"BORG".split("").map((c, i) => (
@@ -218,7 +218,7 @@ function AppInner() {
           </div>
         </div>
 
-        <div className="flex flex-1 flex-col items-center gap-1">
+        <div className="flex flex-1 flex-col items-start gap-1 w-full px-1.5">
           {navItems.map(({ key, label, Icon }) => (
             <button
               key={key}
@@ -226,13 +226,14 @@ function AppInner() {
               title={label}
               aria-label={label}
               className={cn(
-                "group relative flex h-9 w-9 items-center justify-center rounded-lg transition-all",
+                "group relative flex h-9 w-full items-center gap-2.5 rounded-lg px-[9px] transition-all",
                 view === key
                   ? "bg-white/[0.1] text-zinc-100"
                   : "text-zinc-600 hover:bg-white/[0.05] hover:text-zinc-400"
               )}
             >
-              <Icon className="h-[18px] w-[18px]" strokeWidth={view === key ? 2 : 1.5} />
+              <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={view === key ? 2 : 1.5} />
+              <span className="truncate text-[12px] font-medium opacity-0 group-hover/nav:opacity-100 transition-opacity duration-200">{label}</span>
               {view === key && (
                 <div className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r bg-blue-400" />
               )}
@@ -241,7 +242,7 @@ function AppInner() {
         </div>
 
         {/* Status indicator at bottom */}
-        <div className="mt-auto flex flex-col items-center gap-2">
+        <div className="mt-auto flex flex-col items-center gap-2 w-[52px] shrink-0">
           {(status?.dispatched_agents ?? 0) > 0 && (
             <div className="flex h-5 w-5 items-center justify-center" title={`${status?.dispatched_agents} active agent(s)`}>
               <span className="text-[10px] font-bold tabular-nums text-blue-400">{status?.dispatched_agents}</span>
