@@ -207,9 +207,7 @@ export function ChatPanel() {
     setShowThreads(false);
   }
 
-  const dictation = useDictation((transcript) => {
-    setInput((prev) => (prev ? prev + " " + transcript : transcript));
-  });
+  const dictation = useDictation(input, setInput);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {

@@ -1,7 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  [index: number]: { transcript: string };
+}
+
 interface SpeechRecognitionEvent {
-  results: { [index: number]: { [index: number]: { transcript: string } }; length: number };
+  results: { [index: number]: SpeechRecognitionResult; length: number };
   resultIndex: number;
 }
 
@@ -24,12 +29,15 @@ function getSpeechRecognition(): SpeechRecognitionConstructor | null {
   return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as SpeechRecognitionConstructor | null;
 }
 
-export function useDictation(onTranscript: (text: string) => void) {
+export function useDictation(currentInput: string, setInput: (value: string) => void) {
   const [listening, setListening] = useState(false);
   const [supported] = useState(() => getSpeechRecognition() !== null);
   const recRef = useRef<SpeechRecognitionInstance | null>(null);
-  const onTranscriptRef = useRef(onTranscript);
-  onTranscriptRef.current = onTranscript;
+  const baseRef = useRef("");
+  const inputRef = useRef(currentInput);
+  inputRef.current = currentInput;
+  const setInputRef = useRef(setInput);
+  setInputRef.current = setInput;
 
   useEffect(() => {
     return () => recRef.current?.abort();
@@ -44,19 +52,31 @@ export function useDictation(onTranscript: (text: string) => void) {
     const Ctor = getSpeechRecognition();
     if (!Ctor) return;
 
+    baseRef.current = inputRef.current;
+
     const rec = new Ctor();
     rec.continuous = true;
-    rec.interimResults = false;
+    rec.interimResults = true;
     rec.lang = "en-US";
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      const last = e.results[e.results.length - 1];
-      if (last?.[0]?.transcript) {
-        onTranscriptRef.current(last[0].transcript.trim());
+      let finals = "";
+      let interim = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const transcript = e.results[i][0]?.transcript ?? "";
+        if (e.results[i].isFinal) {
+          finals += transcript;
+        } else {
+          interim += transcript;
+        }
       }
+      const dictated = (finals + interim).trim();
+      const base = baseRef.current;
+      setInputRef.current(base ? base + " " + dictated : dictated);
     };
 
     rec.onend = () => {
+      // On end, finalize with only committed text (drop incomplete interim)
       setListening(false);
       recRef.current = null;
     };

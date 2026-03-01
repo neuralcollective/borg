@@ -53,9 +53,7 @@ export function ProjectsPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageInput, setMessageInput] = useState("");
   const [sending, setSending] = useState(false);
-  const dictation = useDictation((transcript) => {
-    setMessageInput((prev) => (prev ? prev + " " + transcript : transcript));
-  });
+  const dictation = useDictation(messageInput, setMessageInput);
   const esRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRetriesRef = useRef(0);

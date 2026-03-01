@@ -41,9 +41,7 @@ export function TaskChat({ taskId }: TaskChatProps) {
     }
   }, [input, sending, sendMessage]);
 
-  const dictation = useDictation((transcript) => {
-    setInput((prev) => (prev ? prev + " " + transcript : transcript));
-  });
+  const dictation = useDictation(input, setInput);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
