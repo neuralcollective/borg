@@ -37,11 +37,11 @@ fn test_web_mode_has_implement_validate_flow() {
 }
 
 #[test]
-fn test_legal_mode_has_research_analyze_draft_review() {
+fn test_legal_mode_has_implement_review() {
     let mode = borg_domains::legal::legal_mode();
     assert_eq!(mode.name, "lawborg");
     let names: Vec<&str> = mode.phases.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, &["backlog", "research", "analyze", "draft", "review"]);
+    assert_eq!(names, &["backlog", "implement", "review"]);
 }
 
 #[test]
