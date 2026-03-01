@@ -10,15 +10,11 @@ logs/
 # Secrets
 .env
 
+# Node modules (global)
+node_modules/
+
 # WhatsApp auth state
 whatsapp/auth/
-whatsapp/node_modules/
-
-# Discord
-discord/node_modules/
-
-# Sidecar
-sidecar/node_modules/
 
 # Pipeline worktrees
 .worktrees/
@@ -27,7 +23,6 @@ sidecar/node_modules/
 spec.md
 
 # Dashboard build artifacts
-dashboard/node_modules/
 dashboard/dist/
 
 # SQLite databases
