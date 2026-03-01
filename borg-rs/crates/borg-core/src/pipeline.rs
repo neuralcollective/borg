@@ -186,6 +186,17 @@ impl Pipeline {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| self.config.container_setup.clone())
         };
+        let mut api_keys = std::collections::HashMap::new();
+        let key_owner = if task.created_by.is_empty() {
+            "global"
+        } else {
+            &task.created_by
+        };
+        for provider in ["lexisnexis", "lexmachina", "intelligize"] {
+            if let Ok(Some(key)) = self.db.get_api_key(key_owner, provider) {
+                api_keys.insert(provider.to_string(), key);
+            }
+        }
         PhaseContext {
             task: task.clone(),
             repo_config: self.repo_config(task),
@@ -198,6 +209,7 @@ impl Pipeline {
             user_coauthor,
             stream_tx: None,
             setup_script,
+            api_keys,
         }
     }
 
@@ -287,6 +299,7 @@ impl Pipeline {
             let pipeline = Arc::clone(&self);
             let inner_pipeline = Arc::clone(&self);
             let task_id = task.id;
+            let task_for_recovery = task.clone();
             tokio::spawn(async move {
                 let handle = tokio::spawn(async move {
                     Arc::clone(&inner_pipeline)
@@ -310,9 +323,13 @@ impl Pipeline {
                             "task cancelled".to_string()
                         };
                         error!("process_task #{task_id} panicked: {msg}");
-                        let _ = pipeline
-                            .db
-                            .update_task_status(task_id, "failed", Some(&format!("panic: {msg}")));
+                        if let Err(e) = pipeline.fail_or_retry(
+                            &task_for_recovery,
+                            &task_for_recovery.status,
+                            &format!("panic: {msg}"),
+                        ) {
+                            error!("process_task #{task_id} panic recovery DB update failed: {e}");
+                        }
                     }
                 }
                 pipeline.in_flight.lock().await.remove(&task_id);
@@ -1053,15 +1070,22 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let next = phase.next.as_str();
         if next == "done" {
             self.db.update_task_status(task.id, "done", None)?;
-            if mode.integration == IntegrationType::GitPr {
-                let branch = format!("task-{}", task.id);
-                if let Err(e) = self.db.enqueue(task.id, &branch, &task.repo_path, 0) {
-                    warn!("enqueue for task #{}: {}", task.id, e);
-                } else {
-                    info!("task #{} done, queued for integration", task.id);
+            match mode.integration {
+                IntegrationType::GitPr => {
+                    let branch = format!("task-{}", task.id);
+                    if let Err(e) = self.db.enqueue(task.id, &branch, &task.repo_path, 0) {
+                        warn!("enqueue for task #{}: {}", task.id, e);
+                    } else {
+                        info!("task #{} done, queued for integration", task.id);
+                    }
                 }
-            } else if mode.uses_git_worktrees {
-                self.cleanup_worktree(task);
+                IntegrationType::GitBranch => {
+                    info!("task #{} done, worktree preserved on branch", task.id);
+                }
+                IntegrationType::None if mode.uses_git_worktrees => {
+                    self.cleanup_worktree(task);
+                }
+                IntegrationType::None => {}
             }
         } else {
             self.db.update_task_status(task.id, next, None)?;

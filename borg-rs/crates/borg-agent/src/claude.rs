@@ -128,6 +128,38 @@ impl AgentBackend for ClaudeBackend {
             claude_args.push(system_prompt);
         }
 
+        // If task has a LexisNexis API key, generate MCP config and pass it
+        let mcp_config_path = if ctx.api_keys.contains_key("lexisnexis") {
+            let mcp_dir = format!("{}/mcp", ctx.session_dir);
+            std::fs::create_dir_all(&mcp_dir).ok();
+            let lexis_mcp_server =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../sidecar/lexis-mcp/server.js")
+                    .canonicalize()
+                    .unwrap_or_default();
+            let config_json = serde_json::json!({
+                "mcpServers": {
+                    "lexisnexis": {
+                        "command": "bun",
+                        "args": ["run", lexis_mcp_server],
+                        "env": {
+                            "LEXISNEXIS_API_KEY": ctx.api_keys.get("lexisnexis").unwrap_or(&String::new()),
+                        }
+                    }
+                }
+            });
+            let config_path = format!("{}/mcp-config.json", mcp_dir);
+            std::fs::write(&config_path, config_json.to_string()).ok();
+            Some(config_path)
+        } else {
+            None
+        };
+
+        if let Some(ref path) = mcp_config_path {
+            claude_args.push("--mcp-config".to_string());
+            claude_args.push(path.clone());
+        }
+
         let session_id = ctx.task.session_id.clone();
         if !session_id.is_empty() && !phase.fresh_session {
             claude_args.push("--resume".to_string());

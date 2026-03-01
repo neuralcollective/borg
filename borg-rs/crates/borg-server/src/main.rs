@@ -198,18 +198,32 @@ async fn main() -> anyhow::Result<()> {
     let pipeline_event_tx = pipeline.event_tx.clone();
     let pipeline = Arc::new(pipeline);
 
-    // Pipeline tick loop — inner spawn catches panics so the loop never dies
+    // Pipeline tick loop — inner spawn catches panics so the loop never dies.
+    // If tick panics repeatedly, exit and let systemd restart with a clean process.
     let tick_secs = config.pipeline_tick_s;
     {
         let pipeline = Arc::clone(&pipeline);
         tokio::spawn(async move {
+            let mut consecutive_panics = 0u32;
             loop {
                 let p = Arc::clone(&pipeline);
                 let handle = tokio::spawn(async move { p.tick().await });
                 match handle.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => tracing::error!("Pipeline tick error: {e}"),
-                    Err(join_err) => tracing::error!("Pipeline tick panicked: {join_err}"),
+                    Ok(Ok(())) => consecutive_panics = 0,
+                    Ok(Err(e)) => {
+                        tracing::error!("Pipeline tick error: {e}");
+                        consecutive_panics = 0;
+                    }
+                    Err(join_err) => {
+                        consecutive_panics += 1;
+                        tracing::error!(
+                            "Pipeline tick panicked ({consecutive_panics}/5): {join_err}"
+                        );
+                        if consecutive_panics >= 5 {
+                            tracing::error!("5 consecutive tick panics — exiting for restart");
+                            std::process::exit(1);
+                        }
+                    }
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(tick_secs)).await;
             }
@@ -685,6 +699,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/:id/backend", put(routes::put_task_backend))
         .route("/api/repos", get(routes::list_repos_handler))
         .route("/api/repos/:id/backend", put(routes::put_repo_backend))
+        // API keys (BYOK)
+        .route("/api/keys", get(routes::list_api_keys))
+        .route("/api/keys", post(routes::store_api_key))
+        .route("/api/keys/:id", delete(routes::delete_api_key))
         // Static dashboard
         .fallback_service(serve_dir)
         .layer(CorsLayer::permissive())

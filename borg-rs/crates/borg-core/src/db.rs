@@ -67,6 +67,15 @@ pub struct ChatMessage {
     pub is_bot_message: bool,
 }
 
+#[derive(serde::Serialize)]
+pub struct ApiKeyEntry {
+    pub id: i64,
+    pub owner: String,
+    pub provider: String,
+    pub key_name: String,
+    pub created_at: String,
+}
+
 pub struct RegisteredGroup {
     pub jid: String,
     pub name: String,
@@ -1512,5 +1521,82 @@ impl Db {
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("get_events_filtered")?;
         Ok(events)
+    }
+
+    // ── API Keys (BYOK) ──────────────────────────────────────────────────
+
+    pub fn store_api_key(
+        &self,
+        owner: &str,
+        provider: &str,
+        key_name: &str,
+        key_value: &str,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Upsert: if same owner+provider exists, update
+        conn.execute(
+            "DELETE FROM api_keys WHERE owner = ?1 AND provider = ?2",
+            params![owner, provider],
+        )?;
+        conn.execute(
+            "INSERT INTO api_keys (owner, provider, key_name, key_value) VALUES (?1, ?2, ?3, ?4)",
+            params![owner, provider, key_name, key_value],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_api_key(&self, owner: &str, provider: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Try owner-specific first, then fall back to global
+        let result = conn
+            .query_row(
+                "SELECT key_value FROM api_keys WHERE owner = ?1 AND provider = ?2",
+                params![owner, provider],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("get_api_key")?;
+        if result.is_some() {
+            return Ok(result);
+        }
+        if owner != "global" {
+            let global = conn
+                .query_row(
+                    "SELECT key_value FROM api_keys WHERE owner = 'global' AND provider = ?1",
+                    params![provider],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .context("get_api_key global fallback")?;
+            return Ok(global);
+        }
+        Ok(None)
+    }
+
+    pub fn list_api_keys(&self, owner: &str) -> Result<Vec<ApiKeyEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, owner, provider, key_name, created_at FROM api_keys \
+             WHERE owner = ?1 OR owner = 'global' ORDER BY provider",
+        )?;
+        let keys = stmt
+            .query_map(params![owner], |row| {
+                Ok(ApiKeyEntry {
+                    id: row.get(0)?,
+                    owner: row.get(1)?,
+                    provider: row.get(2)?,
+                    key_name: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_api_keys")?;
+        Ok(keys)
+    }
+
+    pub fn delete_api_key(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id])?;
+        Ok(())
     }
 }

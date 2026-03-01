@@ -1044,6 +1044,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 user_coauthor: String::new(),
                 stream_tx: None,
                 setup_script: String::new(),
+                api_keys: std::collections::HashMap::new(),
             };
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
@@ -1621,4 +1622,42 @@ pub(crate) async fn get_task_outputs_handler(
             Ok(Json(json!({ "outputs": outputs_json })))
         },
     }
+}
+
+// ── API Keys (BYOK) ──────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct StoreKeyBody {
+    pub provider: String,
+    pub key_name: Option<String>,
+    pub key_value: String,
+    pub owner: Option<String>,
+}
+
+pub(crate) async fn list_api_keys(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let keys = state.db.list_api_keys("global").map_err(internal)?;
+    Ok(Json(json!({ "keys": keys })))
+}
+
+pub(crate) async fn store_api_key(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<StoreKeyBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let owner = body.owner.as_deref().unwrap_or("global");
+    let key_name = body.key_name.as_deref().unwrap_or("");
+    let id = state
+        .db
+        .store_api_key(owner, &body.provider, key_name, &body.key_value)
+        .map_err(internal)?;
+    Ok(Json(json!({ "id": id })))
+}
+
+pub(crate) async fn delete_api_key(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    state.db.delete_api_key(id).map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
 }

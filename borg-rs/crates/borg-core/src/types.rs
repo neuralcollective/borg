@@ -48,7 +48,9 @@ impl Default for PhaseType {
 pub enum IntegrationType {
     /// Creates GitHub PRs and manages merge queue.
     GitPr,
-    /// No VCS integration (e.g. legal/document pipelines).
+    /// Commits to a branch but no PR — worktree kept for versioned document history.
+    GitBranch,
+    /// No VCS integration.
     None,
 }
 
@@ -360,6 +362,8 @@ pub struct PhaseContext {
     pub stream_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// Absolute path to a setup script to source at container start (mounted as /workspace/setup.sh).
     pub setup_script: String,
+    /// Per-task API keys (provider → key_value), looked up from DB at dispatch time.
+    pub api_keys: std::collections::HashMap<String, String>,
 }
 
 /// Output produced by a phase executor.

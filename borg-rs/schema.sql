@@ -197,6 +197,18 @@ CREATE TABLE IF NOT EXISTS config (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ── API keys (BYOK) ──────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner TEXT NOT NULL DEFAULT 'global',   -- chat_key, org name, or 'global'
+  provider TEXT NOT NULL,                 -- e.g. 'lexisnexis', 'lexmachina', 'intelligize'
+  key_name TEXT NOT NULL DEFAULT '',      -- human label for the key
+  key_value TEXT NOT NULL,                -- the actual API key / token
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner, provider);
+
 -- ── Misc / legacy ─────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS state (
