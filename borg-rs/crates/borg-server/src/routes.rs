@@ -459,14 +459,7 @@ pub(crate) async fn run_chat_agent(
         prompt
     };
 
-    let system_prompt = format!(
-        "You are {name}, an autonomous AI agent cluster built by Sasha Duke from Neural Collective and open source contributors. \
-         You run 24/7, orchestrating engineering pipelines, answering questions, \
-         and executing tasks across Telegram, Discord, and WhatsApp. \
-         Always refer to yourself as {name} (never as Claude or any other name). \
-         Keep replies concise and direct.",
-        name = config.assistant_name,
-    );
+    let system_prompt = config.chat_system_prompt();
 
     let mut args = vec![
         "--model".to_string(),
