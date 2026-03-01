@@ -142,7 +142,6 @@ export interface PhaseConfigFull {
   check_artifact: string | null;
   allow_no_changes: boolean;
   next: string;
-  has_qa_fix_routing: boolean;
   fresh_session: boolean;
   fix_instruction: string;
 }

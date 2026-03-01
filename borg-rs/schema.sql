@@ -22,9 +22,9 @@ CREATE TABLE IF NOT EXISTS registered_groups (
   jid TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   folder TEXT NOT NULL UNIQUE,
-  trigger_pattern TEXT DEFAULT '@Borg',
-  added_at TEXT DEFAULT (datetime('now')),
-  requires_trigger INTEGER DEFAULT 1
+  trigger_pattern TEXT NOT NULL DEFAULT '@Borg',
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  requires_trigger INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   cron_expr TEXT NOT NULL,
   next_run TEXT,
   last_run TEXT,
-  enabled INTEGER DEFAULT 1
+  enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS chat_agent_runs (
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS chat_agent_runs (
   output TEXT DEFAULT '',
   new_session_id TEXT DEFAULT '',
   last_msg_timestamp TEXT DEFAULT '',
-  started_at TEXT DEFAULT (datetime('now')),
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_runs_jid ON chat_agent_runs(jid, status);
@@ -90,11 +90,12 @@ CREATE TABLE IF NOT EXISTS pipeline_tasks (
   session_id TEXT NOT NULL DEFAULT '',
   mode TEXT NOT NULL DEFAULT 'sweborg',
   backend TEXT,                  -- backend that actually ran this task
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_status ON pipeline_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_pipeline_repo ON pipeline_tasks(repo_path);
+CREATE INDEX IF NOT EXISTS idx_pipeline_repo_status ON pipeline_tasks(repo_id, status);
 
 -- Statuses: backlog → implement → validate → lint_fix → rebase → done → merged
 --           review, pending_review (mode-specific)
@@ -109,7 +110,7 @@ CREATE TABLE IF NOT EXISTS integration_queue (
   error_msg TEXT DEFAULT '',
   unknown_retries INTEGER DEFAULT 0,
   pr_number INTEGER DEFAULT 0,
-  queued_at TEXT DEFAULT (datetime('now'))
+  queued_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_integration_queue_status ON integration_queue(status);
 
@@ -120,7 +121,7 @@ CREATE TABLE IF NOT EXISTS task_outputs (
   output TEXT NOT NULL,
   raw_stream TEXT DEFAULT '',    -- full NDJSON agent stream
   exit_code INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_task_outputs_task ON task_outputs(task_id);
 
@@ -140,7 +141,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   triage_risk INTEGER DEFAULT 0,
   triage_effort INTEGER DEFAULT 0,
   triage_reasoning TEXT DEFAULT '',
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, triage_score);
 CREATE INDEX IF NOT EXISTS idx_proposals_repo ON proposals(repo_path);

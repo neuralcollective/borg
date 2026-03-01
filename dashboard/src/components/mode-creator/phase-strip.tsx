@@ -73,13 +73,6 @@ export function PhaseStrip({
       if (targetIdx !== undefined && targetIdx <= i) {
         edges.push({ fromIndex: i, toIndex: targetIdx, label: phase.next });
       }
-      // qa_fix routing creates an implicit loop
-      if (phase.has_qa_fix_routing) {
-        const qafIdx = nameToIndex.get("qa_fix");
-        if (qafIdx !== undefined && qafIdx > i) {
-          // Forward to qa_fix, but qa_fix loops back — already captured by qa_fix's next
-        }
-      }
     }
     return edges;
   }, [phases, nameToIndex]);

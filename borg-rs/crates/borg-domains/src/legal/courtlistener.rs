@@ -27,7 +27,7 @@ impl CourtListenerClient {
     pub async fn search_opinions(&self, query: &str, court: Option<&str>) -> Result<SearchResult> {
         let mut url = format!("{BASE}/search/?q={}&type=o", urlencoding::encode(query));
         if let Some(c) = court {
-            url.push_str(&format!("&court={c}"));
+            url.push_str(&format!("&court={}", urlencoding::encode(c)));
         }
         Ok(self.http.get(&url).send().await?.error_for_status()?.json().await?)
     }

@@ -21,7 +21,7 @@ export function PhaseDetail({
   useEffect(() => {
     setShowError(!!phase.error_instruction);
     setShowFix(!!phase.fix_instruction);
-  }, [phase.name]);
+  }, [phase.name, phase.error_instruction, phase.fix_instruction]);
 
   const isAgent = phase.phase_type === "agent" || phase.phase_type === "rebase";
 
@@ -154,8 +154,6 @@ export function PhaseDetail({
             onChange={(v) => onChange({ commits: v })} />
           <FlagToggle label="Allow No Changes" checked={phase.allow_no_changes} disabled={readOnly}
             onChange={(v) => onChange({ allow_no_changes: v })} />
-          <FlagToggle label="QA Fix Routing" checked={phase.has_qa_fix_routing} disabled={readOnly}
-            onChange={(v) => onChange({ has_qa_fix_routing: v })} />
           <FlagToggle label="Fresh Session" checked={phase.fresh_session} disabled={readOnly}
             onChange={(v) => onChange({ fresh_session: v })} />
         </div>

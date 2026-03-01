@@ -42,7 +42,6 @@ export const DEFAULT_PHASE: PhaseConfigFull = {
   check_artifact: null,
   allow_no_changes: false,
   next: "done",
-  has_qa_fix_routing: false,
   fresh_session: false,
   fix_instruction: "",
 };

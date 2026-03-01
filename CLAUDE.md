@@ -17,7 +17,7 @@ borg-rs/                # Rust implementation (active codebase)
     borg-core/          # Pipeline, DB, config, agent traits, modes
     borg-agent/         # Claude + Ollama agent backends
     borg-server/        # Axum HTTP server, routes, logging
-    borg-domains/       # Domain-specific pipeline modes (swe, legal, web, crew, sales, data)
+    borg-domains/       # Domain-specific pipeline modes (swe, legal, web, crew, sales, data, chef)
 container/
   Dockerfile            # Pipeline agent image (bun + claude CLI)
   entrypoint.sh         # Agent entrypoint: parses JSON input, runs claude

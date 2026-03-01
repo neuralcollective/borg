@@ -215,7 +215,7 @@ impl Git {
         let merge = self.exec(worktree_path, &["rev-parse", "--git-path", "rebase-merge"])?;
         let apply = self.exec(worktree_path, &["rev-parse", "--git-path", "rebase-apply"])?;
         if !merge.success() || !apply.success() {
-            return Ok(false);
+            anyhow::bail!("git rev-parse --git-path failed in {worktree_path}");
         }
         let merge_path = std::path::PathBuf::from(merge.stdout.trim());
         let apply_path = std::path::PathBuf::from(apply.stdout.trim());

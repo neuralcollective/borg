@@ -16,19 +16,29 @@ pub struct OllamaBackend {
     pub base_url: String,
     pub model: String,
     pub timeout_secs: u64,
+    http: reqwest::Client,
 }
 
 impl OllamaBackend {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+        let timeout_secs = 300u64;
         Self {
             base_url: base_url.into(),
             model: model.into(),
-            timeout_secs: 300,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .build()
+                .expect("failed to build HTTP client"),
+            timeout_secs,
         }
     }
 
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self.http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(secs))
+            .build()
+            .expect("failed to build HTTP client");
         self
     }
 }
@@ -94,11 +104,7 @@ impl AgentBackend for OllamaBackend {
 
         let url = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(self.timeout_secs))
-            .build()?;
-
-        let response = match client.post(&url).json(&request_body).send().await {
+        let response = match self.http.post(&url).json(&request_body).send().await {
             Ok(r) => r,
             Err(e) if e.is_timeout() => {
                 warn!(

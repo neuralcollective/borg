@@ -106,10 +106,10 @@ impl CognitiveClient {
             .error_for_status()?
             .json()
             .await?;
-        Ok(resp["translated_text"]
+        resp["translated_text"]
             .as_str()
-            .unwrap_or("")
-            .to_string())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("translation response missing 'translated_text' field"))
     }
 
     /// Detect and redact PII from text.

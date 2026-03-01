@@ -1361,7 +1361,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         }
         let script = format!("{wt_path}/.borg/lint.sh");
         if std::path::Path::new(&script).exists() {
-            return Some(format!("bash {script}"));
+            return Some(format!("bash '{script}'"));
         }
         None
     }
@@ -2191,7 +2191,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             }
         }
         let tail = if stderr.len() > 500 {
-            &stderr[stderr.len() - 500..]
+            &stderr[stderr.floor_char_boundary(stderr.len() - 500)..]
         } else {
             stderr
         };
