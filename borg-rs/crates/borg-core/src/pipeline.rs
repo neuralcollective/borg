@@ -441,9 +441,9 @@ impl Pipeline {
             },
         };
 
-        // Rate-limit agent phases (anything that spawns a Claude subprocess).
-        // Setup phases are cheap git ops — no cooldown needed.
-        if phase.phase_type != PhaseType::Setup {
+        // Rate-limit only agent phases (spawns a Claude subprocess).
+        // Setup, Validate, LintFix, and Rebase are local ops — no cooldown needed.
+        if phase.phase_type == PhaseType::Agent {
             let cooldown = self.config.pipeline_agent_cooldown_s;
             if cooldown > 0 {
                 let now = Utc::now().timestamp();
