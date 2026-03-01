@@ -240,7 +240,8 @@ impl AgentBackend for ClaudeBackend {
                     .context("failed to spawn docker")?
             },
             SandboxMode::Direct => {
-                let path = std::env::var("PATH").unwrap_or_default();
+                let path = std::env::var("PATH")
+                    .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
                 let home = std::env::var("HOME").unwrap_or_default();
                 let augmented_path = format!(
                     "{path}:{home}/.local/bin:/usr/local/bin"

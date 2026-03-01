@@ -338,6 +338,7 @@ rl.on('line', async (line) => {
 
 rl.on('close', () => {
   if (discordClient) discordClient.destroy();
+  if (waSock) waSock.end();
   process.exit(0);
 });
 

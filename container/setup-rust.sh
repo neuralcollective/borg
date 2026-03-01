@@ -7,6 +7,6 @@ if command -v cargo &>/dev/null; then
 fi
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --quiet 2>/dev/null
+    | sh -s -- -y --no-modify-path --quiet
 
 export PATH="$HOME/.cargo/bin:$PATH"

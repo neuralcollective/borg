@@ -224,6 +224,7 @@ function AppInner() {
               key={key}
               onClick={() => setView(key)}
               title={label}
+              aria-label={label}
               className={cn(
                 "group relative flex h-9 w-9 items-center justify-center rounded-lg transition-all",
                 view === key

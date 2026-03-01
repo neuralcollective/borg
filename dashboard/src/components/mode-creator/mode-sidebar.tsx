@@ -125,6 +125,7 @@ export function ModeSidebar({
                       e.stopPropagation();
                       onDelete(m.name);
                     }}
+                    aria-label={`Delete mode ${m.label || m.name}`}
                     className="mr-1 hidden rounded px-1 py-0.5 text-[10px] text-zinc-600 hover:bg-red-500/20 hover:text-red-400 group-hover:block"
                   >
                     &times;

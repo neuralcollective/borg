@@ -225,6 +225,7 @@ export function PhaseStrip({
               <button
                 onClick={() => { if (selectedIndex > 0) onMove(selectedIndex, selectedIndex - 1); }}
                 disabled={selectedIndex <= 0}
+                aria-label="Move phase left"
                 className="rounded-md bg-white/[0.06] px-2 py-1 text-[11px] text-zinc-400 hover:bg-white/[0.1] disabled:opacity-30"
               >
                 &larr;
@@ -232,6 +233,7 @@ export function PhaseStrip({
               <button
                 onClick={() => { if (selectedIndex < phases.length - 1) onMove(selectedIndex, selectedIndex + 1); }}
                 disabled={selectedIndex >= phases.length - 1}
+                aria-label="Move phase right"
                 className="rounded-md bg-white/[0.06] px-2 py-1 text-[11px] text-zinc-400 hover:bg-white/[0.1] disabled:opacity-30"
               >
                 &rarr;

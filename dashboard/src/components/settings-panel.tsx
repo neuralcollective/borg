@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useSettings, useStatus, updateSettings, useRepos, setRepoBackend, type Settings } from "@/lib/api";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
 import { useQueryClient } from "@tanstack/react-query";
@@ -21,6 +21,11 @@ export function SettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Partial<Settings>>({});
   const [saved, setSaved] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); };
+  }, []);
 
   const effective = settings ? { ...settings, ...draft } : null;
   const hasDraft = Object.keys(draft).length > 0;
@@ -34,7 +39,8 @@ export function SettingsPanel() {
       queryClient.invalidateQueries({ queryKey: ["status"] });
       setDraft({});
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
     } finally {
       setSaving(false);
     }

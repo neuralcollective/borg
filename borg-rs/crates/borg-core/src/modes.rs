@@ -8,7 +8,9 @@ static MODES: OnceLock<Vec<PipelineMode>> = OnceLock::new();
 /// `get_mode` / `all_modes` calls. Typically called from the server binary
 /// with the modes provided by `borg_domains::all_modes()`.
 pub fn register_modes(modes: Vec<PipelineMode>) {
-    MODES.set(modes).ok();
+    if MODES.set(modes).is_err() {
+        tracing::warn!("register_modes called more than once; subsequent call ignored");
+    }
 }
 
 pub fn all_modes() -> Vec<PipelineMode> {

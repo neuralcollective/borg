@@ -57,13 +57,15 @@ class RateLimiter {
 }
 
 const rateLimiters = [
-  { test: url => url.includes("courtlistener.com"),  limiter: new RateLimiter(5000, 3600000), label: "CourtListener" },
-  { test: url => url.includes("sec.gov"),             limiter: new RateLimiter(10, 1000),      label: "EDGAR/SEC" },
-  { test: url => url.includes("regulations.gov"),     limiter: new RateLimiter(500, 3600000),   label: "regulations.gov" },
-  { test: url => url.includes("congress.gov"),         limiter: new RateLimiter(1000, 3600000),  label: "Congress.gov" },
-  { test: url => url.includes("canlii.org"),           limiter: new RateLimiter(300, 3600000),   label: "CanLII" },
-  { test: url => url.includes("openstates.org"),       limiter: new RateLimiter(600, 3600000),   label: "Open States" },
-  { test: url => url.includes("eur-lex.europa.eu"),   limiter: new RateLimiter(60, 60000),      label: "EUR-Lex" },
+  { test: url => url.includes("courtlistener.com"),    limiter: new RateLimiter(5000, 3600000), label: "CourtListener" },
+  { test: url => url.includes("sec.gov"),               limiter: new RateLimiter(10, 1000),      label: "EDGAR/SEC" },
+  { test: url => url.includes("federalregister.gov"),   limiter: new RateLimiter(1000, 3600000), label: "Federal Register" },
+  { test: url => url.includes("legislation.gov.uk"),    limiter: new RateLimiter(60, 60000),     label: "UK Legislation" },
+  { test: url => url.includes("regulations.gov"),       limiter: new RateLimiter(500, 3600000),  label: "regulations.gov" },
+  { test: url => url.includes("congress.gov"),           limiter: new RateLimiter(1000, 3600000), label: "Congress.gov" },
+  { test: url => url.includes("canlii.org"),             limiter: new RateLimiter(300, 3600000),  label: "CanLII" },
+  { test: url => url.includes("openstates.org"),         limiter: new RateLimiter(600, 3600000),  label: "Open States" },
+  { test: url => url.includes("eur-lex.europa.eu"),     limiter: new RateLimiter(60, 60000),     label: "EUR-Lex" },
 ];
 
 function checkRateLimit(url) {

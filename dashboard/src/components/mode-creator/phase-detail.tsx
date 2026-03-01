@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { PhaseConfigFull, PhaseType } from "@/lib/types";
 import { AutoTextarea } from "./auto-textarea";
 import { ToolChips } from "./tool-chips";
@@ -17,6 +17,11 @@ export function PhaseDetail({
 }) {
   const [showError, setShowError] = useState(!!phase.error_instruction);
   const [showFix, setShowFix] = useState(!!phase.fix_instruction);
+
+  useEffect(() => {
+    setShowError(!!phase.error_instruction);
+    setShowFix(!!phase.fix_instruction);
+  }, [phase.name]);
 
   const isAgent = phase.phase_type === "agent" || phase.phase_type === "rebase";
 

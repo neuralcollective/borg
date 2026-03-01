@@ -7,7 +7,7 @@ import { repoName, isActiveStatus, type TaskOutput } from "@/lib/types";
 import { useUIMode } from "@/lib/ui-mode";
 import { cn } from "@/lib/utils";
 import { formatToolInput, parseRawStream } from "@/lib/stream-utils";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { ArrowLeft, RotateCcw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -38,6 +38,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         <div className="flex items-start gap-3">
           <button
             onClick={onBack}
+            aria-label="Back"
             className="mt-0.5 rounded-md p-1 text-zinc-600 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 md:hidden"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -274,6 +275,11 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
   const { mode: uiMode } = useUIMode();
   const [viewMode, setViewMode] = useState<"summary" | "trace" | "diff">("summary");
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => { if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current); };
+  }, []);
 
   const labeled = useMemo(() => {
     const phaseCounts: Record<string, number> = {};
@@ -362,7 +368,8 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
                 const text = viewMode === "trace" && hasStream ? selected.raw_stream : selected.output;
                 navigator.clipboard.writeText(text || "").then(() => {
                   setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
+                  if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+                  copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
                 });
               }}
               className="rounded-md px-2 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"

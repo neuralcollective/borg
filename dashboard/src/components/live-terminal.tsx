@@ -17,6 +17,7 @@ export function LiveTerminal({ events, streaming }: LiveTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const keyCounterRef = useRef(0);
   const prevLinesRef = useRef<KeyedTermLine[]>([]);
+  const autoScrollRef = useRef(true);
 
   const lines = useMemo(() => {
     const parsed = parseStreamEvents(events);
@@ -30,10 +31,21 @@ export function LiveTerminal({ events, streaming }: LiveTerminalProps) {
   }, [events]);
 
   useEffect(() => {
-    if (bottomRef.current) {
+    if (autoScrollRef.current && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: "instant" });
     }
   }, [lines.length]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      autoScrollRef.current = atBottom;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
   return (
     <div className="flex flex-col h-full rounded-lg border border-white/[0.08] bg-black overflow-hidden">
