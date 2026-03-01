@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 borg-core = { path = "../borg-core" }
+borg-domains = { path = "../borg-domains" }
 borg-agent = { path = "../borg-agent" }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

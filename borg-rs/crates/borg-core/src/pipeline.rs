@@ -285,10 +285,35 @@ impl Pipeline {
 
             dispatched += 1;
             let pipeline = Arc::clone(&self);
+            let inner_pipeline = Arc::clone(&self);
             let task_id = task.id;
             tokio::spawn(async move {
-                if let Err(e) = Arc::clone(&pipeline).process_task(task).await {
-                    error!("process_task #{task_id} error: {e}");
+                let handle = tokio::spawn(async move {
+                    Arc::clone(&inner_pipeline)
+                        .process_task(task)
+                        .await
+                });
+                match handle.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => error!("process_task #{task_id} error: {e}"),
+                    Err(join_err) => {
+                        let msg = if join_err.is_panic() {
+                            let panic = join_err.into_panic();
+                            match panic.downcast_ref::<String>() {
+                                Some(s) => s.clone(),
+                                None => match panic.downcast_ref::<&str>() {
+                                    Some(s) => s.to_string(),
+                                    None => "unknown panic".to_string(),
+                                },
+                            }
+                        } else {
+                            "task cancelled".to_string()
+                        };
+                        error!("process_task #{task_id} panicked: {msg}");
+                        let _ = pipeline
+                            .db
+                            .update_task_status(task_id, "failed", Some(&format!("panic: {msg}")));
+                    }
                 }
                 pipeline.in_flight.lock().await.remove(&task_id);
             });

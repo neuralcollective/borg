@@ -82,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
 
     let env_config = Config::from_env()?;
 
+    borg_core::modes::register_modes(borg_domains::all_modes());
+
     std::fs::create_dir_all(&env_config.data_dir)?;
     let db_path = format!("{}/borg.db", env_config.data_dir);
     let mut db = Db::open(&db_path)?;
@@ -196,14 +198,18 @@ async fn main() -> anyhow::Result<()> {
     let pipeline_event_tx = pipeline.event_tx.clone();
     let pipeline = Arc::new(pipeline);
 
-    // Pipeline tick loop
+    // Pipeline tick loop — inner spawn catches panics so the loop never dies
     let tick_secs = config.pipeline_tick_s;
     {
         let pipeline = Arc::clone(&pipeline);
         tokio::spawn(async move {
             loop {
-                if let Err(e) = Arc::clone(&pipeline).tick().await {
-                    tracing::error!("Pipeline tick error: {e}");
+                let p = Arc::clone(&pipeline);
+                let handle = tokio::spawn(async move { p.tick().await });
+                match handle.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => tracing::error!("Pipeline tick error: {e}"),
+                    Err(join_err) => tracing::error!("Pipeline tick panicked: {join_err}"),
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(tick_secs)).await;
             }

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/borg-core",
+    "crates/borg-domains",
     "crates/borg-server",
     "crates/borg-agent",
 ]

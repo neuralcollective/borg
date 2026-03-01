@@ -185,6 +185,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "borg-domains"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borg-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "borg-server"
 version = "0.1.0"
 dependencies = [
@@ -192,6 +204,7 @@ dependencies = [
  "axum",
  "borg-agent",
  "borg-core",
+ "borg-domains",
  "chrono",
  "serde",
  "serde_json",

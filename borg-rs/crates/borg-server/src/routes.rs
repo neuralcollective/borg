@@ -459,6 +459,15 @@ pub(crate) async fn run_chat_agent(
         prompt
     };
 
+    let system_prompt = format!(
+        "You are {name}, an autonomous AI agent cluster built by Sasha Duke from Neural Collective and open source contributors. \
+         You run 24/7, orchestrating engineering pipelines, answering questions, \
+         and executing tasks across Telegram, Discord, and WhatsApp. \
+         Always refer to yourself as {name} (never as Claude or any other name). \
+         Keep replies concise and direct.",
+        name = config.assistant_name,
+    );
+
     let mut args = vec![
         "--model".to_string(),
         config.model.clone(),
@@ -469,6 +478,8 @@ pub(crate) async fn run_chat_agent(
         "Read".to_string(),
         "--max-turns".to_string(),
         "10".to_string(),
+        "--append-system-prompt".to_string(),
+        system_prompt,
     ];
 
     let session_id = sessions.lock().await.get(chat_key).cloned();
