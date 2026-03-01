@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Clock, ChevronDown, ChevronUp } from "lucide-react";
+import { Clock, ChevronDown, ChevronUp, Mic, MicOff } from "lucide-react";
 import { useTaskMessages, useSendTaskMessage } from "@/lib/api";
 import type { TaskMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useDictation } from "@/lib/dictation";
 
 interface TaskChatProps {
   taskId: number;
@@ -60,6 +61,10 @@ export function TaskChat({ taskId }: TaskChatProps) {
       // error surfaced via mutation state if needed
     }
   }, [input, sending, sendMessage]);
+
+  const dictation = useDictation((transcript) => {
+    setInput((prev) => (prev ? prev + " " + transcript : transcript));
+  });
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -122,6 +127,20 @@ export function TaskChat({ taskId }: TaskChatProps) {
                   "focus:border-white/[0.15] focus:outline-none"
                 )}
               />
+              {dictation.supported && (
+                <button
+                  onClick={dictation.toggle}
+                  title={dictation.listening ? "Stop dictation" : "Start dictation"}
+                  className={cn(
+                    "shrink-0 rounded-lg px-2 py-2 transition-colors",
+                    dictation.listening
+                      ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                      : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+                  )}
+                >
+                  {dictation.listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                </button>
+              )}
               <button
                 onClick={handleSend}
                 disabled={!input.trim() || sending}
