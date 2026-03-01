@@ -247,7 +247,7 @@ fn parse_watched_repos(
         if entry.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = entry.splitn(4, ':').collect();
+        let parts: Vec<&str> = entry.splitn(5, ':').collect();
         if parts.is_empty() {
             continue;
         }
@@ -255,6 +255,7 @@ fn parse_watched_repos(
         let mut test_cmd = parts.get(1).copied().unwrap_or("").to_string();
         let prompt_file = parts.get(2).copied().unwrap_or("").to_string();
         let mode = parts.get(3).copied().unwrap_or("sweborg").to_string();
+        let lint_cmd = parts.get(4).copied().unwrap_or("").to_string();
 
         let auto_merge = if test_cmd.ends_with("!manual") {
             test_cmd = test_cmd[..test_cmd.len() - "!manual".len()].to_string();
@@ -275,7 +276,7 @@ fn parse_watched_repos(
             mode,
             is_self: false,
             auto_merge,
-            lint_cmd: String::new(),
+            lint_cmd,
             backend: String::new(),
         });
     }

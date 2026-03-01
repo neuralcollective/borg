@@ -125,7 +125,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         </div>
       )}
 
-      {task.last_error && (
+      {task.last_error && task.status === "failed" && (
         <div className="mx-4 mt-3 rounded-lg border border-red-500/20 bg-red-500/[0.05] p-3">
           <pre className="max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
             {task.last_error}
