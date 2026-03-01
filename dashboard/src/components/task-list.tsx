@@ -22,8 +22,10 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   const filtered = repoFilter
     ? tasks?.filter((t) => t.repo_path === repoFilter)
     : tasks;
+  const terminalStatuses = new Set(["merged", "failed"]);
   const active = filtered?.filter((t) => isActiveStatus(t.status)) ?? [];
-  const done = filtered?.filter((t) => !isActiveStatus(t.status)) ?? [];
+  const pending = filtered?.filter((t) => !isActiveStatus(t.status) && !terminalStatuses.has(t.status)) ?? [];
+  const terminal = filtered?.filter((t) => terminalStatuses.has(t.status)) ?? [];
 
   return (
     <div className="flex h-full flex-col">
@@ -60,10 +62,19 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
           {active.map((t) => (
             <TaskRow key={t.id} task={t} isActive showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
-          {done.length > 0 && active.length > 0 && (
+          {pending.length > 0 && active.length > 0 && (
             <div className="mx-3 my-2 h-px bg-white/[0.04]" />
           )}
-          {done.slice(0, 30).map((t) => (
+          {pending.length > 0 && (
+            <div className="px-3 pt-1 pb-0.5 text-[9px] font-medium uppercase tracking-wider text-zinc-600">Pending</div>
+          )}
+          {pending.map((t) => (
+            <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
+          ))}
+          {terminal.length > 0 && (active.length > 0 || pending.length > 0) && (
+            <div className="mx-3 my-2 h-px bg-white/[0.04]" />
+          )}
+          {terminal.slice(0, 30).map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {!filtered?.length && (
