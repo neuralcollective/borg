@@ -117,29 +117,19 @@ impl Git {
             .unwrap_or(false)
     }
 
-    fn auto_stash(&self) -> bool {
-        if !self.is_dirty() {
-            return false;
+    fn require_clean(&self) -> Result<()> {
+        if self.is_dirty() {
+            return Err(anyhow!(
+                "refusing to proceed: working tree in {} has uncommitted changes",
+                self.repo_path
+            ));
         }
-        tracing::warn!("dirty working tree in {}, stashing before git operation", self.repo_path);
-        if let Err(e) = self.exec(&self.repo_path, &["stash", "push", "-m", "borg-auto-stash"]) {
-            tracing::warn!("git stash failed in {}: {e}", self.repo_path);
-        }
-        true
-    }
-
-    fn auto_unstash(&self) {
-        if let Err(e) = self.exec(&self.repo_path, &["stash", "pop"]) {
-            tracing::warn!("git stash pop failed in {}: {e}", self.repo_path);
-        }
+        Ok(())
     }
 
     pub fn checkout(&self, branch: &str) -> Result<()> {
-        let stashed = self.auto_stash();
+        self.require_clean()?;
         let result = self.exec(&self.repo_path, &["checkout", branch])?;
-        if stashed {
-            self.auto_unstash();
-        }
         if !result.success() {
             return Err(anyhow!(
                 "git checkout {branch} failed: {}",
@@ -150,24 +140,13 @@ impl Git {
     }
 
     pub fn pull(&self) -> Result<()> {
-        let stashed = self.auto_stash();
-        // Try fast-forward first; if diverged, reset hard to origin/main
+        self.require_clean()?;
         let result = self.exec(&self.repo_path, &["pull", "--ff-only", "origin", "main"])?;
-        if result.success() {
-            if stashed {
-                self.auto_unstash();
-            }
-            return Ok(());
-        }
-        // Diverged: discard local commits and follow origin
-        let reset = self.exec(&self.repo_path, &["reset", "--hard", "origin/main"])?;
-        if stashed {
-            self.auto_unstash();
-        }
-        if !reset.success() {
+        if !result.success() {
             return Err(anyhow!(
-                "git pull --ff-only then reset --hard both failed: {}",
-                reset.combined_output()
+                "git pull --ff-only failed in {} (local has diverged from origin/main): {}",
+                self.repo_path,
+                result.combined_output()
             ));
         }
         Ok(())
@@ -193,25 +172,6 @@ impl Git {
         if !result.success() {
             return Err(anyhow!(
                 "git branch -D {branch} failed: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn stash(&self) -> Result<()> {
-        let result = self.exec(&self.repo_path, &["stash"])?;
-        if !result.success() {
-            return Err(anyhow!("git stash failed: {}", result.combined_output()));
-        }
-        Ok(())
-    }
-
-    pub fn stash_pop(&self) -> Result<()> {
-        let result = self.exec(&self.repo_path, &["stash", "pop"])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git stash pop failed: {}",
                 result.combined_output()
             ));
         }
@@ -321,33 +281,6 @@ impl Git {
         Ok(result.stdout)
     }
 
-    pub fn merge_delete(&self, branch: &str) -> Result<()> {
-        let checkout = self.exec(&self.repo_path, &["checkout", "main"])?;
-        if !checkout.success() {
-            return Err(anyhow!(
-                "git checkout main failed: {}",
-                checkout.combined_output()
-            ));
-        }
-
-        let merge = self.exec(&self.repo_path, &["merge", "--no-ff", branch])?;
-        if !merge.success() {
-            return Err(anyhow!(
-                "git merge --no-ff {branch} failed: {}",
-                merge.combined_output()
-            ));
-        }
-
-        let delete = self.exec(&self.repo_path, &["branch", "-D", branch])?;
-        if !delete.success() {
-            return Err(anyhow!(
-                "git branch -D {branch} failed: {}",
-                delete.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
     pub fn status_clean(&self, dir: &str) -> Result<bool> {
         let result = self.exec(dir, &["status", "--porcelain"])?;
         Ok(result.stdout.trim().is_empty() && result.exit_code == 0)
@@ -392,17 +325,6 @@ impl Git {
             ));
         }
         Ok(result.stdout)
-    }
-
-    pub fn reset_hard(&self, dir: &str, ref_: &str) -> Result<()> {
-        let result = self.exec(dir, &["reset", "--hard", ref_])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git reset --hard {ref_} failed in {dir}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
     }
 
     pub fn set_author_config(&self, dir: &str, name: &str, email: &str) -> Result<()> {
