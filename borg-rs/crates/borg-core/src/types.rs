@@ -31,6 +31,8 @@ pub enum PhaseType {
     Setup,
     /// Runs an AI agent (direct or in Docker).
     Agent,
+    /// Runs test/compile commands independently; loops back to previous phase on failure.
+    Validate,
     /// Runs a git rebase operation with optional agent fix.
     Rebase,
     /// Runs a lint command; spawns an agent to fix errors if any.
@@ -214,6 +216,9 @@ pub struct PhaseConfig {
 
     /// Instruction passed to the fix agent when rebase fails (rebase phases only).
     pub fix_instruction: String,
+
+    /// Phase to loop back to on validation failure (Validate phases only).
+    pub retry_phase: String,
 }
 
 /// Configuration for a seed scan mode.
@@ -286,6 +291,7 @@ impl Default for PhaseConfig {
             has_qa_fix_routing: false,
             fresh_session: false,
             fix_instruction: String::new(),
+            retry_phase: String::new(),
         }
     }
 }
@@ -338,6 +344,50 @@ impl PipelineEvent {
             | Self::Notify { message, .. } => message,
             Self::PhaseResult { content, .. } => content,
         }
+    }
+}
+
+// ── Agent Signal ─────────────────────────────────────────────────────
+
+/// Signal written by an agent to `.borg/signal.json` before exiting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSignal {
+    /// "done" (default), "blocked", or "abandon".
+    #[serde(default = "AgentSignal::default_status")]
+    pub status: String,
+    /// Free-text reason (required for blocked/abandon).
+    #[serde(default)]
+    pub reason: String,
+    /// Optional question for the human (when blocked).
+    #[serde(default)]
+    pub question: String,
+}
+
+impl Default for AgentSignal {
+    fn default() -> Self {
+        Self {
+            status: "done".into(),
+            reason: String::new(),
+            question: String::new(),
+        }
+    }
+}
+
+impl AgentSignal {
+    fn default_status() -> String {
+        "done".into()
+    }
+
+    pub fn done() -> Self {
+        Self::default()
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        self.status == "blocked"
+    }
+
+    pub fn is_abandon(&self) -> bool {
+        self.status == "abandon"
     }
 }
 

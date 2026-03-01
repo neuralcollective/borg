@@ -14,41 +14,18 @@ pub fn crew_mode() -> PipelineMode {
         integration: IntegrationType::None,
         default_max_attempts: 3,
         phases: vec![
-            setup_phase("source"),
+            setup_phase("implement"),
             PhaseConfig {
                 include_task_context: true,
                 include_file_listing: true,
-                check_artifact: Some("candidates.md".into()),
-                ..agent_phase(
-                    "source",
-                    "Sourcing",
-                    CREW_SOURCE_SYSTEM,
-                    CREW_SOURCE_INSTRUCTION,
-                    "Read,Glob,Grep,Write,WebSearch,WebFetch",
-                    "evaluate",
-                )
-            },
-            PhaseConfig {
                 commits: true,
-                commit_message: "eval: candidate evaluations from crew agent".into(),
+                commit_message: "talent: sourcing and evaluation from crew agent".into(),
                 ..agent_phase(
-                    "evaluate",
-                    "Evaluation",
-                    CREW_EVALUATE_SYSTEM,
-                    CREW_EVALUATE_INSTRUCTION,
+                    "implement",
+                    "Implement",
+                    CREW_IMPLEMENT_SYSTEM,
+                    CREW_IMPLEMENT_INSTRUCTION,
                     "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
-                    "rank",
-                )
-            },
-            PhaseConfig {
-                commits: true,
-                commit_message: "rank: prioritized shortlist from crew agent".into(),
-                ..agent_phase(
-                    "rank",
-                    "Ranking",
-                    CREW_RANK_SYSTEM,
-                    CREW_RANK_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit",
                     "done",
                 )
             },
@@ -82,42 +59,24 @@ pub fn crew_mode() -> PipelineMode {
     }
 }
 
-const CREW_SOURCE_SYSTEM: &str =
-    "You are a talent sourcing agent. Your job is to find real, verifiable\
-\ncandidates that match the brief. Use web search to locate profiles,\
-\nportfolios, GitHub accounts, LinkedIn, personal sites, and relevant\
-\ncommunities. Do not invent candidates — only record those you can verify.";
+const CREW_IMPLEMENT_SYSTEM: &str = "\
+You are an autonomous talent sourcing agent. Source candidates, evaluate them as \
+you go, and produce a ranked shortlist — all in one pass. Use web search to find \
+real, verifiable candidates. Do not invent candidates. Drop poor matches early \
+and stop searching once you have enough quality candidates.";
 
-const CREW_SOURCE_INSTRUCTION: &str = "Read the task brief and search for matching candidates.\
-\nWrite candidates.md containing:\
-\n1. Brief (role, requirements, key criteria)\
-\n2. Sourcing channels searched\
-\n3. Candidate list — for each: name, profile URL(s), location, and why they match\
-\nAim for 10-20 candidates. Prefer quality over quantity.";
+const CREW_IMPLEMENT_INSTRUCTION: &str = "\
+Handle this talent search end-to-end:
+1. Read the task brief (role, requirements, key criteria)
+2. Search for matching candidates via web search, GitHub, LinkedIn, communities
+3. Evaluate each candidate as you find them — score against criteria, note strengths/gaps
+4. Drop poor matches early, keep searching if quality is low
+5. Produce two files:
+   - candidates.md: full list with evaluations (name, profile URLs, scores, strengths, gaps)
+   - shortlist.md: top 5 ranked picks, 5 reserves, not-recommended list, recommended next steps
 
-const CREW_EVALUATE_SYSTEM: &str =
-    "You are a talent evaluation agent. Read candidates.md and do deeper\
-\nresearch on each candidate. Assess fit against the brief criteria.\
-\nBe honest about gaps and uncertainties. Do not inflate scores.";
-
-const CREW_EVALUATE_INSTRUCTION: &str = "Read candidates.md and evaluate each candidate.\
-\nFor each, research their background, work quality, and relevance.\
-\nAppend an evaluation section to candidates.md with:\
-\n- Score (1-10) per key criterion\
-\n- Overall fit score\
-\n- Strengths and gaps\
-\n- Availability signals (if findable)\
-\n- Red flags if any";
-
-const CREW_RANK_SYSTEM: &str = "You are a talent ranking agent. Synthesise the evaluations from\
-\ncandidates.md into a final prioritised shortlist. Be concise and decisive.\
-\nThe shortlist is the deliverable — make it actionable.";
-
-const CREW_RANK_INSTRUCTION: &str = "Read candidates.md with evaluations and produce shortlist.md:\
-\n1. Top picks (ranked 1-5) — name, score, 2-sentence summary, contact/profile link\
-\n2. Reserves (next 5) — brief note on each\
-\n3. Not recommended — list names and one-line reason\
-\n4. Recommended next steps (outreach order, questions to ask)";
+Aim for 10-20 candidates sourced, evaluated inline, with a clear final ranking.\n\
+If the brief is unclear, write {\"status\":\"blocked\",\"reason\":\"...\"} to .borg/signal.json.";
 
 const CREW_SEED_DISCOVERY: &str = "Review the existing candidate pool in this repository.\
 \nIdentify gaps: roles not yet sourced, underrepresented skill sets,\

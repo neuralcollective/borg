@@ -128,23 +128,40 @@ impl AgentBackend for ClaudeBackend {
             claude_args.push(system_prompt);
         }
 
-        // If task has a LexisNexis API key, generate MCP config and pass it
-        let mcp_config_path = if ctx.api_keys.contains_key("lexisnexis") {
+        // For legal mode tasks, always include the unified legal MCP server.
+        // Free tools (CourtListener, EDGAR, etc.) work without keys.
+        // BYOK tools (LexisNexis, Westlaw, etc.) activate when keys are present.
+        let mcp_config_path = if ctx.task.mode == "lawborg" {
             let mcp_dir = format!("{}/mcp", ctx.session_dir);
             std::fs::create_dir_all(&mcp_dir).ok();
-            let lexis_mcp_server =
+            let legal_mcp_server =
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../sidecar/lexis-mcp/server.js")
+                    .join("../../sidecar/legal-mcp/server.js")
                     .canonicalize()
                     .unwrap_or_default();
+            let mut env_vars = serde_json::Map::new();
+            // Pass all available BYOK keys as env vars
+            for (provider, key) in &ctx.api_keys {
+                let env_name = match provider.as_str() {
+                    "lexisnexis" => "LEXISNEXIS_API_KEY",
+                    "westlaw" => "WESTLAW_API_KEY",
+                    "clio" => "CLIO_API_KEY",
+                    "imanage" => "IMANAGE_API_KEY",
+                    "netdocuments" => "NETDOCUMENTS_API_KEY",
+                    "congress" => "CONGRESS_API_KEY",
+                    "openstates" => "OPENSTATES_API_KEY",
+                    "canlii" => "CANLII_API_KEY",
+                    "regulations_gov" => "REGULATIONS_GOV_API_KEY",
+                    _ => continue,
+                };
+                env_vars.insert(env_name.into(), serde_json::Value::String(key.clone()));
+            }
             let config_json = serde_json::json!({
                 "mcpServers": {
-                    "lexisnexis": {
+                    "legal": {
                         "command": "bun",
-                        "args": ["run", lexis_mcp_server],
-                        "env": {
-                            "LEXISNEXIS_API_KEY": ctx.api_keys.get("lexisnexis").unwrap_or(&String::new()),
-                        }
+                        "args": ["run", legal_mcp_server],
+                        "env": env_vars,
                     }
                 }
             });

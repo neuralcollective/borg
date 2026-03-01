@@ -126,7 +126,8 @@ async fn main() -> anyhow::Result<()> {
             .filter(|t| {
                 matches!(
                     t.status.as_str(),
-                    "spec" | "qa" | "qa_fix" | "impl" | "retry" | "lint_fix" | "rebase"
+                    "implement" | "validate" | "review" | "lint_fix" | "rebase"
+                        | "spec" | "qa" | "qa_fix" | "impl" | "retry"
                 )
             })
             .count();
@@ -636,6 +637,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/create", post(routes::create_task))
         .route("/api/tasks/:id", get(routes::get_task))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
+        .route("/api/tasks/:id/unblock", post(routes::unblock_task))
         .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))
         .route(
             "/api/tasks/:id/outputs",
