@@ -1459,10 +1459,13 @@ pub(crate) async fn get_chat_messages(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ChatMessagesQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let msgs = state
-        .db
-        .get_chat_messages(&q.thread, q.limit.unwrap_or(100))
-        .map_err(internal)?;
+    let msgs = match state.db.get_chat_messages(&q.thread, q.limit.unwrap_or(100)) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("get_chat_messages({}): {e}", q.thread);
+            return Ok(Json(json!([])));
+        }
+    };
     let v: Vec<Value> = msgs
         .iter()
         .map(|m| {
