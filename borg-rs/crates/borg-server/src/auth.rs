@@ -69,6 +69,38 @@ pub async fn auth_middleware(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::is_exempt;
+
+    #[test]
+    fn health_is_exempt() {
+        assert!(is_exempt("/api/health"));
+    }
+
+    #[test]
+    fn auth_token_is_exempt() {
+        assert!(is_exempt("/api/auth/token"));
+    }
+
+    #[test]
+    fn non_api_path_is_exempt() {
+        assert!(is_exempt("/dashboard"));
+        assert!(is_exempt("/"));
+        assert!(is_exempt("/static/app.js"));
+    }
+
+    #[test]
+    fn api_tasks_not_exempt() {
+        assert!(!is_exempt("/api/tasks"));
+    }
+
+    #[test]
+    fn api_settings_not_exempt() {
+        assert!(!is_exempt("/api/settings"));
+    }
+}
+
 // GET /api/auth/token — returns the token to any caller that can reach the
 // dashboard. The token protects against rogue local processes (e.g. a
 // compromised container), not against someone who already has HTTP access to
