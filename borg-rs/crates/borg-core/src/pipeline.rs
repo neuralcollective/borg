@@ -1408,7 +1408,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             return Ok(());
         }
 
-        let mut ran_any = false;
+        let mut any_merged = false;
         for repo in &self.config.watched_repos {
             let queued = self.db.get_queued_branches_for_repo(&repo.path)?;
             if queued.is_empty() {
@@ -1416,24 +1416,28 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             }
             info!("Integration: {} branches for {}", queued.len(), repo.path);
             match self.run_integration(queued, &repo.path, repo.auto_merge).await {
-                Ok(()) => ran_any = true,
+                Ok(merged) => any_merged |= merged,
                 Err(e) => warn!("Integration error for {}: {e}", repo.path),
             }
         }
 
-        if ran_any {
+        // Only reset the release timer when merges actually happened.
+        // If integration ran but only sent branches to rebase (no merges),
+        // skip resetting so we re-check promptly after rebase completes.
+        if any_merged {
             self.db
                 .set_ts("last_release_ts", chrono::Utc::now().timestamp());
         }
         Ok(())
     }
 
+    /// Returns true if any branches were actually merged.
     async fn run_integration(
         &self,
         queued: Vec<crate::types::QueueEntry>,
         repo_path: &str,
         auto_merge: bool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let git = Git::new(repo_path);
         // Clean up stale worktree refs before checkout (avoids "cannot change to" errors)
         let _ = git.exec(repo_path, &["worktree", "prune"]);
@@ -1456,7 +1460,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             }
         }
         if live.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
 
         let mut excluded_ids: HashSet<i64> = HashSet::new();
@@ -1758,7 +1762,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             info!("Integration complete: {} merged", merged_branches.len());
         }
 
-        Ok(())
+        Ok(!merged_branches.is_empty())
     }
 
     fn generate_digest(&self, merged: &[String]) -> String {
