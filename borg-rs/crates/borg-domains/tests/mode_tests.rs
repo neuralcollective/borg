@@ -122,6 +122,30 @@ fn test_chef_review_is_fresh_session() {
 }
 
 #[test]
+fn test_medwrite_mode_has_implement_review() {
+    let mode = borg_domains::medwrite::medwrite_mode();
+    assert_eq!(mode.name, "medborg");
+    let names: Vec<&str> = mode.phases.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, &["backlog", "implement", "review"]);
+}
+
+#[test]
+fn test_medwrite_review_is_fresh_session() {
+    let mode = borg_domains::medwrite::medwrite_mode();
+    let review = mode.get_phase("review").unwrap();
+    assert!(review.fresh_session);
+}
+
+#[test]
+fn test_medwrite_signal_instructions_in_prompt() {
+    let mode = borg_domains::medwrite::medwrite_mode();
+    let implement = mode.get_phase("implement").unwrap();
+    assert!(implement.instruction.contains("signal.json"));
+    assert!(implement.instruction.contains("blocked"));
+    assert!(implement.instruction.contains("abandon"));
+}
+
+#[test]
 fn test_swe_signal_instructions_in_prompt() {
     let mode = borg_domains::swe::swe_mode();
     let implement = mode.get_phase("implement").unwrap();

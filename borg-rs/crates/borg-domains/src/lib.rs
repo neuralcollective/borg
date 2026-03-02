@@ -4,6 +4,7 @@ pub mod crew;
 pub mod data;
 pub mod health;
 pub mod legal;
+pub mod medwrite;
 pub mod sales;
 pub mod swe;
 pub mod web;
@@ -22,6 +23,7 @@ pub fn all_modes() -> Vec<PipelineMode> {
         data::data_mode(),
         chef::chef_mode(),
         construction::construction_mode(),
+        medwrite::medwrite_mode(),
     ]
 }
 
@@ -33,6 +35,7 @@ pub fn get_mode(name: &str) -> Option<PipelineMode> {
         "health" => get_mode("healthborg"),
         "chef" => get_mode("chefborg"),
         "construction" => get_mode("buildborg"),
+        "medwrite" => get_mode("medborg"),
         _ => all_modes().into_iter().find(|m| m.name == name),
     }
 }
