@@ -41,6 +41,7 @@ export function ChatPanel() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectRef = useRef<() => void>(() => {});
+  const cancelledRef = useRef(false);
 
   const fetchMessages = useCallback(() => {
     abortRef.current?.abort();
@@ -80,8 +81,10 @@ export function ChatPanel() {
   // SSE for real-time updates
   const sseRetriesRef = useRef(0);
   const connect = useCallback(() => {
+    cancelledRef.current = false;
     if (esRef.current) esRef.current.close();
     tokenReady.then(() => {
+      if (cancelledRef.current) return;
       const es = new EventSource(sseUrl("/api/chat/events"));
       esRef.current = es;
 
@@ -130,6 +133,7 @@ export function ChatPanel() {
     }
     connect();
     return () => {
+      cancelledRef.current = true;
       esRef.current?.close();
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       if (sendingTimeoutRef.current) clearTimeout(sendingTimeoutRef.current);

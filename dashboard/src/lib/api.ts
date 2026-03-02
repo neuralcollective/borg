@@ -314,12 +314,15 @@ export function useLogs() {
   const invalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retriesRef = useRef(0);
+  const cancelledRef = useRef(false);
   const queryClient = useQueryClient();
 
   const connect = useCallback(() => {
+    cancelledRef.current = false;
     if (esRef.current) esRef.current.close();
     // Wait for auth token before opening SSE (EventSource can't set headers)
     tokenReady.then(() => {
+      if (cancelledRef.current) return;
       const es = new EventSource(sseUrl("/api/logs"));
       esRef.current = es;
 
@@ -362,6 +365,7 @@ export function useLogs() {
   useEffect(() => {
     connect();
     return () => {
+      cancelledRef.current = true;
       esRef.current?.close();
       if (invalidateTimer.current) clearTimeout(invalidateTimer.current);
       if (retryTimer.current) clearTimeout(retryTimer.current);
