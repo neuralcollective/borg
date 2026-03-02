@@ -3,6 +3,7 @@ import type { ReactNode, ErrorInfo } from "react";
 import { useLogs, useStatus } from "@/lib/api";
 import { UIModeProvider, useUIMode } from "@/lib/ui-mode";
 import type { UIMode } from "@/lib/ui-mode";
+import { DomainProvider, useDomain } from "@/lib/domain";
 import { Header } from "@/components/header";
 import { TaskList } from "@/components/task-list";
 import { TaskDetail } from "@/components/task-detail";
@@ -77,35 +78,46 @@ const MOBILE_TABS = [
   { key: "chat" as const, label: "Chat", Icon: MessageSquare },
 ] as const;
 
-function detectDefaultMode(repos?: { mode: string; is_self: boolean }[]): UIMode {
-  if (!repos || repos.length === 0) return "advanced";
+function detectDefaultMode(domain: { defaultMode: "minimal" | "advanced" }, repos?: { mode: string; is_self: boolean }[]): UIMode {
+  if (!repos || repos.length === 0) return domain.defaultMode;
   const primary = repos.find((r) => r.is_self) ?? repos[0];
-  return primary.mode === "lawborg" || primary.mode === "legal" ? "minimal" : "advanced";
+  if (primary.mode === "lawborg" || primary.mode === "legal") return "minimal";
+  return domain.defaultMode;
 }
 
-function detectDefaultView(repos?: { mode: string; is_self: boolean }[]): View {
-  if (!repos || repos.length === 0) return "tasks";
+function detectDefaultView(domain: { defaultView: "tasks" | "projects" }, repos?: { mode: string; is_self: boolean }[]): View {
+  if (!repos || repos.length === 0) return domain.defaultView;
   const primary = repos.find((r) => r.is_self) ?? repos[0];
   if (["lawborg", "legal", "databorg", "salesborg"].includes(primary.mode)) {
     return "projects";
   }
-  return "tasks";
+  return domain.defaultView;
 }
 
 export default function App() {
-  const { data: status } = useStatus();
-  const defaultMode = useMemo(() => detectDefaultMode(status?.watched_repos), [status]);
-
   return (
     <ErrorBoundary>
-      <UIModeProvider defaultMode={defaultMode}>
-        <AppInner />
-      </UIModeProvider>
+      <DomainProvider>
+        <AppWithDomain />
+      </DomainProvider>
     </ErrorBoundary>
   );
 }
 
+function AppWithDomain() {
+  const domain = useDomain();
+  const { data: status } = useStatus();
+  const defaultMode = useMemo(() => detectDefaultMode(domain, status?.watched_repos), [domain, status]);
+
+  return (
+    <UIModeProvider defaultMode={defaultMode}>
+      <AppInner />
+    </UIModeProvider>
+  );
+}
+
 function AppInner() {
+  const domain = useDomain();
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [view, setView] = useState<View>("tasks");
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
@@ -115,15 +127,18 @@ function AppInner() {
   const { data: status } = useStatus();
   const { mode: uiMode } = useUIMode();
   const isMobile = useIsMobile();
-  const defaultView = useMemo(() => detectDefaultView(status?.watched_repos), [status]);
+  const defaultView = useMemo(() => detectDefaultView(domain, status?.watched_repos), [domain, status]);
 
   useEffect(() => {
     setView((curr) => (curr === "tasks" ? defaultView : curr));
   }, [defaultView]);
 
   const navItems = useMemo(
-    () => ALL_NAV_ITEMS.filter((item) => uiMode === "advanced" || item.minimalVisible),
-    [uiMode]
+    () => ALL_NAV_ITEMS.filter((item) => {
+      if (domain.hiddenNavKeys.includes(item.key)) return false;
+      return uiMode === "advanced" || item.minimalVisible;
+    }),
+    [uiMode, domain]
   );
 
   const handleSelectTask = useCallback((id: number) => setSelectedTaskId(id), []);
@@ -211,7 +226,7 @@ function AppInner() {
     <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
       {/* Sidebar nav — expands on hover */}
       <nav className="group/nav flex w-[52px] hover:w-[160px] shrink-0 flex-col items-start border-r border-white/[0.06] bg-[#09090b] pb-3 transition-[width] duration-200 overflow-hidden">
-        <div className="borg-logo mb-3 w-full shrink-0 bg-orange-500 h-[52px]">
+        <div className={cn("borg-logo mb-3 w-full shrink-0 h-[52px]", domain.accentBg)}>
           <BorgLogo expanded />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2 group-hover/nav:grid-cols-4 group-hover/nav:grid-rows-1" aria-hidden>
             {"BORG".split("").map((c, i) => (

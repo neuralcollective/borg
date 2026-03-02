@@ -18,4 +18,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
   },
+  define: {
+    // Replaced at build time; runtime override via window.__BORG_API_URL__ takes precedence
+    "__BORG_API_URL__": JSON.stringify(""),
+  },
 });

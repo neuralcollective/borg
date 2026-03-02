@@ -1,5 +1,6 @@
 import { useStatus } from "@/lib/api";
 import { useUIMode } from "@/lib/ui-mode";
+import { useDomain } from "@/lib/domain";
 import { TaskCreator } from "./task-creator";
 import { FocusPicker } from "./focus-picker";
 import { BorgLogo } from "./borg-logo";
@@ -41,13 +42,14 @@ export function Header({
 }) {
   const { data: status } = useStatus();
   const { mode: uiMode } = useUIMode();
+  const domain = useDomain();
   const isMinimal = uiMode === "minimal";
 
   if (mobile) {
     return (
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#09090b] px-4">
         <div className="flex items-center gap-2">
-          <div className="borg-logo h-6 w-6 bg-orange-500">
+          <div className={`borg-logo h-6 w-6 ${domain.accentBg}`}>
             <BorgLogo size="mobile" />
             <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
               {"BORG".split("").map((c, i) => (
