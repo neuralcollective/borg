@@ -270,6 +270,10 @@ fn sanitize_upload_name(name: &str) -> String {
     }
 }
 
+fn validate_mime_type(s: &str) -> bool {
+    s.contains('/') && axum::http::HeaderValue::from_str(s).is_ok()
+}
+
 fn project_chat_key(project_id: i64) -> String {
     format!("project:{project_id}")
 }
@@ -760,6 +764,9 @@ pub(crate) async fn upload_project_files(
             .content_type()
             .map(std::string::ToString::to_string)
             .unwrap_or_else(|| "application/octet-stream".to_string());
+        if !validate_mime_type(&mime_type) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
         let bytes = field.bytes().await.map_err(internal)?;
         let file_size = bytes.len() as i64;
         if file_size == 0 {
@@ -2031,4 +2038,51 @@ pub(crate) async fn post_task_container_exec(
         "stdout": stdout,
         "stderr": stderr,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_mime_type_accepts_common_types() {
+        assert!(validate_mime_type("application/octet-stream"));
+        assert!(validate_mime_type("text/plain"));
+        assert!(validate_mime_type("image/png"));
+        assert!(validate_mime_type("application/json"));
+        assert!(validate_mime_type("text/html; charset=utf-8"));
+    }
+
+    #[test]
+    fn validate_mime_type_rejects_no_slash() {
+        assert!(!validate_mime_type("application"));
+        assert!(!validate_mime_type(""));
+        assert!(!validate_mime_type("text"));
+    }
+
+    #[test]
+    fn validate_mime_type_rejects_control_chars() {
+        assert!(!validate_mime_type("text/plain\r\nX-Injected: evil"));
+        assert!(!validate_mime_type("text/plain\n"));
+        assert!(!validate_mime_type("text/plain\x00"));
+        assert!(!validate_mime_type("image/\x1fpng"));
+    }
+
+    #[test]
+    fn sanitize_upload_name_strips_path_components() {
+        assert_eq!(sanitize_upload_name("../etc/passwd"), "passwd");
+        assert_eq!(sanitize_upload_name("/etc/shadow"), "shadow");
+    }
+
+    #[test]
+    fn sanitize_upload_name_replaces_special_chars() {
+        assert_eq!(sanitize_upload_name("my file (1).pdf"), "my_file__1_.pdf");
+        assert_eq!(sanitize_upload_name("hello world.txt"), "hello_world.txt");
+    }
+
+    #[test]
+    fn sanitize_upload_name_empty_falls_back() {
+        assert_eq!(sanitize_upload_name(""), "upload.bin");
+        assert_eq!(sanitize_upload_name("..."), "upload.bin");
+    }
 }
