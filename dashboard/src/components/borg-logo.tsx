@@ -3,6 +3,14 @@ import { useState, useEffect } from "react";
 const WORD = "BORG";
 const LETTERS = WORD.split("");
 
+const GLITCH_CHARS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+  "0123456789!@#$%^&*(){}[]<>?/\\|~`+=_-:;" +
+  "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîï" +
+  "ðñòóôõöøùúûüýþÿĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĖėĘęĚěĜĝĞğ" +
+  "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω" +
+  "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя";
+
 // Groups of indices that can shift together
 const GROUPS = [
   [0],          // B alone
@@ -52,8 +60,7 @@ function BorgLogo({ size = "desktop", expanded }: { size?: "desktop" | "mobile";
         setCells((prev) => {
           const next = [...prev];
           for (const idx of indices) {
-            const others = LETTERS.filter((_, i) => i !== idx);
-            next[idx] = others[Math.floor(Math.random() * others.length)];
+            next[idx] = GLITCH_CHARS[Math.floor(Math.random() * GLITCH_CHARS.length)];
           }
           return next;
         });
