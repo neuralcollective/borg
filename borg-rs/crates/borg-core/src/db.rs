@@ -1758,3 +1758,52 @@ impl Db {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_now_str_round_trips_through_parse_ts() {
+        let s = now_str();
+        let parsed = parse_ts(&s);
+        let re_formatted = parsed.format("%Y-%m-%d %H:%M:%S").to_string();
+        assert_eq!(re_formatted, s);
+    }
+
+    #[test]
+    fn test_parse_ts_empty_string_falls_back_to_now() {
+        let before = Utc::now();
+        let result = parse_ts("");
+        let after = Utc::now();
+        assert!(result >= before, "fallback must be >= time before call");
+        assert!(result <= after, "fallback must be <= time after call");
+    }
+
+    #[test]
+    fn test_parse_ts_truncated_timestamp_falls_back_to_now() {
+        let before = Utc::now();
+        let result = parse_ts("2024-01-15 12:34");
+        let after = Utc::now();
+        assert!(result >= before);
+        assert!(result <= after);
+    }
+
+    #[test]
+    fn test_parse_ts_non_timestamp_string_falls_back_to_now() {
+        let before = Utc::now();
+        let result = parse_ts("not a timestamp");
+        let after = Utc::now();
+        assert!(result >= before);
+        assert!(result <= after);
+    }
+
+    #[test]
+    fn test_parse_ts_fractional_seconds_falls_back_to_now() {
+        let before = Utc::now();
+        let result = parse_ts("2024-01-15 12:34:56.789");
+        let after = Utc::now();
+        assert!(result >= before);
+        assert!(result <= after);
+    }
+}
