@@ -1263,7 +1263,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             let git = Git::new(&task.repo_path);
             let (_, user_coauthor) = self.git_coauthor_settings();
             let lint_commit_msg = Self::with_user_coauthor("fix: lint errors", &user_coauthor);
-            let _ = git.commit_all(&wt_path, &lint_commit_msg, self.git_author());
+            if let Err(e) = git.commit_all(&wt_path, &lint_commit_msg, self.git_author()) {
+                warn!("task #{} lint_fix: commit failed: {e}", task.id);
+            }
 
             lint_out = self.run_test_command(&wt_path, &lint_cmd).await?;
             if lint_out.exit_code == 0 {
@@ -1344,7 +1346,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             let git = Git::new(&task.repo_path);
             let (_, user_coauthor) = self.git_coauthor_settings();
             let msg = Self::with_user_coauthor("fix: compile errors", &user_coauthor);
-            let _ = git.commit_all(wt_path, &msg, self.git_author());
+            if let Err(e) = git.commit_all(wt_path, &msg, self.git_author()) {
+                warn!("task #{} compile_fix: commit failed: {e}", task.id);
+            }
 
             match self.run_test_command(wt_path, check_cmd).await {
                 Ok(ref out) if out.exit_code == 0 => {
