@@ -474,6 +474,16 @@ impl Db {
         Ok(())
     }
 
+    pub fn delete_task(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM task_messages WHERE task_id=?1", params![id])?;
+        conn.execute("DELETE FROM task_outputs WHERE task_id=?1", params![id])?;
+        conn.execute("DELETE FROM integration_queue WHERE task_id=?1", params![id])?;
+        conn.execute("UPDATE pipeline_events SET task_id=NULL WHERE task_id=?1", params![id])?;
+        conn.execute("DELETE FROM pipeline_tasks WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
     // ── Proposals ─────────────────────────────────────────────────────────
 
     pub fn list_proposals(&self, repo_path: &str) -> Result<Vec<Proposal>> {

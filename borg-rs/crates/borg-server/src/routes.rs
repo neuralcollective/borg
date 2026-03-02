@@ -967,6 +967,18 @@ pub(crate) async fn unblock_task(
     }
 }
 
+pub(crate) async fn delete_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.db.get_task(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    state.db.delete_task(id).map_err(internal)?;
+    state.stream_manager.remove(id).await;
+    Ok(Json(json!({ "ok": true })))
+}
+
 // Task messages
 
 pub(crate) async fn get_task_messages(

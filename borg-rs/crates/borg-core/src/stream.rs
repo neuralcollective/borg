@@ -78,6 +78,11 @@ impl TaskStreamManager {
         }
     }
 
+    /// Remove a task's stream entry, freeing its history buffer and broadcast sender.
+    pub async fn remove(&self, task_id: i64) {
+        self.streams.lock().await.remove(&task_id);
+    }
+
     /// Subscribe to a task's stream.
     /// Returns (history_snapshot, live_receiver).
     /// If the stream has ended or doesn't exist, receiver is None.
