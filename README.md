@@ -1,6 +1,6 @@
 # Borg
 
-Autonomous AI agent orchestrator — runs domain-specific pipelines that research, draft, implement, review, and ship work end-to-end. Built-in modes for software engineering, legal, healthcare admin, construction, sales, data analysis, and more. Ships with a real-time web dashboard and chat integration across Telegram, Discord, and WhatsApp.
+Autonomous AI agent orchestrator — runs domain-specific pipelines that research, draft, implement, review, and ship work end-to-end. Built-in domains for software engineering, legal, medical writing, healthcare admin, construction, sales, data analysis, and more. Ships with a real-time web dashboard and chat integration across Telegram, Discord, and WhatsApp.
 
 ## Quick Start
 
@@ -24,23 +24,24 @@ just ship   # test, build, deploy
 
 Dashboard at `http://127.0.0.1:3131`.
 
-## Pipeline Modes
+## Pipeline Domains
 
-Each mode defines its own phases, system prompts, tools, and autonomous scanning presets.
+Each domain is a pipeline template with its own phases, system prompts, tool access, and autonomous scanning presets. Some ship with dedicated tooling (MCP integrations, domain-specific databases) for their use case out of the box.
 
-| Mode | Label | Category | Description |
+| Domain | Label | Category | Description |
 |---|---|---|---|
 | `sweborg` | Software Engineering | Engineering | Implement → validate → lint → rebase. Docker-isolated agents. |
+| `lawborg` | Legal | Professional Services | Contract analysis, case research, regulatory compliance. Ships with CourtListener, EDGAR, Federal Register, state legislation, and BYOK premium tools (LexisNexis, Westlaw) via MCP. |
+| `medborg` | Medical Writing | Professional Services | Regulatory submissions, clinical study reports, lit reviews, manuscripts, pharmacovigilance. Follows ICH/FDA/EMA guidelines and CONSORT/STROBE/PRISMA reporting standards. |
+| `healthborg` | Healthcare Admin | Professional Services | Insurance appeals, prior authorization, medical bill review. Regulatory research via shared legal MCP. |
 | `webborg` | Frontend | Engineering | Web performance, accessibility, visual polish, UX improvements. |
 | `databorg` | Data Analysis | Engineering | Data quality audits, pipeline review, insight discovery. |
-| `lawborg` | Legal | Professional Services | Contract analysis, case research, regulatory compliance. Integrates with CourtListener, EDGAR, Federal Register, and premium research tools (LexisNexis, Westlaw) via MCP. |
-| `healthborg` | Healthcare Admin | Professional Services | Insurance appeals, prior authorization, medical bill review. Regulatory research via shared legal MCP. |
-| `buildborg` | Construction | Professional Services | Permit research, contractor search, cost estimation, code compliance. Powered by Shovels permit database via MCP. |
+| `buildborg` | Construction | Professional Services | Permit research, contractor search, cost estimation, code compliance. Ships with Shovels permit database (170M+ permits) via MCP. |
 | `salesborg` | Sales Outreach | Professional Services | Prospect research, personalised outreach drafting, follow-up sequences. |
 | `crewborg` | Talent Search | People & Ops | Candidate sourcing, evaluation, and ranked shortlists. |
 | `chefborg` | Recipe Dev | Creative | Recipe development and testing with nutritional analysis. |
 
-Modes are extensible — create custom modes with your own phases, prompts, and tools via the dashboard or API.
+Domains are templates, not limits. Create custom domains with your own phases, prompts, and tools via the dashboard or API.
 
 ## How It Works
 
@@ -55,13 +56,13 @@ Tasks move through configurable phases. A typical engineering task:
 5. **Rebase** — rebase onto main, resolve conflicts
 6. **Integration** — PR created, merged (or held for manual review)
 
-Professional services modes (legal, health, construction, sales) use an implement → review flow where an independent reviewer checks the work before completion.
+Professional services domains (legal, health, construction, sales) use an implement → review flow where an independent reviewer checks the work before completion.
 
 Each task gets its own git worktree. Agents can run in Docker containers with `--cap-drop ALL` or in bubblewrap sandboxes. Sessions persist across retries.
 
 ### Autonomous Scanning
 
-When `CONTINUOUS_MODE=true`, each mode's preset scanners periodically analyse repos and create tasks. Examples: security audits, dependency updates, performance issues, accessibility gaps, contract review opportunities, data quality checks.
+When `CONTINUOUS_MODE=true`, each domain's preset scanners periodically analyse repos and create tasks. Examples: security audits, dependency updates, performance issues, accessibility gaps, contract review opportunities, data quality checks.
 
 ### MCP Integrations
 
