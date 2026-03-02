@@ -5,6 +5,13 @@
   "worktree_path": "/home/shulgin/borg/.worktrees/task-24",
   "pr_url": null,
   "pending_approvals": [],
-  "phase_history": [],
-  "generated_at": "2026-03-02T19:46:11.361352026Z"
+  "phase_history": [
+    {
+      "phase": "implement",
+      "success": true,
+      "output": "All done. Here's a summary of what was implemented:\n\n## Changes\n\n### Schema (`migrations/007_task_outputs_attempt.sql`, `schema.sql`)\n- Added `attempt INTEGER NOT NULL DEFAULT 0` to `task_outputs` table — each row is now keyed by `(task_id, attempt, phase)`. Existing rows default to 0 via the migration.\n\n### `borg-core/src/db.rs`\n- `TaskOutput` struct gains `attempt: i64` field\n- `insert_task_output` takes a new `attempt: i64` parameter\n- SQL queries updated accordingly; `migrate()` handles the ALTER TABLE idempotently\n\n### `borg-core/src/git.rs`\n- Added `Git::diff(worktree_path)` — runs `git diff HEAD`, returns stdout or empty string on error\n\n### `borg-core/src/pipeline.rs`\n- All three `insert_task_output` call sites pass `task.attempt`\n- After an agent phase fails (non-Docker), captures `git diff HEAD` and stores it as a `{phase}_diff` output row — the dashboard `DiffView` already renders phases ending in `_diff` with syntax highlighting\n- `build_retry_summary` now:\n  - Separates phase outputs from `_diff` outputs\n  - Extracts the first meaningful error line per attempt (e.g. `error[E0308]`, `FAILED`, `panicked at`)\n  - Includes up to 3000 chars of full output (vs. the old 500-char truncation)\n  - Appends the most recent worktree diff (up to 4000 chars)\n- New `extract_first_error_line` helper function\n\n### `borg-server/src/routes.rs` + `dashboard/src/lib/types.ts`\n- `TaskOutputJson` and the frontend `TaskOutput` type both gain `attempt`\n- Dashboard output selector uses `o.attempt` (from DB) instead of a local counter for attempt labels\n\n### Tests (`failure_context_tests.rs`)\n- 12 new tests covering: attempt storage/retrieval, multi-attempt separation, diff phase naming, legacy zero-default for old rows, and `extract_first_error_line` for Rust errors, test failures, panics, and clean output",
+      "timestamp": "2026-03-02T20:02:39Z"
+    }
+  ],
+  "generated_at": "2026-03-02T20:02:42.582219117Z"
 }
