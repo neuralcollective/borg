@@ -488,7 +488,7 @@ pub(crate) async fn run_chat_agent(
         "--verbose".to_string(),
         "--dangerously-skip-permissions".to_string(),
         "--max-turns".to_string(),
-        "16".to_string(),
+        "64".to_string(),
         "--append-system-prompt".to_string(),
         system_prompt,
     ];
