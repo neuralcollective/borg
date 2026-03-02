@@ -3,13 +3,31 @@ import { useState, useEffect } from "react";
 const WORD = "BORG";
 const LETTERS = WORD.split("");
 
-const GLITCH_CHARS =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
-  "0123456789!@#$%^&*(){}[]<>?/\\|~`+=_-:;" +
-  "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîï" +
-  "ðñòóôõöøùúûüýþÿĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĖėĘęĚěĜĝĞğ" +
-  "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω" +
-  "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя";
+// Unicode ranges for glitch characters — [start, end] inclusive
+const GLYPH_RANGES: [number, number][] = [
+  [0x0021, 0x007e], // ASCII printable
+  [0x00c0, 0x024f], // Latin extended
+  [0x0370, 0x03ff], // Greek
+  [0x0400, 0x04ff], // Cyrillic
+  [0x0530, 0x058f], // Armenian
+  [0x0590, 0x05ff], // Hebrew
+  [0x0600, 0x06ff], // Arabic
+  [0x0900, 0x097f], // Devanagari
+  [0x0e00, 0x0e7f], // Thai
+  [0x10a0, 0x10ff], // Georgian
+  [0x1100, 0x11ff], // Hangul Jamo
+  [0x1200, 0x137f], // Ethiopic
+  [0x3040, 0x309f], // Hiragana
+  [0x30a0, 0x30ff], // Katakana
+  [0x4e00, 0x9fff], // CJK Unified (Chinese/Japanese/Korean)
+  [0xac00, 0xd7af], // Hangul syllables
+];
+
+function randomGlyph(): string {
+  const range = GLYPH_RANGES[Math.floor(Math.random() * GLYPH_RANGES.length)];
+  const cp = range[0] + Math.floor(Math.random() * (range[1] - range[0] + 1));
+  return String.fromCodePoint(cp);
+}
 
 // Groups of indices that can shift together
 const GROUPS = [
@@ -60,7 +78,7 @@ function BorgLogo({ size = "desktop", expanded }: { size?: "desktop" | "mobile";
         setCells((prev) => {
           const next = [...prev];
           for (const idx of indices) {
-            next[idx] = GLITCH_CHARS[Math.floor(Math.random() * GLITCH_CHARS.length)];
+            next[idx] = randomGlyph();
           }
           return next;
         });
