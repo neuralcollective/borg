@@ -121,7 +121,7 @@ fi
 if [ "$exitcode" -eq 0 ]; then
     log_event "{\"type\":\"container_event\",\"event\":\"agent_complete\"}"
 else
-    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | tr '\n' ' ' | sed 's/"/\\"/g')
+    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | tr -cd '[:print:]' | sed 's/\\/\\\\/g; s/"/\\"/g')
     log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":\"${STDERR_TAIL}\"}"
 fi
 
