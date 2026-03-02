@@ -5,84 +5,63 @@ Hetzner VPS + Cloudflare Tunnel + Cloudflare Access (SSO).
 ## Architecture
 
 ```
-  Browser → app.borg.legal
-               │
-         Cloudflare Edge
-         ┌─────────────────┐
-         │  Access (SSO)   │  ← Google/GitHub login
-         │  Tunnel         │  ← encrypted tunnel to VPS
-         └────────┬────────┘
-                  │
-         Hetzner VPS (CAX21)
-         ┌────────┴────────┐
-         │  cloudflared     │  ← tunnel daemon
-         │  borg-server     │  ← API + dashboard on :3131
-         │  (docker agents) │  ← pipeline spawns agent containers
-         └─────────────────┘
+VPS (host)
+├── systemd: borg-server       API + dashboard on :3131
+├── systemd: cloudflared       tunnel to Cloudflare
+├── docker daemon
+│   └── borg-agent containers  spawned per-task, isolated, ephemeral
+├── /opt/borg/store/           SQLite DB, sessions, mirrors
+└── /opt/borg/dashboard/dist/  static dashboard files
 ```
 
-No ports exposed. No Caddy/nginx. No TLS config. Cloudflare handles everything.
-
-**Cost**: ~€6.49/mo (Hetzner) + free (Cloudflare). Domain: ~$7/yr (Porkbun).
+No ports exposed. Cloudflare handles TLS + SSO. ~€6.49/mo.
 
 ---
 
-## Step 1: Cloudflare Setup (~10 min)
+## Step 1: Cloudflare (~10 min)
 
-### 1.1 Add zone
+### 1.1 Add zone + nameservers
 
 1. [dash.cloudflare.com](https://dash.cloudflare.com) → **Add a Site** → `borg.legal` → Free plan
 2. Copy the two nameservers Cloudflare assigns
-
-### 1.2 Update nameservers at Porkbun
-
-1. [porkbun.com](https://porkbun.com) → `borg.legal` → Nameservers
-2. Replace Porkbun defaults with Cloudflare's two nameservers
-3. Disable DNSSEC if enabled (conflicts with Cloudflare)
+3. At Porkbun → `borg.legal` → replace nameservers with Cloudflare's
 4. Wait for propagation (~30 min)
 
-### 1.3 Create Tunnel
+### 1.2 Create Tunnel
 
-1. Cloudflare dashboard → **Zero Trust** → **Networks** → **Tunnels** → **Create**
-2. Name: `borg`
-3. Choose **Cloudflared** connector
-4. Copy the tunnel token (starts with `eyJ...`)
-5. Add public hostname:
+1. **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel**
+2. Name: `borg`, choose **Cloudflared** connector
+3. Copy the tunnel token
+4. Add public hostname:
    - Subdomain: `app`, Domain: `borg.legal`
-   - Service: `http://borg:3131`
+   - Service: `http://localhost:3131`
 
-### 1.4 Add Access Policy (SSO)
+### 1.3 Add Access Policy (SSO)
 
 1. **Zero Trust** → **Access** → **Applications** → **Add an Application**
-2. Type: **Self-hosted**
-3. Application domain: `app.borg.legal`
-4. Name: `Borg Dashboard`
-5. Identity providers: add **Google** and/or **GitHub** (follow the prompts — just needs an OAuth client ID/secret from each provider)
-6. Policy: **Allow** → Include → **Emails** → add your email(s)
+2. Type: **Self-hosted**, domain: `app.borg.legal`
+3. Add identity providers (Google / GitHub)
+4. Policy: **Allow** → Emails → your email(s)
 
 ---
 
 ## Step 2: Hetzner VPS (~5 min)
 
-### 2.1 Install hcloud CLI
-
 ```bash
-sudo pacman -S hcloud-cli   # Arch
-# Or: curl -sSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz | tar xz && sudo mv hcloud /usr/local/bin/
-hcloud context create borg   # Paste API token from console.hetzner.cloud
-```
+# Install hcloud CLI
+sudo pacman -S hcloud-cli  # or brew install hcloud
+hcloud context create borg  # paste API token from console.hetzner.cloud
 
-### 2.2 Provision
-
-```bash
 # Upload SSH key
 hcloud ssh-key create --name borg-key --public-key-from-file ~/.ssh/id_ed25519.pub
 
-# Create firewall (only SSH — tunnel handles the rest)
+# Create firewall (SSH only — tunnel handles HTTP)
 hcloud firewall create --name borg-fw
-hcloud firewall add-rule borg-fw --direction in --protocol tcp --port 22 --source-ips 0.0.0.0/0 --source-ips ::/0
+hcloud firewall add-rule borg-fw \
+  --direction in --protocol tcp --port 22 \
+  --source-ips 0.0.0.0/0 --source-ips ::/0
 
-# Create server
+# Create server (~3 min for cloud-init)
 hcloud server create \
   --name borg \
   --type cax21 \
@@ -93,75 +72,89 @@ hcloud server create \
   --user-data-from-file deploy/cloud-init.yml
 ```
 
-Wait ~3 min for cloud-init to finish installing Docker.
+CAX21 = 4 ARM vCPU, 8 GB RAM, 80 GB disk, €6.49/mo.
 
 ---
 
-## Step 3: Deploy (~5 min)
+## Step 3: First Deploy (~10 min)
+
+Wait ~3 min for cloud-init, then:
 
 ```bash
-VPS_IP=$(hcloud server ip borg)
-ssh root@$VPS_IP   # or deploy@ if cloud-init user created
+VPS=$(hcloud server ip borg)
+ssh root@$VPS
 
 # Clone repo
 git clone https://github.com/neuralcollective/borg.git /opt/borg
-cd /opt/borg/deploy
+cd /opt/borg
 
 # Create .env
 cat > .env << 'EOF'
-CLAUDE_CODE_OAUTH_TOKEN=your-claude-oauth-token
-CLOUDFLARE_TUNNEL_TOKEN=eyJ...your-tunnel-token
+CLAUDE_CODE_OAUTH_TOKEN=<your-oauth-token>
 SANDBOX_BACKEND=docker
 CONTAINER_IMAGE=borg-agent
 CONTINUOUS_MODE=true
-PIPELINE_REPO=/app
-DATA_DIR=/app/store
-DASHBOARD_DIST_DIR=/app/dashboard/dist
+DATA_DIR=store
+DASHBOARD_DIST_DIR=dashboard/dist
 MODEL=claude-sonnet-4-6
+PIPELINE_MAX_AGENTS=2
+RUST_LOG=info
+WEB_BIND=127.0.0.1
 EOF
 
-# Build agent image
-cd /opt/borg && docker build -t borg-agent -f container/Dockerfile container/
+# Build everything
+source ~/.cargo/env
+cd borg-rs && cargo build --release && cd ..
+cd dashboard && bun install && bun run build && cd ..
+docker build -t borg-agent -f container/Dockerfile container/
 
-# Build and start
-cd deploy && docker compose up -d --build
+# Install borg service
+cp deploy/borg.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable borg && systemctl start borg
 
-# Check logs
-docker compose logs -f borg
+# Install cloudflared tunnel
+cloudflared service install <your-tunnel-token>
+
+# Verify
+curl http://127.0.0.1:3131/api/health
 ```
 
-### Getting your Claude OAuth token
-
-Copy from your local machine:
-```bash
-cat ~/.claude/.credentials.json | jq -r '.oauthToken'
-# Or: set CLAUDE_CODE_OAUTH_TOKEN in .env
-```
+Dashboard is now live at `https://app.borg.legal` behind Cloudflare Access.
 
 ---
 
 ## Updating
 
 ```bash
-# From your local machine:
+# From your dev machine:
 BORG_HOST=root@$(hcloud server ip borg) bash deploy/deploy.sh
-
-# Or manually on the VPS:
-cd /opt/borg && git pull && cd deploy && docker compose up -d --build
 ```
 
-## Useful Commands
+Or manually on the VPS:
+```bash
+cd /opt/borg && git pull
+source ~/.cargo/env && cd borg-rs && cargo build --release && cd ..
+systemctl restart borg
+```
+
+## Getting your Claude OAuth token
+
+```bash
+cat ~/.claude/.credentials.json | jq -r '.oauthToken'
+```
+
+## Useful commands
 
 ```bash
 # Logs
-ssh root@$(hcloud server ip borg) 'cd /opt/borg/deploy && docker compose logs -f borg'
-
-# Shell into borg container
-ssh root@$(hcloud server ip borg) 'cd /opt/borg/deploy && docker compose exec borg bash'
+ssh root@$(hcloud server ip borg) journalctl -u borg -f
 
 # Restart
-ssh root@$(hcloud server ip borg) 'cd /opt/borg/deploy && docker compose restart borg'
+ssh root@$(hcloud server ip borg) systemctl restart borg
+
+# Rebuild agent image
+ssh root@$(hcloud server ip borg) 'cd /opt/borg && docker build -t borg-agent -f container/Dockerfile container/'
 
 # DB backup
-ssh root@$(hcloud server ip borg) 'docker compose -f /opt/borg/deploy/docker-compose.yml exec borg sqlite3 /app/store/borg.db ".backup /tmp/backup.db" && docker compose -f /opt/borg/deploy/docker-compose.yml cp borg:/tmp/backup.db .'
+scp root@$(hcloud server ip borg):/opt/borg/store/borg.db ./borg-backup.db
 ```

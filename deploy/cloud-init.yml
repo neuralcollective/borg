@@ -5,11 +5,33 @@ package_upgrade: true
 packages:
   - fail2ban
   - ufw
+  - git
+  - pkg-config
+  - libssl-dev
+  - build-essential
 
 ssh_pwauth: false
 
 runcmd:
+  # Docker
   - curl -fsSL https://get.docker.com | sh
+
+  # Rust
+  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  - echo 'source /root/.cargo/env' >> /root/.bashrc
+
+  # Cloudflared
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  - echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+  - apt-get update && apt-get install -y cloudflared
+
+  # Bun (for sidecar/dashboard builds)
+  - curl -fsSL https://bun.sh/install | bash
+  - echo 'export PATH="/root/.bun/bin:$PATH"' >> /root/.bashrc
+
+  # Firewall — SSH only, tunnel handles the rest
   - ufw allow ssh && ufw --force enable
   - systemctl enable fail2ban && systemctl start fail2ban
+
+  # Workspace
   - mkdir -p /opt/borg

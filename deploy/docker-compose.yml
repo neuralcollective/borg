@@ -1,24 +1,8 @@
+# Only used for building the agent image.
+# borg-server runs directly on the host via systemd.
 services:
-  borg:
+  agent:
     build:
-      context: ..
-      dockerfile: deploy/Dockerfile.borg
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - borg_store:/app/store
-    environment:
-      - RUST_LOG=info
-      - WEB_BIND=0.0.0.0
-    env_file:
-      - .env
-
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-
-volumes:
-  borg_store:
+      context: ../container
+      dockerfile: Dockerfile
+    image: borg-agent
