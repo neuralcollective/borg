@@ -111,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
             &repo.prompt_file,
             repo.auto_merge,
             None,
+            &repo.repo_slug,
         ) {
             tracing::error!("upsert_repo {}: {e}", repo.path);
         }

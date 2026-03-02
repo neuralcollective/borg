@@ -118,6 +118,7 @@ impl AgentBackend for OllamaBackend {
                     new_session_id: None,
                     raw_stream: String::new(),
                     success: false,
+                    signal_json: None,
                 });
             },
             Err(e) => {
@@ -127,6 +128,7 @@ impl AgentBackend for OllamaBackend {
                     new_session_id: None,
                     raw_stream: String::new(),
                     success: false,
+                    signal_json: None,
                 });
             },
         };
@@ -146,6 +148,7 @@ impl AgentBackend for OllamaBackend {
                 new_session_id: None,
                 raw_stream: String::new(),
                 success: false,
+                signal_json: None,
             });
         }
 
@@ -158,6 +161,7 @@ impl AgentBackend for OllamaBackend {
                     new_session_id: None,
                     raw_stream: String::new(),
                     success: false,
+                    signal_json: None,
                 });
             },
         };
@@ -176,6 +180,7 @@ impl AgentBackend for OllamaBackend {
             output,
             new_session_id: None,
             success: true,
+            signal_json: None,
         })
     }
 

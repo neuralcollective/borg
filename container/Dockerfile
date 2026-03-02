@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     xz-utils \
     make \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI and make it accessible to the bun user via group permissions
@@ -21,16 +22,16 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 ENV PATH="/root/.cargo/bin:$PATH"
 
 # Create workspace dirs
-RUN mkdir -p /workspace/group /workspace/ipc /home/bun/.claude
+RUN mkdir -p /workspace/group /workspace/ipc /workspace/repo /mirrors /home/bun/.claude
 
 # Copy entrypoint
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Set ownership
-RUN chown -R bun:bun /workspace /home/bun
+RUN chown -R bun:bun /workspace /mirrors /home/bun
 
 USER bun
-WORKDIR /workspace/group
+WORKDIR /workspace/repo
 
 ENTRYPOINT ["/app/entrypoint.sh"]

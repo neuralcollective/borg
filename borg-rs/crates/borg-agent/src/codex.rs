@@ -171,6 +171,7 @@ impl AgentBackend for CodexBackend {
             new_session_id: None,
             raw_stream: String::new(),
             success: exit_status.success(),
+            signal_json: None,
         })
     }
 

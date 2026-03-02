@@ -228,6 +228,28 @@ pub fn refresh_oauth_token(credentials_path: &str, current: &str) -> String {
         .unwrap_or_else(|| current.to_string())
 }
 
+fn slug_from_remote(path: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-C", path, "remote", "get-url", "origin"])
+        .output();
+    let url = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => return String::new(),
+    };
+    let url = url.strip_suffix(".git").unwrap_or(&url);
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        return rest.to_string();
+    }
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        return rest.to_string();
+    }
+    let parts: Vec<&str> = url.split(&['/', ':'][..]).collect();
+    if parts.len() >= 2 {
+        return format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+    }
+    String::new()
+}
+
 fn parse_watched_repos(
     watched_raw: &str,
     pipeline_repo: &str,
@@ -248,6 +270,7 @@ fn parse_watched_repos(
             auto_merge: true,
             lint_cmd: pipeline_lint_cmd.to_string(),
             backend: String::new(),
+            repo_slug: slug_from_remote(pipeline_repo),
         });
     }
 
@@ -260,7 +283,7 @@ fn parse_watched_repos(
         if entry.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = entry.splitn(5, ':').collect();
+        let parts: Vec<&str> = entry.splitn(6, ':').collect();
         if parts.is_empty() {
             continue;
         }
@@ -269,6 +292,7 @@ fn parse_watched_repos(
         let prompt_file = parts.get(2).copied().unwrap_or("").to_string();
         let mode = parts.get(3).copied().unwrap_or("sweborg").to_string();
         let lint_cmd = parts.get(4).copied().unwrap_or("").to_string();
+        let slug_override = parts.get(5).copied().unwrap_or("").to_string();
 
         let auto_merge = if test_cmd.ends_with("!manual") {
             test_cmd = test_cmd[..test_cmd.len() - "!manual".len()].to_string();
@@ -282,6 +306,12 @@ fn parse_watched_repos(
             continue;
         }
 
+        let repo_slug = if slug_override.is_empty() {
+            slug_from_remote(&path)
+        } else {
+            slug_override
+        };
+
         repos.push(RepoConfig {
             path,
             test_cmd,
@@ -291,6 +321,7 @@ fn parse_watched_repos(
             auto_merge,
             lint_cmd,
             backend: String::new(),
+            repo_slug,
         });
     }
 

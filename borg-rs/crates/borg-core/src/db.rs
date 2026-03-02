@@ -44,6 +44,7 @@ pub struct RepoRow {
     pub test_cmd: String,
     pub prompt_file: String,
     pub auto_merge: bool,
+    pub repo_slug: String,
 }
 
 #[derive(serde::Serialize)]
@@ -225,6 +226,7 @@ fn row_to_repo(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRow> {
         test_cmd: row.get(5)?,
         prompt_file: row.get(6)?,
         auto_merge: auto_merge_int != 0,
+        repo_slug: row.get(8).unwrap_or_default(),
     })
 }
 
@@ -306,6 +308,7 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
             "ALTER TABLE pipeline_tasks ADD COLUMN backend TEXT",
             "ALTER TABLE proposals ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
+            "ALTER TABLE repos ADD COLUMN repo_slug TEXT NOT NULL DEFAULT ''",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -948,19 +951,21 @@ impl Db {
         prompt_file: &str,
         auto_merge: bool,
         backend: Option<&str>,
+        repo_slug: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let auto_merge_int: i64 = if auto_merge { 1 } else { 0 };
         conn.execute(
-            "INSERT INTO repos (path, name, mode, test_cmd, prompt_file, auto_merge, backend) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+            "INSERT INTO repos (path, name, mode, test_cmd, prompt_file, auto_merge, backend, repo_slug) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
              ON CONFLICT(path) DO UPDATE SET \
                name = excluded.name, \
                mode = COALESCE(NULLIF(excluded.mode, ''), repos.mode), \
                test_cmd = COALESCE(NULLIF(excluded.test_cmd, ''), repos.test_cmd), \
                prompt_file = COALESCE(NULLIF(excluded.prompt_file, ''), repos.prompt_file), \
                auto_merge = excluded.auto_merge, \
-               backend = COALESCE(NULLIF(excluded.backend, ''), repos.backend)",
+               backend = COALESCE(NULLIF(excluded.backend, ''), repos.backend), \
+               repo_slug = COALESCE(NULLIF(excluded.repo_slug, ''), repos.repo_slug)",
             params![
                 path,
                 name,
@@ -968,7 +973,8 @@ impl Db {
                 test_cmd,
                 prompt_file,
                 auto_merge_int,
-                backend
+                backend,
+                repo_slug
             ],
         )
         .context("upsert_repo")?;
@@ -985,7 +991,7 @@ impl Db {
     pub fn list_repos(&self) -> Result<Vec<RepoRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge \
+            "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge, repo_slug \
              FROM repos ORDER BY id ASC",
         )?;
         let repos = stmt
@@ -999,7 +1005,7 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn
             .query_row(
-                "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge \
+                "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge, repo_slug \
                  FROM repos WHERE path = ?1",
                 params![path],
                 row_to_repo,

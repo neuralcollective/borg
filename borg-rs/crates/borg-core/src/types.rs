@@ -173,6 +173,8 @@ pub struct RepoConfig {
     pub lint_cmd: String,
     /// Agent backend override for this repo. Empty = use global default.
     pub backend: String,
+    /// GitHub repo slug (owner/repo). Used for `gh --repo` without a local checkout.
+    pub repo_slug: String,
 }
 
 // ── Phase Config ─────────────────────────────────────────────────────────
@@ -422,6 +424,8 @@ pub struct PhaseOutput {
     pub new_session_id: Option<String>,
     pub raw_stream: String,
     pub success: bool,
+    /// AgentSignal JSON extracted from the container's `---BORG_SIGNAL---` stdout line.
+    pub signal_json: Option<String>,
 }
 
 impl PhaseOutput {
@@ -431,6 +435,7 @@ impl PhaseOutput {
             new_session_id: None,
             raw_stream: String::new(),
             success: false,
+            signal_json: None,
         }
     }
 }

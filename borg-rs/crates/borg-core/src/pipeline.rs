@@ -166,6 +166,7 @@ impl Pipeline {
                 auto_merge: true,
                 lint_cmd: String::new(),
                 backend: String::new(),
+                repo_slug: String::new(),
             })
     }
 
@@ -1414,8 +1415,15 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             if queued.is_empty() {
                 continue;
             }
+            if repo.repo_slug.is_empty() {
+                warn!("Integration: no repo_slug for {}, skipping", repo.path);
+                continue;
+            }
             info!("Integration: {} branches for {}", queued.len(), repo.path);
-            match self.run_integration(queued, &repo.path, repo.auto_merge).await {
+            match self
+                .run_integration(queued, &repo.repo_slug, repo.auto_merge)
+                .await
+            {
                 Ok(merged) => any_merged |= merged,
                 Err(e) => warn!("Integration error for {}: {e}", repo.path),
             }
@@ -1431,28 +1439,51 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         Ok(())
     }
 
+    /// Run a `gh` command without a working directory.
+    async fn gh(&self, args: &[&str]) -> Result<TestOutput> {
+        let timeout =
+            std::time::Duration::from_secs(self.config.agent_timeout_s.max(300) as u64);
+        let output = tokio::time::timeout(
+            timeout,
+            tokio::process::Command::new("gh").args(args).output(),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "gh {} timed out after {}s",
+                args.join(" "),
+                timeout.as_secs()
+            )
+        })?
+        .context("gh command")?;
+        Ok(TestOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: output.status.code().unwrap_or(1),
+        })
+    }
+
     /// Returns true if any branches were actually merged.
     async fn run_integration(
         &self,
         queued: Vec<crate::types::QueueEntry>,
-        repo_path: &str,
+        slug: &str,
         auto_merge: bool,
     ) -> Result<bool> {
-        let git = Git::new(repo_path);
-        // Clean up stale worktree refs before checkout (avoids "cannot change to" errors)
-        let _ = git.exec(repo_path, &["worktree", "prune"]);
-        git.checkout("main")?;
-        git.pull()?;
-
-        // Filter entries whose branches no longer exist
         let mut live = Vec::new();
         for entry in queued {
-            let check = git.exec(repo_path, &["rev-parse", "--verify", &entry.branch]);
-            if check.map(|r| r.success()).unwrap_or(false) {
+            let check = self
+                .gh(&[
+                    "api",
+                    "--silent",
+                    &format!("repos/{slug}/branches/{}", entry.branch),
+                ])
+                .await;
+            if check.map(|r| r.exit_code == 0).unwrap_or(false) {
                 live.push(entry);
             } else {
                 warn!(
-                    "Excluding {} from integration: branch not found",
+                    "Excluding {} from integration: branch not found on remote",
                     entry.branch
                 );
                 self.db
@@ -1464,21 +1495,26 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         }
 
         let mut excluded_ids: HashSet<i64> = HashSet::new();
-        let mut freshly_pushed: HashSet<i64> = HashSet::new();
+        let mut freshly_created: HashSet<i64> = HashSet::new();
 
         for entry in &live {
-            // Check if already merged on GitHub, or if changes already in main (squash-merge case)
+            // Check if already merged on GitHub
             let state_out = self
-                .run_test_command(
-                    repo_path,
-                    &format!(
-                        "gh pr view {0} --json state --jq .state 2>/dev/null",
-                        entry.branch
-                    ),
-                )
+                .gh(&[
+                    "pr",
+                    "view",
+                    &entry.branch,
+                    "--repo",
+                    slug,
+                    "--json",
+                    "state",
+                    "--jq",
+                    ".state",
+                ])
                 .await;
             if let Ok(ref o) = state_out {
-                if o.stdout.trim() == "MERGED" {
+                let s = o.stdout.trim();
+                if s == "MERGED" {
                     info!(
                         "Task #{} {}: PR already merged",
                         entry.task_id, entry.branch
@@ -1488,38 +1524,84 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     excluded_ids.insert(entry.id);
                     continue;
                 }
+                // CLOSED + identical to main → squash-merged
+                if s == "CLOSED" {
+                    let cmp = self
+                        .gh(&[
+                            "api",
+                            &format!("repos/{slug}/compare/main...{}", entry.branch),
+                            "--jq",
+                            ".status",
+                        ])
+                        .await;
+                    if cmp
+                        .map(|r| r.stdout.trim() == "identical")
+                        .unwrap_or(false)
+                    {
+                        info!(
+                            "Task #{} {}: identical to main, marking merged",
+                            entry.task_id, entry.branch
+                        );
+                        self.db.update_queue_status(entry.id, "merged")?;
+                        self.db.update_task_status(entry.task_id, "merged", None)?;
+                        excluded_ids.insert(entry.id);
+                        continue;
+                    }
+                }
             }
 
-            // If diff between branch and main is empty, the work is already in main
-            // (e.g. squash-merged PR where GitHub PR state shows CLOSED not MERGED)
-            let diff_empty = git
-                .exec(
-                    repo_path,
-                    &["diff", &format!("{0}...origin/main", entry.branch)],
-                )
-                .map(|r| r.success() && r.stdout.trim().is_empty())
+            // Check rebase status via GitHub compare API
+            let behind = self
+                .gh(&[
+                    "api",
+                    &format!("repos/{slug}/compare/{}...main", entry.branch),
+                    "--jq",
+                    ".behind_by",
+                ])
+                .await;
+            let not_rebased = behind
+                .as_ref()
+                .map(|r| {
+                    r.exit_code != 0
+                        || r.stdout.trim().parse::<u64>().map(|n| n > 0).unwrap_or(false)
+                })
                 .unwrap_or(false);
-            if diff_empty {
+            if not_rebased {
                 info!(
-                    "Task #{} {}: diff vs main is empty, marking merged",
+                    "Task #{} {} not rebased on main, trying GitHub update-branch",
                     entry.task_id, entry.branch
                 );
-                self.db.update_queue_status(entry.id, "merged")?;
-                self.db.update_task_status(entry.task_id, "merged", None)?;
-                excluded_ids.insert(entry.id);
-                continue;
-            }
-
-            // Reject if not rebased on main
-            let rb = git.exec(
-                repo_path,
-                &["merge-base", "--is-ancestor", "origin/main", &entry.branch],
-            );
-            if rb.map(|r| !r.success()).unwrap_or(false) {
-                info!(
-                    "Task #{} {} not rebased on main, sending to rebase",
-                    entry.task_id, entry.branch
-                );
+                let pr_num_out = self
+                    .gh(&[
+                        "pr",
+                        "view",
+                        &entry.branch,
+                        "--repo",
+                        slug,
+                        "--json",
+                        "number",
+                        "--jq",
+                        ".number",
+                    ])
+                    .await;
+                let pr_num = pr_num_out
+                    .ok()
+                    .filter(|o| o.exit_code == 0)
+                    .and_then(|o| o.stdout.trim().parse::<u64>().ok());
+                if let Some(num) = pr_num {
+                    let _ = self
+                        .gh(&[
+                            "api",
+                            "-X",
+                            "PUT",
+                            &format!("repos/{slug}/pulls/{num}/update-branch"),
+                        ])
+                        .await;
+                    info!(
+                        "Task #{} {}: update-branch requested",
+                        entry.task_id, entry.branch
+                    );
+                }
                 self.db.update_queue_status_with_error(
                     entry.id,
                     "excluded",
@@ -1530,44 +1612,21 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 continue;
             }
 
-            // Push branch (force, to handle post-rebase)
-            let push = git.push_force(&entry.branch)?;
-            if !push.success() {
-                if push.stderr.contains("cannot lock ref") {
-                    git.delete_remote_branch(&entry.branch).ok();
-                    let push2 = git.push_force(&entry.branch)?;
-                    if !push2.success() {
-                        warn!(
-                            "Failed to push {} after ref fix: {}",
-                            entry.branch,
-                            &push2.stderr[..push2.stderr.len().min(200)]
-                        );
-                        continue;
-                    }
-                } else {
-                    warn!(
-                        "Failed to push {}: {}",
-                        entry.branch,
-                        &push.stderr[..push.stderr.len().min(200)]
-                    );
-                    continue;
-                }
-            }
-
             // Check if PR already exists
             let view_out = self
-                .run_test_command(
-                    repo_path,
-                    &format!(
-                        "gh pr view {0} --json number --jq .number 2>/dev/null",
-                        entry.branch
-                    ),
-                )
+                .gh(&[
+                    "pr",
+                    "view",
+                    &entry.branch,
+                    "--repo",
+                    slug,
+                    "--json",
+                    "number",
+                    "--jq",
+                    ".number",
+                ])
                 .await?;
             if view_out.exit_code == 0 && !view_out.stdout.trim().is_empty() {
-                if !push.stderr.contains("Everything up-to-date") {
-                    freshly_pushed.insert(entry.id);
-                }
                 continue;
             }
 
@@ -1578,18 +1637,22 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .map(|t| t.title.chars().take(100).collect::<String>())
                 .unwrap_or_else(|| entry.branch.clone());
 
-            let gh_out = tokio::process::Command::new("gh")
-                .args(["pr", "create", "--base", "main", "--head", &entry.branch,
-                       "--title", &title, "--body", "Automated implementation."])
-                .current_dir(repo_path)
-                .output()
-                .await
-                .context("gh pr create")?;
-            let create_out = TestOutput {
-                stdout: String::from_utf8_lossy(&gh_out.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&gh_out.stderr).to_string(),
-                exit_code: gh_out.status.code().unwrap_or(1),
-            };
+            let create_out = self
+                .gh(&[
+                    "pr",
+                    "create",
+                    "--repo",
+                    slug,
+                    "--base",
+                    "main",
+                    "--head",
+                    &entry.branch,
+                    "--title",
+                    &title,
+                    "--body",
+                    "Automated implementation.",
+                ])
+                .await?;
 
             if create_out.exit_code != 0 {
                 let err = &create_out.stderr[..create_out.stderr.len().min(300)];
@@ -1606,7 +1669,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 }
             } else {
                 info!("Created PR for {}", entry.branch);
-                freshly_pushed.insert(entry.id);
+                freshly_created.insert(entry.id);
             }
         }
 
@@ -1628,19 +1691,26 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 if excluded_ids.contains(&entry.id) {
                     continue;
                 }
-                if freshly_pushed.contains(&entry.id) {
+                if freshly_created.contains(&entry.id) {
                     info!(
-                        "Task #{} {}: skipping merge (just pushed)",
+                        "Task #{} {}: skipping merge (PR just created)",
                         entry.task_id, entry.branch
                     );
                     continue;
                 }
 
                 let view_out = self
-                    .run_test_command(
-                        repo_path,
-                        &format!("gh pr view {0} --json state --jq .state", entry.branch),
-                    )
+                    .gh(&[
+                        "pr",
+                        "view",
+                        &entry.branch,
+                        "--repo",
+                        slug,
+                        "--json",
+                        "state",
+                        "--jq",
+                        ".state",
+                    ])
                     .await?;
                 if view_out.exit_code != 0 {
                     continue;
@@ -1655,15 +1725,18 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     continue;
                 }
 
-                // Check mergeability
                 let mb_out = self
-                    .run_test_command(
-                        repo_path,
-                        &format!(
-                            "gh pr view {0} --json mergeable --jq .mergeable",
-                            entry.branch
-                        ),
-                    )
+                    .gh(&[
+                        "pr",
+                        "view",
+                        &entry.branch,
+                        "--repo",
+                        slug,
+                        "--json",
+                        "mergeable",
+                        "--jq",
+                        ".mergeable",
+                    ])
                     .await?;
                 let mb = mb_out.stdout.trim().to_string();
                 let mut force_merge = false;
@@ -1704,17 +1777,16 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
                 self.db.update_queue_status(entry.id, "merging")?;
                 let merge_out = self
-                    .run_test_command(
-                        repo_path,
-                        &format!("gh pr merge {0} --squash", entry.branch),
-                    )
+                    .gh(&[
+                        "pr", "merge", &entry.branch, "--repo", slug, "--squash",
+                    ])
                     .await;
 
                 match merge_out {
                     Err(e) => {
                         warn!("gh pr merge {}: {e}", entry.branch);
                         self.db.update_queue_status(entry.id, "queued")?;
-                    },
+                    }
                     Ok(out) if out.exit_code != 0 => {
                         let err = &out.stderr[..out.stderr.len().min(200)];
                         warn!("gh pr merge {}: {}", entry.branch, err);
@@ -1731,32 +1803,35 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         } else {
                             self.db.update_queue_status(entry.id, "queued")?;
                         }
-                    },
+                    }
                     Ok(_) => {
                         self.db.update_queue_status(entry.id, "merged")?;
                         self.db.update_task_status(entry.task_id, "merged", None)?;
                         merged_branches.push(entry.branch.clone());
-                        // Clean up worktree and local branch (gh --squash doesn't do local cleanup)
-                        let wt_path = format!("{}/.worktrees/{}", repo_path, entry.branch);
-                        if std::path::Path::new(&wt_path).exists() {
-                            if let Err(e) = git.remove_worktree(&wt_path) {
-                                warn!("remove_worktree {} after merge: {e}", entry.branch);
-                            }
-                        }
-                        let _ = git.delete_branch(&entry.branch);
+                        // Delete the remote branch via GitHub API
+                        let _ = self
+                            .gh(&[
+                                "api",
+                                "-X",
+                                "DELETE",
+                                &format!("repos/{slug}/git/refs/heads/{}", entry.branch),
+                            ])
+                            .await;
                         if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
                             self.notify(
                                 &task.notify_chat,
-                                &format!("Task #{} \"{}\" merged via PR.", task.id, task.title),
+                                &format!(
+                                    "Task #{} \"{}\" merged via PR.",
+                                    task.id, task.title
+                                ),
                             );
                         }
-                    },
+                    }
                 }
             }
         }
 
         if !merged_branches.is_empty() {
-            git.pull().ok();
             let digest = self.generate_digest(&merged_branches);
             self.notify(&self.config.pipeline_admin_chat, &digest);
             info!("Integration complete: {} merged", merged_branches.len());

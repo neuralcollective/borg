@@ -154,12 +154,18 @@ impl Sandbox {
 
     // --- docker backend ---
 
-    /// Return a `Command` that runs `command` inside a Docker container.
+    /// Return a `Command` that runs inside a Docker container.
+    ///
+    /// `binds`: `(host_path, container_path, read_only)`.
+    /// `env_vars`: passed as `-e KEY=VALUE` pairs.
+    /// `working_dir`: container working directory; skipped if empty.
+    /// `command`: appended after the image name (empty = use entrypoint default).
     pub fn docker_command(
         image: &str,
-        binds: &[(&str, &str)],
+        binds: &[(&str, &str, bool)],
         working_dir: &str,
         command: &[String],
+        env_vars: &[(&str, &str)],
     ) -> Command {
         let mut args = vec![
             "run".to_string(),
@@ -178,15 +184,26 @@ impl Sandbox {
             ].map(str::to_string));
         }
 
-        for (host, container) in binds {
+        for (host, container, ro) in binds {
             args.push("-v".to_string());
-            args.push(format!("{host}:{container}"));
+            if *ro {
+                args.push(format!("{host}:{container}:ro"));
+            } else {
+                args.push(format!("{host}:{container}"));
+            }
         }
 
-        args.push("-w".to_string());
-        args.push(working_dir.to_string());
-        args.push(image.to_string());
+        for (key, val) in env_vars {
+            args.push("-e".to_string());
+            args.push(format!("{key}={val}"));
+        }
 
+        if !working_dir.is_empty() {
+            args.push("-w".to_string());
+            args.push(working_dir.to_string());
+        }
+
+        args.push(image.to_string());
         args.extend_from_slice(command);
 
         let mut cmd = Command::new("docker");

@@ -1178,6 +1178,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                     auto_merge: false,
                     lint_cmd: String::new(),
                     backend: String::new(),
+                    repo_slug: String::new(),
                 },
                 session_dir: format!("{}/sessions/triage-{}", state.config.data_dir, proposal.id),
                 worktree_path: proposal.repo_path.clone(),
@@ -1739,6 +1740,7 @@ pub(crate) async fn list_repos_handler(
                 "backend": r.backend,
                 "test_cmd": r.test_cmd,
                 "auto_merge": r.auto_merge,
+                "repo_slug": r.repo_slug,
             })
         })
         .collect();
