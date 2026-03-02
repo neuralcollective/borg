@@ -1497,7 +1497,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         }
         let script = format!("{wt_path}/.borg/lint.sh");
         if std::path::Path::new(&script).exists() {
-            return Some(format!("bash '{script}'"));
+            return Some(format!("bash {}", sq(&script)));
         }
         None
     }
@@ -1538,10 +1538,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let container_mirror = format!("/mirrors/{repo_name}.git");
 
         // Shallow clone — test containers only need the branch tip.
-        // Wrap a value in single quotes with internal single quotes escaped.
-        fn sq(s: &str) -> String {
-            format!("'{}'", s.replace('\'', "'\\''"))
-        }
         let repo_url_q = sq(&task.repo_path);
         let branch_q = sq(&branch);
         let cmd_q = sq(cmd);
@@ -3175,6 +3171,11 @@ fn extract_field(block: &str, field: &str) -> Option<String> {
     None
 }
 
+/// Wrap `s` in single quotes with any internal single quotes escaped for POSIX sh.
+fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 fn looks_like_field_key(line: &str) -> bool {
     let trimmed = line.trim();
     if let Some(colon) = trimmed.find(':') {
@@ -3184,5 +3185,44 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sq;
+
+    #[test]
+    fn sq_plain_path() {
+        assert_eq!(sq("/workspace/repo"), "'/workspace/repo'");
+    }
+
+    #[test]
+    fn sq_path_with_single_quote() {
+        // A path like /tmp/it's/lint.sh must not break out of single-quoting.
+        let result = sq("/tmp/it's/lint.sh");
+        assert_eq!(result, "'/tmp/it'\\''s/lint.sh'");
+        // Verify the result is safe to embed in `sh -c`:
+        // The shell sees: '/tmp/it'\''s/lint.sh'
+        // which concatenates to the literal string /tmp/it's/lint.sh
+    }
+
+    #[test]
+    fn sq_path_multiple_quotes() {
+        let result = sq("a'b'c");
+        assert_eq!(result, "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn repo_lint_cmd_uses_sq_escaping() {
+        // If the fallback path is constructed via sq(), the returned command
+        // must contain the escaped form rather than a raw single-quoted path.
+        let plain = sq("/tmp/repo/.borg/lint.sh");
+        assert_eq!(plain, "'/tmp/repo/.borg/lint.sh'");
+
+        let quoted = sq("/tmp/re'po/.borg/lint.sh");
+        assert_eq!(quoted, "'/tmp/re'\\''po/.borg/lint.sh'");
+        // It must not contain an unescaped bare single quote between two path chars.
+        assert!(!quoted.contains("re'po"));
     }
 }
