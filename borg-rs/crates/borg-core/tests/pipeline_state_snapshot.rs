@@ -1,5 +1,3 @@
-use std::path::Path;
-
 /// Integration tests for pipeline-state snapshot files (spec.md).
 ///
 /// All tests in this file reference types and DB methods that do not exist
