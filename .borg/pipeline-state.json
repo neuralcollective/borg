@@ -1,0 +1,10 @@
+{
+  "task_id": 58,
+  "task_title": "Clean up cidfile in claude.rs on all exit paths from `run_docker`",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-58",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T22:14:12.713537617Z"
+}
