@@ -270,6 +270,10 @@ fn sanitize_upload_name(name: &str) -> String {
     }
 }
 
+fn sanitize_content_disposition_name(name: &str) -> String {
+    name.replace('"', "_").replace('\r', "").replace('\n', "")
+}
+
 /// Resolve a knowledge file path, canonicalizing to prevent traversal.
 fn safe_knowledge_path(data_dir: &str, file_name: &str) -> Option<std::path::PathBuf> {
     let base = std::path::Path::new(file_name)
@@ -761,12 +765,12 @@ pub(crate) async fn get_project_file_content(
         .await
         .map_err(internal)?;
 
-    let safe_name = row.file_name.replace('"', "_");
+    let safe_name = sanitize_content_disposition_name(&row.file_name);
     Ok(axum::response::Response::builder()
         .header("content-type", "application/octet-stream")
         .header("content-disposition", format!("attachment; filename=\"{safe_name}\""))
         .body(axum::body::Body::from(bytes))
-        .unwrap())
+        .map_err(internal)?)
 }
 
 pub(crate) async fn upload_project_files(
@@ -2076,3 +2080,39 @@ pub(crate) async fn get_task_container(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_content_disposition_name;
+
+    #[test]
+    fn normal_filename_unchanged() {
+        assert_eq!(sanitize_content_disposition_name("report.pdf"), "report.pdf");
+    }
+
+    #[test]
+    fn quotes_replaced_with_underscore() {
+        assert_eq!(sanitize_content_disposition_name("my\"file.txt"), "my_file.txt");
+    }
+
+    #[test]
+    fn carriage_return_stripped() {
+        assert_eq!(sanitize_content_disposition_name("file\r.txt"), "file.txt");
+    }
+
+    #[test]
+    fn newline_stripped() {
+        assert_eq!(sanitize_content_disposition_name("file\n.txt"), "file.txt");
+    }
+
+    #[test]
+    fn crlf_injection_stripped() {
+        let injected = "file.txt\r\nX-Evil: injected";
+        assert_eq!(sanitize_content_disposition_name(injected), "file.txtX-Evil: injected");
+    }
+
+    #[test]
+    fn combined_sanitization() {
+        assert_eq!(sanitize_content_disposition_name("\"bad\r\nfile\".txt"), "_badfile_.txt");
+    }
+}
