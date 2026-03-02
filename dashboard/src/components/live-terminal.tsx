@@ -151,5 +151,20 @@ function TermLineView({ line }: { line: TermLine }) {
     );
   }
 
+  if (line.type === "container") {
+    const colors: Record<string, string> = {
+      success: "text-emerald-400/80 border-emerald-500/20",
+      error: "text-red-400/80 border-red-500/20",
+      warn: "text-amber-400/80 border-amber-500/20",
+      info: "text-sky-400/70 border-sky-500/20",
+    };
+    const cls = colors[line.variant ?? "info"] ?? colors.info;
+    return (
+      <div className={cn("border-l-2 pl-2 py-0.5 text-[10px]", cls)}>
+        {line.content}
+      </div>
+    );
+  }
+
   return null;
 }

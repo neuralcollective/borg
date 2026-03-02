@@ -333,6 +333,15 @@ export interface StreamEvent {
   content?: unknown;
   output?: unknown;
   phase?: string;
+  // container_event fields
+  event?: string;
+  image?: string;
+  repo?: string;
+  branch?: string;
+  duration_ms?: number;
+  exit_code?: number;
+  stderr_tail?: string;
+  id?: string;
 }
 
 export function useProjects() {
@@ -549,6 +558,43 @@ export async function updateKnowledgeFile(
 
 export async function deleteKnowledgeFile(id: number): Promise<{ ok: boolean }> {
   const res = await fetch(`/api/knowledge/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+// ── Container & cache ───────────────────────────────────────────────────────
+
+export interface ContainerInfo {
+  task_id: number;
+  container_id: string;
+  status: string;
+}
+
+export function useTaskContainer(taskId: number | null, enabled: boolean) {
+  return useQuery<ContainerInfo>({
+    queryKey: ["task_container", taskId],
+    queryFn: () => fetchJson(`/api/tasks/${taskId}/container`),
+    enabled: taskId !== null && enabled,
+    refetchInterval: 5000,
+    retry: false,
+  });
+}
+
+export interface CacheVolume {
+  name: string;
+  size: number;
+}
+
+export function useCacheVolumes() {
+  return useQuery<{ volumes: CacheVolume[] }>({
+    queryKey: ["cache_volumes"],
+    queryFn: () => fetchJson("/api/cache"),
+    staleTime: 15_000,
+  });
+}
+
+export async function deleteCacheVolume(name: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/cache/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }

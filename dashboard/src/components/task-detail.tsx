@@ -1,4 +1,4 @@
-import { useTaskDetail, useTaskStream, retryTask, setTaskBackend } from "@/lib/api";
+import { useTaskDetail, useTaskStream, useTaskContainer, retryTask, setTaskBackend } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
@@ -20,6 +20,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const { data: task, isLoading } = useTaskDetail(taskId);
   const isActive = task ? isActiveStatus(task.status) : false;
   const { events, streaming } = useTaskStream(taskId, isActive);
+  const { data: container } = useTaskContainer(taskId, isActive);
   const { mode: uiMode } = useUIMode();
   const isMinimal = uiMode === "minimal";
   const queryClient = useQueryClient();
@@ -118,6 +119,19 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
               <option value="local">local</option>
             </select>
           </span>
+          {container && (
+            <span
+              className={cn(
+                "font-mono rounded px-1.5 py-0.5 text-[9px]",
+                container.status === "running"
+                  ? "bg-emerald-500/10 text-emerald-400"
+                  : "bg-zinc-500/10 text-zinc-500"
+              )}
+              title={`Container: ${container.container_id}`}
+            >
+              container {container.status}
+            </span>
+          )}
         </div>
       </div>
 

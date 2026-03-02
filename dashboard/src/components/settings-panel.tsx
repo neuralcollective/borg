@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useSettings, useStatus, updateSettings, useRepos, setRepoBackend, type Settings } from "@/lib/api";
+import { useSettings, useStatus, updateSettings, useRepos, setRepoBackend, useCacheVolumes, deleteCacheVolume, type Settings } from "@/lib/api";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -216,6 +216,9 @@ export function SettingsPanel() {
         {/* Per-Repo Settings */}
         <ReposSection />
 
+        {/* Docker Cache Volumes */}
+        <CacheSection />
+
         {/* System Info (read-only) */}
         <Section title="System">
           <InfoRow label="Version" value={status?.version ?? "--"} />
@@ -280,6 +283,51 @@ function ReposSection() {
             <option value="codex">codex</option>
             <option value="local">local</option>
           </select>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
+function CacheSection() {
+  const { data, refetch } = useCacheVolumes();
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const volumes = data?.volumes ?? [];
+
+  if (volumes.length === 0) return null;
+
+  function formatBytes(n: number) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function handleDelete(name: string) {
+    if (!confirm(`Delete Docker volume "${name}"?`)) return;
+    setDeleting(name);
+    try {
+      await deleteCacheVolume(name);
+      await refetch();
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  return (
+    <Section title="Docker Cache Volumes">
+      {volumes.map((vol) => (
+        <div key={vol.name} className="flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] font-mono text-zinc-300 truncate">{vol.name}</div>
+            <div className="text-[11px] text-zinc-600">{formatBytes(vol.size)}</div>
+          </div>
+          <button
+            onClick={() => handleDelete(vol.name)}
+            disabled={deleting === vol.name}
+            className="shrink-0 rounded-md border border-red-500/20 px-2.5 py-1 text-[11px] font-medium text-red-400/70 hover:border-red-500/40 hover:text-red-400 disabled:opacity-40 transition-colors"
+          >
+            {deleting === vol.name ? "Deleting..." : "Delete"}
+          </button>
         </div>
       ))}
     </Section>

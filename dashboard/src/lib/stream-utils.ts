@@ -106,12 +106,96 @@ export function parseStreamEvents(events: StreamEvent[]): TermLine[] {
         lines.push({ type: "phase_result", label: ev.phase || "", content });
       }
     } else if (ev.type === "container_event") {
-      const line = formatContainerEvent(ev as Record<string, unknown>);
+      const line = formatContainerEvent(ev as unknown as Record<string, unknown>);
       if (line) lines.push(line);
     }
   }
 
   return lines;
+}
+
+function formatContainerEvent(ev: Record<string, unknown>): TermLine | null {
+  const event = ev.event as string | undefined;
+  if (!event) return null;
+
+  switch (event) {
+    case "container_starting":
+      return {
+        type: "container",
+        variant: "info",
+        content: `Starting container: image=${ev.image ?? "?"} repo=${ev.repo ?? "?"} branch=${ev.branch ?? "?"}`,
+      };
+    case "agent_started":
+      return {
+        type: "container",
+        variant: "info",
+        content: `Agent started: model=${ev.model ?? "?"} repo=${ev.repo ?? "?"}`,
+      };
+    case "clone_started":
+      return {
+        type: "container",
+        variant: "info",
+        content: `Cloning ${ev.repo ?? "?"}${ev.branch ? ` (branch: ${ev.branch})` : ""}...`,
+      };
+    case "clone_complete":
+      return {
+        type: "container",
+        variant: "success",
+        content: `Clone complete${ev.duration_ms !== undefined ? ` (${ev.duration_ms}ms)` : ""}`,
+      };
+    case "setup_started":
+      return { type: "container", variant: "info", content: "Running setup script..." };
+    case "setup_complete":
+      return { type: "container", variant: "success", content: "Setup complete" };
+    case "agent_complete":
+      return { type: "container", variant: "success", content: "Agent run complete" };
+    case "agent_error":
+      return {
+        type: "container",
+        variant: "error",
+        content: `Agent error (exit ${ev.exit_code ?? "?"})${ev.stderr_tail ? `: ${String(ev.stderr_tail).slice(0, 200)}` : ""}`,
+      };
+    case "commit_complete":
+      return {
+        type: "container",
+        variant: "success",
+        content: `Committed: ${ev.message ?? ""}`,
+      };
+    case "commit_skipped":
+      return { type: "container", variant: "info", content: "No changes to commit" };
+    case "push_complete":
+      return {
+        type: "container",
+        variant: "success",
+        content: `Pushed branch: ${ev.branch ?? "?"}`,
+      };
+    case "push_failed":
+      return {
+        type: "container",
+        variant: "error",
+        content: `Push failed for branch: ${ev.branch ?? "?"}`,
+      };
+    case "container_id":
+      return {
+        type: "container",
+        variant: "info",
+        content: `Container ID: ${String(ev.id ?? "?").slice(0, 12)}`,
+      };
+    case "container_error":
+      return {
+        type: "container",
+        variant: "error",
+        content: `Container error (exit ${ev.exit_code ?? "?"})${ev.stderr_tail ? `: ${String(ev.stderr_tail).slice(0, 200)}` : ""}`,
+      };
+    case "container_exiting":
+      return {
+        type: "container",
+        variant: ev.exit_code === 0 ? "success" : "warn",
+        content: `Container exiting (exit ${ev.exit_code ?? "?"})`,
+      };
+    default:
+      return { type: "container", variant: "info", content: `${event}` };
+  }
 }
 
 export interface ParsedStreamEvent {
@@ -167,6 +251,9 @@ export function parseRawStream(raw: string): ParsedStreamEvent[] {
         if (obj.subtype === "init") {
           events.push({ type: "system", subtype: "init", content: `Session: ${obj.session_id || "?"}` });
         }
+      } else if (type === "container_event") {
+        const line = formatContainerEvent(obj as Record<string, unknown>);
+        if (line) events.push({ type: "container_event", content: line.content, subtype: line.variant });
       }
     } catch {
       // skip unparseable lines
