@@ -606,7 +606,7 @@ impl Pipeline {
 
         let branch = format!("task-{}", task.id);
         let wt_dir = format!("{}/.worktrees", task.repo_path);
-        tokio::fs::create_dir_all(&wt_dir).await.ok();
+        tokio::fs::create_dir_all(&wt_dir).await?;
         let wt_path = format!("{wt_dir}/task-{}", task.id);
 
         // Serialize worktree creation to avoid .git/config lock contention.
