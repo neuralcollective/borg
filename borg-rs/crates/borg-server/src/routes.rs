@@ -513,8 +513,6 @@ pub(crate) async fn run_chat_agent(
         match legal_mcp_path.canonicalize() {
             Ok(mcp_server) => {
                 tracing::info!(chat_key, path = %mcp_server.display(), "wiring lawborg-mcp for chat");
-                let mcp_dir = format!("{session_dir}/mcp");
-                std::fs::create_dir_all(&mcp_dir).ok();
                 let mut env_vars = serde_json::Map::new();
                 let providers = ["lexisnexis", "westlaw", "clio", "imanage",
                     "netdocuments", "congress", "openstates", "canlii", "regulations_gov"];
@@ -544,11 +542,14 @@ pub(crate) async fn run_chat_agent(
                         }
                     }
                 });
-                let config_path = format!("{mcp_dir}/mcp-config.json");
-                if std::fs::write(&config_path, config_json.to_string()).is_ok() {
-                    args.push("--mcp-config".to_string());
-                    args.push(config_path);
+                // Write .mcp.json to session dir so Claude auto-discovers it on resume
+                let mcp_json_path = format!("{session_dir}/.mcp.json");
+                if let Err(e) = std::fs::write(&mcp_json_path, config_json.to_string()) {
+                    tracing::warn!(chat_key, "failed to write .mcp.json: {e}");
                 }
+                // Also pass via --mcp-config for the current invocation
+                args.push("--mcp-config".to_string());
+                args.push(mcp_json_path);
             }
             Err(e) => {
                 tracing::warn!(chat_key, path = %legal_mcp_path.display(), "lawborg-mcp not found: {e}");
