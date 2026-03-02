@@ -1,0 +1,10 @@
+{
+  "task_id": 40,
+  "task_title": "Test db.rs parse_ts() with invalid and boundary inputs",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-40",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T20:37:09.218349310Z"
+}
