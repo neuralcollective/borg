@@ -1,0 +1,10 @@
+{
+  "task_id": 55,
+  "task_title": "Fix overflow in `parse_docker_size` when input value is very large",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-55",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T22:07:11.375965737Z"
+}
