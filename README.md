@@ -1,6 +1,6 @@
 # Borg
 
-Autonomous Software Engineering System — runs an engineering pipeline that writes specs, generates tests, implements code, and merges PRs with zero human intervention. Ships with a real-time web dashboard for monitoring and approval. Also serves as a chat agent across Telegram, Discord, and WhatsApp.
+Autonomous AI agent orchestrator — runs domain-specific pipelines that research, draft, implement, review, and ship work end-to-end. Built-in modes for software engineering, legal, healthcare admin, construction, sales, data analysis, and more. Ships with a real-time web dashboard and chat integration across Telegram, Discord, and WhatsApp.
 
 ## Quick Start
 
@@ -15,50 +15,70 @@ Create `.env`:
 TELEGRAM_BOT_TOKEN=<from @BotFather>
 ASSISTANT_NAME=Borg
 PIPELINE_REPO=/path/to/your/repo
-PIPELINE_TEST_CMD=zig build test
+PIPELINE_TEST_CMD="cargo test"
 ```
 
 ```bash
-just r   # build and run
+just ship   # test, build, deploy
 ```
 
-Dashboard at `http://127.0.0.1:3131`. Send `/register` in a Telegram group, then mention `@Borg`.
+Dashboard at `http://127.0.0.1:3131`.
+
+## Pipeline Modes
+
+Each mode defines its own phases, system prompts, tools, and autonomous scanning presets.
+
+| Mode | Label | Category | Description |
+|---|---|---|---|
+| `sweborg` | Software Engineering | Engineering | Implement → validate → lint → rebase. Docker-isolated agents. |
+| `webborg` | Frontend | Engineering | Web performance, accessibility, visual polish, UX improvements. |
+| `databorg` | Data Analysis | Engineering | Data quality audits, pipeline review, insight discovery. |
+| `lawborg` | Legal | Professional Services | Contract analysis, case research, regulatory compliance. Integrates with CourtListener, EDGAR, Federal Register, and premium research tools (LexisNexis, Westlaw) via MCP. |
+| `healthborg` | Healthcare Admin | Professional Services | Insurance appeals, prior authorization, medical bill review. Regulatory research via shared legal MCP. |
+| `buildborg` | Construction | Professional Services | Permit research, contractor search, cost estimation, code compliance. Powered by Shovels permit database via MCP. |
+| `salesborg` | Sales Outreach | Professional Services | Prospect research, personalised outreach drafting, follow-up sequences. |
+| `crewborg` | Talent Search | People & Ops | Candidate sourcing, evaluation, and ranked shortlists. |
+| `chefborg` | Recipe Dev | Creative | Recipe development and testing with nutritional analysis. |
+
+Modes are extensible — create custom modes with your own phases, prompts, and tools via the dashboard or API.
 
 ## How It Works
 
-### Chat
-
-Mention the bot by name in a registered group and it responds using Claude Code as a subprocess. Messages are batched in a short collection window, then the agent runs with the full conversation context. Each group has its own state machine (`IDLE → COLLECTING → RUNNING → COOLDOWN`) with rate limiting.
-
 ### Pipeline
 
-When `PIPELINE_REPO` is set, Borg runs an autonomous engineering pipeline. Tasks move through phases:
+Tasks move through configurable phases. A typical engineering task:
 
 1. **Backlog** — git worktree created on a new branch
-2. **Spec** — manager agent writes `spec.md` (requirements, files, acceptance criteria)
-3. **QA** — QA agent writes failing tests based on the spec
-4. **Impl** — worker agent implements code to pass the tests (Docker-isolated)
-5. **Test** — repo test command runs; failures retry up to 5 times
-6. **Done** — branch queued for integration
-7. **Release** — PR created, rebased on main, merged (or held for manual review)
+2. **Implement** — agent writes code with full tool access (Read, Write, Edit, Bash, etc.)
+3. **Validate** — test command runs; failures retry back to implement
+4. **Lint** — auto-fix linting issues
+5. **Rebase** — rebase onto main, resolve conflicts
+6. **Integration** — PR created, merged (or held for manual review)
 
-Each task gets its own git worktree. Impl agents run in Docker containers with `--cap-drop ALL`. Rebase agents run on the host. Sessions persist across retries via per-task session dirs.
+Professional services modes (legal, health, construction, sales) use an implement → review flow where an independent reviewer checks the work before completion.
 
-When `CONTINUOUS_MODE=true`, the pipeline auto-seeds tasks by scanning repos for refactoring opportunities, bugs, and missing test coverage.
+Each task gets its own git worktree. Agents can run in Docker containers with `--cap-drop ALL` or in bubblewrap sandboxes. Sessions persist across retries.
+
+### Autonomous Scanning
+
+When `CONTINUOUS_MODE=true`, each mode's preset scanners periodically analyse repos and create tasks. Examples: security audits, dependency updates, performance issues, accessibility gaps, contract review opportunities, data quality checks.
+
+### MCP Integrations
+
+Domain-specific MCP (Model Context Protocol) servers extend agent capabilities:
+
+- **Legal** — CourtListener case law, SEC EDGAR filings, Federal Register, state legislation, plus BYOK premium tools
+- **Construction** — Shovels V2 permit database (170M+ permits, contractor profiles, geographic search)
+- **Banking** — Plaid API (accounts, transactions, balances, identity)
+- **OCR** — kreuzberg document extraction (when installed)
+
+### Chat
+
+Mention the bot by name in a registered Telegram/Discord/WhatsApp group. Messages are batched, then the agent runs with full conversation context. Each group has its own state machine with rate limiting.
 
 ### Self-Update
 
-When a merge lands on the primary repo (`is_self=true`), Borg rebuilds itself and restarts via `execve`.
-
-### Bot Commands
-
-| Command | Description |
-|---|---|
-| `/register` | Register chat for bot responses |
-| `/task <title>` | Create a pipeline task |
-| `/tasks` | List pipeline tasks |
-| `/status` | Version, uptime, config |
-| `/ping` | Health check |
+When a merge lands on the primary repo, Borg rebuilds itself and restarts automatically.
 
 ## Configuration
 
@@ -69,47 +89,32 @@ When a merge lands on the primary repo (`is_self=true`), Borg rebuilds itself an
 | `DISCORD_TOKEN` | — | Discord bot token |
 | `WHATSAPP_ENABLED` | `false` | Enable WhatsApp bridge |
 | `PIPELINE_REPO` | — | Primary repo path (enables pipeline) |
-| `PIPELINE_TEST_CMD` | `zig build test` | Test command for primary repo |
+| `PIPELINE_TEST_CMD` | — | Test command for primary repo |
 | `PIPELINE_AUTO_MERGE` | `true` | Auto-merge PRs for primary repo |
 | `WATCHED_REPOS` | — | Additional repos: `path:cmd\|path:cmd` |
-| `WEB_BIND` | `127.0.0.1` | Dashboard bind address (`0.0.0.0` for remote) |
+| `WEB_BIND` | `127.0.0.1` | Dashboard bind address |
 | `WEB_PORT` | `3131` | Dashboard port |
 | `CONTINUOUS_MODE` | `false` | Auto-seed tasks when idle |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model for all agents |
 | `RELEASE_INTERVAL_MINS` | `180` | Min interval between integration runs |
-| `AGENT_TIMEOUT_S` | `1000` | Max agent runtime in seconds |
 | `MAX_CONCURRENT_AGENTS` | `4` | Global concurrent agent limit |
-| `MAX_PIPELINE_AGENTS` | `4` | Max concurrent pipeline agents |
-| `PIPELINE_ADMIN_CHAT` | — | Telegram chat ID for pipeline notifications |
 
 ### Merge Modes
 
-By default, PRs are auto-merged after passing tests. To require manual merge review:
-
-- **Primary repo**: set `PIPELINE_AUTO_MERGE=false`
-- **Watched repos**: append `!manual` to the entry: `/path/to/repo:make test!manual`
-
-Manual-merge repos still get PRs created, pushed, and rebased automatically — they just skip the merge step.
-
-### Multi-Repo
-
-```bash
-PIPELINE_REPO=/home/me/myproject
-PIPELINE_TEST_CMD=zig build test
-WATCHED_REPOS=/home/me/work-repo:make test!manual|/home/me/other:npm test
-```
-
-The dashboard shows a repo filter dropdown when multiple repos are configured.
+PRs are auto-merged by default. For manual review, set `PIPELINE_AUTO_MERGE=false` or append `!manual` to watched repo entries.
 
 ## Commands
 
 | Just | Description |
 |---|---|
-| `just r` | Build and run |
+| `just ship` | Test, build dashboard, deploy |
 | `just t` | Run tests |
-| `just b` | Build only |
+| `just b` | Build release binary |
 | `just dash` | Build dashboard |
-| `just image` | Build Docker agent image |
-| `just setup` | Full setup |
+| `just setup` | Full setup (image + sidecar + dashboard + build) |
 
-Requires Zig 0.14.1+, Docker, Bun.
+Requires Rust, Docker, Bun.
+
+## License
+
+Business Source License 1.1 — see [LICENSE](LICENSE). Changes to AGPL v3.0 on 2030-01-01.
