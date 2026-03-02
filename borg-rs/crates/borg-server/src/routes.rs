@@ -1729,7 +1729,7 @@ pub(crate) async fn post_chat(
     let rate = state.config.chat_rate_limit.max(1) as u64;
     let cooldown = std::time::Duration::from_secs(60 / rate);
     {
-        let mut map = state.chat_rate.lock().unwrap();
+        let mut map = state.chat_rate.lock().unwrap_or_else(|e| e.into_inner());
         let now = std::time::Instant::now();
         if let Some(last) = map.get(&thread) {
             if now.duration_since(*last) < cooldown {
