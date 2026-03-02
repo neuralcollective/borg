@@ -663,10 +663,18 @@ pub(crate) async fn run_chat_agent(
 
 /// Build a release binary and replace the running process via execve.
 /// Returns true only if execve was invoked (this process should be replaced).
-pub(crate) async fn rebuild_and_exec(repo_path: &str) -> bool {
+pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
     let build_dir = format!("{repo_path}/borg-rs");
-    let build = tokio::process::Command::new("cargo")
-        .args(["build", "--release"])
+    let parts: Vec<&str> = build_cmd.split_whitespace().collect();
+    let (cmd, args) = match parts.split_first() {
+        Some((c, a)) => (*c, a),
+        None => {
+            tracing::error!("empty build_cmd");
+            return false;
+        }
+    };
+    let build = tokio::process::Command::new(cmd)
+        .args(args)
         .current_dir(&build_dir)
         .status()
         .await;
@@ -908,10 +916,14 @@ pub(crate) async fn retry_task(
 pub(crate) async fn retry_all_failed(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
+    const MAX_RETRY_BATCH: usize = 20;
     let tasks = state.db.list_all_tasks(None).map_err(internal)?;
     let mut count = 0;
     for task in &tasks {
         if task.status == "failed" {
+            if count >= MAX_RETRY_BATCH {
+                break;
+            }
             state.db.requeue_task(task.id).map_err(internal)?;
             count += 1;
         }
@@ -1155,6 +1167,10 @@ pub(crate) async fn reopen_proposal(
 }
 
 pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json<Value> {
+    if state.triage_running.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Json(json!({ "scored": 0, "error": "triage already running" }));
+    }
+
     let proposals = match state.db.list_untriaged_proposals() {
         Ok(p) => p,
         Err(e) => {
@@ -1181,6 +1197,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
         .or_else(|_| std::env::var("CLAUDE_CODE_OAUTH_TOKEN"))
         .unwrap_or_default();
 
+    let triage_flag = Arc::clone(&state.triage_running);
     tokio::spawn(async move {
         for proposal in proposals {
             let prompt = format!(
@@ -1282,6 +1299,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 Err(e) => tracing::error!("triage agent for proposal #{}: {e}", proposal.id),
             }
         }
+        triage_flag.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 
     Json(json!({ "scored": count }))
@@ -1899,7 +1917,8 @@ pub(crate) async fn delete_cache_volume(
     State(_state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    if !name.starts_with("borg-cache-") {
+    // Only allow alphanumeric, hyphens, and underscores in volume names
+    if !name.starts_with("borg-cache-") || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(StatusCode::BAD_REQUEST);
     }
     let removed = borg_core::sandbox::Sandbox::remove_volume(&name).await;

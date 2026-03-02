@@ -52,6 +52,7 @@ pub struct AppState {
     pub backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>,
     pub force_restart: Arc<std::sync::atomic::AtomicBool>,
     pub chat_rate: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
+    pub triage_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -397,6 +398,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(self_repo) = config.watched_repos.iter().find(|r| r.is_self).cloned() {
         let check_interval = config.remote_check_interval_s as u64;
         let force_restart_check = Arc::clone(&force_restart);
+        let build_cmd = config.build_cmd.clone();
         tokio::spawn(async move {
             let git = borg_core::git::Git::new(&self_repo.path);
             let mut last_head = git.rev_parse_head().unwrap_or_default();
@@ -406,7 +408,7 @@ async fn main() -> anyhow::Result<()> {
 
                 if force_restart_check.load(std::sync::atomic::Ordering::Relaxed) {
                     tracing::info!("Force restart requested via /api/release, rebuilding...");
-                    if routes::rebuild_and_exec(&self_repo.path).await {
+                    if routes::rebuild_and_exec(&self_repo.path, &build_cmd).await {
                         force_restart_check.store(false, std::sync::atomic::Ordering::Relaxed);
                     } else {
                         tracing::warn!("Force restart rebuild failed; will retry");
@@ -433,7 +435,7 @@ async fn main() -> anyhow::Result<()> {
                     &remote_head[..8.min(remote_head.len())]
                 );
                 tracing::info!("Self-update: rebuilding...");
-                if routes::rebuild_and_exec(&self_repo.path).await {
+                if routes::rebuild_and_exec(&self_repo.path, &build_cmd).await {
                     // Only advance last_head after a successful execve replaces us.
                     // If build failed, we retry this same remote_head next loop.
                     last_head = remote_head;
@@ -664,6 +666,7 @@ async fn main() -> anyhow::Result<()> {
         backends,
         force_restart,
         chat_rate: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        triage_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let dashboard_dir = config.dashboard_dist_dir.clone();
@@ -811,10 +814,14 @@ async fn main() -> anyhow::Result<()> {
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
 
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         res = server => { res?; }
         _ = tokio::signal::ctrl_c() => {
-            info!("shutdown signal received");
+            info!("shutdown signal received (SIGINT)");
+        }
+        _ = sigterm.recv() => {
+            info!("shutdown signal received (SIGTERM)");
         }
     }
 
