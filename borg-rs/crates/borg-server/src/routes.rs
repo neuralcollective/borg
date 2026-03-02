@@ -270,6 +270,21 @@ fn sanitize_upload_name(name: &str) -> String {
     }
 }
 
+/// Resolve a knowledge file path, canonicalizing to prevent traversal.
+fn safe_knowledge_path(data_dir: &str, file_name: &str) -> Option<std::path::PathBuf> {
+    let base = std::path::Path::new(file_name)
+        .file_name()?
+        .to_str()?;
+    let dir = std::path::Path::new(data_dir).join("knowledge");
+    let full = dir.join(base);
+    // Ensure the resolved path stays inside the knowledge directory
+    if full.starts_with(&dir) {
+        Some(full)
+    } else {
+        None
+    }
+}
+
 fn project_chat_key(project_id: i64) -> String {
     format!("project:{project_id}")
 }
@@ -325,7 +340,11 @@ fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
     let dest_dir = format!("{session_dir}/project_files");
     let _ = std::fs::create_dir_all(&dest_dir);
     for file in files {
-        let dest = format!("{dest_dir}/{}", file.file_name);
+        let safe_name = std::path::Path::new(&file.file_name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed");
+        let dest = format!("{dest_dir}/{safe_name}");
         let _ = std::fs::copy(&file.stored_path, &dest);
     }
 }
@@ -654,7 +673,14 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str) -> bool {
     match build {
         Ok(s) if s.success() => {
             tracing::info!("Build done, restarting");
-            let bin = format!("{repo_path}/borg-rs/target/release/borg-server");
+            // Use the current executable path (immutable) instead of deriving from config
+            let bin = match std::env::current_exe() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("failed to resolve current_exe: {e}");
+                    return false;
+                }
+            };
             use std::os::unix::process::CommandExt;
             let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
             let err = std::process::Command::new(&bin).args(&args[1..]).exec();
@@ -727,8 +753,10 @@ pub(crate) async fn get_project_file_content(
         .await
         .map_err(internal)?;
 
+    let safe_name = row.file_name.replace('"', "_");
     Ok(axum::response::Response::builder()
-        .header("content-type", &row.mime_type)
+        .header("content-type", "application/octet-stream")
+        .header("content-disposition", format!("attachment; filename=\"{safe_name}\""))
         .body(axum::body::Body::from(bytes))
         .unwrap())
 }
@@ -953,6 +981,9 @@ pub(crate) async fn post_task_message(
     match state.db.get_task(id).map_err(internal)? {
         None => Err(StatusCode::NOT_FOUND),
         Some(_) => {
+            if body.role != "user" && body.role != "system" {
+                return Err(StatusCode::BAD_REQUEST);
+            }
             state
                 .db
                 .insert_task_message(id, &body.role, &body.content)
@@ -1081,7 +1112,10 @@ pub(crate) async fn approve_proposal(
         notify_chat: String::new(),
         created_at: Utc::now(),
         session_id: String::new(),
-        mode: "sweborg".into(),
+        mode: state.config.watched_repos.iter()
+            .find(|r| r.path == proposal.repo_path)
+            .map(|r| r.mode.clone())
+            .unwrap_or_else(|| "sweborg".into()),
         backend: String::new(),
     };
     let task_id = state.db.insert_task(&task).map_err(internal)?;
@@ -1668,10 +1702,27 @@ pub(crate) async fn post_chat(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ChatPostBody>,
 ) -> Result<Json<Value>, StatusCode> {
+    if body.text.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let thread = body
         .thread
         .clone()
         .unwrap_or_else(|| "web:dashboard".to_string());
+
+    // Rate limit: one message per (60 / chat_rate_limit) seconds per thread
+    let rate = state.config.chat_rate_limit.max(1) as u64;
+    let cooldown = std::time::Duration::from_secs(60 / rate);
+    {
+        let mut map = state.chat_rate.lock().unwrap();
+        let now = std::time::Instant::now();
+        if let Some(last) = map.get(&thread) {
+            if now.duration_since(*last) < cooldown {
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+        }
+        map.insert(thread.clone(), now);
+    }
     let sender = body
         .sender
         .clone()
@@ -1931,8 +1982,9 @@ pub(crate) async fn delete_knowledge(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
     if let Ok(Some(file)) = state.db.get_knowledge_file(id) {
-        let path = format!("{}/knowledge/{}", state.config.data_dir, file.file_name);
-        let _ = std::fs::remove_file(&path);
+        if let Some(safe_path) = safe_knowledge_path(&state.config.data_dir, &file.file_name) {
+            let _ = std::fs::remove_file(&safe_path);
+        }
     }
     state.db.delete_knowledge_file(id).map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
@@ -1948,11 +2000,19 @@ pub(crate) async fn get_knowledge_content(
         .get_knowledge_file(id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let path = format!("{}/knowledge/{}", state.config.data_dir, file.file_name);
+    let path = safe_knowledge_path(&state.config.data_dir, &file.file_name)
+        .ok_or(StatusCode::BAD_REQUEST)?;
     let bytes = std::fs::read(&path).map_err(|_| StatusCode::NOT_FOUND)?;
+    let disp = format!(
+        "attachment; filename=\"{}\"",
+        file.file_name.replace('"', "_")
+    );
     Ok((
         axum::http::StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (axum::http::header::CONTENT_DISPOSITION, disp),
+        ],
         bytes,
     )
         .into_response())
@@ -2000,35 +2060,3 @@ pub(crate) async fn get_task_container(
     }
 }
 
-#[derive(Deserialize)]
-pub(crate) struct ContainerExecBody {
-    pub cmd: Vec<String>,
-}
-
-pub(crate) async fn post_task_container_exec(
-    State(state): State<Arc<AppState>>,
-    Path(task_id): Path<i64>,
-    Json(body): Json<ContainerExecBody>,
-) -> Result<Json<Value>, StatusCode> {
-    if body.cmd.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let container_id = container_id_from_stream(&state, task_id)
-        .await
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let out = tokio::process::Command::new("docker")
-        .arg("exec")
-        .arg(&container_id)
-        .args(&body.cmd)
-        .output()
-        .await
-        .map_err(internal)?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    Ok(Json(json!({
-        "container_id": container_id,
-        "exit_code": out.status.code().unwrap_or(-1),
-        "stdout": stdout,
-        "stderr": stderr,
-    })))
-}

@@ -51,6 +51,7 @@ pub struct AppState {
     pub web_sessions: Arc<TokioMutex<HashMap<String, String>>>,
     pub backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>,
     pub force_restart: Arc<std::sync::atomic::AtomicBool>,
+    pub chat_rate: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
 }
 
 impl AppState {
@@ -662,6 +663,7 @@ async fn main() -> anyhow::Result<()> {
         web_sessions: Arc::new(TokioMutex::new(HashMap::new())),
         backends,
         force_restart,
+        chat_rate: Arc::new(std::sync::Mutex::new(HashMap::new())),
     });
 
     let dashboard_dir = config.dashboard_dist_dir.clone();
@@ -687,7 +689,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/tasks/:id/stream", get(routes::sse_task_stream))
         .route("/api/tasks/:id/container", get(routes::get_task_container))
-        .route("/api/tasks/:id/container/exec", post(routes::post_task_container_exec))
         // Task messages
         .route("/api/tasks/:id/messages", get(routes::get_task_messages))
         .route("/api/tasks/:id/messages", post(routes::post_task_message))
