@@ -364,6 +364,15 @@ export function useProjectFiles(projectId: number | null) {
   });
 }
 
+export async function fetchProjectFileContent(
+  projectId: number,
+  fileId: number
+): Promise<ArrayBuffer> {
+  const res = await fetch(`/api/projects/${projectId}/files/${fileId}/content`);
+  if (!res.ok) throw new Error(`Failed to load file (${res.status})`);
+  return res.arrayBuffer();
+}
+
 export async function uploadProjectFiles(
   projectId: number,
   files: FileList | File[]

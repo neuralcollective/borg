@@ -8,7 +8,9 @@ import {
   useProjectFiles,
   useProjects,
 } from "@/lib/api";
-import { Mic, MicOff } from "lucide-react";
+import { Eye, Mic, MicOff } from "lucide-react";
+import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
+import type { ProjectFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { BorgingIndicator } from "./borging";
@@ -47,6 +49,7 @@ export function ProjectsPanel() {
     isFetching: filesLoading,
   } = useProjectFiles(activeProjectId);
 
+  const [previewFile, setPreviewFile] = useState<ProjectFile | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -266,7 +269,18 @@ export function ProjectsPanel() {
                 {files.map((f) => (
                   <div key={f.id} className="flex items-center justify-between border-b border-white/[0.04] px-2 py-1 text-[11px] text-zinc-400 last:border-0">
                     <span className="truncate pr-2">{f.file_name}</span>
-                    <span className="shrink-0 text-zinc-600">{formatBytes(f.size_bytes)}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {isPreviewable(f) && (
+                        <button
+                          onClick={() => setPreviewFile(f)}
+                          className="text-zinc-600 transition-colors hover:text-zinc-300"
+                          title="Preview"
+                        >
+                          <Eye className="h-3 w-3" />
+                        </button>
+                      )}
+                      <span className="text-zinc-600">{formatBytes(f.size_bytes)}</span>
+                    </div>
                   </div>
                 ))}
                 {files.length === 0 && (
@@ -346,6 +360,13 @@ export function ProjectsPanel() {
           </>
         )}
       </div>
+      {previewFile && activeProjectId && (
+        <FilePreviewModal
+          file={previewFile}
+          projectId={activeProjectId}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </div>
   );
 }

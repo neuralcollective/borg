@@ -648,6 +648,22 @@ impl Db {
         Ok(files)
     }
 
+    pub fn get_project_file(
+        &self,
+        project_id: i64,
+        file_id: i64,
+    ) -> Result<Option<ProjectFileRow>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, created_at \
+             FROM project_files WHERE id=?1 AND project_id=?2",
+            params![file_id, project_id],
+            row_to_project_file,
+        )
+        .optional()
+        .context("get_project_file")
+    }
+
     pub fn insert_project_file(
         &self,
         project_id: i64,
