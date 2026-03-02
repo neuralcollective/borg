@@ -42,6 +42,21 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
     last_content
 }
 
+pub fn provider_env_var(provider: &str) -> Option<&'static str> {
+    match provider {
+        "lexisnexis" => Some("LEXISNEXIS_API_KEY"),
+        "westlaw" => Some("WESTLAW_API_KEY"),
+        "clio" => Some("CLIO_API_KEY"),
+        "imanage" => Some("IMANAGE_API_KEY"),
+        "netdocuments" => Some("NETDOCUMENTS_API_KEY"),
+        "congress" => Some("CONGRESS_API_KEY"),
+        "openstates" => Some("OPENSTATES_API_KEY"),
+        "canlii" => Some("CANLII_API_KEY"),
+        "regulations_gov" => Some("REGULATIONS_GOV_API_KEY"),
+        _ => None,
+    }
+}
+
 fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
     if trimmed.contains("cargo test") {
@@ -268,19 +283,9 @@ impl AgentBackend for ClaudeBackend {
                     Ok(p) => {
                         let mut env_vars = serde_json::Map::new();
                         for (provider, key) in &ctx.api_keys {
-                            let env_name = match provider.as_str() {
-                                "lexisnexis" => "LEXISNEXIS_API_KEY",
-                                "westlaw" => "WESTLAW_API_KEY",
-                                "clio" => "CLIO_API_KEY",
-                                "imanage" => "IMANAGE_API_KEY",
-                                "netdocuments" => "NETDOCUMENTS_API_KEY",
-                                "congress" => "CONGRESS_API_KEY",
-                                "openstates" => "OPENSTATES_API_KEY",
-                                "canlii" => "CANLII_API_KEY",
-                                "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                                _ => continue,
-                            };
-                            env_vars.insert(env_name.into(), serde_json::Value::String(key.clone()));
+                            if let Some(env_name) = provider_env_var(provider.as_str()) {
+                                env_vars.insert(env_name.into(), serde_json::Value::String(key.clone()));
+                            }
                         }
                         mcp_servers.insert("legal".into(), serde_json::json!({
                             "command": "bun",

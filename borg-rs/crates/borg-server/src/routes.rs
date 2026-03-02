@@ -24,6 +24,8 @@ use tokio_stream::{
     StreamExt,
 };
 
+use borg_agent::provider_env_var;
+
 use crate::AppState;
 
 // ── Error helper ──────────────────────────────────────────────────────────
@@ -553,19 +555,9 @@ pub(crate) async fn run_chat_agent(
                     "netdocuments", "congress", "openstates", "canlii", "regulations_gov"];
                 for provider in providers {
                     if let Ok(Some(key)) = db.get_api_key("global", provider) {
-                        let env_name = match provider {
-                            "lexisnexis" => "LEXISNEXIS_API_KEY",
-                            "westlaw" => "WESTLAW_API_KEY",
-                            "clio" => "CLIO_API_KEY",
-                            "imanage" => "IMANAGE_API_KEY",
-                            "netdocuments" => "NETDOCUMENTS_API_KEY",
-                            "congress" => "CONGRESS_API_KEY",
-                            "openstates" => "OPENSTATES_API_KEY",
-                            "canlii" => "CANLII_API_KEY",
-                            "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                            _ => continue,
-                        };
-                        env_vars.insert(env_name.into(), serde_json::Value::String(key));
+                        if let Some(env_name) = provider_env_var(provider) {
+                            env_vars.insert(env_name.into(), serde_json::Value::String(key));
+                        }
                     }
                 }
                 let config_json = serde_json::json!({
