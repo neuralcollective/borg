@@ -42,6 +42,13 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
     last_content
 }
 
+fn repo_name(task: &Task) -> String {
+    std::path::Path::new(&task.repo_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
     if trimmed.contains("cargo test") {
@@ -122,10 +129,7 @@ impl ClaudeBackend {
             phase.commit_message.clone()
         };
 
-        let repo_name = std::path::Path::new(&task.repo_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let repo_name = repo_name(task);
         let branch = format!("task-{}", task.id);
         let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
 
@@ -186,19 +190,11 @@ impl ClaudeBackend {
     }
 
     fn host_mirror_path(task: &Task, data_dir: &str) -> String {
-        let repo_name = std::path::Path::new(&task.repo_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        format!("{data_dir}/mirrors/{repo_name}.git")
+        format!("{data_dir}/mirrors/{}.git", repo_name(task))
     }
 
     fn container_mirror_path(task: &Task) -> String {
-        let repo_name = std::path::Path::new(&task.repo_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        format!("/mirrors/{repo_name}.git")
+        format!("/mirrors/{}.git", repo_name(task))
     }
 }
 
@@ -398,15 +394,11 @@ impl AgentBackend for ClaudeBackend {
         full_cmd.extend(claude_args);
 
         if is_docker {
-            let repo_name = std::path::Path::new(&task.repo_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
             let evt = serde_json::json!({
                 "type": "container_event",
                 "event": "container_starting",
                 "image": self.docker_image,
-                "repo": repo_name,
+                "repo": repo_name(task),
                 "branch": format!("task-{}", task.id),
             })
             .to_string();
@@ -461,10 +453,7 @@ impl AgentBackend for ClaudeBackend {
                     binds.push((ctx.knowledge_dir.clone(), "/knowledge".to_string(), true));
                 }
 
-                let repo_name = std::path::Path::new(&task.repo_path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+                let repo_name = repo_name(task);
 
                 // Per-branch cache volumes — tasks on different branches get isolated
                 // target dirs, while retries on the same branch reuse the same cache.
@@ -771,5 +760,54 @@ impl AgentBackend for ClaudeBackend {
     async fn interrupt(&self, session_id: &str) -> Result<()> {
         warn!(session_id = %session_id, "interrupt not yet implemented");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_task(repo_path: &str) -> Task {
+        Task {
+            id: 1,
+            title: String::new(),
+            description: String::new(),
+            repo_path: repo_path.to_string(),
+            branch: String::new(),
+            status: String::new(),
+            attempt: 0,
+            max_attempts: 1,
+            last_error: String::new(),
+            created_by: String::new(),
+            notify_chat: String::new(),
+            created_at: Default::default(),
+            session_id: String::new(),
+            mode: String::new(),
+            backend: String::new(),
+        }
+    }
+
+    #[test]
+    fn repo_name_extracts_last_component() {
+        let t = make_task("/home/user/myrepo");
+        assert_eq!(repo_name(&t), "myrepo");
+    }
+
+    #[test]
+    fn repo_name_trailing_slash() {
+        let t = make_task("/home/user/myrepo/");
+        assert_eq!(repo_name(&t), "myrepo");
+    }
+
+    #[test]
+    fn repo_name_bare_name() {
+        let t = make_task("myrepo");
+        assert_eq!(repo_name(&t), "myrepo");
+    }
+
+    #[test]
+    fn repo_name_empty_path() {
+        let t = make_task("");
+        assert_eq!(repo_name(&t), "");
     }
 }
