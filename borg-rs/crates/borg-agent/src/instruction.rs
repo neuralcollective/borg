@@ -128,3 +128,128 @@ fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_repo_prompt;
+    use borg_core::db::KnowledgeFile;
+    use borg_core::types::{PhaseContext, RepoConfig, Task};
+
+    fn make_ctx(prompt_file: &str, worktree_path: &str, repo_path: &str) -> PhaseContext {
+        PhaseContext {
+            task: Task {
+                id: 0,
+                title: String::new(),
+                description: String::new(),
+                repo_path: String::new(),
+                branch: String::new(),
+                status: String::new(),
+                attempt: 0,
+                max_attempts: 1,
+                last_error: String::new(),
+                created_by: String::new(),
+                notify_chat: String::new(),
+                created_at: chrono::Utc::now(),
+                session_id: String::new(),
+                mode: String::new(),
+                backend: String::new(),
+            },
+            repo_config: RepoConfig {
+                path: repo_path.to_string(),
+                test_cmd: String::new(),
+                prompt_file: prompt_file.to_string(),
+                mode: String::new(),
+                is_self: false,
+                auto_merge: false,
+                lint_cmd: String::new(),
+                backend: String::new(),
+                repo_slug: String::new(),
+            },
+            data_dir: String::new(),
+            session_dir: String::new(),
+            worktree_path: worktree_path.to_string(),
+            oauth_token: String::new(),
+            model: String::new(),
+            pending_messages: Vec::new(),
+            system_prompt_suffix: String::new(),
+            user_coauthor: String::new(),
+            stream_tx: None,
+            setup_script: String::new(),
+            api_keys: std::collections::HashMap::new(),
+            disallowed_tools: String::new(),
+            knowledge_files: Vec::new() as Vec<KnowledgeFile>,
+            knowledge_dir: String::new(),
+            agent_network: None,
+        }
+    }
+
+    #[test]
+    fn test_explicit_prompt_file_found() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("custom.md");
+        std::fs::write(&file, "explicit content\n").unwrap();
+
+        let ctx = make_ctx(file.to_str().unwrap(), "/nonexistent/wt", "/nonexistent/repo");
+        assert_eq!(read_repo_prompt(&ctx), Some("explicit content".to_string()));
+    }
+
+    #[test]
+    fn test_explicit_path_missing_falls_through_to_worktree() {
+        let wt = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(wt.path().join(".borg")).unwrap();
+        std::fs::write(wt.path().join(".borg/prompt.md"), "worktree content\n").unwrap();
+
+        let wt_str = wt.path().to_str().unwrap();
+        let ctx = make_ctx("/nonexistent/prompt.md", wt_str, wt_str);
+        assert_eq!(read_repo_prompt(&ctx), Some("worktree content".to_string()));
+    }
+
+    #[test]
+    fn test_equal_paths_skip_third_lookup() {
+        let wt = tempfile::TempDir::new().unwrap();
+        let repo = tempfile::TempDir::new().unwrap();
+        // Only the repo root has .borg/prompt.md
+        std::fs::create_dir_all(repo.path().join(".borg")).unwrap();
+        std::fs::write(repo.path().join(".borg/prompt.md"), "repo root content").unwrap();
+
+        let wt_str = wt.path().to_str().unwrap();
+        let repo_str = repo.path().to_str().unwrap();
+
+        // Different paths: level 3 reads repo root → content found
+        let ctx_diff = make_ctx("", wt_str, repo_str);
+        assert_eq!(read_repo_prompt(&ctx_diff), Some("repo root content".to_string()));
+
+        // Equal paths (worktree == repo): level 3 skipped, level 2 finds nothing → None
+        let ctx_same = make_ctx("", wt_str, wt_str);
+        assert_eq!(read_repo_prompt(&ctx_same), None);
+    }
+
+    #[test]
+    fn test_all_three_missing_returns_none() {
+        let wt = tempfile::TempDir::new().unwrap();
+        let repo = tempfile::TempDir::new().unwrap();
+        let wt_str = wt.path().to_str().unwrap();
+        let repo_str = repo.path().to_str().unwrap();
+
+        let ctx = make_ctx("", wt_str, repo_str);
+        assert_eq!(read_repo_prompt(&ctx), None);
+    }
+
+    #[test]
+    fn test_whitespace_only_file_treated_as_absent() {
+        let prompt_dir = tempfile::TempDir::new().unwrap();
+        let wt = tempfile::TempDir::new().unwrap();
+
+        // Explicit file contains only whitespace → treated as absent
+        let prompt_file = prompt_dir.path().join("prompt.md");
+        std::fs::write(&prompt_file, "   \n\t\n  ").unwrap();
+
+        // Worktree has real content → should be returned as fallback
+        std::fs::create_dir_all(wt.path().join(".borg")).unwrap();
+        std::fs::write(wt.path().join(".borg/prompt.md"), "fallback content").unwrap();
+
+        let wt_str = wt.path().to_str().unwrap();
+        let ctx = make_ctx(prompt_file.to_str().unwrap(), wt_str, wt_str);
+        assert_eq!(read_repo_prompt(&ctx), Some("fallback content".to_string()));
+    }
+}
