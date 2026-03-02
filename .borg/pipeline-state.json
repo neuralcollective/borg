@@ -1,0 +1,10 @@
+{
+  "task_id": 46,
+  "task_title": "Silenced create_dir_all failure causes agent to run with relative HOME path",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-46",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T21:05:23.711392759Z"
+}
