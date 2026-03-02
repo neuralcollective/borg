@@ -279,6 +279,9 @@ impl Pipeline {
 
     /// Remove the git worktree for a task (best-effort, silent on error).
     fn cleanup_worktree(&self, task: &Task) {
+        if self.sandbox_mode == SandboxMode::Docker {
+            return;
+        }
         let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
         let git = Git::new(&task.repo_path);
         let _ = git.remove_worktree(&wt_path);
@@ -551,12 +554,18 @@ impl Pipeline {
 
     /// Setup phase: create git worktree and advance to first agent phase.
     async fn setup_branch(&self, task: &Task, mode: &PipelineMode) -> Result<()> {
-        if !mode.uses_git_worktrees {
-            let next = mode
-                .phases
-                .get(1)
-                .map(|p| p.name.as_str())
-                .unwrap_or("spec");
+        let next = mode
+            .phases
+            .iter()
+            .find(|p| p.phase_type != PhaseType::Setup)
+            .map(|p| p.name.as_str())
+            .unwrap_or("spec");
+
+        if !mode.uses_git_worktrees || self.sandbox_mode == SandboxMode::Docker {
+            // Docker mode: container handles its own clone; branch is created inside.
+            // Record the branch name so integration/rebase can reference it.
+            let branch = format!("task-{}", task.id);
+            self.db.update_task_branch(task.id, &branch)?;
             self.db.update_task_status(task.id, next, None)?;
             return Ok(());
         }
@@ -591,14 +600,6 @@ impl Pipeline {
         }
 
         self.db.update_task_branch(task.id, &branch)?;
-
-        let next = mode
-            .phases
-            .iter()
-            .find(|p| p.phase_type != PhaseType::Setup)
-            .map(|p| p.name.as_str())
-            .unwrap_or("spec");
-
         self.db.update_task_status(task.id, next, None)?;
 
         info!(
@@ -620,18 +621,22 @@ impl Pipeline {
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
-        let wt_path = if mode.uses_git_worktrees {
-            format!("{}/.worktrees/task-{}", task.repo_path, task.id)
-        } else {
-            task.repo_path.clone()
-        };
-
         let session_dir_rel = format!("store/sessions/task-{}", task.id);
         tokio::fs::create_dir_all(&session_dir_rel).await.ok();
         let session_dir = std::fs::canonicalize(&session_dir_rel)
             .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
             .to_string_lossy()
             .to_string();
+
+        // In Docker mode the container handles its own clone; wt_path is only
+        // used for local file ops (signal.json, state snapshot), so use session_dir.
+        let wt_path = if self.sandbox_mode == SandboxMode::Docker {
+            session_dir.clone()
+        } else if mode.uses_git_worktrees {
+            format!("{}/.worktrees/task-{}", task.repo_path, task.id)
+        } else {
+            task.repo_path.clone()
+        };
 
         let pending_messages = self
             .db
@@ -784,7 +789,7 @@ impl Pipeline {
             }
         }
 
-        if phase.commits && mode.uses_git_worktrees {
+        if phase.commits && mode.uses_git_worktrees && !result.ran_in_docker {
             let git = Git::new(&task.repo_path);
             let (_, user_coauthor) = self.git_coauthor_settings();
             let commit_msg = Self::with_user_coauthor(&phase.commit_message, &user_coauthor);
@@ -951,6 +956,12 @@ impl Pipeline {
         phase: &PhaseConfig,
         _mode: &PipelineMode,
     ) -> Result<()> {
+        // In Docker mode, the container manages git state. Use GitHub's update-branch
+        // API to rebase the PR branch onto main, then advance directly.
+        if self.sandbox_mode == SandboxMode::Docker {
+            return self.run_rebase_phase_docker(task, phase).await;
+        }
+
         let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
         let git = Git::new(&task.repo_path);
 
@@ -1059,6 +1070,57 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Docker-mode rebase: use GitHub's update-branch API to rebase the PR onto main.
+    async fn run_rebase_phase_docker(&self, task: &Task, phase: &PhaseConfig) -> Result<()> {
+        let repo = self.repo_config(task);
+        if repo.repo_slug.is_empty() {
+            warn!("task #{} docker rebase: no repo_slug, skipping", task.id);
+            self.db.update_task_status(task.id, &phase.next, None)?;
+            return Ok(());
+        }
+
+        let branch = format!("task-{}", task.id);
+        let slug = &repo.repo_slug;
+
+        // Find the PR number for this branch
+        let pr_num_out = self.gh(&[
+            "pr", "view", &branch, "--repo", slug,
+            "--json", "number", "--jq", ".number",
+        ]).await;
+        let pr_num = pr_num_out
+            .ok()
+            .filter(|o| o.exit_code == 0)
+            .and_then(|o| o.stdout.trim().parse::<u64>().ok());
+
+        if let Some(num) = pr_num {
+            let update_out = self.gh(&[
+                "api", "-X", "PUT",
+                &format!("repos/{slug}/pulls/{num}/update-branch"),
+            ]).await;
+            match update_out {
+                Ok(o) if o.exit_code == 0 => {
+                    info!("task #{} docker rebase: update-branch succeeded", task.id);
+                    self.db.update_task_status(task.id, &phase.next, None)?;
+                },
+                Ok(o) => {
+                    let err = o.stderr.trim().chars().take(300).collect::<String>();
+                    warn!("task #{} docker rebase: update-branch failed: {err}", task.id);
+                    self.fail_or_retry(task, "rebase", &err)?;
+                },
+                Err(e) => {
+                    warn!("task #{} docker rebase: update-branch error: {e}", task.id);
+                    self.fail_or_retry(task, "rebase", &e.to_string())?;
+                },
+            }
+        } else {
+            // No PR yet — branch may not exist on remote. Advance and let integration create it.
+            info!("task #{} docker rebase: no PR found, advancing", task.id);
+            self.db.update_task_status(task.id, &phase.next, None)?;
+        }
+
+        Ok(())
+    }
+
     /// Run a lint_fix phase: run lint command, spawn agent to fix if dirty, re-verify.
     async fn run_lint_fix_phase(
         &self,
@@ -1066,6 +1128,12 @@ impl Pipeline {
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
+        // In Docker mode, lint is handled inside the container by the entrypoint.
+        if self.sandbox_mode == SandboxMode::Docker {
+            self.advance_phase(task, phase, mode)?;
+            return Ok(());
+        }
+
         let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
 
         let lint_cmd = match self.repo_lint_cmd(&task.repo_path, &wt_path) {
@@ -2049,7 +2117,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             return Ok(());
         }
 
-        let issues = self.fetch_open_issues(&repo.path)?;
+        let issues = self.fetch_open_issues(repo)?;
         if issues.is_empty() {
             return Ok(());
         }
@@ -2132,30 +2200,37 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         Ok(())
     }
 
-    fn fetch_open_issues(&self, repo_path: &str) -> Result<Vec<GithubIssue>> {
-        let output = Command::new("gh")
-            .args([
-                "issue",
-                "list",
-                "--state",
-                "open",
-                "--limit",
-                "100",
-                "--json",
-                "number,title,body,url,labels",
-            ])
-            .current_dir(repo_path)
+    fn fetch_open_issues(&self, repo: &RepoConfig) -> Result<Vec<GithubIssue>> {
+        let mut cmd = Command::new("gh");
+        cmd.args([
+            "issue",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "number,title,body,url,labels",
+        ]);
+        if !repo.repo_slug.is_empty() {
+            cmd.args(["--repo", &repo.repo_slug]);
+        } else if std::path::Path::new(&repo.path).exists() {
+            cmd.current_dir(&repo.path);
+        } else {
+            anyhow::bail!("no repo_slug or local checkout for {}", repo.path);
+        }
+        let output = cmd
             .output()
-            .with_context(|| format!("failed to execute `gh issue list` in {}", repo_path))?;
+            .with_context(|| format!("failed to execute `gh issue list` for {}", repo.path))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            anyhow::bail!("gh issue list failed for {}: {}", repo_path, stderr);
+            anyhow::bail!("gh issue list failed for {}: {}", repo.path, stderr);
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let issues: Vec<GithubIssue> = serde_json::from_str(&stdout)
-            .with_context(|| format!("failed to parse gh issue list JSON for {}", repo_path))?;
+            .with_context(|| format!("failed to parse gh issue list JSON for {}", repo.path))?;
         Ok(issues)
     }
 
@@ -2336,6 +2411,11 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     // ── Health monitoring ─────────────────────────────────────────────────
 
     pub async fn check_health(&self) -> Result<()> {
+        // In Docker mode, repos are not checked out on the host; skip host-side health checks.
+        if self.sandbox_mode == SandboxMode::Docker {
+            return Ok(());
+        }
+
         const HEALTH_INTERVAL_S: i64 = 1800;
         let now = chrono::Utc::now().timestamp();
         if now - self.db.get_ts("last_health_ts") < HEALTH_INTERVAL_S {
@@ -2421,6 +2501,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
         for repo in &self.config.watched_repos {
             if !repo.is_self {
+                continue;
+            }
+            // In Docker mode, the host checkout may not exist; skip git operations.
+            if self.sandbox_mode == SandboxMode::Docker
+                && !std::path::Path::new(&repo.path).exists()
+            {
                 continue;
             }
             let git = Git::new(&repo.path);

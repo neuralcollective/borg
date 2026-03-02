@@ -77,6 +77,8 @@ pub struct Config {
     // Build / self-update
     /// Command to rebuild the binary on self-update (configurable via DB key "build_cmd").
     pub build_cmd: String,
+    /// When false, skip self-update checks entirely.
+    pub self_update_enabled: bool,
 
     // Codex
     pub codex_api_key: String,
@@ -418,6 +420,7 @@ impl Config {
             ("git_claude_coauthor", self.git_claude_coauthor.to_string()),
             ("git_user_coauthor", self.git_user_coauthor.clone()),
             ("build_cmd", "cargo build --release".into()),
+            ("self_update_enabled", self.self_update_enabled.to_string()),
             ("observer_config", self.observer_config.clone()),
             ("wa_disabled", self.wa_disabled.to_string()),
         ];
@@ -488,6 +491,7 @@ impl Config {
         c.git_user_coauthor = get_str("git_user_coauthor", &c.git_user_coauthor);
         c.observer_config = get_str("observer_config", &c.observer_config);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
+        c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
         c.git_via_borg = get_bool("git_via_borg", c.git_via_borg);
         c.git_claude_coauthor = get_bool("git_claude_coauthor", c.git_claude_coauthor);
@@ -606,6 +610,7 @@ impl Config {
             git_user_coauthor: get_str("GIT_USER_COAUTHOR", &dotenv, ""),
             watched_repos,
             build_cmd: "cargo build --release".into(),
+            self_update_enabled: get_bool("SELF_UPDATE_ENABLED", &dotenv, true),
             codex_api_key,
             codex_credentials_path,
             discord_token: get_str("DISCORD_TOKEN", &dotenv, ""),

@@ -164,6 +164,22 @@ pub fn legal_mode() -> PipelineMode {
                 allowed_tools: String::new(),
                 target_primary_repo: false,
             },
+            SeedConfig {
+                name: "conveyancing".into(),
+                label: "Conveyancing".into(),
+                output_type: SeedOutputType::Task,
+                prompt: "Review the property transaction documents in this repository for conveyancing issues. \
+                    Check title deeds, contracts of sale, and transfer documents for completeness and accuracy. \
+                    Verify encumbrances, easements, covenants, and zoning compliance. \
+                    Use uk_legislation_search for relevant property law statutes (Land Registration Act, \
+                    Law of Property Act, etc.) or eurlex_search for cross-border property directives. \
+                    Use courtlistener_search_opinions for US real property case law if applicable. \
+                    Check for outstanding charges, liens, or restrictions on title. \
+                    If LexisNexis is available, use lexis_search for property law precedent. \
+                    Create a task for each defect, risk, or missing item that needs resolution before completion.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
+            },
         ],
     }
 }
