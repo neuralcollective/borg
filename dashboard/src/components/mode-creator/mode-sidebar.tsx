@@ -18,11 +18,33 @@ export function ModeSidebar({
   onDelete: (name: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [search, setSearch] = useState("");
+
+  const filteredBuiltIn = useMemo(() => {
+    if (!search.trim()) return builtIn;
+    const q = search.toLowerCase();
+    return builtIn.filter(
+      (m) =>
+        m.label.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        (m.category || "").toLowerCase().includes(q)
+    );
+  }, [builtIn, search]);
+
+  const filteredCustom = useMemo(() => {
+    if (!search.trim()) return custom;
+    const q = search.toLowerCase();
+    return custom.filter(
+      (m) =>
+        (m.label || m.name).toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q)
+    );
+  }, [custom, search]);
 
   const categoryGroups = useMemo(() => {
     const groups: { category: string; modes: PipelineModeFull[] }[] = [];
     const seen = new Map<string, number>();
-    for (const m of builtIn) {
+    for (const m of filteredBuiltIn) {
       const cat = m.category || "Other";
       if (seen.has(cat)) {
         groups[seen.get(cat)!].modes.push(m);
@@ -32,7 +54,7 @@ export function ModeSidebar({
       }
     }
     return groups;
-  }, [builtIn]);
+  }, [filteredBuiltIn]);
 
   const toggle = (cat: string) =>
     setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
@@ -43,6 +65,13 @@ export function ModeSidebar({
         <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
           Borg Creator
         </div>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search modes..."
+          className="mt-2 w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[11px] text-zinc-300 placeholder-zinc-600 outline-none focus:border-blue-500/40"
+        />
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -81,7 +110,7 @@ export function ModeSidebar({
           </div>
         ))}
 
-        {custom.length > 0 && (
+        {filteredCustom.length > 0 && (
           <div className="mb-2">
             <button
               onClick={() => toggle("__custom__")}
@@ -93,10 +122,10 @@ export function ModeSidebar({
               <span className="flex-1 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                 Custom
               </span>
-              <span className="text-[9px] text-zinc-700">{custom.length}</span>
+              <span className="text-[9px] text-zinc-700">{filteredCustom.length}</span>
             </button>
             {!collapsed["__custom__"] &&
-              custom.map((m) => (
+              filteredCustom.map((m) => (
                 <div
                   key={m.name}
                   className={cn(

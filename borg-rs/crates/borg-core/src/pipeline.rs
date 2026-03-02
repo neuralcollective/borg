@@ -2493,6 +2493,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     // ── Self-update ───────────────────────────────────────────────────────
 
     pub async fn check_remote_updates(&self) {
+        if !self.config.self_update_enabled {
+            return;
+        }
         let now = chrono::Utc::now().timestamp();
         if now - self.db.get_ts("last_remote_check_ts") < self.config.remote_check_interval_s {
             return;
@@ -2503,51 +2506,117 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             if !repo.is_self {
                 continue;
             }
-            // In Docker mode, the host checkout may not exist; skip git operations.
-            if self.sandbox_mode == SandboxMode::Docker
-                && !std::path::Path::new(&repo.path).exists()
-            {
+            if !std::path::Path::new(&repo.path).exists() {
                 continue;
             }
-            let git = Git::new(&repo.path);
-            if git.fetch_origin().is_err() {
-                return;
+
+            let repo_name = std::path::Path::new(&repo.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if repo_name.is_empty() {
+                continue;
             }
-            let local = match git.rev_parse_head() {
+
+            // Compare the clone's HEAD against the bare mirror (kept fresh by refresh_mirrors).
+            // Falls back to fetching origin directly if the mirror doesn't exist yet.
+            let mirror_path = format!("{}/mirrors/{}.git", self.config.data_dir, repo_name);
+            let remote = if std::path::Path::new(&mirror_path).exists() {
+                tokio::process::Command::new("git")
+                    .args(["-C", &mirror_path, "rev-parse", "HEAD"])
+                    .output()
+                    .await
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                let git = Git::new(&repo.path);
+                if git.fetch_origin().is_err() {
+                    return;
+                }
+                git.rev_parse("origin/main").ok()
+            };
+
+            let Some(remote) = remote else { return };
+
+            let local = match Git::new(&repo.path).rev_parse_head() {
                 Ok(h) => h,
                 Err(_) => return,
             };
-            let remote = match git.rev_parse("origin/main") {
-                Ok(h) => h,
-                Err(_) => return,
-            };
+
             if local == remote {
                 return;
             }
-            // Never pull on the live working tree — it can overwrite uncommitted
-            // local edits. The server-side self-update loop in main.rs handles
-            // rebuild+restart via fetch+compare without touching the working tree.
-            info!("Remote update detected on {} (local={}, remote={})", repo.path, &local[..8], &remote[..8]);
+
+            info!(
+                "Remote update detected on {} (local={}, remote={})",
+                repo.path,
+                &local[..8.min(local.len())],
+                &remote[..8.min(remote.len())]
+            );
             self.check_self_update(&repo.path).await;
             return;
         }
     }
 
     async fn check_self_update(&self, repo_path: &str) {
-        let git = Git::new(repo_path);
-        let current = match git.rev_parse_head() {
-            Ok(h) => h,
-            Err(_) => return,
+        // Prevent concurrent self-updates via a pid lock file.
+        let lock_path = format!("{}/self-update.lock", self.config.data_dir);
+        if std::path::Path::new(&lock_path).exists() {
+            warn!("Self-update: lock file exists, skipping");
+            return;
+        }
+        if let Err(e) = std::fs::write(&lock_path, std::process::id().to_string()) {
+            warn!("Self-update: could not create lock file: {e}");
+            return;
+        }
+        struct LockGuard(String);
+        impl Drop for LockGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _guard = LockGuard(lock_path);
+
+        // Stash any local changes before pulling (defensive).
+        let _ = tokio::process::Command::new("git")
+            .args(["-C", repo_path, "stash", "--include-untracked", "-m", "self-update-stash"])
+            .output()
+            .await;
+
+        let pull_out = tokio::process::Command::new("git")
+            .args(["-C", repo_path, "pull", "--ff-only", "origin", "main"])
+            .output()
+            .await;
+
+        let pulled = match pull_out {
+            Ok(o) if o.status.success() => Git::new(repo_path).rev_parse_head().ok(),
+            Ok(o) => {
+                warn!(
+                    "Self-update: git pull failed: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+                return;
+            },
+            Err(e) => {
+                warn!("Self-update: git pull spawn failed: {e}");
+                return;
+            },
         };
+
         let startup = match self.startup_heads.get(repo_path) {
             Some(h) => h,
             None => return,
         };
-        if &current == startup {
+        let current = pulled.as_deref().unwrap_or("");
+        if current == startup.as_str() {
             return;
         }
 
-        info!("Self-update: HEAD changed, rebuilding...");
+        info!(
+            "Self-update: HEAD at {}, rebuilding...",
+            &current[..8.min(current.len())]
+        );
         self.notify(
             &self.config.pipeline_admin_chat,
             "Self-update: new commits detected, rebuilding...",
@@ -2559,6 +2628,11 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             .ok()
             .flatten()
             .unwrap_or_else(|| self.config.build_cmd.clone());
+
+        let binary_path = format!("{}/target/release/borg-server", repo_path);
+        let mtime_before = std::fs::metadata(&binary_path)
+            .and_then(|m| m.modified())
+            .ok();
 
         let out = tokio::process::Command::new("sh")
             .arg("-c")
@@ -2587,6 +2661,20 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 );
             },
             Ok(_) => {
+                let mtime_after = std::fs::metadata(&binary_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+                if mtime_after.is_none() {
+                    warn!("Self-update: binary not found at {binary_path} after build");
+                    self.notify(
+                        &self.config.pipeline_admin_chat,
+                        "Self-update: build succeeded but binary missing — not restarting.",
+                    );
+                    return;
+                }
+                if mtime_after == mtime_before {
+                    warn!("Self-update: binary mtime unchanged after build");
+                }
                 info!("Self-update: build succeeded, restart scheduled");
                 self.notify(
                     &self.config.pipeline_admin_chat,
