@@ -327,6 +327,11 @@ fn parse_project_chat_key(chat_key: &str) -> Option<i64> {
     chat_key.strip_prefix("project:")?.parse::<i64>().ok()
 }
 
+pub(crate) fn is_safe_filename(name: &str) -> bool {
+    let mut components = std::path::Path::new(name).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none()
+}
+
 fn is_binary_mime(mime: &str) -> bool {
     mime.starts_with("application/pdf")
         || mime.starts_with("image/")
@@ -374,6 +379,10 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
     for file in files {
         if remaining < 256 {
             break;
+        }
+
+        if !is_safe_filename(&file.file_name) {
+            continue;
         }
 
         let file_path = format!("{files_dir}/{}", file.file_name);
@@ -2076,3 +2085,40 @@ pub(crate) async fn get_task_container(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::is_safe_filename;
+
+    #[test]
+    fn safe_filename_accepts_plain_name() {
+        assert!(is_safe_filename("report.pdf"));
+        assert!(is_safe_filename("data.csv"));
+        assert!(is_safe_filename("file_with-dashes.txt"));
+        assert!(is_safe_filename("123.bin"));
+    }
+
+    #[test]
+    fn safe_filename_rejects_path_traversal() {
+        assert!(!is_safe_filename("../../etc/passwd"));
+        assert!(!is_safe_filename("../secret.txt"));
+        assert!(!is_safe_filename("subdir/file.txt"));
+        assert!(!is_safe_filename(".."));
+    }
+
+    #[test]
+    fn safe_filename_rejects_absolute_path() {
+        assert!(!is_safe_filename("/etc/passwd"));
+        assert!(!is_safe_filename("/absolute/path.txt"));
+    }
+
+    #[test]
+    fn safe_filename_rejects_empty_string() {
+        assert!(!is_safe_filename(""));
+    }
+
+    #[test]
+    fn safe_filename_rejects_current_dir_component() {
+        // a leading "./" introduces an extra component
+        assert!(!is_safe_filename("./file.txt"));
+    }
+}
