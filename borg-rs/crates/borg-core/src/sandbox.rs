@@ -665,5 +665,37 @@ fn parse_docker_size(s: &str) -> Option<u64> {
     } else {
         return None;
     };
-    Some((num * unit as f64) as u64)
+    let bytes = num * unit as f64;
+    if bytes > u64::MAX as f64 {
+        return None;
+    }
+    Some(bytes as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_docker_size;
+
+    #[test]
+    fn parse_docker_size_basic() {
+        assert_eq!(parse_docker_size("1GB"), Some(1_000_000_000));
+        assert_eq!(parse_docker_size("2.5MB"), Some(2_500_000));
+        assert_eq!(parse_docker_size("512kB"), Some(512_000));
+        assert_eq!(parse_docker_size("100B"), Some(100));
+    }
+
+    #[test]
+    fn parse_docker_size_overflow_returns_none() {
+        // 20000000000GB = 2e19 bytes > u64::MAX (~1.84e19)
+        assert_eq!(parse_docker_size("20000000000GB"), None);
+        // f64::INFINITY (parsed from overflow exponent) also exceeds u64::MAX
+        assert_eq!(parse_docker_size("1e400GB"), None);
+    }
+
+    #[test]
+    fn parse_docker_size_invalid_returns_none() {
+        assert_eq!(parse_docker_size("not_a_size"), None);
+        assert_eq!(parse_docker_size(""), None);
+        assert_eq!(parse_docker_size("123"), None);
+    }
 }
