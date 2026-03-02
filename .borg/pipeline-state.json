@@ -1,0 +1,10 @@
+{
+  "task_id": 18,
+  "task_title": "Don't swallow fetch errors silently in chat-panel message fetch",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-18",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T07:10:29.365353412Z"
+}
