@@ -183,6 +183,15 @@ impl Pipeline {
             })
     }
 
+    /// Canonicalize a task's session directory path using the configured data_dir.
+    fn task_session_dir(data_dir: &str, task_id: i64) -> String {
+        let rel = format!("{}/sessions/task-{}", data_dir, task_id);
+        std::fs::canonicalize(&rel)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&rel))
+            .to_string_lossy()
+            .to_string()
+    }
+
     /// Build a PhaseContext for a task phase.
     fn make_context(
         &self,
@@ -652,12 +661,10 @@ impl Pipeline {
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        tokio::fs::create_dir_all(&session_dir_rel).await.ok();
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        tokio::fs::create_dir_all(format!("{}/sessions/task-{}", self.config.data_dir, task.id))
+            .await
+            .ok();
+        let session_dir = Self::task_session_dir(&self.config.data_dir, task.id);
 
         // In Docker mode the container handles its own clone; wt_path is only
         // used for local file ops (signal.json, state snapshot), so use session_dir.
@@ -1032,11 +1039,7 @@ impl Pipeline {
                         ..Default::default()
                     };
 
-                    let session_dir_rel = format!("store/sessions/task-{}", task.id);
-                    let session_dir = std::fs::canonicalize(&session_dir_rel)
-                        .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-                        .to_string_lossy()
-                        .to_string();
+                    let session_dir = Self::task_session_dir(&self.config.data_dir, task.id);
                     let ctx = self.make_context(task, wt_path.clone(), session_dir, Vec::new());
 
                     if let Some(backend) = self.resolve_backend(task) {
@@ -1188,11 +1191,7 @@ minimal changes needed. After editing, do not run the linter yourself — the pi
             return Ok(());
         }
 
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        let session_dir = Self::task_session_dir(&self.config.data_dir, task.id);
 
         for fix_attempt in 0..2u32 {
             let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)
@@ -1291,11 +1290,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         check_cmd: &str,
         initial_errors: &str,
     ) -> Result<bool> {
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        let session_dir = Self::task_session_dir(&self.config.data_dir, task.id);
 
         let mut errors = initial_errors.to_string();
 
@@ -3184,5 +3179,47 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Pipeline;
+
+    #[test]
+    fn task_session_dir_uses_data_dir() {
+        let result = Pipeline::task_session_dir("mystore", 42);
+        assert!(
+            result.contains("mystore/sessions/task-42")
+                || result.ends_with("mystore/sessions/task-42"),
+            "expected path to contain data_dir-based prefix, got: {result}"
+        );
+    }
+
+    #[test]
+    fn task_session_dir_falls_back_to_relative_when_missing() {
+        // Non-existent directory → canonicalize fails → relative path returned.
+        let result = Pipeline::task_session_dir("/nonexistent/no-such-dir", 99);
+        assert_eq!(result, "/nonexistent/no-such-dir/sessions/task-99");
+    }
+
+    #[test]
+    fn task_session_dir_resolves_to_absolute_when_dir_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions = dir.path().join("sessions/task-7");
+        std::fs::create_dir_all(&sessions).expect("create sessions dir");
+        let data_dir = dir.path().to_str().expect("utf8 path");
+
+        let result = Pipeline::task_session_dir(data_dir, 7);
+
+        assert!(std::path::Path::new(&result).is_absolute(), "must be absolute: {result}");
+        assert!(result.ends_with("sessions/task-7"), "must end with task path: {result}");
+    }
+
+    #[test]
+    fn task_session_dir_different_task_ids_produce_different_paths() {
+        let a = Pipeline::task_session_dir("store", 1);
+        let b = Pipeline::task_session_dir("store", 2);
+        assert_ne!(a, b);
     }
 }
