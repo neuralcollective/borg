@@ -1,0 +1,10 @@
+{
+  "task_id": 37,
+  "task_title": "Test SandboxMode::from_str_or_auto parsing",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-37",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T20:32:07.835996394Z"
+}
