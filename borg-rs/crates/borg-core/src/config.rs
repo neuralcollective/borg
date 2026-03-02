@@ -631,3 +631,112 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_watched_repos;
+
+    fn call(watched_raw: &str) -> Vec<crate::types::RepoConfig> {
+        parse_watched_repos(watched_raw, "", "", "", "sweborg")
+    }
+
+    #[test]
+    fn empty_input_returns_empty_vec() {
+        let repos = call("");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn happy_path_all_six_fields() {
+        // path:test_cmd:prompt_file:mode:lint_cmd:slug
+        let repos = call("/repo/a:just test:.borg/prompt.md:sweborg:just lint:owner/repo-a");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/a");
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.prompt_file, ".borg/prompt.md");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "just lint");
+        assert_eq!(r.repo_slug, "owner/repo-a");
+        assert!(r.auto_merge);
+        assert!(!r.is_self);
+    }
+
+    #[test]
+    fn fewer_than_six_fields_uses_defaults() {
+        // only path:test_cmd:prompt_file — mode/lint_cmd/slug get defaults
+        let repos = call("/repo/b:cargo test:.borg/prompt.md");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/b");
+        assert_eq!(r.test_cmd, "cargo test");
+        assert_eq!(r.prompt_file, ".borg/prompt.md");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "");
+        // slug_from_remote on a non-repo path returns empty string
+        assert_eq!(r.repo_slug, "");
+    }
+
+    #[test]
+    fn only_path_field_uses_all_defaults() {
+        let repos = call("/repo/c");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/c");
+        assert_eq!(r.test_cmd, "");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "");
+        assert!(r.auto_merge);
+    }
+
+    #[test]
+    fn manual_flag_sets_auto_merge_false_and_strips_suffix() {
+        let repos = call("/repo/d:just test!manual::::/org/repo-d");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+    }
+
+    #[test]
+    fn whitespace_only_entries_are_skipped() {
+        let repos = call("   |   |/repo/e:::::/org/repo-e|   ");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, "/repo/e");
+    }
+
+    #[test]
+    fn primary_repo_deduplication() {
+        // When pipeline_repo matches an entry in watched_raw, it should not be added twice.
+        let repos = parse_watched_repos("/repo/self:::::/org/self", "/repo/self", "", "", "sweborg");
+        // pipeline_repo is added as is_self=true; the watched entry is skipped
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+    }
+
+    #[test]
+    fn primary_repo_is_first_and_is_self() {
+        let repos = parse_watched_repos("/repo/x:::::/org/x", "/repo/primary", "", "", "sweborg");
+        assert_eq!(repos.len(), 2);
+        assert!(repos[0].is_self);
+        assert_eq!(repos[0].path, "/repo/primary");
+        assert!(!repos[1].is_self);
+        assert_eq!(repos[1].path, "/repo/x");
+    }
+
+    #[test]
+    fn multiple_entries_all_parsed() {
+        let repos = call("/a:::::/org/a|/b:::::/org/b|/c:::::/org/c");
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[0].path, "/a");
+        assert_eq!(repos[1].path, "/b");
+        assert_eq!(repos[2].path, "/c");
+    }
+
+    #[test]
+    fn slug_override_used_instead_of_git() {
+        let repos = call("/some/path:::::myorg/myrepo");
+        assert_eq!(repos[0].repo_slug, "myorg/myrepo");
+    }
+}
