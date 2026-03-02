@@ -338,14 +338,19 @@ fn is_binary_mime(mime: &str) -> bool {
 
 fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
     let dest_dir = format!("{session_dir}/project_files");
-    let _ = std::fs::create_dir_all(&dest_dir);
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        tracing::warn!("failed to create project_files dir {dest_dir}: {e}");
+        return;
+    }
     for file in files {
         let safe_name = std::path::Path::new(&file.file_name)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed");
         let dest = format!("{dest_dir}/{safe_name}");
-        let _ = std::fs::copy(&file.stored_path, &dest);
+        if let Err(e) = std::fs::copy(&file.stored_path, &dest) {
+            tracing::warn!("failed to copy project file {} -> {dest}: {e}", file.stored_path);
+        }
     }
 }
 
