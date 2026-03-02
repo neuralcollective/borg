@@ -137,7 +137,7 @@ impl AgentBackend for ClaudeBackend {
                 std::path::PathBuf::from(p)
             } else {
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../sidecar/lawborg-mcp/server.js")
+                    .join("../../../sidecar/lawborg-mcp/server.js")
             };
             let legal_mcp_server = match legal_mcp_path.canonicalize() {
                 Ok(p) => p,

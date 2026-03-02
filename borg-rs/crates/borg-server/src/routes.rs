@@ -508,44 +508,50 @@ pub(crate) async fn run_chat_agent(
             std::path::PathBuf::from(p)
         } else {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../sidecar/lawborg-mcp/server.js")
+                .join("../../../sidecar/lawborg-mcp/server.js")
         };
-        if let Ok(mcp_server) = legal_mcp_path.canonicalize() {
-            let mcp_dir = format!("{session_dir}/mcp");
-            std::fs::create_dir_all(&mcp_dir).ok();
-            let mut env_vars = serde_json::Map::new();
-            let providers = ["lexisnexis", "westlaw", "clio", "imanage",
-                "netdocuments", "congress", "openstates", "canlii", "regulations_gov"];
-            for provider in providers {
-                if let Ok(Some(key)) = db.get_api_key("global", provider) {
-                    let env_name = match provider {
-                        "lexisnexis" => "LEXISNEXIS_API_KEY",
-                        "westlaw" => "WESTLAW_API_KEY",
-                        "clio" => "CLIO_API_KEY",
-                        "imanage" => "IMANAGE_API_KEY",
-                        "netdocuments" => "NETDOCUMENTS_API_KEY",
-                        "congress" => "CONGRESS_API_KEY",
-                        "openstates" => "OPENSTATES_API_KEY",
-                        "canlii" => "CANLII_API_KEY",
-                        "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                        _ => continue,
-                    };
-                    env_vars.insert(env_name.into(), serde_json::Value::String(key));
-                }
-            }
-            let config_json = serde_json::json!({
-                "mcpServers": {
-                    "legal": {
-                        "command": "bun",
-                        "args": ["run", mcp_server],
-                        "env": env_vars,
+        match legal_mcp_path.canonicalize() {
+            Ok(mcp_server) => {
+                tracing::info!(chat_key, path = %mcp_server.display(), "wiring lawborg-mcp for chat");
+                let mcp_dir = format!("{session_dir}/mcp");
+                std::fs::create_dir_all(&mcp_dir).ok();
+                let mut env_vars = serde_json::Map::new();
+                let providers = ["lexisnexis", "westlaw", "clio", "imanage",
+                    "netdocuments", "congress", "openstates", "canlii", "regulations_gov"];
+                for provider in providers {
+                    if let Ok(Some(key)) = db.get_api_key("global", provider) {
+                        let env_name = match provider {
+                            "lexisnexis" => "LEXISNEXIS_API_KEY",
+                            "westlaw" => "WESTLAW_API_KEY",
+                            "clio" => "CLIO_API_KEY",
+                            "imanage" => "IMANAGE_API_KEY",
+                            "netdocuments" => "NETDOCUMENTS_API_KEY",
+                            "congress" => "CONGRESS_API_KEY",
+                            "openstates" => "OPENSTATES_API_KEY",
+                            "canlii" => "CANLII_API_KEY",
+                            "regulations_gov" => "REGULATIONS_GOV_API_KEY",
+                            _ => continue,
+                        };
+                        env_vars.insert(env_name.into(), serde_json::Value::String(key));
                     }
                 }
-            });
-            let config_path = format!("{mcp_dir}/mcp-config.json");
-            if std::fs::write(&config_path, config_json.to_string()).is_ok() {
-                args.push("--mcp-config".to_string());
-                args.push(config_path);
+                let config_json = serde_json::json!({
+                    "mcpServers": {
+                        "legal": {
+                            "command": "bun",
+                            "args": ["run", mcp_server],
+                            "env": env_vars,
+                        }
+                    }
+                });
+                let config_path = format!("{mcp_dir}/mcp-config.json");
+                if std::fs::write(&config_path, config_json.to_string()).is_ok() {
+                    args.push("--mcp-config".to_string());
+                    args.push(config_path);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(chat_key, path = %legal_mcp_path.display(), "lawborg-mcp not found: {e}");
             }
         }
     }
@@ -688,6 +694,26 @@ pub(crate) async fn list_project_files(
     let files = state.db.list_project_files(id).map_err(internal)?;
     let out: Vec<ProjectFileJson> = files.into_iter().map(ProjectFileJson::from).collect();
     Ok(Json(json!(out)))
+}
+
+pub(crate) async fn get_project_file_content(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, file_id)): Path<(i64, i64)>,
+) -> Result<axum::response::Response, StatusCode> {
+    let row = state
+        .db
+        .get_project_file(project_id, file_id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let bytes = tokio::fs::read(&row.stored_path)
+        .await
+        .map_err(internal)?;
+
+    Ok(axum::response::Response::builder()
+        .header("content-type", &row.mime_type)
+        .body(axum::body::Body::from(bytes))
+        .unwrap())
 }
 
 pub(crate) async fn upload_project_files(
