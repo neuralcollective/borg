@@ -29,7 +29,11 @@ use borg_core::{
 use chrono::Utc;
 use serde_json::json;
 use tokio::sync::{broadcast, Mutex as TokioMutex};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use axum::http::HeaderValue;
+use tower_http::{
+    cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
+    services::ServeDir,
+};
 use tracing::info;
 
 // ── AppState ──────────────────────────────────────────────────────────────
@@ -767,7 +771,32 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&state),
             auth::auth_middleware,
         ))
-        .layer(CorsLayer::permissive())
+        .layer({
+            let origins: Vec<HeaderValue> = [
+                "https://borg.legal",
+                "https://app.borg.legal",
+                "https://borg.neuralcollective.ai",
+                "http://localhost:5173",
+                "http://localhost:3131",
+            ]
+            .iter()
+            .map(|o| o.parse().unwrap())
+            .collect();
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins))
+                .allow_methods(AllowMethods::list([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                    axum::http::Method::OPTIONS,
+                ]))
+                .allow_headers(AllowHeaders::list([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ]))
+                .allow_credentials(true)
+        })
         .with_state(state);
 
     let bind = config.web_bind.clone();
