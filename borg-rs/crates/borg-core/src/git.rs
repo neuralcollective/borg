@@ -177,3 +177,34 @@ impl Git {
         Ok(result.stdout)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ExecResult;
+
+    fn result(stdout: &str, stderr: &str) -> ExecResult {
+        ExecResult {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            exit_code: 0,
+        }
+    }
+
+    #[test]
+    fn empty_stderr_returns_stdout_unchanged() {
+        let r = result("hello", "");
+        assert_eq!(r.combined_output(), "hello");
+    }
+
+    #[test]
+    fn non_empty_stderr_appends_with_newline() {
+        let r = result("out", "err");
+        assert_eq!(r.combined_output(), "out\nerr");
+    }
+
+    #[test]
+    fn both_empty_returns_empty_string() {
+        let r = result("", "");
+        assert_eq!(r.combined_output(), "");
+    }
+}
