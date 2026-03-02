@@ -234,15 +234,8 @@ pub fn refresh_oauth_token(credentials_path: &str, current: &str) -> String {
         .unwrap_or_else(|| current.to_string())
 }
 
-fn slug_from_remote(path: &str) -> String {
-    let out = std::process::Command::new("git")
-        .args(["-C", path, "remote", "get-url", "origin"])
-        .output();
-    let url = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => return String::new(),
-    };
-    let url = url.strip_suffix(".git").unwrap_or(&url);
+fn parse_remote_url(url: &str) -> String {
+    let url = url.strip_suffix(".git").unwrap_or(url);
     if let Some(rest) = url.strip_prefix("https://github.com/") {
         return rest.to_string();
     }
@@ -254,6 +247,17 @@ fn slug_from_remote(path: &str) -> String {
         return format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]);
     }
     String::new()
+}
+
+fn slug_from_remote(path: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-C", path, "remote", "get-url", "origin"])
+        .output();
+    let url = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => return String::new(),
+    };
+    parse_remote_url(&url)
 }
 
 fn parse_watched_repos(
@@ -641,5 +645,64 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remote_url;
+
+    #[test]
+    fn https_without_git_suffix() {
+        assert_eq!(parse_remote_url("https://github.com/owner/repo"), "owner/repo");
+    }
+
+    #[test]
+    fn https_with_git_suffix() {
+        assert_eq!(parse_remote_url("https://github.com/owner/repo.git"), "owner/repo");
+    }
+
+    #[test]
+    fn ssh_with_git_suffix() {
+        assert_eq!(parse_remote_url("git@github.com:owner/repo.git"), "owner/repo");
+    }
+
+    #[test]
+    fn ssh_without_git_suffix() {
+        assert_eq!(parse_remote_url("git@github.com:owner/repo"), "owner/repo");
+    }
+
+    #[test]
+    fn https_extra_path_segments() {
+        // The prefix is stripped, extra segments are kept as-is
+        assert_eq!(
+            parse_remote_url("https://github.com/owner/repo/extra"),
+            "owner/repo/extra"
+        );
+    }
+
+    #[test]
+    fn non_github_https_uses_fallback() {
+        assert_eq!(parse_remote_url("https://gitlab.com/owner/repo.git"), "owner/repo");
+    }
+
+    #[test]
+    fn non_github_ssh_uses_fallback() {
+        assert_eq!(parse_remote_url("git@gitlab.com:owner/repo.git"), "owner/repo");
+    }
+
+    #[test]
+    fn empty_string_returns_empty() {
+        assert_eq!(parse_remote_url(""), "");
+    }
+
+    #[test]
+    fn no_slashes_or_colons_returns_empty() {
+        assert_eq!(parse_remote_url("notaurl"), "");
+    }
+
+    #[test]
+    fn only_git_suffix_no_owner() {
+        assert_eq!(parse_remote_url("repo.git"), "");
     }
 }
