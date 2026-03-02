@@ -168,6 +168,12 @@ pub fn legal_mode() -> PipelineMode {
     }
 }
 
+/// Returns a legal-aware system prompt suffix for chat agents.
+/// Appends tool inventory and chat-specific guidance to the base chat prompt.
+pub fn legal_chat_system_suffix() -> &'static str {
+    LEGAL_TOOL_INVENTORY
+}
+
 // ── Tool inventory appended to every legal system prompt ────────────
 const LEGAL_TOOL_INVENTORY: &str = "\n\n\
 You have access to a comprehensive legal research toolkit via MCP:\n\

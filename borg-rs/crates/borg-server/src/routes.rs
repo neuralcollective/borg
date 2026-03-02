@@ -468,13 +468,17 @@ pub(crate) async fn run_chat_agent(
         prompt
     };
 
-    let system_prompt = config.chat_system_prompt();
+    let mut system_prompt = config.chat_system_prompt();
 
     // Detect project mode for MCP wiring
     let project_mode = parse_project_chat_key(chat_key)
         .and_then(|pid| db.get_project(pid).ok().flatten())
         .map(|p| p.mode);
     let is_legal = matches!(project_mode.as_deref(), Some("lawborg" | "legal"));
+
+    if is_legal {
+        system_prompt.push_str(borg_domains::legal::legal_chat_system_suffix());
+    }
 
     let mut args = vec![
         "--model".to_string(),
