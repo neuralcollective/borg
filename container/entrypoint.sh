@@ -15,10 +15,24 @@ log_event() {
     echo "---BORG_EVENT---${1}" >&2
 }
 
+# Returns 0 if the command string is safe to pass to bash -c, 1 otherwise.
+# Blocks shell injection vectors: ; $ ` ( ) { } ! < > \ and embedded newlines.
+cmd_is_safe() {
+    local cmd="$1"
+    [[ "$cmd" != *$'\n'* ]] &&
+    [[ "$cmd" != *$'\r'* ]] &&
+    [[ "$cmd" != *\\* ]] &&
+    ! printf '%s' "$cmd" | grep -q '[;$`(){}!<>]'
+}
+
 run_check() {
     local phase="$1"
     local cmd="$2"
     if [ -z "$cmd" ]; then return; fi
+    if ! cmd_is_safe "$cmd"; then
+        log_event "{\"type\":\"container_event\",\"event\":\"check_blocked\",\"phase\":\"${phase}\"}"
+        return
+    fi
     local out rc=0
     out=$(bash -c "$cmd" 2>&1) || rc=$?
     local passed="false"
