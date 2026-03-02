@@ -3186,3 +3186,191 @@ fn looks_like_field_key(line: &str) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_db() -> Arc<Db> {
+        let mut db = Db::open(":memory:").expect("open in-memory db");
+        db.migrate().expect("migrate");
+        Arc::new(db)
+    }
+
+    fn make_task(db: &Db) -> i64 {
+        let task = Task {
+            id: 0,
+            title: "t".into(),
+            description: "d".into(),
+            repo_path: "/repo".into(),
+            branch: "task-1".into(),
+            status: "impl".into(),
+            attempt: 1,
+            max_attempts: 5,
+            last_error: String::new(),
+            created_by: "test".into(),
+            notify_chat: String::new(),
+            created_at: chrono::Utc::now(),
+            session_id: String::new(),
+            mode: "swe".into(),
+            backend: String::new(),
+        };
+        db.insert_task(&task).expect("insert_task")
+    }
+
+    fn test_pipeline(db: Arc<Db>) -> Pipeline {
+        let config = Arc::new(Config {
+            telegram_token: String::new(),
+            oauth_token: String::new(),
+            assistant_name: String::new(),
+            trigger_pattern: String::new(),
+            data_dir: String::new(),
+            container_image: String::new(),
+            model: String::new(),
+            credentials_path: String::new(),
+            session_max_age_hours: 0,
+            max_consecutive_errors: 0,
+            pipeline_repo: String::new(),
+            pipeline_test_cmd: String::new(),
+            pipeline_lint_cmd: String::new(),
+            backend: String::new(),
+            pipeline_admin_chat: String::new(),
+            release_interval_mins: 0,
+            continuous_mode: false,
+            chat_collection_window_ms: 0,
+            chat_cooldown_ms: 0,
+            agent_timeout_s: 0,
+            max_chat_agents: 0,
+            chat_rate_limit: 0,
+            pipeline_max_agents: 0,
+            web_bind: String::new(),
+            web_port: 0,
+            dashboard_dist_dir: String::new(),
+            container_setup: String::new(),
+            container_memory_mb: 0,
+            container_cpus: 0.0,
+            sandbox_backend: String::new(),
+            pipeline_max_backlog: 0,
+            pipeline_seed_cooldown_s: 0,
+            proposal_promote_threshold: 0,
+            pipeline_tick_s: 0,
+            remote_check_interval_s: 0,
+            mirror_refresh_interval_s: 0,
+            pipeline_agent_cooldown_s: 0,
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            git_committer_name: String::new(),
+            git_committer_email: String::new(),
+            git_via_borg: false,
+            git_claude_coauthor: false,
+            git_user_coauthor: String::new(),
+            watched_repos: vec![],
+            build_cmd: String::new(),
+            self_update_enabled: false,
+            codex_api_key: String::new(),
+            codex_credentials_path: String::new(),
+            discord_token: String::new(),
+            wa_auth_dir: String::new(),
+            wa_disabled: false,
+            observer_config: String::new(),
+        });
+        let (tx, _rx) = broadcast::channel(1);
+        Pipeline {
+            db,
+            backends: HashMap::new(),
+            config,
+            sandbox: Sandbox,
+            sandbox_mode: SandboxMode::Direct,
+            event_tx: tx,
+            stream_manager: TaskStreamManager::new(),
+            force_restart: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            seed_cooldowns: Mutex::new(HashMap::new()),
+            last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
+            last_cache_prune_secs: std::sync::atomic::AtomicI64::new(0),
+            startup_heads: HashMap::new(),
+            in_flight: Mutex::new(HashSet::new()),
+            last_agent_dispatch: Mutex::new(HashMap::new()),
+            worktree_create_lock: Mutex::new(()),
+            seeding_active: std::sync::atomic::AtomicBool::new(false),
+            agent_network_available: false,
+        }
+    }
+
+    #[test]
+    fn test_retry_summary_most_recent_first() {
+        let db = open_db();
+        let task_id = make_task(&db);
+        db.insert_task_output(task_id, "spec", "first output", "", 1).unwrap();
+        db.insert_task_output(task_id, "qa", "second output", "", 1).unwrap();
+        db.insert_task_output(task_id, "impl", "third output", "", 1).unwrap();
+
+        let p = test_pipeline(db);
+        let summary = p.build_retry_summary(task_id, "some error");
+
+        let third_pos = summary.find("third output").unwrap();
+        let second_pos = summary.find("second output").unwrap();
+        let first_pos = summary.find("first output").unwrap();
+        assert!(third_pos < second_pos, "most recent output must appear first");
+        assert!(second_pos < first_pos, "second most recent must appear before oldest");
+    }
+
+    #[test]
+    fn test_retry_summary_takes_only_3_most_recent() {
+        let db = open_db();
+        let task_id = make_task(&db);
+        db.insert_task_output(task_id, "spec", "oldest output", "", 1).unwrap();
+        db.insert_task_output(task_id, "qa", "second output", "", 1).unwrap();
+        db.insert_task_output(task_id, "impl", "third output", "", 1).unwrap();
+        db.insert_task_output(task_id, "impl", "newest output", "", 1).unwrap();
+
+        let p = test_pipeline(db);
+        let summary = p.build_retry_summary(task_id, "some error");
+
+        assert!(!summary.contains("oldest output"), "4th-oldest output must be excluded");
+        assert!(summary.contains("second output"));
+        assert!(summary.contains("third output"));
+        assert!(summary.contains("newest output"));
+    }
+
+    #[test]
+    fn test_retry_summary_output_truncated_to_500_chars() {
+        let db = open_db();
+        let task_id = make_task(&db);
+        let long_output: String = "x".repeat(600);
+        db.insert_task_output(task_id, "impl", &long_output, "", 1).unwrap();
+
+        let p = test_pipeline(db);
+        let summary = p.build_retry_summary(task_id, "err");
+
+        let expected_prefix: String = "x".repeat(500);
+        assert!(summary.contains(&expected_prefix), "500-char prefix must appear in summary");
+        assert!(!summary.contains(&long_output), "600-char output must not appear untruncated");
+    }
+
+    #[test]
+    fn test_retry_summary_error_truncated_to_2000_chars() {
+        let db = open_db();
+        let task_id = make_task(&db);
+
+        let long_error: String = "e".repeat(2500);
+        let p = test_pipeline(db);
+        let summary = p.build_retry_summary(task_id, &long_error);
+
+        let expected_prefix: String = "e".repeat(2000);
+        assert!(summary.contains(&expected_prefix), "2000-char error prefix must appear");
+        assert!(!summary.contains(&long_error), "2500-char error must not appear untruncated");
+    }
+
+    #[test]
+    fn test_retry_summary_empty_outputs_contains_only_error() {
+        let db = open_db();
+        let task_id = make_task(&db);
+
+        let p = test_pipeline(db);
+        let summary = p.build_retry_summary(task_id, "the only error");
+
+        assert!(summary.contains("the only error"), "error must appear in summary");
+        assert!(summary.contains("FRESH RETRY"), "header must be present");
+        assert!(!summary.contains("Attempt 1"), "no attempt lines when outputs list is empty");
+    }
+}
