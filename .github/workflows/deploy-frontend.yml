@@ -1,0 +1,32 @@
+name: Deploy Frontend
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'landing/**'
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: cd dashboard && bun install && BORG_API_URL=https://api.borg.legal bash build.sh
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: dashboard
+          command: deploy
+
+  landing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: landing
+          command: deploy
