@@ -631,3 +631,85 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // ── resolve_tilde ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn tilde_expanded_with_home_set() {
+        std::env::set_var("HOME", "/home/testuser");
+        assert_eq!(resolve_tilde("~/foo/bar"), "/home/testuser/foo/bar");
+    }
+
+    #[test]
+    fn tilde_only_path_expanded() {
+        std::env::set_var("HOME", "/home/testuser");
+        assert_eq!(resolve_tilde("~/"), "/home/testuser/");
+    }
+
+    #[test]
+    fn no_tilde_prefix_returned_unchanged() {
+        assert_eq!(resolve_tilde("/absolute/path"), "/absolute/path");
+        assert_eq!(resolve_tilde("relative/path"), "relative/path");
+        assert_eq!(resolve_tilde(""), "");
+    }
+
+    #[test]
+    fn tilde_without_slash_returned_unchanged() {
+        // "~" alone (no "/") must not be expanded
+        assert_eq!(resolve_tilde("~"), "~");
+    }
+
+    #[test]
+    fn tilde_not_expanded_when_home_unset() {
+        std::env::remove_var("HOME");
+        assert_eq!(resolve_tilde("~/foo"), "~/foo");
+    }
+
+    // ── codex_has_credentials ─────────────────────────────────────────────────
+
+    fn write_tmp(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f
+    }
+
+    #[test]
+    fn valid_credentials_returns_true() {
+        let f = write_tmp(r#"{"tokens":{"access_token":"tok_abc123"}}"#);
+        assert!(codex_has_credentials(f.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn missing_access_token_field_returns_false() {
+        let f = write_tmp(r#"{"tokens":{"other_field":"value"}}"#);
+        assert!(!codex_has_credentials(f.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn empty_access_token_returns_false() {
+        let f = write_tmp(r#"{"tokens":{"access_token":""}}"#);
+        assert!(!codex_has_credentials(f.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn missing_tokens_key_returns_false() {
+        let f = write_tmp(r#"{"access_token":"tok_abc"}"#);
+        assert!(!codex_has_credentials(f.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn malformed_json_returns_false() {
+        let f = write_tmp("not json at all {{");
+        assert!(!codex_has_credentials(f.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn nonexistent_file_returns_false() {
+        assert!(!codex_has_credentials("/tmp/borg_test_nonexistent_9999.json"));
+    }
+}
