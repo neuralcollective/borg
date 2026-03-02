@@ -3186,3 +3186,285 @@ fn looks_like_field_key(line: &str) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        agent::AgentBackend,
+        config::Config,
+        db::Db,
+        sandbox::SandboxMode,
+        types::{PhaseConfig, PhaseContext, PhaseOutput, RepoConfig, Task},
+    };
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use std::sync::Arc;
+
+    struct NamedBackend(pub &'static str);
+
+    #[async_trait]
+    impl AgentBackend for NamedBackend {
+        async fn run_phase(&self, _: &Task, _: &PhaseConfig, _: PhaseContext) -> Result<PhaseOutput> {
+            unimplemented!()
+        }
+        async fn inject_message(&self, _: &str, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn interrupt(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    fn backend(name: &'static str) -> Arc<dyn AgentBackend> {
+        Arc::new(NamedBackend(name))
+    }
+
+    fn name_of(b: &Arc<dyn AgentBackend>) -> &'static str {
+        // SAFETY: we only ever put NamedBackend in these Arcs in tests
+        unsafe { &*(Arc::as_ptr(b) as *const NamedBackend) }.0
+    }
+
+    fn make_config(global_backend: &str, watched_repos: Vec<RepoConfig>) -> Config {
+        Config {
+            telegram_token: String::new(),
+            oauth_token: String::new(),
+            assistant_name: "Borg".into(),
+            trigger_pattern: "@Borg".into(),
+            data_dir: "store".into(),
+            container_image: "borg-agent".into(),
+            model: "claude-sonnet-4-6".into(),
+            credentials_path: String::new(),
+            session_max_age_hours: 24,
+            max_consecutive_errors: 3,
+            pipeline_repo: String::new(),
+            pipeline_test_cmd: String::new(),
+            pipeline_lint_cmd: String::new(),
+            backend: global_backend.into(),
+            pipeline_admin_chat: String::new(),
+            release_interval_mins: 180,
+            continuous_mode: false,
+            chat_collection_window_ms: 3000,
+            chat_cooldown_ms: 5000,
+            agent_timeout_s: 1000,
+            max_chat_agents: 4,
+            chat_rate_limit: 5,
+            pipeline_max_agents: 2,
+            web_bind: "127.0.0.1".into(),
+            web_port: 3131,
+            dashboard_dist_dir: "dashboard/dist".into(),
+            container_setup: String::new(),
+            container_memory_mb: 2048,
+            container_cpus: 2.0,
+            sandbox_backend: "none".into(),
+            pipeline_max_backlog: 5,
+            pipeline_seed_cooldown_s: 3600,
+            proposal_promote_threshold: 8,
+            pipeline_tick_s: 10,
+            remote_check_interval_s: 300,
+            mirror_refresh_interval_s: 60,
+            pipeline_agent_cooldown_s: 120,
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            git_committer_name: String::new(),
+            git_committer_email: String::new(),
+            git_via_borg: false,
+            git_claude_coauthor: false,
+            git_user_coauthor: String::new(),
+            watched_repos,
+            build_cmd: "cargo build --release".into(),
+            self_update_enabled: false,
+            codex_api_key: String::new(),
+            codex_credentials_path: String::new(),
+            discord_token: String::new(),
+            wa_auth_dir: String::new(),
+            wa_disabled: true,
+            observer_config: String::new(),
+        }
+    }
+
+    fn make_pipeline(
+        backends: HashMap<String, Arc<dyn AgentBackend>>,
+        config: Config,
+    ) -> Pipeline {
+        let mut db = Db::open(":memory:").expect("open db");
+        db.migrate().expect("migrate");
+        let (pipeline, _rx) = Pipeline::new(
+            Arc::new(db),
+            backends,
+            Arc::new(config),
+            SandboxMode::Direct,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false,
+        );
+        pipeline
+    }
+
+    fn make_task(repo_path: &str, task_backend: &str) -> Task {
+        Task {
+            id: 1,
+            title: "t".into(),
+            description: String::new(),
+            repo_path: repo_path.into(),
+            branch: "task-1".into(),
+            status: "impl".into(),
+            attempt: 1,
+            max_attempts: 5,
+            last_error: String::new(),
+            created_by: "test".into(),
+            notify_chat: String::new(),
+            created_at: Utc::now(),
+            session_id: String::new(),
+            mode: "sweborg".into(),
+            backend: task_backend.into(),
+        }
+    }
+
+    fn make_repo(path: &str, backend: &str) -> RepoConfig {
+        RepoConfig {
+            path: path.into(),
+            test_cmd: String::new(),
+            prompt_file: String::new(),
+            mode: "sweborg".into(),
+            is_self: false,
+            auto_merge: true,
+            lint_cmd: String::new(),
+            backend: backend.into(),
+            repo_slug: String::new(),
+        }
+    }
+
+    // Priority 1: task-level backend override wins over everything else.
+    #[test]
+    fn task_backend_wins_over_repo_and_global() {
+        let b_task = backend("task");
+        let b_repo = backend("repo");
+        let b_global = backend("global");
+
+        let mut backends = HashMap::new();
+        backends.insert("task".into(), Arc::clone(&b_task));
+        backends.insert("repo".into(), Arc::clone(&b_repo));
+        backends.insert("global".into(), Arc::clone(&b_global));
+
+        let config = make_config("global", vec![make_repo("/repo", "repo")]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "task");
+        let result = pipeline.resolve_backend(&task).expect("should find backend");
+        assert_eq!(name_of(&result), "task");
+    }
+
+    // Priority 2: task backend set but not in map → falls through to repo override.
+    #[test]
+    fn task_backend_miss_falls_through_to_repo() {
+        let b_repo = backend("repo");
+        let b_global = backend("global");
+
+        let mut backends = HashMap::new();
+        backends.insert("repo".into(), Arc::clone(&b_repo));
+        backends.insert("global".into(), Arc::clone(&b_global));
+
+        let config = make_config("global", vec![make_repo("/repo", "repo")]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "nonexistent");
+        let result = pipeline.resolve_backend(&task).expect("should find backend");
+        assert_eq!(name_of(&result), "repo");
+    }
+
+    // Priority 2: repo-level override wins over global when task has no override.
+    #[test]
+    fn repo_backend_wins_over_global() {
+        let b_repo = backend("repo");
+        let b_global = backend("global");
+
+        let mut backends = HashMap::new();
+        backends.insert("repo".into(), Arc::clone(&b_repo));
+        backends.insert("global".into(), Arc::clone(&b_global));
+
+        let config = make_config("global", vec![make_repo("/repo", "repo")]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "");
+        let result = pipeline.resolve_backend(&task).expect("should find backend");
+        assert_eq!(name_of(&result), "repo");
+    }
+
+    // Priority 2 miss: repo backend set but not in map → falls through to global.
+    #[test]
+    fn repo_backend_miss_falls_through_to_global() {
+        let b_global = backend("global");
+
+        let mut backends = HashMap::new();
+        backends.insert("global".into(), Arc::clone(&b_global));
+
+        let config = make_config("global", vec![make_repo("/repo", "nonexistent")]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "");
+        let result = pipeline.resolve_backend(&task).expect("should find backend");
+        assert_eq!(name_of(&result), "global");
+    }
+
+    // Priority 3: global config backend used when no task or repo overrides.
+    #[test]
+    fn global_backend_used_when_no_overrides() {
+        let b_global = backend("global");
+
+        let mut backends = HashMap::new();
+        backends.insert("global".into(), Arc::clone(&b_global));
+
+        let config = make_config("global", vec![]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "");
+        let result = pipeline.resolve_backend(&task).expect("should find backend");
+        assert_eq!(name_of(&result), "global");
+    }
+
+    // Priority 4: global backend not in map → fallback to first available backend.
+    #[test]
+    fn fallback_to_first_available_when_global_misses() {
+        let b_other = backend("other");
+
+        let mut backends = HashMap::new();
+        backends.insert("other".into(), Arc::clone(&b_other));
+
+        // global config points to "missing", but only "other" is registered
+        let config = make_config("missing", vec![]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "");
+        let result = pipeline.resolve_backend(&task).expect("should fall back to any");
+        assert_eq!(name_of(&result), "other");
+    }
+
+    // Edge: empty backends map → returns None.
+    #[test]
+    fn empty_backends_returns_none() {
+        let config = make_config("claude", vec![]);
+        let pipeline = make_pipeline(HashMap::new(), config);
+
+        let task = make_task("/repo", "");
+        assert!(pipeline.resolve_backend(&task).is_none());
+    }
+
+    // Edge: task repo_path has no watched-repo entry → skip repo level entirely.
+    #[test]
+    fn unmatched_repo_path_skips_repo_level() {
+        let b_global = backend("global");
+
+        let mut backends = HashMap::new();
+        backends.insert("global".into(), Arc::clone(&b_global));
+        backends.insert("repo".into(), backend("repo"));
+
+        // watched repo is /other, task uses /repo — no match
+        let config = make_config("global", vec![make_repo("/other", "repo")]);
+        let pipeline = make_pipeline(backends, config);
+
+        let task = make_task("/repo", "");
+        let result = pipeline.resolve_backend(&task).expect("should find global");
+        assert_eq!(name_of(&result), "global");
+    }
+}
