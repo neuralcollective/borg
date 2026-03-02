@@ -1,0 +1,10 @@
+{
+  "task_id": 26,
+  "task_title": "Fix JSON injection in entrypoint.sh log_event calls",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-26",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T19:53:52.085561533Z"
+}
