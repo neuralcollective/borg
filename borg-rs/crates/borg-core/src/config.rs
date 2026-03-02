@@ -516,6 +516,29 @@ impl Config {
             c.container_cpus = v;
         }
         load_u16!("web_port", c.web_port);
+
+        // Rebuild watched_repos from the repos table (canonical source for dashboard-managed repos)
+        if let Ok(rows) = db.list_repos() {
+            if !rows.is_empty() {
+                let mut repos = Vec::new();
+                for row in rows {
+                    let is_self = row.path == c.pipeline_repo;
+                    repos.push(crate::types::RepoConfig {
+                        path: row.path,
+                        test_cmd: row.test_cmd,
+                        prompt_file: row.prompt_file,
+                        mode: row.mode,
+                        is_self,
+                        auto_merge: row.auto_merge,
+                        lint_cmd: String::new(),
+                        backend: row.backend.unwrap_or_default(),
+                        repo_slug: row.repo_slug,
+                    });
+                }
+                c.watched_repos = repos;
+            }
+        }
+
         c
     }
 
