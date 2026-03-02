@@ -80,6 +80,10 @@ install-service:
         systemctl --user enable borg >/dev/null 2>&1 || true
     fi
 
+# Serve landing page locally at http://localhost:3000
+landing:
+    bunx http-server landing -p 3000
+
 # Check service status
 status:
     #!/usr/bin/env bash

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BORG — AI Agent for Law Firms</title>
-  <meta name="description" content="BORG is an autonomous AI agent that drafts documents, reviews contracts, conducts legal research, and manages cases — so your team can focus on clients." />
+  <title>BORG — Your Autonomous Legal Team</title>
+  <meta name="description" content="BORG is an autonomous legal workforce that drafts, reviews, researches, and files — running 24/7 at a fraction of the cost of traditional staffing." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Chakra+Petch:wght@700&display=swap" rel="stylesheet" />
@@ -23,9 +23,9 @@
       --text:        #fafafa;
       --text-muted:  #a1a1aa;
       --text-dim:    #71717a;
-      --blue:        #2563eb;
-      --blue-light:  #3b82f6;
-      --blue-dim:    rgba(37,99,235,0.15);
+      --accent:      #f97316;
+      --accent-light:#fb923c;
+      --accent-dim:  rgba(249,115,22,0.15);
     }
 
     html {
@@ -65,29 +65,7 @@
     .nav-logo {
       display: flex;
       align-items: center;
-      gap: 10px;
       text-decoration: none;
-    }
-
-    .logo-mark {
-      width: 34px;
-      height: 34px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
-      background: var(--blue);
-      border-radius: 6px;
-      overflow: hidden;
-    }
-
-    .logo-mark span {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'Chakra Petch', sans-serif;
-      font-weight: 700;
-      font-size: 11px;
-      color: #fff;
     }
 
     .logo-wordmark {
@@ -98,11 +76,16 @@
       letter-spacing: 0.05em;
     }
 
+    .glitch-letter {
+      display: inline-block;
+      transition: transform 80ms steps(1, end);
+    }
+
     .nav-cta {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: var(--blue);
+      background: var(--accent);
       color: #fff;
       font-size: 14px;
       font-weight: 500;
@@ -113,7 +96,7 @@
     }
 
     .nav-cta:hover {
-      background: var(--blue-light);
+      background: var(--accent-light);
     }
 
     /* ── Hero ─────────────────────────────────────────────── */
@@ -129,9 +112,9 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: var(--blue-dim);
-      border: 1px solid rgba(37,99,235,0.3);
-      color: var(--blue-light);
+      background: var(--accent-dim);
+      border: 1px solid rgba(249,115,22,0.3);
+      color: var(--accent-light);
       font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.08em;
@@ -152,8 +135,10 @@
     }
 
     .hero-subtitle {
-      font-size: clamp(20px, 3vw, 26px);
-      font-weight: 500;
+      font-family: 'Chakra Petch', sans-serif;
+      font-size: clamp(16px, 2.5vw, 22px);
+      font-weight: 700;
+      letter-spacing: 0.15em;
       color: var(--text-muted);
       margin-bottom: 28px;
     }
@@ -177,7 +162,7 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      background: var(--blue);
+      background: var(--accent);
       color: #fff;
       font-size: 16px;
       font-weight: 600;
@@ -188,7 +173,7 @@
     }
 
     .btn-primary:hover {
-      background: var(--blue-light);
+      background: var(--accent-light);
     }
 
     .btn-ghost {
@@ -235,7 +220,7 @@
       font-weight: 600;
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: var(--blue-light);
+      color: var(--accent-light);
       margin-bottom: 16px;
     }
 
@@ -272,8 +257,8 @@
     .prop-icon {
       width: 44px;
       height: 44px;
-      background: var(--blue-dim);
-      border: 1px solid rgba(37,99,235,0.25);
+      background: var(--accent-dim);
+      border: 1px solid rgba(249,115,22,0.25);
       border-radius: 10px;
       display: flex;
       align-items: center;
@@ -284,7 +269,7 @@
     .prop-icon svg {
       width: 22px;
       height: 22px;
-      color: var(--blue-light);
+      color: var(--accent-light);
     }
 
     .prop-title {
@@ -331,7 +316,7 @@
       font-family: 'Chakra Petch', sans-serif;
       font-size: 13px;
       font-weight: 700;
-      color: var(--blue-light);
+      color: var(--accent-light);
       letter-spacing: 0.08em;
     }
 
@@ -453,14 +438,10 @@
   <nav>
     <div class="nav-inner">
       <a href="/" class="nav-logo">
-        <div class="logo-mark">
-          <span>B</span><span>O</span>
-          <span>R</span><span>G</span>
-        </div>
-        <span class="logo-wordmark">BORG</span>
+        <span class="logo-wordmark" data-glitch>BORG</span>
       </a>
       <a href="https://app.borg.legal" class="nav-cta">
-        Get Started
+        Request access
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 8h10M9 4l4 4-4 4"/>
         </svg>
@@ -474,22 +455,22 @@
       <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
         <circle cx="5" cy="5" r="5"/>
       </svg>
-      Built for Legal Teams
+      Now in private beta
     </div>
-    <h1 class="hero-title">BORG</h1>
-    <p class="hero-subtitle">AI Agent for Law Firms</p>
+    <h1 class="hero-title" data-glitch>BORG</h1>
+    <p class="hero-subtitle">AUTONOMOUS LEGAL WORKFORCE</p>
     <p class="hero-body">
-      An autonomous agent that works alongside your legal team — drafting, reviewing, researching, and managing — so your attorneys can focus on what matters.
+      Briefs drafted, contracts reviewed, precedent researched, deadlines tracked — all running around the clock without supervision. One subscription, the output of an entire paralegal department.
     </p>
     <div class="hero-actions">
       <a href="https://app.borg.legal" class="btn-primary">
-        Get Started
+        Request access
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 8h10M9 4l4 4-4 4"/>
         </svg>
       </a>
       <a href="mailto:hello@borg.legal" class="btn-ghost">
-        Talk to us
+        Book a demo
       </a>
     </div>
   </section>
@@ -498,15 +479,14 @@
 
   <!-- Value Props -->
   <section class="props-section">
-    <p class="section-label">What BORG does</p>
-    <h2 class="section-heading">Everything your team needs, automated</h2>
-    <p class="section-sub">Four core capabilities, delivered by a single AI agent that understands legal work.</p>
+    <p class="section-label">Capabilities</p>
+    <h2 class="section-heading">A workforce, not a tool</h2>
+    <p class="section-sub">BORG handles entire workstreams end-to-end — not one query at a time.</p>
 
     <div class="props-grid">
 
       <div class="prop-card">
         <div class="prop-icon">
-          <!-- Document icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
             <polyline points="14 2 14 8 20 8"/>
@@ -515,45 +495,42 @@
             <polyline points="10 9 9 9 8 9"/>
           </svg>
         </div>
-        <h3 class="prop-title">Document Drafting</h3>
-        <p class="prop-desc">Generate first drafts of pleadings, motions, briefs, and correspondence in seconds. Consistent, accurate, and formatted to your standards.</p>
+        <h3 class="prop-title">Drafts on demand</h3>
+        <p class="prop-desc">Pleadings, motions, briefs, contracts, correspondence — produced in minutes with your firm's formatting and citation standards baked in.</p>
       </div>
 
       <div class="prop-card">
         <div class="prop-icon">
-          <!-- Shield/check icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             <polyline points="9 12 11 14 15 10"/>
           </svg>
         </div>
-        <h3 class="prop-title">Contract Review</h3>
-        <p class="prop-desc">Flag risk clauses, missing terms, and non-standard language across any agreement. Review hundreds of pages in minutes, not hours.</p>
+        <h3 class="prop-title">Due diligence at scale</h3>
+        <p class="prop-desc">Hundreds of pages reviewed in the time it takes to pour a coffee. Risk clauses flagged, missing provisions identified, redlines suggested.</p>
       </div>
 
       <div class="prop-card">
         <div class="prop-icon">
-          <!-- Search icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"/>
             <line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
         </div>
-        <h3 class="prop-title">Legal Research</h3>
-        <p class="prop-desc">Surface relevant precedents, statutes, and regulatory guidance with full citations. Get a clear synthesis, not just a list of documents.</p>
+        <h3 class="prop-title">Deep research, cited</h3>
+        <p class="prop-desc">Pulls from case law databases, statutes, and regulatory filings — then delivers a structured memo with pinpoint citations, not a chatbot summary.</p>
       </div>
 
       <div class="prop-card">
         <div class="prop-icon">
-          <!-- Layers/case icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="12 2 2 7 12 12 22 7 12 2"/>
             <polyline points="2 17 12 22 22 17"/>
             <polyline points="2 12 12 17 22 12"/>
           </svg>
         </div>
-        <h3 class="prop-title">Case Management</h3>
-        <p class="prop-desc">Track deadlines, summarize case status, and coordinate tasks across your team. Stay on top of every matter without the overhead.</p>
+        <h3 class="prop-title">Runs your matters</h3>
+        <p class="prop-desc">Tracks every deadline, monitors regulatory changes, manages document workflows. Works overnight so your team walks in to progress, not backlogs.</p>
       </div>
 
     </div>
@@ -563,26 +540,26 @@
   <section class="how-section">
     <div class="how-inner">
       <p class="section-label">How it works</p>
-      <h2 class="section-heading">Simple by design</h2>
+      <h2 class="section-heading">Deployed in a day, paying for itself by the end of the week</h2>
 
       <div class="steps-grid">
 
         <div class="step">
           <span class="step-num">01</span>
-          <h3 class="step-title">Connect your workspace</h3>
-          <p class="step-desc">Link BORG to your existing document store, email, and matter management system. Setup takes minutes.</p>
+          <h3 class="step-title">Point it at your matters</h3>
+          <p class="step-desc">Connect your document store, case files, and practice management system. BORG ingests your existing work product and learns your firm's standards.</p>
         </div>
 
         <div class="step">
           <span class="step-num">02</span>
-          <h3 class="step-title">Assign tasks</h3>
-          <p class="step-desc">Describe what you need in plain language. BORG understands legal context and gets to work immediately.</p>
+          <h3 class="step-title">Give it work</h3>
+          <p class="step-desc">Assign tasks the way you'd brief a junior associate — in plain language, via chat, email, or the dashboard. BORG plans, executes, and delivers complete work product.</p>
         </div>
 
         <div class="step">
           <span class="step-num">03</span>
-          <h3 class="step-title">Review and approve</h3>
-          <p class="step-desc">Your attorneys stay in control. BORG delivers work product for review — you decide what goes out the door.</p>
+          <h3 class="step-title">Sign off and ship</h3>
+          <p class="step-desc">Every output goes through your attorneys before it leaves the firm. You stay in control. BORG just eliminates the 80% of work that didn't need a human in the first place.</p>
         </div>
 
       </div>
@@ -592,10 +569,10 @@
   <!-- CTA -->
   <section class="cta-section">
     <div class="cta-card">
-      <h2 class="cta-title">Ready to put BORG to work?</h2>
-      <p class="cta-sub">Join law firms already using BORG to deliver more, faster — without growing headcount.</p>
+      <h2 class="cta-title">Your competitors will wonder how you scaled so fast</h2>
+      <p class="cta-sub">Firms in the private beta are shipping work that used to take days — in hours.</p>
       <a href="https://app.borg.legal" class="btn-primary">
-        Get Started
+        Request access
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 8h10M9 4l4 4-4 4"/>
         </svg>
@@ -619,5 +596,74 @@
     </div>
   </footer>
 
+  <script>
+    (function() {
+      var RANGES = [
+        [0x0021,0x007e],[0x00c0,0x024f],[0x0391,0x03c9],[0x0400,0x04ff],
+        [0x05d0,0x05ea],[0x0621,0x064a],[0x3040,0x309f],[0x30a0,0x30ff],
+        [0x4e00,0x9fff],[0xac00,0xd7af]
+      ];
+      function glyph() {
+        var r = RANGES[Math.random() * RANGES.length | 0];
+        return String.fromCodePoint(r[0] + (Math.random() * (r[1] - r[0] + 1) | 0));
+      }
+      function shift() {
+        var d = (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random() * 2.5);
+        var r = Math.random();
+        return r < 0.4 ? [d,0] : r < 0.8 ? [0,d] : [d,d];
+      }
+
+      document.querySelectorAll('[data-glitch]').forEach(function(el) {
+        var word = el.textContent;
+        var letters = word.split('');
+        el.innerHTML = '';
+        var spans = letters.map(function(c) {
+          var s = document.createElement('span');
+          s.className = 'glitch-letter';
+          s.textContent = c;
+          el.appendChild(s);
+          return s;
+        });
+
+        // Letter flicker
+        (function flicker() {
+          setTimeout(function() {
+            var r = Math.random();
+            var count = r < 0.6 ? 1 : r < 0.9 ? 2 : 3;
+            var indices = [];
+            while (indices.length < count) {
+              var idx = Math.random() * letters.length | 0;
+              if (indices.indexOf(idx) < 0) indices.push(idx);
+            }
+            indices.forEach(function(i) { spans[i].textContent = glyph(); });
+            setTimeout(function() {
+              indices.forEach(function(i) { spans[i].textContent = letters[i]; });
+            }, 60 + Math.random() * 140);
+            flicker();
+          }, 4000 + Math.random() * 12000);
+        })();
+
+        // Positional shifts
+        (function shiftLoop() {
+          setTimeout(function() {
+            var count = (Math.random() < 0.5 ? 1 : 2);
+            var indices = [];
+            while (indices.length < count) {
+              var idx = Math.random() * letters.length | 0;
+              if (indices.indexOf(idx) < 0) indices.push(idx);
+            }
+            var s = shift();
+            indices.forEach(function(i) {
+              spans[i].style.transform = 'translate(' + s[0] + 'px,' + s[1] + 'px)';
+            });
+            setTimeout(function() {
+              indices.forEach(function(i) { spans[i].style.transform = ''; });
+            }, 30 + Math.random() * 20);
+            shiftLoop();
+          }, 3000 + Math.random() * 8000);
+        })();
+      });
+    })();
+  </script>
 </body>
 </html>
