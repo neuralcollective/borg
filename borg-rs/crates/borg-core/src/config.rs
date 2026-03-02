@@ -168,6 +168,39 @@ fn resolve_tilde(path: &str) -> String {
     path.to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::resolve_tilde;
+
+    #[test]
+    fn tilde_slash_prefix_expands_with_home() {
+        std::env::set_var("HOME", "/home/testuser");
+        assert_eq!(resolve_tilde("~/docs/file.txt"), "/home/testuser/docs/file.txt");
+    }
+
+    #[test]
+    fn bare_tilde_not_expanded() {
+        assert_eq!(resolve_tilde("~"), "~");
+    }
+
+    #[test]
+    fn no_tilde_unchanged() {
+        assert_eq!(resolve_tilde("/absolute/path"), "/absolute/path");
+        assert_eq!(resolve_tilde("relative/path"), "relative/path");
+    }
+
+    #[test]
+    fn empty_string_unchanged() {
+        assert_eq!(resolve_tilde(""), "");
+    }
+
+    #[test]
+    fn tilde_not_at_start_unchanged() {
+        assert_eq!(resolve_tilde("/path/with/~/inside"), "/path/with/~/inside");
+        assert_eq!(resolve_tilde("prefix~/suffix"), "prefix~/suffix");
+    }
+}
+
 pub fn codex_has_credentials(path: &str) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
