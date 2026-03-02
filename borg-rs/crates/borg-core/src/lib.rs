@@ -1,7 +1,6 @@
 pub mod agent;
 pub mod chat;
 pub mod config;
-pub mod container;
 pub mod db;
 pub mod git;
 pub mod ipc;

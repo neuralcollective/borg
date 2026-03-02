@@ -1839,7 +1839,7 @@ pub(crate) async fn list_cache_volumes(
     let volumes = borg_core::sandbox::Sandbox::list_cache_volumes("borg-cache-").await;
     let arr: Vec<_> = volumes
         .into_iter()
-        .map(|(name, size)| json!({ "name": name, "size": size }))
+        .map(|(name, size, last_used)| json!({ "name": name, "size": size, "last_used": last_used }))
         .collect();
     Ok(Json(json!({ "volumes": arr })))
 }

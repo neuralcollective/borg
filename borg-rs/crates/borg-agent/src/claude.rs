@@ -401,9 +401,26 @@ impl AgentBackend for ClaudeBackend {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
 
+                // Per-branch cache volumes — tasks on different branches get isolated
+                // target dirs, while retries on the same branch reuse the same cache.
+                // Global caches (cargo registry, bun) are shared across all branches.
+                let branch = format!("task-{}", task.id);
+                let target_vol = Sandbox::branch_volume_name(&repo_name, &branch, "target");
+                let node_vol = Sandbox::branch_volume_name(&repo_name, &branch, "node-modules");
+                // Warm branch caches from main on first use (async, fire-and-forget)
+                {
+                    let img = self.docker_image.clone();
+                    let rn = repo_name.clone();
+                    let br = branch.clone();
+                    tokio::spawn(async move {
+                        Sandbox::warm_branch_cache(&rn, &br, "target", &img).await;
+                        Sandbox::warm_branch_cache(&rn, &br, "node-modules", &img).await;
+                    });
+                }
+
                 let volumes_owned: Vec<(String, String)> = vec![
-                    (format!("borg-cache-{repo_name}-target"), "/workspace/repo/target".to_string()),
-                    (format!("borg-cache-{repo_name}-node-modules"), "/workspace/repo/node_modules".to_string()),
+                    (target_vol, "/workspace/repo/target".to_string()),
+                    (node_vol, "/workspace/repo/node_modules".to_string()),
                     (format!("borg-cache-{repo_name}-bun-cache"), "/home/bun/.bun/install/cache".to_string()),
                     (format!("borg-cache-{repo_name}-cargo-registry"), "/home/bun/.cargo/registry".to_string()),
                 ];

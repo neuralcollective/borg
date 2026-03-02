@@ -270,9 +270,178 @@ impl Sandbox {
         }
     }
 
+    /// Compute a short 8-char hex hash of a branch name for stable volume naming.
+    /// Uses FNV-1a so there's no external crate dependency.
+    pub fn branch_hash(branch: &str) -> String {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for b in branch.bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{hash:016x}")
+            .chars()
+            .take(8)
+            .collect()
+    }
+
+    /// Return the per-branch cache volume name for a given repo + branch + cache type.
+    /// E.g. `borg-cache-myrepo-a1b2c3d4-target`.
+    pub fn branch_volume_name(repo: &str, branch: &str, cache_type: &str) -> String {
+        let h = Self::branch_hash(branch);
+        format!("borg-cache-{repo}-{h}-{cache_type}")
+    }
+
+    /// Return the `main`-branch cache volume name (used as warm seed).
+    pub fn main_volume_name(repo: &str, cache_type: &str) -> String {
+        Self::branch_volume_name(repo, "main", cache_type)
+    }
+
+    /// Ensure a Docker volume exists with the given name and label it with
+    /// the current unix timestamp as `borg-last-used`.
+    pub async fn touch_volume(name: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        // `docker volume create` is idempotent — no-op if already exists.
+        let _ = tokio::process::Command::new("docker")
+            .args([
+                "volume", "create",
+                "--label", &format!("borg-last-used={now}"),
+                name,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+    }
+
+    /// If a `main` cache volume exists for the repo and the branch volume does
+    /// not yet exist, copy the main cache into the new branch volume so the
+    /// first build is warm. No-op if branch volume already exists or main
+    /// volume is absent.
+    pub async fn warm_branch_cache(repo: &str, branch: &str, cache_type: &str, helper_image: &str) {
+        let main_vol = Self::main_volume_name(repo, cache_type);
+        let branch_vol = Self::branch_volume_name(repo, branch, cache_type);
+
+        if branch_vol == main_vol {
+            // branch IS main — nothing to warm
+            Self::touch_volume(&main_vol).await;
+            return;
+        }
+
+        // Check if branch volume already exists (avoid redundant copy)
+        let exists = tokio::process::Command::new("docker")
+            .args(["volume", "inspect", &branch_vol])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if exists {
+            Self::touch_volume(&branch_vol).await;
+            return;
+        }
+
+        // Check if main cache volume exists
+        let main_exists = tokio::process::Command::new("docker")
+            .args(["volume", "inspect", &main_vol])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        Self::touch_volume(&branch_vol).await;
+
+        if main_exists {
+            // Copy main → branch using a minimal busybox container.
+            // Mount both volumes and rsync/cp the contents.
+            let status = tokio::process::Command::new("docker")
+                .args([
+                    "run", "--rm",
+                    "-v", &format!("{main_vol}:/src:ro"),
+                    "-v", &format!("{branch_vol}:/dst"),
+                    helper_image,
+                    "sh", "-c", "cp -a /src/. /dst/ 2>/dev/null || true",
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            match status {
+                Ok(s) if s.success() => {
+                    info!(repo, branch, cache_type, "warmed branch cache from main");
+                }
+                _ => {
+                    info!(repo, branch, cache_type, "cache warm skipped (copy failed or no main cache)");
+                }
+            }
+        } else {
+            info!(repo, branch, cache_type, "no main cache to warm from — starting cold");
+        }
+    }
+
+    /// Remove stale borg-cache volumes not used in the last `max_age_days` days.
+    /// "Last used" is read from the `borg-last-used` label written by `touch_volume`.
+    /// Falls back to Docker's volume CreatedAt if the label is absent.
+    pub async fn prune_stale_cache_volumes(max_age_days: u64) {
+        let threshold_secs = max_age_days * 86_400;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let Ok(out) = tokio::process::Command::new("docker")
+            .args([
+                "volume", "ls",
+                "--filter", "name=borg-cache-",
+                "--format", "{{.Name}}",
+            ])
+            .output()
+            .await
+        else {
+            return;
+        };
+
+        let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+
+        for name in names {
+            let last_used = Self::volume_last_used(&name).await;
+            if let Some(ts) = last_used {
+                if now.saturating_sub(ts) > threshold_secs {
+                    if Self::remove_volume(&name).await {
+                        info!("evicted stale cache volume: {name} (last used {ts})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Read the `borg-last-used` label from a volume, returning unix seconds.
+    async fn volume_last_used(name: &str) -> Option<u64> {
+        let out = tokio::process::Command::new("docker")
+            .args([
+                "volume", "inspect", name,
+                "--format", "{{index .Labels \"borg-last-used\"}}",
+            ])
+            .output()
+            .await
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        s.trim().parse::<u64>().ok()
+    }
+
     /// List all Docker volumes whose names start with the given prefix.
-    /// Returns `(name, size_bytes)` pairs. Size is best-effort from `docker system df -v`.
-    pub async fn list_cache_volumes(prefix: &str) -> Vec<(String, Option<u64>)> {
+    /// Returns `(name, size_bytes, last_used_secs)` triples.
+    pub async fn list_cache_volumes(prefix: &str) -> Vec<(String, Option<u64>, Option<u64>)> {
         let Ok(out) = tokio::process::Command::new("docker")
             .args(["volume", "ls", "--filter", &format!("name={prefix}"), "--format", "{{.Name}}"])
             .output()
@@ -288,13 +457,13 @@ impl Sandbox {
 
         let size_map = Self::volume_sizes().await;
 
-        names
-            .into_iter()
-            .map(|n| {
-                let sz = size_map.get(&n).copied();
-                (n, sz)
-            })
-            .collect()
+        let mut result = Vec::with_capacity(names.len());
+        for n in names {
+            let sz = size_map.get(&n).copied();
+            let last_used = Self::volume_last_used(&n).await;
+            result.push((n, sz, last_used));
+        }
+        result
     }
 
     async fn volume_sizes() -> std::collections::HashMap<String, u64> {

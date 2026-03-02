@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 
@@ -33,17 +33,6 @@ impl Git {
         }
     }
 
-    pub fn worktree_path(&self, branch: &str) -> String {
-        let parent = Path::new(&self.repo_path)
-            .parent()
-            .unwrap_or(Path::new("/tmp"));
-        parent
-            .join("worktrees")
-            .join(branch)
-            .to_string_lossy()
-            .into_owned()
-    }
-
     pub fn exec(&self, dir: &str, args: &[&str]) -> Result<ExecResult> {
         self.exec_env(dir, args, &[])
     }
@@ -65,21 +54,6 @@ impl Git {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             exit_code: output.status.code().unwrap_or(1),
         })
-    }
-
-    pub fn create_worktree(&self, branch: &str, base: &str) -> Result<String> {
-        let wt_path = self.worktree_path(branch);
-        let result = self.exec(
-            &self.repo_path,
-            &["worktree", "add", &wt_path, "-b", branch, base],
-        )?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git worktree add failed for branch={branch} base={base}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(wt_path)
     }
 
     pub fn remove_worktree(&self, worktree_path: &str) -> Result<()> {
@@ -109,88 +83,6 @@ impl Git {
             ));
         }
         Ok(result.stdout.trim().to_string())
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.exec(&self.repo_path, &["status", "--porcelain"])
-            .map(|r| !r.stdout.trim().is_empty())
-            .unwrap_or(false)
-    }
-
-    fn require_clean(&self, caller: &str) -> Result<()> {
-        let result = self.exec(&self.repo_path, &["status", "--porcelain"])?;
-        let status = result.stdout.trim();
-        if !status.is_empty() {
-            let preview = if status.len() > 200 { &status[..200] } else { status };
-            tracing::warn!(
-                "{caller}: blocked on dirty tree in {}: {preview}",
-                self.repo_path
-            );
-            return Err(anyhow!(
-                "refusing to proceed: working tree in {} has uncommitted changes",
-                self.repo_path
-            ));
-        }
-        tracing::debug!("{caller}: tree clean in {}", self.repo_path);
-        Ok(())
-    }
-
-    /// Checkout a branch. Only use on worktrees, never on the primary repo.
-    pub fn checkout(&self, branch: &str) -> Result<()> {
-        self.require_clean("checkout")?;
-        tracing::info!("git checkout {branch} in {}", self.repo_path);
-        let result = self.exec(&self.repo_path, &["checkout", branch])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git checkout {branch} failed: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
-    /// Pull from origin/main. Only use on worktrees, never on the primary repo.
-    pub fn pull(&self) -> Result<()> {
-        self.require_clean("pull")?;
-        tracing::info!("git pull --ff-only in {}", self.repo_path);
-        let result = self.exec(&self.repo_path, &["pull", "--ff-only", "origin", "main"])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git pull --ff-only failed in {} (local has diverged from origin/main): {}",
-                self.repo_path,
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn push_force(&self, branch: &str) -> Result<ExecResult> {
-        tracing::info!("git push --force origin {branch} in {}", self.repo_path);
-        self.exec(&self.repo_path, &["push", "--force", "origin", branch])
-    }
-
-    pub fn delete_remote_branch(&self, branch: &str) -> Result<()> {
-        tracing::info!("git push --delete origin {branch} in {}", self.repo_path);
-        let result = self.exec(&self.repo_path, &["push", "origin", "--delete", branch])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git push origin --delete {branch} failed: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn delete_branch(&self, branch: &str) -> Result<()> {
-        tracing::info!("git branch -D {branch} in {}", self.repo_path);
-        let result = self.exec(&self.repo_path, &["branch", "-D", branch])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git branch -D {branch} failed: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
     }
 
     pub fn fetch_origin(&self) -> Result<()> {
@@ -274,17 +166,6 @@ impl Git {
         Ok(true)
     }
 
-    pub fn push_branch(&self, worktree_path: &str, branch: &str) -> Result<()> {
-        let result = self.exec(worktree_path, &["push", "origin", branch])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git push origin {branch} failed: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
     pub fn ls_files(&self, worktree_path: &str) -> Result<String> {
         let result = self.exec(worktree_path, &["ls-files"])?;
         if !result.success() {
@@ -294,69 +175,5 @@ impl Git {
             ));
         }
         Ok(result.stdout)
-    }
-
-    pub fn status_clean(&self, dir: &str) -> Result<bool> {
-        let result = self.exec(dir, &["status", "--porcelain"])?;
-        Ok(result.stdout.trim().is_empty() && result.exit_code == 0)
-    }
-
-    pub fn current_branch(&self, dir: &str) -> Result<String> {
-        let result = self.exec(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git rev-parse --abbrev-ref HEAD failed in {dir}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(result.stdout.trim().to_string())
-    }
-
-    pub fn abort_rebase(&self, dir: &str) -> Result<ExecResult> {
-        self.exec(dir, &["rebase", "--abort"])
-    }
-
-    pub fn abort_merge(&self, dir: &str) -> Result<ExecResult> {
-        self.exec(dir, &["merge", "--abort"])
-    }
-
-    pub fn diff_name_only(&self, dir: &str) -> Result<String> {
-        let result = self.exec(dir, &["diff", "--name-only", "HEAD"])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git diff --name-only HEAD failed in {dir}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(result.stdout)
-    }
-
-    pub fn log_oneline(&self, dir: &str, range: &str) -> Result<String> {
-        let result = self.exec(dir, &["log", "--oneline", range])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git log --oneline {range} failed in {dir}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(result.stdout)
-    }
-
-    pub fn set_author_config(&self, dir: &str, name: &str, email: &str) -> Result<()> {
-        let name_result = self.exec(dir, &["config", "user.name", name])?;
-        if !name_result.success() {
-            return Err(anyhow!(
-                "git config user.name failed: {}",
-                name_result.combined_output()
-            ));
-        }
-        let email_result = self.exec(dir, &["config", "user.email", email])?;
-        if !email_result.success() {
-            return Err(anyhow!(
-                "git config user.email failed: {}",
-                email_result.combined_output()
-            ));
-        }
-        Ok(())
     }
 }
