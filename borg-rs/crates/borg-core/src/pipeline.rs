@@ -39,6 +39,7 @@ pub struct Pipeline {
     seed_cooldowns: Mutex<HashMap<(String, String), i64>>,
     last_self_update_secs: std::sync::atomic::AtomicI64,
     last_cache_prune_secs: std::sync::atomic::AtomicI64,
+    last_stream_cleanup_secs: std::sync::atomic::AtomicI64,
     startup_heads: HashMap<String, String>,
     in_flight: Mutex<HashSet<i64>>,
     /// Per-task last agent dispatch timestamp (epoch seconds) for rate limiting.
@@ -120,6 +121,7 @@ impl Pipeline {
             seed_cooldowns: Mutex::new(seed_cooldowns),
             last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
             last_cache_prune_secs: std::sync::atomic::AtomicI64::new(0),
+            last_stream_cleanup_secs: std::sync::atomic::AtomicI64::new(0),
             startup_heads,
             in_flight: Mutex::new(HashSet::new()),
             last_agent_dispatch: Mutex::new(HashMap::new()),
@@ -456,6 +458,7 @@ impl Pipeline {
         self.maybe_apply_self_update();
         self.refresh_mirrors().await;
         self.maybe_prune_cache_volumes().await;
+        self.maybe_cleanup_streams().await;
 
         // Check if main loop should exit for self-update restart
         if self
@@ -3052,6 +3055,21 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         }
         self.last_cache_prune_secs.store(now, std::sync::atomic::Ordering::Relaxed);
         Sandbox::prune_stale_cache_volumes(7).await;
+    }
+
+    async fn maybe_cleanup_streams(&self) {
+        const INTERVAL_S: i64 = 300;
+        const RETENTION_S: u64 = 3600;
+        let now = chrono::Utc::now().timestamp();
+        let last = self.last_stream_cleanup_secs.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last < INTERVAL_S {
+            return;
+        }
+        self.last_stream_cleanup_secs.store(now, std::sync::atomic::Ordering::Relaxed);
+        let removed = self.stream_manager.cleanup_ended_streams(RETENTION_S).await;
+        if removed > 0 {
+            info!("stream cleanup: removed {removed} ended task streams");
+        }
     }
 
     /// Run `claude --print --model <model>` with prompt on stdin, return stdout.

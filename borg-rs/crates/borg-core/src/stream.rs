@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
+    time::Instant,
 };
 
 use tokio::sync::{broadcast, Mutex};
@@ -11,6 +12,7 @@ struct TaskStream {
     tx: broadcast::Sender<String>,
     history: VecDeque<String>,
     ended: bool,
+    ended_at: Option<Instant>,
 }
 
 /// Per-task NDJSON stream manager.
@@ -38,6 +40,7 @@ impl TaskStreamManager {
                 tx,
                 history: VecDeque::new(),
                 ended: false,
+                ended_at: None,
             },
         );
     }
@@ -75,7 +78,20 @@ impl TaskStreamManager {
                 s.history.pop_front();
             }
             s.ended = true;
+            s.ended_at = Some(Instant::now());
         }
+    }
+
+    /// Remove streams that ended more than `max_age_secs` seconds ago.
+    /// Returns the number of entries removed.
+    pub async fn cleanup_ended_streams(&self, max_age_secs: u64) -> usize {
+        let mut map = self.streams.lock().await;
+        let before = map.len();
+        map.retain(|_, s| match s.ended_at {
+            Some(ended_at) => ended_at.elapsed().as_secs() < max_age_secs,
+            None => true,
+        });
+        before - map.len()
     }
 
     /// Subscribe to a task's stream.
