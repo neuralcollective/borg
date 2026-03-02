@@ -1,0 +1,10 @@
+{
+  "task_id": 47,
+  "task_title": "Silenced worktree directory creation error masks root cause of git failures",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-47",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T21:10:57.531097066Z"
+}
