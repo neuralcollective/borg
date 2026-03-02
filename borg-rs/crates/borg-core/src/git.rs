@@ -1,6 +1,9 @@
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Context, Result};
+
+pub const DEFAULT_GIT_OUTPUT_LIMIT: usize = 10 * 1024 * 1024; // 10 MB
 
 pub struct ExecResult {
     pub stdout: String,
@@ -24,12 +27,30 @@ impl ExecResult {
 
 pub struct Git {
     pub repo_path: String,
+    /// Max bytes to collect from stdout or stderr of a single git command.
+    pub output_limit: usize,
+}
+
+/// Read up to `limit` bytes from `reader`, returning the data and whether it was truncated.
+fn read_limited<R: Read>(reader: R, limit: usize) -> (String, bool) {
+    let mut buf = Vec::new();
+    // Read one extra byte so we can detect truncation without reading the whole stream.
+    reader
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut buf)
+        .ok();
+    let truncated = buf.len() > limit;
+    if truncated {
+        buf.truncate(limit);
+    }
+    (String::from_utf8_lossy(&buf).into_owned(), truncated)
 }
 
 impl Git {
     pub fn new(repo_path: impl Into<String>) -> Self {
         Self {
             repo_path: repo_path.into(),
+            output_limit: DEFAULT_GIT_OUTPUT_LIMIT,
         }
     }
 
@@ -44,15 +65,38 @@ impl Git {
         for (k, v) in env {
             cmd.env(k, v);
         }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let output = cmd
-            .output()
+        let mut child = cmd
+            .spawn()
             .with_context(|| format!("failed to spawn git -C {dir} {}", args.join(" ")))?;
 
+        let stdout_pipe = child.stdout.take().expect("stdout pipe missing");
+        let stderr_pipe = child.stderr.take().expect("stderr pipe missing");
+
+        let limit = self.output_limit;
+        let stdout_handle = std::thread::spawn(move || read_limited(stdout_pipe, limit));
+        let stderr_handle = std::thread::spawn(move || read_limited(stderr_pipe, limit));
+
+        let status = child
+            .wait()
+            .with_context(|| format!("failed to wait for git -C {dir} {}", args.join(" ")))?;
+
+        let (stdout, stdout_truncated) = stdout_handle.join().expect("stdout thread panicked");
+        let (stderr, stderr_truncated) = stderr_handle.join().expect("stderr thread panicked");
+
+        if stdout_truncated || stderr_truncated {
+            tracing::warn!(
+                "git output truncated at {} bytes for: git -C {dir} {}",
+                limit,
+                args.join(" ")
+            );
+        }
+
         Ok(ExecResult {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            exit_code: output.status.code().unwrap_or(1),
+            stdout,
+            stderr,
+            exit_code: status.code().unwrap_or(1),
         })
     }
 
