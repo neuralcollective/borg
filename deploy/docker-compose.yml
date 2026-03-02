@@ -1,0 +1,30 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  borg:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.borg
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - borg_store:/app/store
+      - /root/.claude:/root/.claude:ro
+    environment:
+      - RUST_LOG=info
+    env_file:
+      - .env
+
+volumes:
+  caddy_data:
+  caddy_config:
+  borg_store:
