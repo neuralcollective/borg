@@ -267,8 +267,9 @@ async fn execute_action(
                 .await?;
         },
         Action::Command { cmd } => {
-            tokio::process::Command::new("/bin/sh")
-                .args(["-c", cmd])
+            let (prog, args) = split_command(cmd)?;
+            tokio::process::Command::new(&prog)
+                .args(&args)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()?
@@ -309,8 +310,9 @@ async fn collect_logs(entry: &Entry) -> Result<String> {
             c
         },
         Source::Command { cmd } => {
-            let mut c = tokio::process::Command::new("/bin/sh");
-            c.args(["-c", cmd]);
+            let (prog, args) = split_command(cmd)?;
+            let mut c = tokio::process::Command::new(&prog);
+            c.args(&args);
             c
         },
     };
@@ -324,6 +326,15 @@ async fn collect_logs(entry: &Entry) -> Result<String> {
     .await
     .map_err(|_| anyhow::anyhow!("collect_logs timed out for {}", entry.name))??;
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn split_command(cmd: &str) -> Result<(String, Vec<String>)> {
+    let argv = shlex::split(cmd)
+        .ok_or_else(|| anyhow::anyhow!("invalid command (unmatched quote): {}", cmd))?;
+    let Some((prog, args)) = argv.split_first() else {
+        anyhow::bail!("empty command");
+    };
+    Ok((prog.clone(), args.to_vec()))
 }
 
 fn strip_fences(text: &str) -> &str {
@@ -523,6 +534,38 @@ mod tests {
     fn load_entries_missing_file() {
         let entries = load_entries("/nonexistent/observer.json");
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn split_command_simple() {
+        let (prog, args) = split_command("echo hello world").unwrap();
+        assert_eq!(prog, "echo");
+        assert_eq!(args, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn split_command_quoted_arg() {
+        let (prog, args) = split_command("echo 'hello world'").unwrap();
+        assert_eq!(prog, "echo");
+        assert_eq!(args, vec!["hello world"]);
+    }
+
+    #[test]
+    fn split_command_empty_fails() {
+        assert!(split_command("").is_err());
+    }
+
+    #[test]
+    fn split_command_unmatched_quote_fails() {
+        assert!(split_command("echo 'unterminated").is_err());
+    }
+
+    #[test]
+    fn split_command_semicolon_is_literal_arg() {
+        // Shell metacharacters must not be interpreted — ';' becomes a literal argument
+        let (prog, args) = split_command("echo foo; rm -rf /").unwrap();
+        assert_eq!(prog, "echo");
+        assert_eq!(args, vec!["foo;", "rm", "-rf", "/"]);
     }
 
     #[test]
