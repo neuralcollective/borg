@@ -1731,6 +1731,7 @@ pub(crate) async fn post_chat(
     {
         let mut map = state.chat_rate.lock().unwrap();
         let now = std::time::Instant::now();
+        map.retain(|_, last| now.duration_since(*last) < cooldown);
         if let Some(last) = map.get(&thread) {
             if now.duration_since(*last) < cooldown {
                 return Err(StatusCode::TOO_MANY_REQUESTS);
@@ -2076,3 +2077,78 @@ pub(crate) async fn get_task_container(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, time::{Duration, Instant}};
+
+    fn evict_stale(map: &mut HashMap<String, Instant>, cooldown: Duration) {
+        let now = Instant::now();
+        map.retain(|_, last| now.duration_since(*last) < cooldown);
+    }
+
+    #[test]
+    fn evicts_entries_older_than_cooldown() {
+        let cooldown = Duration::from_secs(10);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        let old = Instant::now() - Duration::from_secs(20);
+        map.insert("thread-a".to_string(), old);
+        map.insert("thread-b".to_string(), Instant::now());
+
+        evict_stale(&mut map, cooldown);
+
+        assert!(!map.contains_key("thread-a"), "stale entry must be evicted");
+        assert!(map.contains_key("thread-b"), "fresh entry must be kept");
+    }
+
+    #[test]
+    fn keeps_entries_within_cooldown() {
+        let cooldown = Duration::from_secs(60);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        map.insert("thread-x".to_string(), Instant::now());
+
+        evict_stale(&mut map, cooldown);
+
+        assert!(map.contains_key("thread-x"));
+    }
+
+    #[test]
+    fn empty_map_eviction_is_noop() {
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        evict_stale(&mut map, Duration::from_secs(10));
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn all_stale_entries_are_cleared() {
+        let cooldown = Duration::from_secs(5);
+        let old = Instant::now() - Duration::from_secs(10);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        for i in 0..100 {
+            map.insert(format!("thread-{i}"), old);
+        }
+
+        evict_stale(&mut map, cooldown);
+
+        assert!(map.is_empty(), "all 100 stale entries must be evicted");
+    }
+
+    #[test]
+    fn mixed_entries_only_stale_removed() {
+        let cooldown = Duration::from_secs(30);
+        let old = Instant::now() - Duration::from_secs(60);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        for i in 0..50 {
+            map.insert(format!("old-{i}"), old);
+        }
+        for i in 0..50 {
+            map.insert(format!("new-{i}"), Instant::now());
+        }
+
+        evict_stale(&mut map, cooldown);
+
+        assert_eq!(map.len(), 50);
+        for i in 0..50 {
+            assert!(map.contains_key(&format!("new-{i}")));
+        }
+    }
+}
