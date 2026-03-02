@@ -92,9 +92,7 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
     s
 }
 
-/// Read the per-repo prompt from the explicit prompt_file config, or by
-/// auto-detecting `.borg/prompt.md` in the worktree / repo root.
-fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
+pub(crate) fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
     use borg_core::ipc::{self, IpcReadResult};
 
     // 1. Explicit prompt_file from config (operator-trusted absolute path)
@@ -127,4 +125,139 @@ fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use chrono::Utc;
+    use tempfile::TempDir;
+
+    use borg_core::types::{PhaseContext, RepoConfig, Task};
+
+    use super::read_repo_prompt;
+
+    fn make_task() -> Task {
+        Task {
+            id: 1,
+            title: "t".into(),
+            description: "d".into(),
+            repo_path: String::new(),
+            branch: String::new(),
+            status: "backlog".into(),
+            attempt: 0,
+            max_attempts: 3,
+            last_error: String::new(),
+            created_by: String::new(),
+            notify_chat: String::new(),
+            created_at: Utc::now(),
+            session_id: String::new(),
+            mode: "sweborg".into(),
+            backend: String::new(),
+        }
+    }
+
+    fn make_repo_config(path: &str, prompt_file: &str) -> RepoConfig {
+        RepoConfig {
+            path: path.to_string(),
+            test_cmd: String::new(),
+            prompt_file: prompt_file.to_string(),
+            mode: "sweborg".into(),
+            is_self: false,
+            auto_merge: false,
+            lint_cmd: String::new(),
+            backend: String::new(),
+            repo_slug: String::new(),
+        }
+    }
+
+    fn make_ctx(worktree_path: &str, repo_config: RepoConfig) -> PhaseContext {
+        PhaseContext {
+            task: make_task(),
+            repo_config,
+            data_dir: String::new(),
+            session_dir: String::new(),
+            worktree_path: worktree_path.to_string(),
+            oauth_token: String::new(),
+            model: String::new(),
+            pending_messages: vec![],
+            system_prompt_suffix: String::new(),
+            user_coauthor: String::new(),
+            stream_tx: None,
+            setup_script: String::new(),
+            api_keys: HashMap::new(),
+            disallowed_tools: String::new(),
+            knowledge_files: vec![],
+            knowledge_dir: String::new(),
+            agent_network: None,
+        }
+    }
+
+    fn write_prompt(dir: &TempDir, rel: &str, content: &str) {
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    // Explicit prompt_file is returned instead of the worktree file.
+    #[test]
+    fn explicit_prompt_file_takes_priority() {
+        let tmp = TempDir::new().unwrap();
+        let explicit = tmp.path().join("explicit.txt");
+        std::fs::write(&explicit, "explicit content").unwrap();
+        write_prompt(&tmp, "wt/.borg/prompt.md", "worktree content");
+
+        let repo_cfg = make_repo_config(
+            &tmp.path().join("wt").to_string_lossy(),
+            &explicit.to_string_lossy(),
+        );
+        let ctx = make_ctx(&tmp.path().join("wt").to_string_lossy(), repo_cfg);
+        let result = read_repo_prompt(&ctx);
+        assert_eq!(result.as_deref(), Some("explicit content"));
+    }
+
+    // Whitespace-only explicit file falls through to the worktree .borg/prompt.md.
+    #[test]
+    fn whitespace_only_prompt_file_falls_through_to_worktree() {
+        let tmp = TempDir::new().unwrap();
+        let explicit = tmp.path().join("blank.txt");
+        std::fs::write(&explicit, "   \n\t  \n").unwrap();
+        write_prompt(&tmp, "wt/.borg/prompt.md", "worktree prompt");
+
+        let repo_cfg = make_repo_config(
+            &tmp.path().join("wt").to_string_lossy(),
+            &explicit.to_string_lossy(),
+        );
+        let ctx = make_ctx(&tmp.path().join("wt").to_string_lossy(), repo_cfg);
+        let result = read_repo_prompt(&ctx);
+        assert_eq!(result.as_deref(), Some("worktree prompt"));
+    }
+
+    // When worktree_path == repo_config.path the third lookup is skipped;
+    // no double-read occurs and the result is None when no prompt exists.
+    #[test]
+    fn same_path_skips_third_lookup() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_string_lossy().into_owned();
+        // No .borg/prompt.md written — both source 2 and (skipped) source 3 would be absent.
+        let repo_cfg = make_repo_config(&dir, "");
+        let ctx = make_ctx(&dir, repo_cfg);
+        assert!(read_repo_prompt(&ctx).is_none());
+    }
+
+    // Confirm the third source IS used when paths differ.
+    #[test]
+    fn third_source_used_when_paths_differ() {
+        let tmp = TempDir::new().unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let repo_root = tmp.path().join("repo");
+        write_prompt(&tmp, "repo/.borg/prompt.md", "repo root prompt");
+
+        let repo_cfg = make_repo_config(&repo_root.to_string_lossy(), "");
+        let ctx = make_ctx(&wt.to_string_lossy(), repo_cfg);
+        let result = read_repo_prompt(&ctx);
+        assert_eq!(result.as_deref(), Some("repo root prompt"));
+    }
 }
