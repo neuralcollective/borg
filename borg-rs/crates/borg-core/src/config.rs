@@ -93,11 +93,8 @@ pub struct Config {
     pub observer_config: String,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+fn parse_dotenv_str(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -116,6 +113,13 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    let Ok(contents) = std::fs::read_to_string(".env") else {
+        return HashMap::new();
+    };
+    parse_dotenv_str(&contents)
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -234,15 +238,9 @@ pub fn refresh_oauth_token(credentials_path: &str, current: &str) -> String {
         .unwrap_or_else(|| current.to_string())
 }
 
-fn slug_from_remote(path: &str) -> String {
-    let out = std::process::Command::new("git")
-        .args(["-C", path, "remote", "get-url", "origin"])
-        .output();
-    let url = match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => return String::new(),
-    };
-    let url = url.strip_suffix(".git").unwrap_or(&url);
+fn slug_from_url(url: &str) -> String {
+    let url = url.trim();
+    let url = url.strip_suffix(".git").unwrap_or(url);
     if let Some(rest) = url.strip_prefix("https://github.com/") {
         return rest.to_string();
     }
@@ -254,6 +252,17 @@ fn slug_from_remote(path: &str) -> String {
         return format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]);
     }
     String::new()
+}
+
+fn slug_from_remote(path: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-C", path, "remote", "get-url", "origin"])
+        .output();
+    let url = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => return String::new(),
+    };
+    slug_from_url(&url)
 }
 
 fn parse_watched_repos(
@@ -629,5 +638,166 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_dotenv_str ──────────────────────────────────────────────────────
+
+    #[test]
+    fn dotenv_empty_input() {
+        let map = parse_dotenv_str("");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn dotenv_simple_key_value() {
+        let map = parse_dotenv_str("FOO=bar");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn dotenv_double_quoted_value() {
+        let map = parse_dotenv_str(r#"TOKEN="abc123""#);
+        assert_eq!(map.get("TOKEN").map(String::as_str), Some("abc123"));
+    }
+
+    #[test]
+    fn dotenv_single_quoted_value() {
+        let map = parse_dotenv_str("TOKEN='abc123'");
+        assert_eq!(map.get("TOKEN").map(String::as_str), Some("abc123"));
+    }
+
+    #[test]
+    fn dotenv_comment_line_skipped() {
+        let map = parse_dotenv_str("# this is a comment\nFOO=bar");
+        assert!(!map.contains_key("# this is a comment"));
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn dotenv_empty_lines_skipped() {
+        let map = parse_dotenv_str("\n\nFOO=bar\n\n");
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn dotenv_whitespace_around_key_trimmed() {
+        let map = parse_dotenv_str("  FOO  =bar");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn dotenv_whitespace_around_value_trimmed() {
+        let map = parse_dotenv_str("FOO=  bar  ");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn dotenv_value_with_equals_sign() {
+        // split_once('=') only splits on the first '='
+        let map = parse_dotenv_str("URL=https://example.com?a=1&b=2");
+        assert_eq!(
+            map.get("URL").map(String::as_str),
+            Some("https://example.com?a=1&b=2")
+        );
+    }
+
+    #[test]
+    fn dotenv_line_without_equals_skipped() {
+        let map = parse_dotenv_str("NOT_A_KEY_VALUE\nFOO=bar");
+        assert!(!map.contains_key("NOT_A_KEY_VALUE"));
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn dotenv_multiple_keys() {
+        let input = "A=1\nB=2\nC=3";
+        let map = parse_dotenv_str(input);
+        assert_eq!(map.get("A").map(String::as_str), Some("1"));
+        assert_eq!(map.get("B").map(String::as_str), Some("2"));
+        assert_eq!(map.get("C").map(String::as_str), Some("3"));
+    }
+
+    #[test]
+    fn dotenv_quoted_empty_value() {
+        let map = parse_dotenv_str(r#"EMPTY="""#);
+        assert_eq!(map.get("EMPTY").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn dotenv_mismatched_quotes_not_stripped() {
+        // starts_with('"') but ends_with('\'') — quotes are not stripped
+        let map = parse_dotenv_str("FOO=\"bar'");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("\"bar'"));
+    }
+
+    // ── slug_from_url ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn slug_https_with_git_suffix() {
+        assert_eq!(
+            slug_from_url("https://github.com/owner/repo.git"),
+            "owner/repo"
+        );
+    }
+
+    #[test]
+    fn slug_https_without_git_suffix() {
+        assert_eq!(
+            slug_from_url("https://github.com/owner/repo"),
+            "owner/repo"
+        );
+    }
+
+    #[test]
+    fn slug_ssh_with_git_suffix() {
+        assert_eq!(
+            slug_from_url("git@github.com:owner/repo.git"),
+            "owner/repo"
+        );
+    }
+
+    #[test]
+    fn slug_ssh_without_git_suffix() {
+        assert_eq!(slug_from_url("git@github.com:owner/repo"), "owner/repo");
+    }
+
+    #[test]
+    fn slug_trailing_newline_trimmed() {
+        assert_eq!(
+            slug_from_url("https://github.com/owner/repo.git\n"),
+            "owner/repo"
+        );
+    }
+
+    #[test]
+    fn slug_generic_https_fallback() {
+        assert_eq!(
+            slug_from_url("https://gitlab.com/myorg/myrepo.git"),
+            "myorg/myrepo"
+        );
+    }
+
+    #[test]
+    fn slug_generic_ssh_fallback() {
+        assert_eq!(
+            slug_from_url("git@gitlab.com:myorg/myrepo.git"),
+            "myorg/myrepo"
+        );
+    }
+
+    #[test]
+    fn slug_empty_string() {
+        assert_eq!(slug_from_url(""), "");
+    }
+
+    #[test]
+    fn slug_single_component_returns_empty() {
+        assert_eq!(slug_from_url("notaurl"), "");
     }
 }
