@@ -834,6 +834,19 @@ pub(crate) async fn get_task(
     }
 }
 
+pub(crate) async fn get_task_timings(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(_) => {
+            let timings = state.db.get_phase_timings(id).map_err(internal)?;
+            Ok(Json(json!({ "timings": timings })))
+        },
+    }
+}
+
 pub(crate) async fn create_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateTaskBody>,

@@ -1155,6 +1155,71 @@ impl Db {
         Ok(conn.last_insert_rowid())
     }
 
+    pub fn get_phase_timings(&self, task_id: i64) -> Result<Vec<crate::types::PhaseTiming>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT kind, payload, created_at FROM pipeline_events \
+             WHERE task_id = ?1 AND kind IN ('phase_started', 'phase_completed') \
+             ORDER BY id",
+        )?;
+        struct EventRow {
+            kind: String,
+            payload: serde_json::Value,
+            created_at: String,
+        }
+        let rows: Vec<EventRow> = stmt
+            .query_map(params![task_id], |row| {
+                let kind: String = row.get(0)?;
+                let payload_str: String = row.get(1)?;
+                let created_at: String = row.get(2)?;
+                Ok((kind, payload_str, created_at))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(kind, payload_str, created_at)| {
+                let payload = serde_json::from_str(&payload_str).ok()?;
+                Some(EventRow { kind, payload, created_at })
+            })
+            .collect();
+
+        // Pair phase_started with phase_completed by (phase, attempt).
+        let mut pending: Vec<(String, i64, String)> = Vec::new(); // (phase, attempt, started_at)
+        let mut result: Vec<crate::types::PhaseTiming> = Vec::new();
+
+        for row in rows {
+            let phase = row.payload.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let attempt = row.payload.get("attempt").and_then(|v| v.as_i64()).unwrap_or(0);
+
+            if row.kind == "phase_started" {
+                pending.push((phase, attempt, row.created_at));
+            } else if row.kind == "phase_completed" {
+                let duration_ms = row.payload.get("duration_ms").and_then(|v| v.as_i64());
+                if let Some(pos) = pending.iter().position(|(p, a, _)| p == &phase && *a == attempt) {
+                    let (_, _, started_at) = pending.remove(pos);
+                    result.push(crate::types::PhaseTiming {
+                        phase,
+                        attempt,
+                        started_at,
+                        ended_at: Some(row.created_at),
+                        duration_ms,
+                    });
+                }
+            }
+        }
+
+        // Flush any in-progress phases (started but not completed).
+        for (phase, attempt, started_at) in pending {
+            result.push(crate::types::PhaseTiming {
+                phase,
+                attempt,
+                started_at,
+                ended_at: None,
+                duration_ms: None,
+            });
+        }
+
+        Ok(result)
+    }
+
     // ── Config ────────────────────────────────────────────────────────────
 
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {

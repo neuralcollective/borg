@@ -519,6 +519,14 @@ impl Pipeline {
             task.id, task.status, task.repo_path, task.title
         );
 
+        let phase_start = Utc::now();
+        let _ = self.db.log_event(
+            Some(task.id),
+            None,
+            "phase_started",
+            &serde_json::json!({"phase": task.status, "attempt": task.attempt}),
+        );
+
         match phase.phase_type {
             PhaseType::Setup => self.setup_branch(&task, &mode).await?,
             PhaseType::Agent => self.run_agent_phase(&task, &phase, &mode).await?,
@@ -526,6 +534,14 @@ impl Pipeline {
             PhaseType::Rebase => self.run_rebase_phase(&task, &phase, &mode).await?,
             PhaseType::LintFix => self.run_lint_fix_phase(&task, &phase, &mode).await?,
         }
+
+        let duration_ms = Utc::now().signed_duration_since(phase_start).num_milliseconds();
+        let _ = self.db.log_event(
+            Some(task.id),
+            None,
+            "phase_completed",
+            &serde_json::json!({"phase": task.status, "attempt": task.attempt, "duration_ms": duration_ms}),
+        );
 
         Ok(())
     }

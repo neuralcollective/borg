@@ -185,6 +185,14 @@ export interface ProjectFile {
   created_at: string;
 }
 
+export interface PhaseTiming {
+  phase: string;
+  attempt: number;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+}
+
 export interface KnowledgeFile {
   id: number;
   file_name: string;

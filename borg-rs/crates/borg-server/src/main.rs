@@ -688,6 +688,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/:id/stream", get(routes::sse_task_stream))
         .route("/api/tasks/:id/container", get(routes::get_task_container))
         .route("/api/tasks/:id/container/exec", post(routes::post_task_container_exec))
+        .route("/api/tasks/:id/timings", get(routes::get_task_timings))
         // Task messages
         .route("/api/tasks/:id/messages", get(routes::get_task_messages))
         .route("/api/tasks/:id/messages", post(routes::post_task_message))

@@ -13,6 +13,7 @@ import type {
   ProjectFile,
   PipelineModeFull,
   KnowledgeFile,
+  PhaseTiming,
 } from "./types";
 import {
   MAX_LOG_BUFFER,
@@ -501,6 +502,19 @@ export function useSendTaskMessage(taskId: number) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["task_messages", taskId] });
     },
+  });
+}
+
+export function useTaskTimings(taskId: number | null) {
+  return useQuery<PhaseTiming[]>({
+    queryKey: ["task_timings", taskId],
+    queryFn: async () => {
+      if (!taskId) return [];
+      const data = await fetchJson<{ timings: PhaseTiming[] }>(`/api/tasks/${taskId}/timings`);
+      return data.timings ?? [];
+    },
+    enabled: taskId !== null,
+    staleTime: 10_000,
   });
 }
 

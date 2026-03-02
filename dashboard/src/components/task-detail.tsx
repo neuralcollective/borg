@@ -1,9 +1,9 @@
-import { useTaskDetail, useTaskStream, useTaskContainer, retryTask, setTaskBackend } from "@/lib/api";
+import { useTaskDetail, useTaskStream, useTaskContainer, useTaskTimings, retryTask, setTaskBackend } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
 import { TaskChat } from "./task-chat";
-import { repoName, isActiveStatus, type TaskOutput } from "@/lib/types";
+import { repoName, isActiveStatus, type TaskOutput, type PhaseTiming } from "@/lib/types";
 import { useUIMode } from "@/lib/ui-mode";
 import { cn } from "@/lib/utils";
 import { parseRawStream, type ParsedStreamEvent } from "@/lib/stream-utils";
@@ -21,6 +21,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const isActive = task ? isActiveStatus(task.status) : false;
   const { events, streaming } = useTaskStream(taskId, isActive);
   const { data: container } = useTaskContainer(taskId, isActive);
+  const { data: timings } = useTaskTimings(taskId);
   const { mode: uiMode } = useUIMode();
   const isMinimal = uiMode === "minimal";
   const queryClient = useQueryClient();
@@ -147,6 +148,10 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
             {task.last_error}
           </pre>
         </div>
+      )}
+
+      {timings && timings.length > 0 && (
+        <PhaseTimingBreakdown timings={timings} />
       )}
 
       {/* Main content area: terminal / outputs + chat */}
@@ -413,6 +418,57 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
             {selected.output || "(empty)"}
           </pre>
         )}
+      </div>
+    </div>
+  );
+}
+
+function formatDuration(ms: number | null): string {
+  if (ms === null) return "…";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
+function PhaseTimingBreakdown({ timings }: { timings: PhaseTiming[] }) {
+  const totalMs = timings.reduce((sum, t) => sum + (t.duration_ms ?? 0), 0);
+
+  // Group by phase to show multi-attempt totals.
+  const byPhase = new Map<string, PhaseTiming[]>();
+  for (const t of timings) {
+    const key = t.phase;
+    if (!byPhase.has(key)) byPhase.set(key, []);
+    byPhase.get(key)!.push(t);
+  }
+
+  return (
+    <div className="border-b border-white/[0.06] px-5 py-2.5">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">Phase Timing</span>
+        {totalMs > 0 && (
+          <span className="text-[10px] text-zinc-700">total {formatDuration(totalMs)}</span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {Array.from(byPhase.entries()).map(([phase, pts]) => {
+          const attempts = pts.length;
+          const totalPhaseMs = pts.reduce((s, t) => s + (t.duration_ms ?? 0), 0);
+          const inProgress = pts.some((t) => t.ended_at === null);
+          return (
+            <span key={phase} className="text-[11px] text-zinc-400">
+              <span className="text-zinc-600">{phase}</span>{" "}
+              {formatDuration(inProgress && totalPhaseMs === 0 ? null : totalPhaseMs)}
+              {attempts > 1 && (
+                <span className="ml-0.5 text-[9px] text-zinc-600">×{attempts}</span>
+              )}
+              {inProgress && (
+                <span className="ml-0.5 text-[9px] text-amber-500/80">●</span>
+              )}
+            </span>
+          );
+        })}
       </div>
     </div>
   );

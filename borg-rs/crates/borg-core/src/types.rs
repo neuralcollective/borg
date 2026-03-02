@@ -390,6 +390,18 @@ impl AgentSignal {
     }
 }
 
+// ── Phase Timing ─────────────────────────────────────────────────────────
+
+/// Duration record for a single phase attempt, derived from pipeline_events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseTiming {
+    pub phase: String,
+    pub attempt: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
 // ── Phase Execution ──────────────────────────────────────────────────────
 
 /// Runtime context passed to a phase executor.
