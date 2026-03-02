@@ -3186,3 +3186,173 @@ fn looks_like_field_key(line: &str) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use chrono::Utc;
+
+    use crate::{
+        config::Config,
+        db::Db,
+        sandbox::SandboxMode,
+        types::Task,
+    };
+
+    use super::Pipeline;
+
+    fn open_db() -> Arc<Db> {
+        let mut db = Db::open(":memory:").expect("open in-memory db");
+        db.migrate().expect("migrate");
+        Arc::new(db)
+    }
+
+    fn minimal_config() -> Arc<Config> {
+        Arc::new(Config {
+            telegram_token: String::new(),
+            oauth_token: String::new(),
+            assistant_name: String::new(),
+            trigger_pattern: String::new(),
+            data_dir: String::new(),
+            container_image: String::new(),
+            model: String::new(),
+            credentials_path: String::new(),
+            session_max_age_hours: 0,
+            max_consecutive_errors: 0,
+            pipeline_repo: String::new(),
+            pipeline_test_cmd: String::new(),
+            pipeline_lint_cmd: String::new(),
+            backend: String::new(),
+            pipeline_admin_chat: String::new(),
+            release_interval_mins: 0,
+            continuous_mode: false,
+            chat_collection_window_ms: 0,
+            chat_cooldown_ms: 0,
+            agent_timeout_s: 0,
+            max_chat_agents: 0,
+            chat_rate_limit: 0,
+            pipeline_max_agents: 0,
+            web_bind: String::new(),
+            web_port: 0,
+            dashboard_dist_dir: String::new(),
+            container_setup: String::new(),
+            container_memory_mb: 0,
+            container_cpus: 0.0,
+            sandbox_backend: String::new(),
+            pipeline_max_backlog: 0,
+            pipeline_seed_cooldown_s: 0,
+            proposal_promote_threshold: 0,
+            pipeline_tick_s: 0,
+            remote_check_interval_s: 0,
+            mirror_refresh_interval_s: 0,
+            pipeline_agent_cooldown_s: 0,
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            git_committer_name: String::new(),
+            git_committer_email: String::new(),
+            git_via_borg: false,
+            git_claude_coauthor: false,
+            git_user_coauthor: String::new(),
+            watched_repos: vec![],
+            build_cmd: String::new(),
+            self_update_enabled: false,
+            codex_api_key: String::new(),
+            codex_credentials_path: String::new(),
+            discord_token: String::new(),
+            wa_auth_dir: String::new(),
+            wa_disabled: false,
+            observer_config: String::new(),
+        })
+    }
+
+    fn make_pipeline(db: Arc<Db>) -> Pipeline {
+        let (p, _rx) = Pipeline::new(
+            db,
+            HashMap::new(),
+            minimal_config(),
+            SandboxMode::Docker, // skips cleanup_worktree — no real git repo needed
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false,
+        );
+        p
+    }
+
+    fn insert_task(db: &Db, attempt: i64, max_attempts: i64, session_id: &str) -> Task {
+        let task = Task {
+            id: 0,
+            title: "test task".into(),
+            description: "desc".into(),
+            repo_path: "/repo".into(),
+            branch: "task-1".into(),
+            status: "retry".into(),
+            attempt,
+            max_attempts,
+            last_error: String::new(),
+            created_by: "test".into(),
+            notify_chat: String::new(),
+            created_at: Utc::now(),
+            session_id: session_id.into(),
+            mode: "sweborg".into(),
+            backend: String::new(),
+        };
+        let id = db.insert_task(&task).expect("insert_task");
+        Task { id, ..task }
+    }
+
+    // First retry: attempt increments to 1 and status is set to retry_status (not "failed").
+    #[test]
+    fn test_first_retry_increments_attempt_and_sets_retry_status() {
+        let db = open_db();
+        let task = insert_task(&db, 0, 3, "sess-1");
+        let pipeline = make_pipeline(Arc::clone(&db));
+
+        pipeline.fail_or_retry(&task, "retry", "something failed").expect("fail_or_retry");
+
+        let updated = db.get_task(task.id).expect("get_task").expect("task exists");
+        assert_eq!(updated.attempt, 1, "attempt must be incremented to 1");
+        assert_eq!(updated.status, "retry", "status must equal retry_status");
+        assert_eq!(updated.last_error, "something failed");
+        // Session must not be cleared below the threshold of 3
+        assert_eq!(updated.session_id, "sess-1", "session must not be cleared before attempt 3");
+    }
+
+    // Retry limit hit: status becomes "failed" when attempt reaches max_attempts.
+    #[test]
+    fn test_retry_limit_marks_task_failed() {
+        let db = open_db();
+        let task = insert_task(&db, 4, 5, "sess-2");
+        let pipeline = make_pipeline(Arc::clone(&db));
+
+        pipeline.fail_or_retry(&task, "retry", "fatal error").expect("fail_or_retry");
+
+        let updated = db.get_task(task.id).expect("get_task").expect("task exists");
+        assert_eq!(updated.attempt, 5, "attempt must be incremented to 5");
+        assert_eq!(updated.status, "failed", "status must be 'failed' at the retry limit");
+        assert_eq!(updated.last_error, "fatal error");
+    }
+
+    // Attempt-3 path: session is cleared and last_error contains the fresh-retry summary.
+    #[test]
+    fn test_attempt_3_clears_session_and_uses_retry_summary() {
+        let db = open_db();
+        let task = insert_task(&db, 2, 5, "sess-active");
+        let pipeline = make_pipeline(Arc::clone(&db));
+
+        pipeline.fail_or_retry(&task, "retry", "third failure").expect("fail_or_retry");
+
+        let updated = db.get_task(task.id).expect("get_task").expect("task exists");
+        assert_eq!(updated.attempt, 3, "attempt must be incremented to 3");
+        assert_eq!(updated.status, "retry", "must remain retryable below max_attempts");
+        assert_eq!(updated.session_id, "", "session must be cleared for fresh start at attempt 3");
+        assert!(
+            updated.last_error.starts_with("FRESH RETRY"),
+            "last_error must be the retry summary, got: {:?}",
+            updated.last_error
+        );
+        assert!(
+            updated.last_error.contains("third failure"),
+            "retry summary must include the current error"
+        );
+    }
+}
