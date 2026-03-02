@@ -51,6 +51,17 @@ fn derive_compile_check(test_cmd: &str) -> Option<String> {
     }
 }
 
+/// Removes a cidfile when dropped, ensuring cleanup on every exit path.
+struct CidfileCleanup(Option<String>);
+
+impl Drop for CidfileCleanup {
+    fn drop(&mut self) {
+        if let Some(ref p) = self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 /// Runs Claude Code as a subprocess, with configurable sandbox isolation.
 pub struct ClaudeBackend {
     /// Path to the `claude` CLI binary.
@@ -427,6 +438,8 @@ impl AgentBackend for ClaudeBackend {
         } else {
             None
         };
+        // Ensure cidfile is removed on every exit path (normal, error, timeout).
+        let _cid_guard = CidfileCleanup(cidfile_path.clone());
 
         let mut child = match effective_mode {
             SandboxMode::Bwrap => {
@@ -772,5 +785,51 @@ impl AgentBackend for ClaudeBackend {
     async fn interrupt(&self, session_id: &str) -> Result<()> {
         warn!(session_id = %session_id, "interrupt not yet implemented");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn cidfile_cleanup_removes_file_on_drop() {
+        let path = std::env::temp_dir().join("borg-test-cid-drop.txt");
+        fs::write(&path, "abc123").expect("write test cidfile");
+        assert!(path.exists());
+        {
+            let _guard = CidfileCleanup(Some(path.to_string_lossy().to_string()));
+        }
+        assert!(!path.exists(), "cidfile should be removed when guard drops");
+    }
+
+    #[test]
+    fn cidfile_cleanup_none_is_noop() {
+        let _guard = CidfileCleanup(None);
+        // must not panic
+    }
+
+    #[test]
+    fn cidfile_cleanup_missing_file_is_noop() {
+        let _guard = CidfileCleanup(Some("/tmp/borg-test-nonexistent-cid-99999.txt".to_string()));
+        // must not panic when the file doesn't exist
+    }
+
+    #[test]
+    fn cidfile_cleanup_removes_file_on_early_return() {
+        let path = std::env::temp_dir().join("borg-test-cid-early-return.txt");
+        fs::write(&path, "containerid").expect("write test cidfile");
+        assert!(path.exists());
+
+        let result: Result<()> = (|| {
+            let _guard = CidfileCleanup(Some(path.to_string_lossy().to_string()));
+            return Err(anyhow::anyhow!("simulated error"));
+            #[allow(unreachable_code)]
+            Ok(())
+        })();
+
+        assert!(result.is_err());
+        assert!(!path.exists(), "cidfile should be removed even on early return");
     }
 }
