@@ -189,6 +189,7 @@ export interface Project {
   deadline?: string;
   privilege_level?: string;
   status?: string;
+  default_template_id?: number | null;
 }
 
 export interface ProjectTask {

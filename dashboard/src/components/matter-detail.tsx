@@ -213,7 +213,7 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportingAll, setExportingAll] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
-  const [exportTemplateId, setExportTemplateId] = useState<number | null>(null);
+  const [exportTemplateId, setExportTemplateId] = useState<number | null>(project.default_template_id ?? null);
   const { data: templates = [] } = useTemplates("template");
 
   async function exportAll(format: "pdf" | "docx") {
@@ -343,6 +343,7 @@ function MetadataPanel({ project, projectId }: { project: Project; projectId: nu
   const [open, setOpen] = useState(false);
   const [conflicts, setConflicts] = useState<ConflictHit[]>([]);
   const { mutate: update } = useUpdateProject(projectId);
+  const { data: templates = [] } = useTemplates("template");
 
   useEffect(() => {
     if (!project.client_name && !project.opposing_counsel) return;
@@ -400,6 +401,24 @@ function MetadataPanel({ project, projectId }: { project: Project; projectId: nu
               options={["active", "pending", "on_hold", "closed", "archived"]}
               onSave={save("status")}
             />
+            {templates.length > 0 && (
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] text-zinc-600">Default Template</span>
+                <select
+                  value={project.default_template_id ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value ? Number(e.target.value) : null;
+                    update({ default_template_id: v });
+                  }}
+                  className="rounded border border-white/[0.12] bg-white/[0.04] px-2 py-0.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+                >
+                  <option value="">none</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.file_name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </>
       )}
