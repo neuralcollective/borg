@@ -1,10 +1,10 @@
 {
-  "task_id": 290,
-  "task_title": "Fix seeding TOCTOU: in_flight check and atomic CAS are not jointly atomic (pipeline.rs:411)",
+  "task_id": 333,
+  "task_title": "Unit-test `parse_stream` session ID extraction and output fallback",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-290",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-333",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T10:25:57.721826441Z"
+  "generated_at": "2026-03-03T12:43:12.229826279Z"
 }
