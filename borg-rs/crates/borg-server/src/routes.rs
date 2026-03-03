@@ -33,6 +33,14 @@ pub(crate) fn internal(e: impl std::fmt::Display) -> StatusCode {
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
+fn sanitize_filename_stem(stem: &str) -> String {
+    let s: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    if s.is_empty() { "document".to_string() } else { s }
+}
+
 fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);
@@ -1516,14 +1524,11 @@ pub(crate) async fn export_project_document(
     // Write markdown to a temp file
     let tmp_dir = tempfile::tempdir().map_err(internal)?;
     let md_path = tmp_dir.path().join("document.md");
-    let out_filename = format!(
-        "{}.{}",
-        std::path::Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("document"),
-        format
-    );
+    let raw_stem = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+    let out_filename = format!("{}.{}", sanitize_filename_stem(raw_stem), format);
     let out_path = tmp_dir.path().join(&out_filename);
 
     tokio::fs::write(&md_path, &md_bytes).await.map_err(internal)?;
@@ -3030,6 +3035,50 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename_stem;
+
+    #[test]
+    fn safe_stem_passes_through() {
+        assert_eq!(sanitize_filename_stem("report"), "report");
+        assert_eq!(sanitize_filename_stem("my-doc_v2.final"), "my-doc_v2.final");
+        assert_eq!(sanitize_filename_stem("ABC123"), "ABC123");
+    }
+
+    #[test]
+    fn double_quote_replaced() {
+        assert_eq!(sanitize_filename_stem("fi\"le"), "fi_le");
+    }
+
+    #[test]
+    fn crlf_replaced() {
+        assert_eq!(sanitize_filename_stem("fi\r\nle"), "fi__le");
+    }
+
+    #[test]
+    fn spaces_replaced() {
+        assert_eq!(sanitize_filename_stem("my file name"), "my_file_name");
+    }
+
+    #[test]
+    fn non_ascii_replaced() {
+        assert_eq!(sanitize_filename_stem("résumé"), "r_sum_");
+    }
+
+    #[test]
+    fn empty_stem_returns_document() {
+        assert_eq!(sanitize_filename_stem(""), "document");
+    }
+
+    #[test]
+    fn all_bad_chars_returns_underscores_not_empty() {
+        let result = sanitize_filename_stem("\"\"");
+        assert_eq!(result, "__");
+        assert!(!result.is_empty());
     }
 }
 
