@@ -91,6 +91,20 @@ pub struct Config {
 
     // Observer
     pub observer_config: String,
+
+    /// Public base URL for OAuth callbacks (e.g. "https://app.borg.legal").
+    /// Falls back to http://localhost:{web_port} if unset.
+    pub public_url: String,
+}
+
+impl Config {
+    pub fn get_base_url(&self) -> String {
+        if !self.public_url.is_empty() {
+            self.public_url.trim_end_matches('/').to_string()
+        } else {
+            format!("http://localhost:{}", self.web_port)
+        }
+    }
 }
 
 fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
@@ -674,6 +688,7 @@ impl Config {
         c.git_committer_email = get_str("git_committer_email", &c.git_committer_email);
         c.git_user_coauthor = get_str("git_user_coauthor", &c.git_user_coauthor);
         c.observer_config = get_str("observer_config", &c.observer_config);
+        c.public_url = get_str("public_url", &c.public_url);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
@@ -828,6 +843,7 @@ impl Config {
             wa_auth_dir: get_str("WA_AUTH_DIR", &dotenv, ""),
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
+            public_url: get_str("PUBLIC_URL", &dotenv, ""),
         })
     }
 }

@@ -199,6 +199,21 @@ pub struct DeadlineRow {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct CloudConnection {
+    pub id: i64,
+    pub project_id: i64,
+    /// "dropbox" | "google_drive" | "onedrive"
+    pub provider: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    /// ISO 8601 expiry timestamp
+    pub token_expiry: String,
+    pub account_email: String,
+    pub account_id: String,
+    pub created_at: DateTime<Utc>,
+}
+
 // ── Timestamp helpers ─────────────────────────────────────────────────────
 
 fn parse_ts(s: &str) -> DateTime<Utc> {
@@ -240,6 +255,20 @@ fn normalize_party_name(name: &str) -> String {
         .filter(|t| !matches!(*t, "inc" | "llc" | "ltd" | "corp" | "co" | "plc" | "the" | "of" | "and"))
         .collect();
     tokens.join(" ")
+}
+
+fn row_to_cloud_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudConnection> {
+    Ok(CloudConnection {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        provider: row.get(2)?,
+        access_token: row.get(3)?,
+        refresh_token: row.get(4)?,
+        token_expiry: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        account_email: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+        account_id: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        created_at: row.get::<_, String>(8).map(|s| parse_ts(&s))?,
+    })
 }
 
 // ── Row mappers ───────────────────────────────────────────────────────────
@@ -469,6 +498,17 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN default_template_id INTEGER",
+            "CREATE TABLE IF NOT EXISTS cloud_connections (\
+              id INTEGER PRIMARY KEY AUTOINCREMENT, \
+              project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, \
+              provider TEXT NOT NULL, \
+              access_token TEXT NOT NULL DEFAULT '', \
+              refresh_token TEXT NOT NULL DEFAULT '', \
+              token_expiry TEXT NOT NULL DEFAULT '', \
+              account_email TEXT NOT NULL DEFAULT '', \
+              account_id TEXT NOT NULL DEFAULT '', \
+              created_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            "CREATE INDEX IF NOT EXISTS idx_cloud_connections_project ON cloud_connections(project_id)",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -1340,6 +1380,65 @@ impl Db {
             )
             .context("total_project_file_bytes")?;
         Ok(total)
+    }
+
+    // ── Cloud connections ─────────────────────────────────────────────────
+
+    pub fn insert_cloud_connection(
+        &self, project_id: i64, provider: &str, access_token: &str,
+        refresh_token: &str, token_expiry: &str, account_email: &str, account_id: &str,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO cloud_connections \
+             (project_id, provider, access_token, refresh_token, token_expiry, account_email, account_id, created_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![project_id, provider, access_token, refresh_token, token_expiry,
+                    account_email, account_id, now_str()],
+        ).context("insert_cloud_connection")?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_cloud_connections(&self, project_id: i64) -> Result<Vec<CloudConnection>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, provider, access_token, refresh_token, token_expiry, \
+                    account_email, account_id, created_at \
+             FROM cloud_connections WHERE project_id=?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![project_id], row_to_cloud_connection)?;
+        let mut out = Vec::new();
+        for r in rows { out.push(r?); }
+        Ok(out)
+    }
+
+    pub fn get_cloud_connection(&self, id: i64) -> Result<Option<CloudConnection>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT id, project_id, provider, access_token, refresh_token, token_expiry, \
+                    account_email, account_id, created_at \
+             FROM cloud_connections WHERE id=?1",
+            params![id],
+            row_to_cloud_connection,
+        ).optional().context("get_cloud_connection")
+    }
+
+    pub fn update_cloud_connection_tokens(
+        &self, id: i64, access_token: &str, refresh_token: &str, token_expiry: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE cloud_connections SET access_token=?1, refresh_token=?2, token_expiry=?3 WHERE id=?4",
+            params![access_token, refresh_token, token_expiry, id],
+        ).context("update_cloud_connection_tokens")?;
+        Ok(())
+    }
+
+    pub fn delete_cloud_connection(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM cloud_connections WHERE id=?1", params![id])
+            .context("delete_cloud_connection")?;
+        Ok(())
     }
 
     // ── Knowledge files ───────────────────────────────────────────────────

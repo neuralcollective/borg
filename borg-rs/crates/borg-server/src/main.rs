@@ -814,6 +814,13 @@ async fn main() -> anyhow::Result<()> {
         // Cache volumes
         .route("/api/cache", get(routes::list_cache_volumes))
         .route("/api/cache/:name", delete(routes::delete_cache_volume))
+        // Cloud storage OAuth
+        .route("/api/cloud/:provider/auth", get(routes::cloud_auth_init))
+        .route("/api/cloud/:provider/callback", get(routes::cloud_auth_callback))
+        .route("/api/projects/:id/cloud", get(routes::list_cloud_connections))
+        .route("/api/projects/:id/cloud/:conn_id", delete(routes::delete_cloud_connection))
+        .route("/api/projects/:id/cloud/:conn_id/browse", get(routes::browse_cloud_files))
+        .route("/api/projects/:id/cloud/:conn_id/import", post(routes::import_cloud_files))
         // Knowledge base
         .route("/api/knowledge", get(routes::list_knowledge))
         .route("/api/knowledge/templates", get(routes::list_templates))
