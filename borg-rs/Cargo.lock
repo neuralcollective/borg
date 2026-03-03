@@ -238,6 +238,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "tokio",
  "tokio-stream",
