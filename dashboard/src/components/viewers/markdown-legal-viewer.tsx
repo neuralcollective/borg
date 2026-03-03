@@ -199,7 +199,49 @@ export function MarkdownLegalViewer({ projectId, taskId, path }: MarkdownLegalVi
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeCitation, setActiveCitation] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!exportOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [exportOpen]);
+
+  async function triggerExport(format: "pdf" | "docx") {
+    setExportOpen(false);
+    setExporting(true);
+    try {
+      await tokenReady;
+      let url = `${apiBase()}/api/projects/${projectId}/documents/${taskId}/export?path=${encodeURIComponent(path)}&format=${format}`;
+      if (selectedSha) url += `&ref_name=${encodeURIComponent(selectedSha)}`;
+      const res = await fetch(url, { headers: authHeaders() });
+      if (!res.ok) {
+        const text = await res.text();
+        alert(`Export failed: ${text || res.status}`);
+        return;
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stem = path.split("/").pop()?.replace(/\.\w+$/, "") ?? "document";
+      a.href = blobUrl;
+      a.download = `${stem}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     fetchDocumentVersions(projectId, taskId, path)
@@ -321,6 +363,42 @@ export function MarkdownLegalViewer({ projectId, taskId, path }: MarkdownLegalVi
             ))}
           </select>
         )}
+        {/* Export dropdown */}
+        <div ref={exportRef} className={cn("relative shrink-0", versions.length === 0 && "ml-auto")}>
+          <button
+            onClick={() => setExportOpen((v) => !v)}
+            disabled={exporting || loading}
+            className="flex items-center gap-1.5 rounded border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:border-white/[0.14] hover:text-zinc-300 disabled:opacity-50"
+          >
+            {exporting ? (
+              <span className="h-3 w-3 animate-spin rounded-full border border-zinc-500 border-t-zinc-300" />
+            ) : (
+              <svg className="h-3 w-3" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 8v5h8V8M8 2v8M5.5 7.5 8 10l2.5-2.5" />
+              </svg>
+            )}
+            Export
+            <svg className="h-2.5 w-2.5 opacity-60" fill="none" viewBox="0 0 10 10" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" d="M2 3.5 5 6.5 8 3.5" />
+            </svg>
+          </button>
+          {exportOpen && (
+            <div className="absolute right-0 top-full z-50 mt-1 w-40 overflow-hidden rounded border border-white/[0.1] bg-zinc-900 shadow-xl">
+              <button
+                onClick={() => triggerExport("pdf")}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06]"
+              >
+                Export as PDF
+              </button>
+              <button
+                onClick={() => triggerExport("docx")}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06]"
+              >
+                Export as DOCX
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Privilege banner */}

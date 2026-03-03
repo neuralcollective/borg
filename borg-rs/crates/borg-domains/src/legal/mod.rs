@@ -301,6 +301,7 @@ Structure:
 
 ## Discussion
 [IRAC analysis: Issue → Rule → Application → Conclusion for each question]
+[Tag each legal proposition with an inline confidence marker: Confidence: High / Medium / Low]
 
 ## Methodology
 [Which databases were searched, what queries were used, how many results reviewed, what was excluded and why]
@@ -319,6 +320,16 @@ For EVERY case, statute, and regulation cited:
   Independent verification of citation currency is recommended.\"
 
 ## Step 4: Draft the Document
+
+For every legal claim, conclusion, or cited proposition in the document, add an inline
+confidence marker immediately after the sentence or clause it applies to:
+- **Confidence: High** — well-established law, verified citation (Shepard's/KeyCite), strong binding precedent
+- **Confidence: Medium** — some uncertainty, developing area, conflicting authority, or existence-only verification
+- **Confidence: Low** — novel theory, limited authority, training-data-only citation, or highly jurisdiction-dependent
+
+The dashboard renders these markers as colored badges; place them naturally in prose, e.g.:
+> The employer bears the burden of proving the exemption applies. *Corning Glass Works v. Brennan*, 417 U.S. 188, 196-97 (1974). Confidence: High
+> Courts are divided on whether economic loss alone triggers liability. Confidence: Medium
 
 Follow Bluebook citation format throughout:
 - Cases: *Smith v. Jones*, 550 U.S. 124, 130 (2007)
@@ -431,6 +442,9 @@ For each citation in the documents:
 - [ ] Verify the confidence ratings in analysis.md are justified
 - [ ] Any \"High confidence\" claim must have verified citations
 - [ ] Any conclusion based on unverified citations should be Medium or Low
+- [ ] Confirm inline \"Confidence: High/Medium/Low\" markers are present throughout the drafted document and research.md Discussion section
+- [ ] Downgrade any \"Confidence: High\" marker on a claim whose citation could not be verified via Shepard's/KeyCite
+- [ ] Add missing confidence markers to any uncovered legal proposition
 
 ## Output: review_notes.md
 

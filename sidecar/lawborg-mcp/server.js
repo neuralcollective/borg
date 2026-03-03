@@ -588,16 +588,16 @@ const UK_LEG_TOOLS = [
 const EURLEX_TOOLS = [
   {
     name: "eurlex_search",
-    description: "Search EU legislation, case law, and legal documents on EUR-Lex. Covers regulations, directives, CJEU judgments.",
+    description: "Search EU legislation, case law, and legal documents via the CELLAR SPARQL endpoint. Returns structured results with CELEX numbers, titles, and dates. Covers regulations, directives, decisions, and CJEU judgments.",
     inputSchema: {
       type: "object",
       properties: {
-        text: { type: "string", description: "Search text" },
-        type: { type: "string", description: "Document type: REG (regulation), DIR (directive), DEC (decision), JUDG (judgment)" },
-        date_from: { type: "string", description: "Date from (YYYY-MM-DD)" },
-        date_to: { type: "string", description: "Date to (YYYY-MM-DD)" },
-        page: { type: "number" },
-        pageSize: { type: "number" },
+        text: { type: "string", description: "Search text (matched against document titles)" },
+        type: { type: "string", description: "Filter by document type: REG (regulation), DIR (directive), DEC (decision), JUDG (judgment)" },
+        date_from: { type: "string", description: "Filter documents from this date (YYYY-MM-DD)" },
+        date_to: { type: "string", description: "Filter documents up to this date (YYYY-MM-DD)" },
+        page: { type: "number", description: "Page number (default 1)" },
+        pageSize: { type: "number", description: "Results per page (default 20, max 50)" },
       },
       required: ["text"],
     },
@@ -1539,28 +1539,123 @@ async function handleTool(name, args) {
       break;
     }
 
-    // ── EUR-Lex ────────────────────────────────────────────────────
+    // ── EUR-Lex (CELLAR SPARQL API) ──────────────────────────────
     case "eurlex_search": {
-      const searchUrl = `https://eur-lex.europa.eu/search.html?textScope=ti-te&text=${encodeURIComponent(args.text)}&qid=1&type=quick&lang=en&DTS_SUBDOM=LEGISLATION`;
-      checkRateLimit(searchUrl);
-      const resp = await fetch(searchUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
-      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-      const html = await resp.text();
-      // Extract CELEX numbers from results
-      const celexMatches = [...html.matchAll(/CELEX[^"]*?(\d{1,2}\d{4}[A-Z]{1,5}\d{4})/g)].map(m => m[1]);
-      result = { query: args.text, celex_numbers: [...new Set(celexMatches)].slice(0, 20), note: "Use eurlex_get_document with a CELEX number to get full text" };
+      const ck = cacheKey("eurlex_search", args);
+      const hit = cached(ck);
+      if (hit) { result = hit; break; }
+
+      // Build SPARQL query against the CELLAR endpoint for structured results
+      const limit = Math.min(args.pageSize || 20, 50);
+      const offset = ((args.page || 1) - 1) * limit;
+      let typeFilter = "";
+      const typeMap = { REG: "regulation", DIR: "directive", DEC: "decision", JUDG: "judgment" };
+      if (args.type && typeMap[args.type.toUpperCase()]) {
+        typeFilter = `?work cdm:resource_legal_resource_type ?rtype . FILTER(CONTAINS(LCASE(STR(?rtype)), "${typeMap[args.type.toUpperCase()]}"))`;
+      }
+      let dateFilter = "";
+      if (args.date_from) dateFilter += `FILTER(?date >= "${args.date_from}"^^xsd:date) `;
+      if (args.date_to) dateFilter += `FILTER(?date <= "${args.date_to}"^^xsd:date) `;
+
+      const sparql = `
+        PREFIX cdm: <http://publications.europa.eu/ontology/cdm#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT DISTINCT ?celex ?title ?date WHERE {
+          ?work cdm:resource_legal_id_celex ?celex .
+          ?work cdm:resource_legal_date_document ?date .
+          ?exp cdm:expression_belongs_to_work ?work .
+          ?exp cdm:expression_uses_language <http://publications.europa.eu/resource/authority/language/ENG> .
+          ?exp cdm:expression_title ?title .
+          ${typeFilter}
+          ${dateFilter}
+          FILTER(CONTAINS(LCASE(?title), "${args.text.toLowerCase().replace(/"/g, '\\"')}"))
+        }
+        ORDER BY DESC(?date)
+        LIMIT ${limit} OFFSET ${offset}
+      `.trim();
+
+      const sparqlUrl = "https://publications.europa.eu/webapi/rdf/sparql";
+      checkRateLimit(sparqlUrl);
+      const resp = await fetch(sparqlUrl, {
+        method: "POST",
+        headers: { "User-Agent": UA, Accept: "application/sparql-results+json", "Content-Type": "application/x-www-form-urlencoded" },
+        body: `query=${encodeURIComponent(sparql)}`,
+      });
+
+      if (!resp.ok) {
+        // Fallback to HTML scraping if SPARQL is unavailable
+        const fallbackUrl = `https://eur-lex.europa.eu/search.html?textScope=ti-te&text=${encodeURIComponent(args.text)}&qid=1&type=quick&lang=en&DTS_SUBDOM=ALL_ALL`;
+        checkRateLimit(fallbackUrl);
+        const fbResp = await fetch(fallbackUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
+        if (!fbResp.ok) throw new Error(`EUR-Lex search failed: ${fbResp.status}`);
+        const html = await fbResp.text();
+        const celexMatches = [...html.matchAll(/CELEX[^"]*?(\d{1,2}\d{4}[A-Z]{1,5}\d{4})/g)].map(m => m[1]);
+        result = { query: args.text, results: [...new Set(celexMatches)].slice(0, 20).map(c => ({ celex: c })), source: "html_fallback" };
+        setCache(ck, result);
+        break;
+      }
+
+      const data = await resp.json();
+      const results = (data.results?.bindings || []).map(b => ({
+        celex: b.celex?.value || "",
+        title: b.title?.value || "",
+        date: b.date?.value || "",
+      }));
+
+      result = {
+        query: args.text,
+        results,
+        total: results.length,
+        note: results.length > 0 ? "Use eurlex_get_document with a CELEX number to get full text" : "No results found. Try broader search terms.",
+        source: "cellar_sparql",
+      };
+      setCache(ck, result);
       break;
     }
     case "eurlex_get_document": {
       const lang = validateId(args.language || "EN");
-      const url = `https://eur-lex.europa.eu/legal-content/${lang}/TXT/HTML/?uri=CELEX:${validateId(args.celex)}`;
+      const celex = validateId(args.celex);
+      const ck = cacheKey("eurlex_doc", { celex, lang });
+      const hit = cached(ck);
+      if (hit) { result = hit; break; }
+
+      const url = `https://eur-lex.europa.eu/legal-content/${lang}/TXT/HTML/?uri=CELEX:${celex}`;
       checkRateLimit(url);
       const resp = await fetch(url, { headers: { "User-Agent": UA } });
       if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
       const html = await resp.text();
-      // Strip HTML tags for a cleaner text version
-      const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-      result = { celex: args.celex, language: lang, text: text.slice(0, 50000) };
+
+      // Structured HTML-to-text: preserve headings, articles, paragraphs
+      const text = html
+        .replace(/<title[^>]*>.*?<\/title>/gis, "")
+        .replace(/<style[^>]*>.*?<\/style>/gis, "")
+        .replace(/<script[^>]*>.*?<\/script>/gis, "")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/p>/gi, "\n\n")
+        .replace(/<\/div>/gi, "\n")
+        .replace(/<\/li>/gi, "\n")
+        .replace(/<\/tr>/gi, "\n")
+        .replace(/<\/h[1-6]>/gi, "\n\n")
+        .replace(/<[^>]*>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/ {2,}/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+      const maxLen = 50000;
+      const truncated = text.length > maxLen;
+      result = {
+        celex,
+        language: lang,
+        text: text.slice(0, maxLen),
+        ...(truncated ? { truncated: true, total_length: text.length, note: `Document truncated from ${text.length} to ${maxLen} characters` } : {}),
+      };
+      setCache(ck, result);
       break;
     }
 

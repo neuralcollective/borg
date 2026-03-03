@@ -72,6 +72,13 @@ pub(crate) struct DocQuery {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct ExportQuery {
+    pub path: Option<String>,
+    pub format: Option<String>,
+    pub ref_name: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct CreateMessageBody {
     pub role: String,
     pub content: String,
@@ -1009,6 +1016,144 @@ pub(crate) async fn get_project_document_versions(
 
     let versions: Value = serde_json::from_slice(&out.stdout).unwrap_or(json!([]));
     Ok(Json(versions))
+}
+
+pub(crate) async fn export_project_document(
+    State(state): State<Arc<AppState>>,
+    Path((id, task_id)): Path<(i64, i64)>,
+    Query(q): Query<ExportQuery>,
+) -> Result<axum::response::Response, StatusCode> {
+    if state.db.get_project(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let task = state
+        .db
+        .get_task(task_id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let repo = state
+        .config
+        .watched_repos
+        .iter()
+        .find(|r| r.path == task.repo_path);
+    let slug = repo.map(|r| r.repo_slug.as_str()).unwrap_or("");
+    if slug.is_empty() || task.branch.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let path = q.path.as_deref().unwrap_or("research.md");
+    let ref_name = q.ref_name.as_deref().unwrap_or(&task.branch);
+    let format = q.format.as_deref().unwrap_or("pdf");
+
+    if format != "pdf" && format != "docx" {
+        return Ok(axum::response::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(axum::body::Body::from("format must be 'pdf' or 'docx'"))
+            .unwrap());
+    }
+
+    // Check pandoc availability
+    let pandoc_check = tokio::process::Command::new("pandoc")
+        .arg("--version")
+        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .await;
+    if pandoc_check.is_err() || !pandoc_check.unwrap().success() {
+        return Ok(axum::response::Response::builder()
+            .status(StatusCode::NOT_IMPLEMENTED)
+            .header("content-type", "text/plain")
+            .body(axum::body::Body::from(
+                "pandoc is not installed on the server; install it to enable document export",
+            ))
+            .unwrap());
+    }
+
+    // Fetch markdown content from GitHub
+    let gh_out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new("gh")
+            .args([
+                "api",
+                &format!("repos/{slug}/contents/{path}?ref={ref_name}"),
+                "--jq",
+                ".content",
+            ])
+            .stderr(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(internal)?
+    .map_err(internal)?;
+
+    if !gh_out.status.success() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let b64 = String::from_utf8_lossy(&gh_out.stdout).trim().replace('\n', "");
+    let md_bytes = base64_decode(&b64).map_err(internal)?;
+
+    // Write markdown to a temp file
+    let tmp_dir = tempfile::tempdir().map_err(internal)?;
+    let md_path = tmp_dir.path().join("document.md");
+    let out_filename = format!(
+        "{}.{}",
+        std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("document"),
+        format
+    );
+    let out_path = tmp_dir.path().join(&out_filename);
+
+    tokio::fs::write(&md_path, &md_bytes).await.map_err(internal)?;
+
+    let mut cmd = tokio::process::Command::new("pandoc");
+    cmd.arg(&md_path)
+        .arg("-f").arg("markdown")
+        .arg("-t").arg(format)
+        .arg("-o").arg(&out_path)
+        .stderr(std::process::Stdio::piped());
+
+    if format == "pdf" {
+        cmd.arg("--pdf-engine=xelatex");
+    }
+
+    let pandoc_out = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        cmd.output(),
+    )
+    .await
+    .map_err(internal)?
+    .map_err(internal)?;
+
+    if !pandoc_out.status.success() {
+        let stderr = String::from_utf8_lossy(&pandoc_out.stderr);
+        tracing::warn!("pandoc export failed: {stderr}");
+        return Ok(axum::response::Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", "text/plain")
+            .body(axum::body::Body::from(format!("pandoc failed: {stderr}")))
+            .unwrap());
+    }
+
+    let file_bytes = tokio::fs::read(&out_path).await.map_err(internal)?;
+
+    let content_type = if format == "pdf" {
+        "application/pdf"
+    } else {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    };
+
+    Ok(axum::response::Response::builder()
+        .header("content-type", content_type)
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{out_filename}\""),
+        )
+        .body(axum::body::Body::from(file_bytes))
+        .unwrap())
 }
 
 pub(crate) async fn list_project_files(
