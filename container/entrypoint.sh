@@ -83,9 +83,9 @@ if [ -n "$REPO_URL" ]; then
         # Fetch the task branch if it exists on remote
         git fetch --depth 50 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
         if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-            git checkout -b "$BRANCH" "origin/$BRANCH"
+            git checkout -b -- "$BRANCH" "origin/$BRANCH"
         else
-            git checkout -b "$BRANCH" "$BASE"
+            git checkout -b -- "$BRANCH" "$BASE"
         fi
     fi
 
@@ -161,7 +161,7 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
     fi
 
     if [ -n "$PUSH_AFTER_COMMIT" ] && [ -n "$BRANCH" ]; then
-        if git push origin "$BRANCH"; then
+        if git push origin -- "$BRANCH"; then
             log_event "{\"type\":\"container_event\",\"event\":\"push_complete\",\"branch\":\"${BRANCH}\"}"
         else
             log_event "{\"type\":\"container_event\",\"event\":\"push_failed\",\"branch\":\"${BRANCH}\"}"
