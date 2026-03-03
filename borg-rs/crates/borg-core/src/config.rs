@@ -93,11 +93,8 @@ pub struct Config {
     pub observer_config: String,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+fn parse_dotenv_str(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -116,6 +113,13 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    let Ok(contents) = std::fs::read_to_string(".env") else {
+        return HashMap::new();
+    };
+    parse_dotenv_str(&contents)
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -159,13 +163,15 @@ fn get_u16(key: &str, dotenv: &HashMap<String, String>, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-fn resolve_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{}/{}", home, path.strip_prefix("~/").unwrap_or(path));
-        }
+fn resolve_tilde_with_home(path: &str, home: Option<&str>) -> String {
+    if let (true, Some(h)) = (path.starts_with("~/"), home) {
+        return format!("{}/{}", h, &path[2..]);
     }
     path.to_string()
+}
+
+fn resolve_tilde(path: &str) -> String {
+    resolve_tilde_with_home(path, std::env::var("HOME").ok().as_deref())
 }
 
 pub fn codex_has_credentials(path: &str) -> bool {
@@ -635,5 +641,77 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    // ── resolve_tilde ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_tilde_expands_with_home_set() {
+        let result = resolve_tilde_with_home("~/foo/bar", Some("/home/user"));
+        assert_eq!(result, "/home/user/foo/bar");
+    }
+
+    #[test]
+    fn resolve_tilde_no_tilde_prefix_unchanged() {
+        assert_eq!(resolve_tilde_with_home("/abs/path", Some("/home/user")), "/abs/path");
+        assert_eq!(resolve_tilde_with_home("relative/path", Some("/home/user")), "relative/path");
+        assert_eq!(resolve_tilde_with_home("~notslash", Some("/home/user")), "~notslash");
+    }
+
+    #[test]
+    fn resolve_tilde_home_unset_returns_path_unchanged() {
+        let result = resolve_tilde_with_home("~/foo", None);
+        assert_eq!(result, "~/foo");
+    }
+
+    // ── parse_dotenv_str ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_dotenv_skips_comment_lines() {
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "# this is a comment\nKEY=value\n").unwrap();
+        let contents = std::fs::read_to_string(f.path()).unwrap();
+        let map = parse_dotenv_str(&contents);
+        assert!(!map.contains_key("# this is a comment"));
+        assert_eq!(map.get("KEY").map(String::as_str), Some("value"));
+    }
+
+    #[test]
+    fn parse_dotenv_skips_blank_lines() {
+        let map = parse_dotenv_str("\n\nKEY=val\n\n");
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("KEY").map(String::as_str), Some("val"));
+    }
+
+    #[test]
+    fn parse_dotenv_double_quoted_value_strips_quotes() {
+        let map = parse_dotenv_str("KEY=\"hello world\"\n");
+        assert_eq!(map.get("KEY").map(String::as_str), Some("hello world"));
+    }
+
+    #[test]
+    fn parse_dotenv_single_quoted_value_strips_quotes() {
+        let map = parse_dotenv_str("KEY='hello world'\n");
+        assert_eq!(map.get("KEY").map(String::as_str), Some("hello world"));
+    }
+
+    #[test]
+    fn parse_dotenv_unquoted_value_taken_as_is() {
+        let map = parse_dotenv_str("KEY=plainvalue\n");
+        assert_eq!(map.get("KEY").map(String::as_str), Some("plainvalue"));
+    }
+
+    #[test]
+    fn parse_dotenv_line_without_equals_ignored() {
+        let map = parse_dotenv_str("NOEQUALS\nKEY=val\n");
+        assert!(!map.contains_key("NOEQUALS"));
+        assert_eq!(map.get("KEY").map(String::as_str), Some("val"));
     }
 }
