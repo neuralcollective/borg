@@ -55,7 +55,7 @@ export function sseUrl(path: string): string {
 async function fetchJson<T>(path: string): Promise<T> {
   await tokenReady;
   const res = await fetch(`${apiBase()}${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -66,6 +66,10 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     headers: { ...authHeaders(), ...(extraHeaders as Record<string, string> | undefined) },
     ...rest,
   });
+}
+
+function assertOk(res: Response): void {
+  if (!res.ok) throw new Error(`${res.status}`);
 }
 
 function normalizeLogEvent(raw: unknown): LogEvent | null {
@@ -167,13 +171,13 @@ export async function saveCustomMode(mode: PipelineModeFull): Promise<{ ok: bool
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(mode),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
 export async function removeCustomMode(name: string): Promise<{ ok: boolean }> {
   const res = await apiFetch(`/api/modes/custom/${encodeURIComponent(name)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -210,7 +214,7 @@ export async function updateSettings(settings: Partial<Settings>): Promise<{ upd
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -228,34 +232,34 @@ export async function setFocus(text: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function clearFocus(): Promise<void> {
   const res = await apiFetch("/api/focus", { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function approveProposal(id: number): Promise<{ task_id: number }> {
   const res = await apiFetch(`/api/proposals/${id}/approve`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
 export async function dismissProposal(id: number): Promise<void> {
   const res = await apiFetch(`/api/proposals/${id}/dismiss`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function triageProposals(): Promise<{ scored: number }> {
   const res = await apiFetch("/api/proposals/triage", { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
 export async function reopenProposal(id: number): Promise<void> {
   const res = await apiFetch(`/api/proposals/${id}/reopen`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function patchTask(id: number, patch: { title?: string; description?: string }): Promise<void> {
@@ -264,17 +268,17 @@ export async function patchTask(id: number, patch: { title?: string; description
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function retryTask(id: number): Promise<void> {
   const res = await apiFetch(`/api/tasks/${id}/retry`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function approveTask(id: number): Promise<{ next_phase: string }> {
   const res = await apiFetch(`/api/tasks/${id}/approve`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -284,7 +288,7 @@ export async function rejectTask(id: number, feedback?: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ feedback }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function requestRevision(id: number, feedback: string): Promise<{ target_phase: string }> {
@@ -293,7 +297,7 @@ export async function requestRevision(id: number, feedback: string): Promise<{ t
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ feedback }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -338,13 +342,13 @@ export async function getTaskCitations(id: number): Promise<CitationVerification
 
 export async function verifyTaskCitations(id: number): Promise<{ verified: number; total: number; citations: CitationVerification[] }> {
   const res = await apiFetch(`/api/tasks/${id}/verify-citations`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
 export async function retryAllFailed(): Promise<void> {
   const res = await apiFetch("/api/tasks/retry-all-failed", { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function setTaskBackend(id: number, backend: string): Promise<void> {
@@ -353,7 +357,7 @@ export async function setTaskBackend(id: number, backend: string): Promise<void>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ backend }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export interface RepoInfo {
@@ -380,7 +384,7 @@ export async function setRepoBackend(id: number, backend: string): Promise<void>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ backend }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function createTask(
@@ -396,7 +400,7 @@ export async function createTask(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, description, mode, repo: repo_path, project_id, task_type }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -521,7 +525,7 @@ export async function createProject(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, mode, ...opts }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -570,7 +574,7 @@ export async function uploadProjectFiles(
     headers: authHeaders(),
     body: form,
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -588,7 +592,7 @@ export async function reextractProjectFile(
   const res = await apiFetch(`/api/projects/${projectId}/files/${fileId}/reextract`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -620,7 +624,7 @@ export async function createDeadline(projectId: number, label: string, dueDate: 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, due_date: dueDate, rule_basis: ruleBasis || "" }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -630,14 +634,14 @@ export async function updateDeadline(projectId: number, id: number, updates: Par
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export async function deleteDeadline(projectId: number, id: number): Promise<void> {
   const res = await apiFetch(`/api/projects/${projectId}/deadlines/${id}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
 }
 
 export function useTemplates(category?: string) {
@@ -746,7 +750,7 @@ export function useUpdateProject(projectId: number) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      if (!res.ok) throw new Error(`${res.status}`);
+      assertOk(res);
       return res.json();
     },
     onSuccess: (data) => {
@@ -761,7 +765,7 @@ export function useDeleteProject() {
   return useMutation<void, Error, number>({
     mutationFn: async (projectId) => {
       const res = await apiFetch(`/api/projects/${projectId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(`${res.status}`);
+      assertOk(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -785,7 +789,7 @@ export async function sendProjectChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, sender }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -817,7 +821,7 @@ export function useSendTaskMessage(taskId: number) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: "user", content }),
       });
-      if (!res.ok) throw new Error(`${res.status}`);
+      assertOk(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["task_messages", taskId] });
@@ -916,7 +920,7 @@ export async function uploadKnowledgeFile(
   form.append("inline", inline ? "true" : "false");
   if (category) form.append("category", category);
   const res = await fetch(`${apiBase()}/api/knowledge/upload`, { method: "POST", headers: authHeaders(), body: form });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -935,13 +939,13 @@ export async function updateKnowledgeFile(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
 export async function deleteKnowledgeFile(id: number): Promise<{ ok: boolean }> {
   const res = await apiFetch(`/api/knowledge/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
 
@@ -978,6 +982,6 @@ export function useCacheVolumes() {
 
 export async function deleteCacheVolume(name: string): Promise<{ ok: boolean }> {
   const res = await apiFetch(`/api/cache/${encodeURIComponent(name)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  assertOk(res);
   return res.json();
 }
