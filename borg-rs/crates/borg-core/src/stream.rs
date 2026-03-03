@@ -5,7 +5,7 @@ use std::{
 
 use tokio::sync::{broadcast, Mutex};
 
-const MAX_HISTORY_LINES: usize = 10_000;
+pub const MAX_HISTORY_LINES: usize = 10_000;
 
 struct TaskStream {
     tx: broadcast::Sender<String>,
