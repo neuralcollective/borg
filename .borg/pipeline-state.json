@@ -1,0 +1,10 @@
+{
+  "task_id": 139,
+  "task_title": "Replace hand-rolled base64_decode with the base64 crate",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-139",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T02:51:09.612229472Z"
+}
