@@ -3005,3 +3005,241 @@ fn looks_like_field_key(line: &str) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
+    struct MockBackend;
+
+    #[async_trait]
+    impl AgentBackend for MockBackend {
+        async fn run_phase(
+            &self,
+            _task: &crate::types::Task,
+            _phase: &crate::types::PhaseConfig,
+            _ctx: crate::types::PhaseContext,
+        ) -> anyhow::Result<crate::types::PhaseOutput> {
+            Err(anyhow::anyhow!("mock"))
+        }
+        async fn inject_message(&self, _session_id: &str, _message: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn interrupt(&self, _session_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_task(repo_path: &str, backend: &str) -> Task {
+        Task {
+            id: 1,
+            title: "test".into(),
+            description: "desc".into(),
+            repo_path: repo_path.into(),
+            branch: "test-branch".into(),
+            status: "impl".into(),
+            attempt: 1,
+            max_attempts: 5,
+            last_error: String::new(),
+            created_by: "test".into(),
+            notify_chat: String::new(),
+            created_at: chrono::Utc::now(),
+            session_id: String::new(),
+            mode: "sweborg".into(),
+            backend: backend.into(),
+            project_id: 0,
+        }
+    }
+
+    fn make_repo(path: &str, backend: &str) -> crate::types::RepoConfig {
+        crate::types::RepoConfig {
+            path: path.into(),
+            test_cmd: String::new(),
+            prompt_file: String::new(),
+            mode: "sweborg".into(),
+            is_self: false,
+            auto_merge: true,
+            lint_cmd: String::new(),
+            backend: backend.into(),
+            repo_slug: String::new(),
+        }
+    }
+
+    fn make_pipeline(
+        backends: HashMap<String, Arc<dyn AgentBackend>>,
+        global_backend: &str,
+        repos: Vec<crate::types::RepoConfig>,
+    ) -> Pipeline {
+        let (event_tx, _) = tokio::sync::broadcast::channel(8);
+        let mut db = crate::db::Db::open(":memory:").expect("open db");
+        db.migrate().expect("migrate");
+        let db = Arc::new(db);
+        let config = Arc::new(crate::config::Config {
+            telegram_token: String::new(),
+            oauth_token: String::new(),
+            assistant_name: "test".into(),
+            trigger_pattern: String::new(),
+            data_dir: "store".into(),
+            container_image: String::new(),
+            model: String::new(),
+            credentials_path: String::new(),
+            session_max_age_hours: 24,
+            max_consecutive_errors: 3,
+            pipeline_repo: String::new(),
+            pipeline_test_cmd: String::new(),
+            pipeline_lint_cmd: String::new(),
+            backend: global_backend.into(),
+            pipeline_admin_chat: String::new(),
+            release_interval_mins: 180,
+            continuous_mode: false,
+            chat_collection_window_ms: 3000,
+            chat_cooldown_ms: 5000,
+            agent_timeout_s: 1000,
+            max_chat_agents: 4,
+            chat_rate_limit: 5,
+            pipeline_max_agents: 2,
+            web_bind: String::new(),
+            web_port: 3131,
+            dashboard_dist_dir: String::new(),
+            container_setup: String::new(),
+            container_memory_mb: 2048,
+            container_cpus: 2.0,
+            sandbox_backend: "none".into(),
+            pipeline_max_backlog: 5,
+            pipeline_seed_cooldown_s: 3600,
+            proposal_promote_threshold: 8,
+            pipeline_tick_s: 10,
+            remote_check_interval_s: 300,
+            mirror_refresh_interval_s: 60,
+            pipeline_agent_cooldown_s: 120,
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            git_committer_name: String::new(),
+            git_committer_email: String::new(),
+            git_via_borg: false,
+            git_claude_coauthor: false,
+            git_user_coauthor: String::new(),
+            watched_repos: repos,
+            build_cmd: String::new(),
+            self_update_enabled: false,
+            codex_api_key: String::new(),
+            codex_credentials_path: String::new(),
+            discord_token: String::new(),
+            wa_auth_dir: String::new(),
+            wa_disabled: false,
+            observer_config: String::new(),
+        });
+        Pipeline {
+            db,
+            backends,
+            config,
+            sandbox: crate::sandbox::Sandbox,
+            sandbox_mode: crate::sandbox::SandboxMode::Direct,
+            event_tx,
+            stream_manager: crate::stream::TaskStreamManager::new(),
+            force_restart: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            seed_cooldowns: Mutex::new(HashMap::new()),
+            last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
+            last_cache_prune_secs: std::sync::atomic::AtomicI64::new(0),
+            startup_heads: HashMap::new(),
+            in_flight: Mutex::new(HashSet::new()),
+            last_agent_dispatch: Mutex::new(HashMap::new()),
+            seeding_active: std::sync::atomic::AtomicBool::new(false),
+            agent_network_available: false,
+        }
+    }
+
+    fn insert_backend(
+        map: &mut HashMap<String, Arc<dyn AgentBackend>>,
+        name: &str,
+    ) -> Arc<dyn AgentBackend> {
+        let b: Arc<dyn AgentBackend> = Arc::new(MockBackend);
+        map.insert(name.into(), Arc::clone(&b));
+        b
+    }
+
+    // Task-level override wins over both repo and global.
+    #[test]
+    fn task_override_wins_over_repo_and_global() {
+        let mut backends = HashMap::new();
+        let task_be = insert_backend(&mut backends, "task-be");
+        insert_backend(&mut backends, "repo-be");
+        insert_backend(&mut backends, "global-be");
+
+        let repos = vec![make_repo("/repo", "repo-be")];
+        let pipeline = make_pipeline(backends, "global-be", repos);
+        let task = make_task("/repo", "task-be");
+
+        let result = pipeline.resolve_backend(&task).expect("backend resolved");
+        assert!(Arc::ptr_eq(&result, &task_be));
+    }
+
+    // Repo-level override wins over global when task has no override.
+    #[test]
+    fn repo_override_wins_over_global() {
+        let mut backends = HashMap::new();
+        let repo_be = insert_backend(&mut backends, "repo-be");
+        insert_backend(&mut backends, "global-be");
+
+        let repos = vec![make_repo("/repo", "repo-be")];
+        let pipeline = make_pipeline(backends, "global-be", repos);
+        let task = make_task("/repo", "");
+
+        let result = pipeline.resolve_backend(&task).expect("backend resolved");
+        assert!(Arc::ptr_eq(&result, &repo_be));
+    }
+
+    // Global default is returned when neither task nor repo specifies one.
+    #[test]
+    fn global_default_returned_when_no_overrides() {
+        let mut backends = HashMap::new();
+        let global_be = insert_backend(&mut backends, "global-be");
+
+        let repos = vec![make_repo("/repo", "")];
+        let pipeline = make_pipeline(backends, "global-be", repos);
+        let task = make_task("/repo", "");
+
+        let result = pipeline.resolve_backend(&task).expect("backend resolved");
+        assert!(Arc::ptr_eq(&result, &global_be));
+    }
+
+    // Falls back to any available backend when global name isn't registered.
+    #[test]
+    fn fallback_to_any_backend_when_global_not_registered() {
+        let mut backends = HashMap::new();
+        insert_backend(&mut backends, "only-be");
+
+        let repos = vec![make_repo("/repo", "")];
+        let pipeline = make_pipeline(backends, "missing-global", repos);
+        let task = make_task("/repo", "");
+
+        assert!(pipeline.resolve_backend(&task).is_some());
+    }
+
+    // Returns None when no backends are configured at all.
+    #[test]
+    fn returns_none_when_no_backends() {
+        let pipeline = make_pipeline(HashMap::new(), "", vec![]);
+        let task = make_task("/repo", "");
+        assert!(pipeline.resolve_backend(&task).is_none());
+    }
+
+    // Task override is used even when the repo has no matching entry.
+    #[test]
+    fn task_override_works_without_matching_repo() {
+        let mut backends = HashMap::new();
+        let task_be = insert_backend(&mut backends, "task-be");
+        insert_backend(&mut backends, "global-be");
+
+        // No matching repo for "/repo"
+        let pipeline = make_pipeline(backends, "global-be", vec![]);
+        let task = make_task("/repo", "task-be");
+
+        let result = pipeline.resolve_backend(&task).expect("backend resolved");
+        assert!(Arc::ptr_eq(&result, &task_be));
+    }
+}
