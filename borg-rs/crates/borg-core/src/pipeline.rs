@@ -1841,68 +1841,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 }
             }
 
-            // Check if branch is behind main (needs rebase)
-            let behind = self
-                .gh(&[
-                    "api",
-                    &format!("repos/{slug}/compare/main...{}", entry.branch),
-                    "--jq",
-                    ".behind_by",
-                ])
-                .await;
-            let not_rebased = behind
-                .as_ref()
-                .map(|r| {
-                    r.exit_code != 0
-                        || r.stdout.trim().parse::<u64>().map(|n| n > 0).unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if not_rebased {
-                info!(
-                    "Task #{} {} not rebased on main, trying GitHub update-branch",
-                    entry.task_id, entry.branch
-                );
-                let pr_num_out = self
-                    .gh(&[
-                        "pr",
-                        "view",
-                        &entry.branch,
-                        "--repo",
-                        slug,
-                        "--json",
-                        "number",
-                        "--jq",
-                        ".number",
-                    ])
-                    .await;
-                let pr_num = pr_num_out
-                    .ok()
-                    .filter(|o| o.exit_code == 0)
-                    .and_then(|o| o.stdout.trim().parse::<u64>().ok());
-                if let Some(num) = pr_num {
-                    let _ = self
-                        .gh(&[
-                            "api",
-                            "-X",
-                            "PUT",
-                            &format!("repos/{slug}/pulls/{num}/update-branch"),
-                        ])
-                        .await;
-                    info!(
-                        "Task #{} {}: update-branch requested",
-                        entry.task_id, entry.branch
-                    );
-                }
-                self.db.update_queue_status_with_error(
-                    entry.id,
-                    "excluded",
-                    "branch not rebased on main",
-                )?;
-                self.db.update_task_status(entry.task_id, "rebase", None)?;
-                excluded_ids.insert(entry.id);
-                continue;
-            }
-
             // Check if PR already exists
             let view_out = self
                 .gh(&[
