@@ -445,8 +445,8 @@ export function useLogs() {
               invalidateTimer.current = null;
             }, 1000);
           }
-        } catch {
-          // ignore parse errors
+        } catch (e) {
+          console.warn("log-stream JSON parse error:", e);
         }
       };
     });
@@ -799,7 +799,8 @@ export function useTaskMessages(taskId: number | null) {
         if (!res.ok) return [];
         const data = await res.json();
         return data.messages ?? [];
-      } catch {
+      } catch (e) {
+        console.warn("task messages fetch error:", e);
         return [];
       }
     },
@@ -869,8 +870,8 @@ export function useTaskStream(taskId: number | null, active: boolean) {
             const next = [...prev, obj];
             return next.length > MAX_STREAM_EVENTS ? next.slice(-MAX_STREAM_EVENTS) : next;
           });
-        } catch {
-          // ignore
+        } catch (e) {
+          console.warn("stream event parse error:", e);
         }
       };
 
