@@ -231,4 +231,57 @@ mod tests {
         let cites = extract_citations(text);
         assert_eq!(cites.iter().filter(|c| c.text == "550 U.S. 124").count(), 1);
     }
+
+    #[test]
+    fn test_federal_reporters_fsupp2d_and_fappx() {
+        let text = "See 123 F.Supp.2d 456 (S.D.N.Y. 2002) and 78 F.App'x 910 (2d Cir. 2003).";
+        let cites = extract_citations(text);
+        assert!(cites.iter().any(|c| c.text.contains("123 F.Supp.2d 456")));
+        assert!(cites.iter().any(|c| c.text.contains("78 F.App'x 910")));
+    }
+
+    #[test]
+    fn test_state_regional_reporters() {
+        let text = "See 200 N.E.2d 300 and 400 P.3d 500.";
+        let cites = extract_citations(text);
+        assert!(cites.iter().any(|c| c.text.contains("200 N.E.2d 300")));
+        assert!(cites.iter().any(|c| c.text.contains("400 P.3d 500")));
+    }
+
+    #[test]
+    fn test_state_specific_reporters() {
+        let text = "Held in 10 Cal. 20 and reversed in 30 N.Y. 40.";
+        let cites = extract_citations(text);
+        assert!(cites.iter().any(|c| c.text.contains("10 Cal. 20")));
+        assert!(cites.iter().any(|c| c.text.contains("30 N.Y. 40")));
+    }
+
+    #[test]
+    fn test_eu_court_citations() {
+        let text = "The CJEU decided Case C-1/23 and the General Court decided Case T-1/23.";
+        let cites = extract_citations(text);
+        assert!(cites.iter().any(|c| c.text.contains("Case C-1/23")));
+        assert!(cites.iter().any(|c| c.text.contains("Case T-1/23")));
+    }
+
+    #[test]
+    fn test_canlii_neutral_citation() {
+        let text = "As decided in 2022 CanLII 98765 (ON).";
+        let cites = extract_citations(text);
+        assert!(cites.iter().any(|c| c.text.contains("2022 CanLII 98765 (ON)")));
+    }
+
+    #[test]
+    fn test_state_statute() {
+        let text = "Pursuant to Cal. Civ. Code § 1714 and Tex. Bus. & Com. Code § 17.50.";
+        let cites = extract_citations(text);
+        assert!(cites.iter().any(|c| c.citation_type == "statute" && c.text.contains("Cal.")));
+        assert!(cites.iter().any(|c| c.citation_type == "statute" && c.text.contains("Tex.")));
+    }
+
+    #[test]
+    fn test_empty_string_returns_empty() {
+        let cites = extract_citations("");
+        assert!(cites.is_empty());
+    }
 }
