@@ -1,0 +1,10 @@
+{
+  "task_id": 89,
+  "task_title": "Test TaskStreamManager::push_line MAX_HISTORY_LINES FIFO eviction",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-89",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T23:33:12.516202494Z"
+}

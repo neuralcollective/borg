@@ -208,6 +208,34 @@ async fn test_multiple_push_phase_result_both_in_history() {
 }
 
 // =============================================================================
+// MAX_HISTORY_LINES: FIFO eviction when history exceeds 10,000 lines
+// =============================================================================
+
+#[tokio::test]
+async fn test_push_line_max_history_fifo_eviction() {
+    let manager = TaskStreamManager::new();
+    let task_id: i64 = 100;
+    manager.start(task_id).await;
+
+    // Push 10,001 lines; the first should be evicted.
+    manager.push_line(task_id, "line_0".to_string()).await;
+    for i in 1..=10_000 {
+        manager.push_line(task_id, format!("line_{i}")).await;
+    }
+
+    let (history, _rx) = manager.subscribe(task_id).await;
+    assert_eq!(history.len(), 10_000, "history must be capped at 10,000");
+    assert!(
+        !history.contains(&"line_0".to_string()),
+        "first line must have been evicted"
+    );
+    assert!(
+        history.contains(&"line_10000".to_string()),
+        "last pushed line must be present"
+    );
+}
+
+// =============================================================================
 // Independent streams — push only affects the specified task
 // =============================================================================
 
