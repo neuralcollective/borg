@@ -1,0 +1,10 @@
+{
+  "task_id": 323,
+  "task_title": "Log instead of silently swallowing errors in api.ts catch blocks",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-323",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T12:13:26.409565695Z"
+}
