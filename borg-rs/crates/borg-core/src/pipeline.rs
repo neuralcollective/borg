@@ -1013,12 +1013,11 @@ impl Pipeline {
             return self.run_rebase_phase_docker(task, phase).await;
         }
 
-        // Non-Docker rebase: re-create worktree if needed, rebase onto origin/main, then advance.
+        // Non-Docker rebase: re-create worktree if needed, rebase onto origin/main.
         let branch = format!("task-{}", task.id);
         let git = Git::new(&task.repo_path);
         let wt_path = format!("{}/.worktrees/{}", task.repo_path, branch);
         if !std::path::Path::new(&wt_path).exists() {
-            // Worktree was cleaned up after previous done; re-create from existing branch.
             let _ = git.exec(&task.repo_path, &["worktree", "remove", "--force", &wt_path]);
             let result = git.exec(
                 &task.repo_path,
@@ -1031,14 +1030,49 @@ impl Pipeline {
                 return Ok(());
             }
         }
-        if let Err(e) = git.rebase_onto_main(&wt_path) {
-            warn!("task #{} rebase: {e}", task.id);
-            self.fail_or_retry(task, "rebase", &e.to_string())?;
-            return Ok(());
+
+        // Try fast rebase first
+        match git.rebase_onto_main(&wt_path) {
+            Ok(()) => {
+                info!("task #{} rebase: rebased onto origin/main", task.id);
+                self.advance_phase(task, phase, mode)?;
+                return Ok(());
+            }
+            Err(e) => {
+                info!("task #{} rebase: conflicts detected, spawning agent to resolve: {e}", task.id);
+            }
         }
-        info!("task #{} rebase: rebased onto origin/main", task.id);
-        self.advance_phase(task, phase, mode)?;
-        Ok(())
+
+        // Fast rebase failed — run an agent to resolve conflicts
+        let test_cmd = mode.phases.iter()
+            .find(|p| p.phase_type == PhaseType::Validate)
+            .map(|p| p.instruction.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("cargo test");
+        let rebase_phase = PhaseConfig {
+            name: "rebase".to_string(),
+            instruction: format!(
+                "Your branch `{branch}` needs to be rebased onto origin/main. \
+                 The automatic rebase failed due to merge conflicts.\n\n\
+                 Steps:\n\
+                 1. Run `git fetch origin main`\n\
+                 2. Run `git rebase origin/main`\n\
+                 3. For each conflict, resolve it by keeping the intent of YOUR changes \
+                    while incorporating upstream changes from main. Use `git diff` to understand \
+                    both sides.\n\
+                 4. After resolving each file: `git add <file>` then `git rebase --continue`\n\
+                 5. If a commit is no longer needed (already in main), use `git rebase --skip`\n\
+                 6. Make sure `{test_cmd}` still passes after the rebase\n\n\
+                 Do NOT create new commits — only resolve the rebase conflicts.",
+            ),
+            phase_type: PhaseType::Agent,
+            include_task_context: true,
+            allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
+            commits: true,
+            fresh_session: true,
+            ..PhaseConfig::default()
+        };
+        self.run_agent_phase(task, &rebase_phase, mode).await
     }
 
     /// Docker-mode rebase: use GitHub's update-branch API to rebase the PR onto main.
