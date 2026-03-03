@@ -1702,7 +1702,7 @@ and report what went wrong.",
                     .filter(|o| o.exit_code == 0)
                     .and_then(|o| o.stdout.trim().parse::<u64>().ok());
                 if let Some(num) = pr_num {
-                    let _ = self
+                    let update_res = self
                         .gh(&[
                             "api",
                             "-X",
@@ -1710,11 +1710,21 @@ and report what went wrong.",
                             &format!("repos/{slug}/pulls/{num}/update-branch"),
                         ])
                         .await;
-                    info!(
-                        "Task #{} {}: update-branch requested",
+                    let ok = update_res.as_ref().map(|o| o.exit_code == 0).unwrap_or(false);
+                    if ok {
+                        info!(
+                            "Task #{} {}: update-branch requested, will retry next tick",
+                            entry.task_id, entry.branch
+                        );
+                        // Stay queued — next tick the branch should be rebased
+                        continue;
+                    }
+                    warn!(
+                        "Task #{} {}: update-branch failed, sending to rebase agent",
                         entry.task_id, entry.branch
                     );
                 }
+                // No PR or update-branch failed — send back to rebase phase for agent
                 self.db.update_queue_status_with_error(
                     entry.id,
                     "excluded",
