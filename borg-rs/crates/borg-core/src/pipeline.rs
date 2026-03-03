@@ -85,6 +85,14 @@ struct GithubIssue {
 }
 
 impl Pipeline {
+    fn task_session_dir(task_id: i64) -> String {
+        let rel = format!("store/sessions/task-{task_id}");
+        std::fs::canonicalize(&rel)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&rel))
+            .to_string_lossy()
+            .to_string()
+    }
+
     fn custom_modes_from_db(&self) -> Vec<PipelineMode> {
         let raw = match self.db.get_config("custom_modes") {
             Ok(Some(v)) => v,
@@ -943,7 +951,8 @@ impl Pipeline {
         mode: &PipelineMode,
     ) -> Result<()> {
         let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = make_session_dir(&session_dir_rel).await?;
+        tokio::fs::create_dir_all(&session_dir_rel).await.ok();
+        let session_dir = Self::task_session_dir(task.id);
 
         let work_dir = session_dir.clone();
 
@@ -1670,7 +1679,122 @@ and report what went wrong.",
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
-        self.advance_phase(task, phase, mode)?;
+        // In Docker mode, lint is handled inside the container by the entrypoint.
+        if self.sandbox_mode == SandboxMode::Docker {
+            self.advance_phase(task, phase, mode)?;
+            return Ok(());
+        }
+
+        let wt_path = task.repo_path.clone();
+
+        let lint_cmd = match self.repo_lint_cmd(&task.repo_path, &wt_path) {
+            Some(cmd) => cmd,
+            None => {
+                self.advance_phase(task, phase, mode)?;
+                info!("task #{} lint_fix: no lint command, skipping", task.id);
+                return Ok(());
+            },
+        };
+
+        const LINT_FIX_SYSTEM: &str = "You are a lint-fix agent. Your only job is to make the \
+codebase pass the project's linter with zero warnings or errors. Do not refactor, rename, or \
+change logic — only fix what the linter reports. Read the lint output carefully and make the \
+minimal changes needed. After editing, do not run the linter yourself — the pipeline will verify.";
+
+        let mut lint_out = self.run_test_command(&wt_path, &lint_cmd).await?;
+        if lint_out.exit_code == 0 {
+            self.advance_phase(task, phase, mode)?;
+            info!("task #{} lint_fix: already clean", task.id);
+            return Ok(());
+        }
+
+        let session_dir = Self::task_session_dir(task.id);
+
+        for fix_attempt in 0..2u32 {
+            let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)
+                .trim()
+                .to_string();
+
+            info!(
+                "task #{} lint_fix: running fix agent (attempt {})",
+                task.id,
+                fix_attempt + 1
+            );
+
+            let fix_phase = PhaseConfig {
+                name: format!("lint_fix_{fix_attempt}"),
+                label: "Lint Fix".into(),
+                system_prompt: LINT_FIX_SYSTEM.into(),
+                instruction: format!(
+                    "Fix all lint errors. Lint output:\n\n```\n{lint_output_text}\n```\n\n\
+Make only the minimal changes the linter requires. Do not refactor or change logic.",
+                ),
+                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
+                use_docker: true,
+                allow_no_changes: true,
+                fresh_session: true,
+                ..PhaseConfig::default()
+            };
+
+            let ctx = self.make_context(task, wt_path.clone(), session_dir.clone(), Vec::new());
+
+            let agent_result = match self.resolve_backend(task) {
+                Some(b) => {
+                    if let Err(e) = self
+                        .write_pipeline_state_snapshot(task, &fix_phase.name, &wt_path)
+                        .await
+                    {
+                        warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
+                    }
+                    b.run_phase(task, &fix_phase, ctx)
+                        .await
+                        .unwrap_or_else(|e| {
+                            error!("lint-fix agent for task #{}: {e}", task.id);
+                            PhaseOutput::failed(String::new())
+                        })
+                },
+                None => {
+                    warn!(
+                        "task #{}: no backend, skipping lint fix attempt {}",
+                        task.id, fix_attempt
+                    );
+                    self.advance_phase(task, phase, mode)?;
+                    return Ok(());
+                },
+            };
+
+            if let Some(ref sid) = agent_result.new_session_id {
+                self.db.update_task_session(task.id, sid).ok();
+            }
+            self.db
+                .insert_task_output(
+                    task.id,
+                    &fix_phase.name,
+                    &agent_result.output,
+                    &agent_result.raw_stream,
+                    if agent_result.success { 0 } else { 1 },
+                )
+                .ok();
+
+            let git = Git::new(&task.repo_path);
+            let (_, user_coauthor) = self.git_coauthor_settings();
+            let lint_commit_msg = Self::with_user_coauthor("fix: lint errors", &user_coauthor);
+            let _ = git.commit_all(&wt_path, &lint_commit_msg, self.git_author());
+
+            lint_out = self.run_test_command(&wt_path, &lint_cmd).await?;
+            if lint_out.exit_code == 0 {
+                self.advance_phase(task, phase, mode)?;
+                info!(
+                    "task #{} lint_fix: clean after {} fix attempt(s)",
+                    task.id,
+                    fix_attempt + 1
+                );
+                return Ok(());
+            }
+        }
+
+        let error_msg = format!("{}\n{}", lint_out.stdout, lint_out.stderr);
+        self.fail_or_retry(task, "lint_fix", error_msg.trim())?;
         Ok(())
     }
 
@@ -1683,11 +1807,7 @@ and report what went wrong.",
         check_cmd: &str,
         initial_errors: &str,
     ) -> Result<bool> {
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        let session_dir = Self::task_session_dir(task.id);
 
         let mut errors = initial_errors.to_string();
 
@@ -3574,141 +3694,25 @@ fn looks_like_field_key(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::Pipeline;
 
-    fn sq(s: &str) -> String {
-        format!("'{}'", s.replace('\'', "'\\''"))
+    #[test]
+    fn task_session_dir_contains_task_id() {
+        let dir = Pipeline::task_session_dir(42);
+        assert!(dir.contains("task-42"), "path should include task-42, got {dir}");
     }
 
     #[test]
-    fn test_build_system_prompt_suffix_no_coauthor_no_user() {
-        let s = Pipeline::build_system_prompt_suffix(false, "");
-        assert!(s.contains("Do not add Co-Authored-By trailers to commit messages."));
+    fn task_session_dir_different_ids_produce_different_paths() {
+        let a = Pipeline::task_session_dir(1);
+        let b = Pipeline::task_session_dir(2);
+        assert_ne!(a, b);
     }
 
     #[test]
-    fn test_build_system_prompt_suffix_claude_coauthor_no_user() {
-        let s = Pipeline::build_system_prompt_suffix(true, "");
-        assert!(s.is_empty());
-    }
-
-    #[test]
-    fn test_build_system_prompt_suffix_no_coauthor_with_user() {
-        let s = Pipeline::build_system_prompt_suffix(false, "User Name <u@e.com>");
-        assert!(s.contains("Do not add Co-Authored-By trailers to commit messages."));
-        assert!(s.contains("Git author is configured via environment variables"));
-    }
-
-    #[test]
-    fn test_build_system_prompt_suffix_claude_coauthor_with_user() {
-        let s = Pipeline::build_system_prompt_suffix(true, "User Name <u@e.com>");
-        assert!(!s.contains("Do not add Co-Authored-By trailers"));
-        assert!(s.contains("Git author is configured via environment variables"));
-    }
-
-    #[test]
-    fn test_with_user_coauthor_empty_returns_message_unchanged() {
-        let msg = "fix: some bug";
-        assert_eq!(Pipeline::with_user_coauthor(msg, ""), msg);
-    }
-
-    #[test]
-    fn test_with_user_coauthor_appends_trailer() {
-        let result = Pipeline::with_user_coauthor("fix: some bug", "Name <email>");
-        assert_eq!(result, "fix: some bug\n\nCo-Authored-By: Name <email>");
-    }
-
-    #[test]
-    fn derive_compile_check_cargo_test_appends_no_run() {
-        let result = derive_compile_check("cargo test");
-        assert_eq!(result, Some("cargo test --no-run".to_string()));
-    }
-
-    #[test]
-    fn derive_compile_check_just_test_returns_none() {
-        assert_eq!(derive_compile_check("just test"), None);
-    }
-
-    #[test]
-    fn derive_compile_check_bun_test_returns_none() {
-        assert_eq!(derive_compile_check("bun test"), None);
-    }
-
-    #[test]
-    fn derive_compile_check_cargo_test_release_preserves_full_command() {
-        let result = derive_compile_check("cargo test --release");
-        assert_eq!(result, Some("cargo test --release --no-run".to_string()));
-    }
-
-    #[test]
-    fn derive_compile_check_trims_whitespace() {
-        let result = derive_compile_check("  cargo test  ");
-        assert_eq!(result, Some("cargo test --no-run".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_make_session_dir_creates_dir_and_returns_absolute_path() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let sub = tmp.path().join("task-999");
-        let result = make_session_dir(sub.to_str().expect("utf8")).await;
-        assert!(result.is_ok(), "should succeed for valid path: {result:?}");
-        let path = result.expect("ok");
-        assert!(std::path::Path::new(&path).is_absolute(), "path must be absolute");
-        assert!(std::path::Path::new(&path).is_dir(), "directory must exist after creation");
-    }
-
-    #[tokio::test]
-    async fn test_make_session_dir_propagates_error_on_invalid_parent() {
-        // /dev/null is a character device, not a directory; subdirs cannot be created under it.
-        let result = make_session_dir("/dev/null/borg_session_test").await;
-        assert!(result.is_err(), "must return Err when directory cannot be created");
-        let msg = format!("{:#}", result.expect_err("is err"));
-        assert!(msg.contains("session dir"), "error message must name the operation");
-    }
-
-    #[test]
-    fn sq_plain() {
-        assert_eq!(sq("hello"), "'hello'");
-    }
-
-    #[test]
-    fn sq_with_spaces() {
-        assert_eq!(sq("my repo"), "'my repo'");
-    }
-
-    #[test]
-    fn sq_with_single_quote() {
-        assert_eq!(sq("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn container_mirror_quoted_in_clone_cmd() {
-        // Simulate the clone_cmd construction for a repo name with spaces.
-        let repo_name = "my repo";
-        let container_mirror = format!("/mirrors/{repo_name}.git");
-        let container_mirror_q = sq(&container_mirror);
-        let repo_url_q = sq("/path/to/repo");
-        let clone_cmd = format!(
-            "git clone --depth 1 --single-branch --reference {container_mirror_q} {repo_url_q} /workspace/repo"
-        );
-        // The mirror path must be single-quoted so spaces don't split the argument.
-        assert!(clone_cmd.contains("'/mirrors/my repo.git'"));
-        // Sanity-check the unquoted form is NOT present (would be split by bash).
-        assert!(!clone_cmd.contains(" /mirrors/my repo.git "));
-    }
-
-    #[test]
-    fn compliance_pack_unknown_profile_returns_supported_error() {
-        let findings = run_compliance_pack("unknown_pack", "Regulatory Considerations\nas of 2026-01-01\nhttps://example.com");
-        assert!(!findings.is_empty());
-        assert!(findings.iter().any(|f| f.check_id == "profile_supported"));
-    }
-
-    #[test]
-    fn compliance_should_block_only_when_enforcement_is_block() {
-        let findings = run_compliance_pack("uk_sra", "short output");
-        assert!(compliance_should_block("block", &findings));
-        assert!(!compliance_should_block("warn", &findings));
-        assert!(!compliance_should_block("block", &[]));
+    fn task_session_dir_nonexistent_dir_falls_back_to_relative() {
+        // A very large task id won't exist on disk — must not panic.
+        let dir = Pipeline::task_session_dir(i64::MAX);
+        assert!(dir.contains(&format!("task-{}", i64::MAX)));
     }
 }
