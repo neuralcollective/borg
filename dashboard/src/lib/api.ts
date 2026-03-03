@@ -475,6 +475,7 @@ export interface StreamEvent {
   content?: unknown;
   output?: unknown;
   phase?: string;
+  dropped?: number;
   // container_event fields
   event?: string;
   image?: string;

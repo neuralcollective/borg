@@ -151,6 +151,14 @@ function TermLineView({ line }: { line: TermLine }) {
     );
   }
 
+  if (line.type === "stream_lag") {
+    return (
+      <div className="rounded border border-amber-500/40 bg-amber-950/20 px-3 py-2 my-1 text-amber-300/90 text-[11px]">
+        ⚠ {line.content}
+      </div>
+    );
+  }
+
   if (line.type === "container") {
     const colors: Record<string, string> = {
       success: "text-emerald-400/80 border-emerald-500/20",

@@ -1,11 +1,12 @@
 import type { StreamEvent } from "./api";
 
 export interface TermLine {
-  type: "system" | "text" | "tool" | "result" | "tool_result" | "phase_result" | "container";
+  type: "system" | "text" | "tool" | "result" | "tool_result" | "phase_result" | "container" | "stream_lag";
   tool?: string;
   label?: string;
   content: string;
   variant?: "info" | "success" | "error" | "warn";
+  dropped?: number;
 }
 
 export function formatToolInput(
@@ -108,6 +109,13 @@ export function parseStreamEvents(events: StreamEvent[]): TermLine[] {
     } else if (ev.type === "container_event") {
       const line = formatContainerEvent(ev as unknown as Record<string, unknown>);
       if (line) lines.push(line);
+    } else if (ev.type === "stream_lag") {
+      const dropped = typeof ev.dropped === "number" ? ev.dropped : 0;
+      lines.push({
+        type: "stream_lag",
+        content: `Stream lagged — ${dropped} event${dropped === 1 ? "" : "s"} dropped. Reload to see full output.`,
+        dropped,
+      });
     }
   }
 

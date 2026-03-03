@@ -3135,7 +3135,12 @@ pub(crate) async fn sse_task_stream(
                             return;
                         }
                     },
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        let lag = format!(r#"{{"type":"stream_lag","dropped":{n}}}"#);
+                        if tx.send(lag).is_err() {
+                            return;
+                        }
+                    },
                     Err(_) => break,
                 }
             }
