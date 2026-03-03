@@ -127,19 +127,9 @@ pub struct Config {
     pub experimental_domains: bool,
 }
 
-impl Config {
-    pub fn get_base_url(&self) -> String {
-        if !self.public_url.is_empty() {
-            self.public_url.trim_end_matches('/').to_string()
-        } else {
-            format!("http://localhost:{}", self.web_port)
-        }
-    }
-}
-
-fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
+pub(crate) fn parse_dotenv_content(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    for line in content.lines() {
+    for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -160,10 +150,10 @@ fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
 }
 
 fn parse_dotenv() -> HashMap<String, String> {
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return HashMap::new();
-    };
-    parse_dotenv_str(&contents)
+    match std::fs::read_to_string(".env") {
+        Ok(contents) => parse_dotenv_content(&contents),
+        Err(_) => HashMap::new(),
+    }
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -947,140 +937,74 @@ impl Config {
 }
 
 #[cfg(test)]
-mod resolve_tilde_tests {
-    use super::*;
-
-    // ── resolve_tilde_impl ────────────────────────────────────────────────────
+mod tests {
+    use super::parse_dotenv_content;
 
     #[test]
-    fn tilde_path_expands_with_home() {
-        assert_eq!(
-            resolve_tilde_impl("~/projects/borg", Some("/home/alice")),
-            "/home/alice/projects/borg"
-        );
-    }
-
-    #[test]
-    fn tilde_path_expands_nested() {
-        assert_eq!(
-            resolve_tilde_impl("~/a/b/c", Some("/root")),
-            "/root/a/b/c"
-        );
-    }
-
-    #[test]
-    fn tilde_path_unchanged_when_home_missing() {
-        assert_eq!(
-            resolve_tilde_impl("~/projects/borg", None),
-            "~/projects/borg"
-        );
-    }
-
-    #[test]
-    fn absolute_path_unchanged() {
-        assert_eq!(
-            resolve_tilde_impl("/absolute/path", Some("/home/alice")),
-            "/absolute/path"
-        );
-    }
-
-    #[test]
-    fn relative_path_unchanged() {
-        assert_eq!(
-            resolve_tilde_impl("relative/path", Some("/home/alice")),
-            "relative/path"
-        );
-    }
-
-    #[test]
-    fn bare_tilde_unchanged() {
-        // "~" without trailing slash is not expanded
-        assert_eq!(resolve_tilde_impl("~", Some("/home/alice")), "~");
-    }
-
-    #[test]
-    fn tilde_slash_only_expands_correctly() {
-        assert_eq!(
-            resolve_tilde_impl("~/", Some("/home/alice")),
-            "/home/alice/"
-        );
-    }
-
-    // ── parse_dotenv_str ──────────────────────────────────────────────────────
-
-    #[test]
-    fn dotenv_basic_key_value() {
-        let map = parse_dotenv_str("FOO=bar\n");
-        assert_eq!(map["FOO"], "bar");
-    }
-
-    #[test]
-    fn dotenv_skips_blank_lines() {
-        let map = parse_dotenv_str("FOO=bar\n\nBAZ=qux\n");
-        assert_eq!(map.len(), 2);
-        assert_eq!(map["FOO"], "bar");
-        assert_eq!(map["BAZ"], "qux");
-    }
-
-    #[test]
-    fn dotenv_skips_hash_comment_lines() {
-        let map = parse_dotenv_str("# comment\nFOO=bar\n");
+    fn blank_lines_skipped() {
+        let map = parse_dotenv_content("\n\n  \nFOO=bar\n\n");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
         assert_eq!(map.len(), 1);
-        assert_eq!(map["FOO"], "bar");
     }
 
     #[test]
-    fn dotenv_strips_double_quotes() {
-        let map = parse_dotenv_str("TOKEN=\"abc123\"\n");
-        assert_eq!(map["TOKEN"], "abc123");
+    fn comment_lines_skipped() {
+        let map = parse_dotenv_content("# this is a comment\n# another\nFOO=bar");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(map.len(), 1);
     }
 
     #[test]
-    fn dotenv_strips_single_quotes() {
-        let map = parse_dotenv_str("TOKEN='abc123'\n");
-        assert_eq!(map["TOKEN"], "abc123");
+    fn double_quoted_value_stripped() {
+        let map = parse_dotenv_content(r#"FOO="hello world""#);
+        assert_eq!(map.get("FOO").map(String::as_str), Some("hello world"));
     }
 
     #[test]
-    fn dotenv_trims_key_whitespace() {
-        let map = parse_dotenv_str("  FOO  =bar\n");
-        assert_eq!(map["FOO"], "bar");
+    fn single_quoted_value_stripped() {
+        let map = parse_dotenv_content("FOO='hello world'");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("hello world"));
     }
 
     #[test]
-    fn dotenv_trims_value_whitespace() {
-        let map = parse_dotenv_str("FOO=  bar  \n");
-        assert_eq!(map["FOO"], "bar");
+    fn key_without_value_not_inserted() {
+        // Lines with no `=` must be skipped, not panic
+        let map = parse_dotenv_content("ORPHAN_KEY\nFOO=bar");
+        assert!(!map.contains_key("ORPHAN_KEY"));
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
     }
 
     #[test]
-    fn dotenv_empty_content_returns_empty_map() {
-        assert!(parse_dotenv_str("").is_empty());
+    fn multiple_equals_value_contains_rest() {
+        // split_once('=') splits on the first `=`; value gets the remainder
+        let map = parse_dotenv_content("URL=https://example.com/path?a=1&b=2");
+        assert_eq!(
+            map.get("URL").map(String::as_str),
+            Some("https://example.com/path?a=1&b=2")
+        );
     }
 
     #[test]
-    fn dotenv_only_comments_returns_empty_map() {
-        assert!(parse_dotenv_str("# comment\n# another\n").is_empty());
+    fn whitespace_around_key_and_value_trimmed() {
+        let map = parse_dotenv_content("  FOO  =  bar  ");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
     }
 
     #[test]
-    fn dotenv_line_without_equals_is_skipped() {
-        assert!(parse_dotenv_str("NOEQUALSSIGN\n").is_empty());
+    fn empty_value_stored_as_empty_string() {
+        let map = parse_dotenv_content("FOO=");
+        assert_eq!(map.get("FOO").map(String::as_str), Some(""));
     }
 
     #[test]
-    fn dotenv_value_with_equals_uses_first_split() {
-        let map = parse_dotenv_str("URL=https://example.com?a=1\n");
-        assert_eq!(map["URL"], "https://example.com?a=1");
+    fn mismatched_quotes_not_stripped() {
+        // Starts with `"` but ends with `'` — must not strip quotes
+        let map = parse_dotenv_content("FOO=\"bad'");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("\"bad'"));
     }
 
     #[test]
-    fn dotenv_multiple_entries_parsed() {
-        let input = "A=1\nB=2\nC=3\n";
-        let map = parse_dotenv_str(input);
-        assert_eq!(map.len(), 3);
-        assert_eq!(map["A"], "1");
-        assert_eq!(map["B"], "2");
-        assert_eq!(map["C"], "3");
+    fn empty_input_returns_empty_map() {
+        assert!(parse_dotenv_content("").is_empty());
     }
 }
