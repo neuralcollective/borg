@@ -208,6 +208,48 @@ async fn test_multiple_push_phase_result_both_in_history() {
 }
 
 // =============================================================================
+// History cap: push_line evicts oldest entry when MAX_HISTORY_LINES exceeded
+// =============================================================================
+
+#[tokio::test]
+async fn test_push_line_history_cap() {
+    use borg_core::stream::MAX_HISTORY_LINES;
+
+    let manager = TaskStreamManager::new();
+    let task_id: i64 = 100;
+    manager.start(task_id).await;
+
+    let first_line = "line_0_first".to_string();
+    manager.push_line(task_id, first_line.clone()).await;
+
+    for i in 1..MAX_HISTORY_LINES {
+        manager.push_line(task_id, format!("line_{i}")).await;
+    }
+
+    // History is exactly at the cap — oldest line still present.
+    let (history, _) = manager.subscribe(task_id).await;
+    assert_eq!(history.len(), MAX_HISTORY_LINES);
+    assert_eq!(history[0], first_line);
+
+    // One more line tips us over; oldest should be evicted.
+    manager
+        .push_line(task_id, "line_overflow".to_string())
+        .await;
+
+    let (history, _) = manager.subscribe(task_id).await;
+    assert_eq!(history.len(), MAX_HISTORY_LINES, "history must not exceed cap");
+    assert_ne!(
+        history[0], first_line,
+        "oldest line must have been evicted"
+    );
+    assert_eq!(
+        history[history.len() - 1],
+        "line_overflow",
+        "newest line must be at the back"
+    );
+}
+
+// =============================================================================
 // Independent streams — push only affects the specified task
 // =============================================================================
 
