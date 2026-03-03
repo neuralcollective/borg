@@ -652,6 +652,47 @@ impl Sandbox {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{SandboxMode, SandboxMode::*};
+
+    #[test]
+    fn bwrap_maps_to_bwrap() {
+        assert_eq!(SandboxMode::from_str_or_auto("bwrap"), Some(Bwrap));
+    }
+
+    #[test]
+    fn docker_maps_to_docker() {
+        assert_eq!(SandboxMode::from_str_or_auto("docker"), Some(Docker));
+    }
+
+    #[test]
+    fn none_maps_to_direct() {
+        assert_eq!(SandboxMode::from_str_or_auto("none"), Some(Direct));
+    }
+
+    #[test]
+    fn direct_maps_to_direct() {
+        assert_eq!(SandboxMode::from_str_or_auto("direct"), Some(Direct));
+    }
+
+    #[test]
+    fn auto_returns_none() {
+        assert_eq!(SandboxMode::from_str_or_auto("auto"), None);
+    }
+
+    #[test]
+    fn unrecognised_returns_none() {
+        assert_eq!(SandboxMode::from_str_or_auto("podman"), None);
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        assert_eq!(SandboxMode::from_str_or_auto("BWRAP"), Some(Bwrap));
+        assert_eq!(SandboxMode::from_str_or_auto("Docker"), Some(Docker));
+    }
+}
+
 fn parse_docker_size(s: &str) -> Option<u64> {
     let s = s.trim();
     let (num, unit) = if let Some(n) = s.strip_suffix("GB") {
