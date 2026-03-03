@@ -37,6 +37,11 @@ fn make_task(db: &Db) -> i64 {
         backend: String::new(),
         project_id: 0,
         task_type: String::new(),
+        started_at: None,
+        completed_at: None,
+        duration_secs: None,
+        review_status: None,
+        revision_count: 0,
     };
     db.insert_task(&task).expect("insert_task")
 }

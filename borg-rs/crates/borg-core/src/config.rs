@@ -833,7 +833,7 @@ impl Config {
 }
 
 #[cfg(test)]
-mod tests {
+mod resolve_tilde_tests {
     use super::*;
 
     // ── resolve_tilde_impl ────────────────────────────────────────────────────

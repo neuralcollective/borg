@@ -1040,13 +1040,18 @@ tests pass if a test command is available. Push the result.".into(),
 2. `git rebase origin/main`\n\
 3. If conflicts arise, resolve them preserving the branch's intent\n\
 4. `git rebase --continue` after resolving each conflict\n\
-5. `git push --force-with-lease origin {branch}`\n\n\
+5. After rebase, run the project's compile check (e.g. `cargo check`) to verify the result compiles\n\
+6. Fix any compile errors introduced by the rebase before pushing\n\
+7. `git push --force-with-lease origin {branch}`\n\n\
 If the rebase is too complex or the conflicts are unclear, abort with `git rebase --abort` \
 and report what went wrong.",
             ),
             allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
             use_docker: true,
             fresh_session: true,
+            error_instruction: "\n\n---\n## Previous Attempt Failed\n{ERROR}\n\n\
+                Analyze what went wrong and take a different approach. \
+                Pay close attention to any compile errors — fix them before pushing.".into(),
             ..PhaseConfig::default()
         };
 
@@ -1085,6 +1090,34 @@ and report what went wrong.",
             .ok();
 
         if result.success {
+            // If the container ran a compile check, enforce it before advancing.
+            // A bad conflict resolution often compiles fine locally but fails here.
+            let compile_result = result
+                .container_test_results
+                .iter()
+                .find(|r| r.phase == "compileCheck");
+            if let Some(cr) = compile_result {
+                if !cr.passed {
+                    let errors = cr.output.chars().take(3000).collect::<String>();
+                    warn!(
+                        "task #{} rebase: compile check failed after rebase, retrying",
+                        task.id
+                    );
+                    self.db.insert_task_output(
+                        task.id,
+                        "rebase_compile_fail",
+                        &errors,
+                        "",
+                        1,
+                    ).ok();
+                    self.fail_or_retry(
+                        task,
+                        "rebase",
+                        &format!("Compile failed after rebase:\n{errors}"),
+                    )?;
+                    return Ok(());
+                }
+            }
             info!("task #{} rebase: agent resolved conflicts", task.id);
             self.advance_phase(task, phase, mode)?;
         } else {
@@ -1755,152 +1788,135 @@ and report what went wrong.",
                 );
             }
         } else {
-            for entry in &live {
-                if excluded_ids.contains(&entry.id) {
-                    continue;
-                }
-                if freshly_created.contains(&entry.id) {
-                    info!(
-                        "Task #{} {}: skipping merge (PR just created)",
-                        entry.task_id, entry.branch
-                    );
-                    continue;
-                }
+            // ── Merge queue: serialize to one merge per cycle ──────────────
+            //
+            // Pick the oldest non-excluded, non-freshly-created entry. Verify
+            // it is current with main (behind_by == 0) before merging. A branch
+            // rebased onto main N has behind_by=0 and will fast-forward onto N,
+            // producing an identical file tree to what the compile check tested.
+            // If any other PR was merged since the rebase, behind_by > 0 and we
+            // send the branch back to rebase rather than risk a corrupted merge.
+            let candidate = live.iter().find(|e| {
+                !excluded_ids.contains(&e.id) && !freshly_created.contains(&e.id)
+            });
 
-                let view_out = self
+            if let Some(entry) = candidate {
+                // Check if PR is already merged (picked up from a prior run)
+                let state_check = self
                     .gh(&[
-                        "pr",
-                        "view",
-                        &entry.branch,
-                        "--repo",
-                        slug,
-                        "--json",
-                        "state",
-                        "--jq",
-                        ".state",
+                        "pr", "view", &entry.branch, "--repo", slug,
+                        "--json", "state", "--jq", ".state",
                     ])
                     .await;
-                let view_out = match view_out {
-                    Ok(o) => o,
-                    Err(e) => { warn!("gh pr view state {}: {e}", entry.branch); continue; }
-                };
-                if view_out.exit_code != 0 {
-                    continue;
-                }
-                let pr_state = view_out.stdout.trim();
+                let pr_state = state_check
+                    .as_ref()
+                    .map(|o| o.stdout.trim().to_string())
+                    .unwrap_or_default();
 
                 if pr_state == "MERGED" {
                     info!("Task #{} {}: already merged", entry.task_id, entry.branch);
                     self.db.update_queue_status(entry.id, "merged")?;
                     self.db.update_task_status(entry.task_id, "merged", None)?;
                     merged_branches.push(entry.branch.clone());
-                    continue;
-                }
+                } else {
+                    // Check how far behind main this branch is.
+                    // behind_by == 0 means the branch was rebased onto current main tip.
+                    // A fast-forward merge then produces exactly what the rebase compile
+                    // check tested — no new conflicts can arise.
+                    let compare = self
+                        .gh(&[
+                            "api",
+                            &format!(
+                                "repos/{slug}/compare/main...{}",
+                                entry.branch
+                            ),
+                            "--jq", ".behind_by",
+                        ])
+                        .await;
+                    let behind_by: u64 = compare
+                        .as_ref()
+                        .ok()
+                        .and_then(|o| o.stdout.trim().parse().ok())
+                        .unwrap_or(1); // default conservative: treat unknown as stale
 
-                let mb_out = self
-                    .gh(&[
-                        "pr",
-                        "view",
-                        &entry.branch,
-                        "--repo",
-                        slug,
-                        "--json",
-                        "mergeable",
-                        "--jq",
-                        ".mergeable",
-                    ])
-                    .await;
-                let mb_out = match mb_out {
-                    Ok(o) => o,
-                    Err(e) => { warn!("gh pr view mergeable {}: {e}", entry.branch); continue; }
-                };
-                let mb = mb_out.stdout.trim().to_string();
-                let mut force_merge = false;
-
-                if mb == "UNKNOWN" {
-                    let retries = self.db.get_unknown_retries(entry.id);
-                    if retries >= 5 {
-                        warn!(
-                            "Task #{} {}: mergeability UNKNOWN after {} retries, forcing merge",
-                            entry.task_id, entry.branch, retries
-                        );
-                        self.db.reset_unknown_retries(entry.id)?;
-                        force_merge = true;
-                    } else {
-                        self.db.increment_unknown_retries(entry.id)?;
+                    if behind_by > 0 {
                         info!(
-                            "Task #{} {}: UNKNOWN ({}/5), retrying next tick",
-                            entry.task_id,
-                            entry.branch,
-                            retries + 1
+                            "Task #{} {}: behind main by {}, sending to rebase",
+                            entry.task_id, entry.branch, behind_by
                         );
-                        continue;
-                    }
-                }
-                if !force_merge && mb != "MERGEABLE" {
-                    info!(
-                        "Task #{} {}: mergeable={mb}, sending to rebase",
-                        entry.task_id, entry.branch
-                    );
-                    self.db.update_queue_status_with_error(
-                        entry.id,
-                        "excluded",
-                        "merge conflict with main",
-                    )?;
-                    self.db.update_task_status(entry.task_id, "rebase", None)?;
-                    continue;
-                }
-
-                self.db.update_queue_status(entry.id, "merging")?;
-                let merge_out = self
-                    .gh(&[
-                        "pr", "merge", &entry.branch, "--repo", slug, "--merge",
-                    ])
-                    .await;
-
-                match merge_out {
-                    Err(e) => {
-                        warn!("gh pr merge {}: {e}", entry.branch);
-                        self.db.update_queue_status(entry.id, "queued")?;
-                    }
-                    Ok(out) if out.exit_code != 0 => {
-                        let err = &out.stderr[..out.stderr.len().min(200)];
-                        warn!("gh pr merge {}: {}", entry.branch, err);
-                        if err.contains("not mergeable")
-                            || err.contains("cannot be cleanly created")
-                        {
-                            self.db.update_queue_status_with_error(
-                                entry.id,
-                                "excluded",
-                                "merge conflict with main",
-                            )?;
-                            self.db.update_task_status(entry.task_id, "rebase", None)?;
-                            info!("Task #{} has conflicts, sent to rebase", entry.task_id);
-                        } else {
-                            self.db.update_queue_status(entry.id, "queued")?;
-                        }
-                    }
-                    Ok(_) => {
-                        self.db.update_queue_status(entry.id, "merged")?;
-                        self.db.update_task_status(entry.task_id, "merged", None)?;
-                        merged_branches.push(entry.branch.clone());
-                        // Delete the remote branch via GitHub API
-                        let _ = self
+                        self.db.update_queue_status_with_error(
+                            entry.id,
+                            "excluded",
+                            "behind main — rebase required",
+                        )?;
+                        self.db.update_task_status(entry.task_id, "rebase", None)?;
+                    } else {
+                        // behind_by == 0 → safe to fast-forward merge
+                        self.db.update_queue_status(entry.id, "merging")?;
+                        let merge_out = self
                             .gh(&[
-                                "api",
-                                "-X",
-                                "DELETE",
-                                &format!("repos/{slug}/git/refs/heads/{}", entry.branch),
+                                "pr", "merge", &entry.branch, "--repo", slug, "--merge",
                             ])
                             .await;
-                        if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
-                            self.notify(
-                                &task.notify_chat,
-                                &format!(
-                                    "Task #{} \"{}\" merged via PR.",
-                                    task.id, task.title
-                                ),
-                            );
+
+                        match merge_out {
+                            Err(e) => {
+                                warn!("gh pr merge {}: {e}", entry.branch);
+                                self.db.update_queue_status(entry.id, "queued")?;
+                            }
+                            Ok(out) if out.exit_code != 0 => {
+                                let err = &out.stderr[..out.stderr.len().min(200)];
+                                warn!("gh pr merge {}: {}", entry.branch, err);
+                                if err.contains("not mergeable")
+                                    || err.contains("cannot be cleanly created")
+                                {
+                                    self.db.update_queue_status_with_error(
+                                        entry.id,
+                                        "excluded",
+                                        "merge conflict with main",
+                                    )?;
+                                    self.db.update_task_status(
+                                        entry.task_id,
+                                        "rebase",
+                                        None,
+                                    )?;
+                                    info!(
+                                        "Task #{} has conflicts, sent to rebase",
+                                        entry.task_id
+                                    );
+                                } else {
+                                    self.db.update_queue_status(entry.id, "queued")?;
+                                }
+                            }
+                            Ok(_) => {
+                                self.db.update_queue_status(entry.id, "merged")?;
+                                self.db.update_task_status(
+                                    entry.task_id,
+                                    "merged",
+                                    None,
+                                )?;
+                                merged_branches.push(entry.branch.clone());
+                                let _ = self
+                                    .gh(&[
+                                        "api",
+                                        "-X",
+                                        "DELETE",
+                                        &format!(
+                                            "repos/{slug}/git/refs/heads/{}",
+                                            entry.branch
+                                        ),
+                                    ])
+                                    .await;
+                                if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
+                                    self.notify(
+                                        &task.notify_chat,
+                                        &format!(
+                                            "Task #{} \"{}\" merged via PR.",
+                                            task.id, task.title
+                                        ),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
