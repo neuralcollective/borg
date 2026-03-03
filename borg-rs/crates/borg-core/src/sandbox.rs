@@ -44,20 +44,20 @@ impl Sandbox {
     /// Detect the best available sandbox mode given a preference string.
     ///
     /// Preference order when `preferred` is `"auto"` or empty:
-    /// bwrap → docker → direct.
+    /// docker → bwrap → direct.
     pub async fn detect(preferred: &str) -> SandboxMode {
         if let Some(forced) = SandboxMode::from_str_or_auto(preferred) {
             return forced;
         }
-        // auto
-        if Self::bwrap_available().await {
-            info!("sandbox: bwrap detected, using namespace sandbox");
-            SandboxMode::Bwrap
-        } else if Self::docker_available().await {
-            info!("sandbox: bwrap not found, falling back to docker");
+        // auto — prefer Docker (containerised agents get their own clone)
+        if Self::docker_available().await {
+            info!("sandbox: docker detected, using container sandbox");
             SandboxMode::Docker
+        } else if Self::bwrap_available().await {
+            info!("sandbox: docker not found, falling back to bwrap");
+            SandboxMode::Bwrap
         } else {
-            warn!("sandbox: neither bwrap nor docker available, running agents directly (no isolation)");
+            warn!("sandbox: neither docker nor bwrap available, running agents directly (no isolation)");
             SandboxMode::Direct
         }
     }

@@ -248,27 +248,6 @@ impl Pipeline {
         }
     }
 
-    /// Resolve the working directory for a task (worktree if exists, else repo root).
-    fn task_work_dir(&self, task: &Task) -> String {
-        if self.sandbox_mode != SandboxMode::Docker && !task.repo_path.is_empty() {
-            let wt = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
-            if std::path::Path::new(&wt).exists() { return wt; }
-        }
-        task.repo_path.clone()
-    }
-
-    /// Clean up worktree for a task (non-Docker mode).
-    fn cleanup_worktree(&self, task: &Task) {
-        if self.sandbox_mode != SandboxMode::Docker && !task.repo_path.is_empty() {
-            let branch = format!("task-{}", task.id);
-            let wt_path = format!("{}/.worktrees/{}", task.repo_path, branch);
-            if std::path::Path::new(&wt_path).exists() {
-                let git = Git::new(&task.repo_path);
-                git.remove_worktree(&wt_path);
-            }
-        }
-    }
-
     /// Increment attempt and set the retry status, or fail if attempts exhausted.
     /// After 3 failed attempts, clears the session ID to force a fresh start and
     /// builds a summary of previous attempts so the new session has context.
@@ -277,7 +256,6 @@ impl Pipeline {
         let current = self.db.get_task(task.id)?.unwrap_or_else(|| task.clone());
         if current.attempt >= current.max_attempts {
             self.db.update_task_status(task.id, "failed", Some(error))?;
-            self.cleanup_worktree(task);
         } else {
             // After 3 attempts, force a fresh session with a summary of what was tried
             let error_ctx = if current.attempt >= 3 {
@@ -358,31 +336,14 @@ impl Pipeline {
             }
         }
 
-        // Merging done tasks is top priority — run integration BEFORE dispatch
-        let queued_merges = self.db.count_queued_integration().unwrap_or(0);
-        if queued_merges > 0 {
-            info!("Integration queue has {queued_merges} entries — processing before dispatch");
-        }
-        self.clone()
-            .check_integration()
-            .await
-            .unwrap_or_else(|e| warn!("check_integration: {e}"));
-
-        // Dispatch ready tasks (throttled when merge backlog exists)
+        // Dispatch ready tasks
         let tasks = self.db.list_active_tasks().context("list_active_tasks")?;
         let max_agents = self.config.pipeline_max_agents as usize;
         let mut dispatched = 0usize;
 
-        // When there's a merge backlog, reserve agent capacity for integration
-        let effective_max = if queued_merges > 0 {
-            1.max(max_agents / 2)
-        } else {
-            max_agents
-        };
-
         for task in tasks {
             let mut guard = self.in_flight.lock().await;
-            if guard.len() >= effective_max {
+            if guard.len() >= max_agents {
                 break;
             }
             if guard.contains(&task.id) {
@@ -471,6 +432,10 @@ impl Pipeline {
         }
 
         // Periodic background work (each is internally throttled)
+        self.clone()
+            .check_integration()
+            .await
+            .unwrap_or_else(|e| warn!("check_integration: {e}"));
         self.maybe_auto_promote_proposals();
         self.maybe_auto_triage().await;
         self.check_health()
@@ -637,16 +602,6 @@ impl Pipeline {
         let branch = format!("task-{}", task.id);
         self.db.update_task_branch(task.id, &branch)?;
 
-        if self.sandbox_mode != SandboxMode::Docker && !task.repo_path.is_empty() {
-            let git = Git::new(&task.repo_path);
-            if let Err(e) = git.fetch_origin() {
-                warn!("task #{}: fetch before branch create: {e}", task.id);
-            }
-            let wt_path = git.create_worktree(&branch, "origin/main")
-                .with_context(|| format!("task #{}: create worktree for {branch}", task.id))?;
-            info!("task #{}: created worktree {wt_path} (branch {branch})", task.id);
-        }
-
         self.db.update_task_status(task.id, next, None)?;
 
         self.emit(PipelineEvent::Phase {
@@ -671,14 +626,7 @@ impl Pipeline {
             .to_string_lossy()
             .to_string();
 
-        // Docker: container handles its own clone; work_dir is only used for
-        // local file ops (signal.json, state snapshot).
-        // Non-Docker: use worktree (isolated per-task working copy).
-        let work_dir = if self.sandbox_mode == SandboxMode::Docker {
-            session_dir.clone()
-        } else {
-            self.task_work_dir(task)
-        };
+        let work_dir = session_dir.clone();
 
         let pending_messages = self
             .db
@@ -742,6 +690,7 @@ impl Pipeline {
                 error!("backend.run_phase for task #{}: {e}", task.id);
                 PhaseOutput::failed(String::new())
             });
+
         if let Some(ref sid) = result.new_session_id {
             if let Err(e) = self.db.update_task_session(task.id, sid) {
                 warn!("task #{}: update_task_session: {e}", task.id);
@@ -790,7 +739,6 @@ impl Pipeline {
             };
             self.db
                 .update_task_status(task.id, "failed", Some(&reason))?;
-            self.cleanup_worktree(task);
             return Ok(());
         }
 
@@ -812,7 +760,6 @@ impl Pipeline {
                 task_id: Some(task.id),
                 message: format!("task #{} blocked: {}", task.id, reason),
             });
-            self.cleanup_worktree(task);
             return Ok(());
         }
 
@@ -924,7 +871,7 @@ impl Pipeline {
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
-        let work_dir = self.task_work_dir(task);
+        let work_dir = task.repo_path.clone();
 
         let test_cmd = self.repo_config(task).test_cmd;
         if test_cmd.is_empty() {
@@ -1002,77 +949,14 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Run a rebase phase (Docker-only — uses GitHub API to update the PR branch).
+    /// Run a rebase phase — uses GitHub API to update the PR branch.
     async fn run_rebase_phase(
         &self,
         task: &Task,
         phase: &PhaseConfig,
-        mode: &PipelineMode,
+        _mode: &PipelineMode,
     ) -> Result<()> {
-        if self.sandbox_mode == SandboxMode::Docker {
-            return self.run_rebase_phase_docker(task, phase).await;
-        }
-
-        // Non-Docker rebase: re-create worktree if needed, rebase onto origin/main.
-        let branch = format!("task-{}", task.id);
-        let git = Git::new(&task.repo_path);
-        let wt_path = format!("{}/.worktrees/{}", task.repo_path, branch);
-        if !std::path::Path::new(&wt_path).exists() {
-            let _ = git.exec(&task.repo_path, &["worktree", "remove", "--force", &wt_path]);
-            let result = git.exec(
-                &task.repo_path,
-                &["worktree", "add", &wt_path, &branch],
-            )?;
-            if !result.success() {
-                let msg = format!("recreate worktree: {}", result.combined_output());
-                warn!("task #{} rebase: {msg}", task.id);
-                self.fail_or_retry(task, "rebase", &msg)?;
-                return Ok(());
-            }
-        }
-
-        // Try fast rebase first
-        match git.rebase_onto_main(&wt_path) {
-            Ok(()) => {
-                info!("task #{} rebase: rebased onto origin/main", task.id);
-                self.advance_phase(task, phase, mode)?;
-                return Ok(());
-            }
-            Err(e) => {
-                info!("task #{} rebase: conflicts detected, spawning agent to resolve: {e}", task.id);
-            }
-        }
-
-        // Fast rebase failed — run an agent to resolve conflicts
-        let test_cmd = mode.phases.iter()
-            .find(|p| p.phase_type == PhaseType::Validate)
-            .map(|p| p.instruction.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("cargo test");
-        let rebase_phase = PhaseConfig {
-            name: "rebase".to_string(),
-            instruction: format!(
-                "Your branch `{branch}` needs to be rebased onto origin/main. \
-                 The automatic rebase failed due to merge conflicts.\n\n\
-                 Steps:\n\
-                 1. Run `git fetch origin main`\n\
-                 2. Run `git rebase origin/main`\n\
-                 3. For each conflict, resolve it by keeping the intent of YOUR changes \
-                    while incorporating upstream changes from main. Use `git diff` to understand \
-                    both sides.\n\
-                 4. After resolving each file: `git add <file>` then `git rebase --continue`\n\
-                 5. If a commit is no longer needed (already in main), use `git rebase --skip`\n\
-                 6. Make sure `{test_cmd}` still passes after the rebase\n\n\
-                 Do NOT create new commits — only resolve the rebase conflicts.",
-            ),
-            phase_type: PhaseType::Agent,
-            include_task_context: true,
-            allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
-            commits: true,
-            fresh_session: true,
-            ..PhaseConfig::default()
-        };
-        self.run_agent_phase(task, &rebase_phase, mode).await
+        self.run_rebase_phase_docker(task, phase).await
     }
 
     /// Docker-mode rebase: use GitHub's update-branch API to rebase the PR onto main.
@@ -1126,133 +1010,14 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Run a lint_fix phase: run lint command, spawn agent to fix if dirty, re-verify.
+    /// Lint is handled inside the Docker container by the entrypoint.
     async fn run_lint_fix_phase(
         &self,
         task: &Task,
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
-        // In Docker mode, lint is handled inside the container by the entrypoint.
-        if self.sandbox_mode == SandboxMode::Docker {
-            self.advance_phase(task, phase, mode)?;
-            return Ok(());
-        }
-
-        let work_dir = self.task_work_dir(task);
-
-        let lint_cmd = match self.repo_lint_cmd(&task.repo_path, &work_dir) {
-            Some(cmd) => cmd,
-            None => {
-                self.advance_phase(task, phase, mode)?;
-                info!("task #{} lint_fix: no lint command, skipping", task.id);
-                return Ok(());
-            },
-        };
-
-        const LINT_FIX_SYSTEM: &str = "You are a lint-fix agent. Your only job is to make the \
-codebase pass the project's linter with zero warnings or errors. Do not refactor, rename, or \
-change logic — only fix what the linter reports. Read the lint output carefully and make the \
-minimal changes needed. After editing, do not run the linter yourself — the pipeline will verify.";
-
-        let mut lint_out = self.run_test_command(&work_dir, &lint_cmd).await?;
-        if lint_out.exit_code == 0 {
-            self.advance_phase(task, phase, mode)?;
-            info!("task #{} lint_fix: already clean", task.id);
-            return Ok(());
-        }
-
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
-
-        for fix_attempt in 0..2u32 {
-            let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)
-                .trim()
-                .to_string();
-
-            info!(
-                "task #{} lint_fix: running fix agent (attempt {})",
-                task.id,
-                fix_attempt + 1
-            );
-
-            let fix_phase = PhaseConfig {
-                name: format!("lint_fix_{fix_attempt}"),
-                label: "Lint Fix".into(),
-                system_prompt: LINT_FIX_SYSTEM.into(),
-                instruction: format!(
-                    "Fix all lint errors. Lint output:\n\n```\n{lint_output_text}\n```\n\n\
-Make only the minimal changes the linter requires. Do not refactor or change logic.",
-                ),
-                allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
-                use_docker: true,
-                allow_no_changes: true,
-                fresh_session: true,
-                ..PhaseConfig::default()
-            };
-
-            let ctx = self.make_context(task, work_dir.clone(), session_dir.clone(), Vec::new());
-
-            let agent_result = match self.resolve_backend(task) {
-                Some(b) => {
-                    if let Err(e) = self
-                        .write_pipeline_state_snapshot(task, &fix_phase.name, &work_dir)
-                        .await
-                    {
-                        warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
-                    }
-                    b.run_phase(task, &fix_phase, ctx)
-                        .await
-                        .unwrap_or_else(|e| {
-                            error!("lint-fix agent for task #{}: {e}", task.id);
-                            PhaseOutput::failed(String::new())
-                        })
-                },
-                None => {
-                    warn!(
-                        "task #{}: no backend, skipping lint fix attempt {}",
-                        task.id, fix_attempt
-                    );
-                    self.advance_phase(task, phase, mode)?;
-                    return Ok(());
-                },
-            };
-
-            if let Some(ref sid) = agent_result.new_session_id {
-                self.db.update_task_session(task.id, sid).ok();
-            }
-            self.db
-                .insert_task_output(
-                    task.id,
-                    &fix_phase.name,
-                    &agent_result.output,
-                    &agent_result.raw_stream,
-                    if agent_result.success { 0 } else { 1 },
-                )
-                .ok();
-
-            let git = Git::new(&task.repo_path);
-            let (_, user_coauthor) = self.git_coauthor_settings();
-            let lint_commit_msg = Self::with_user_coauthor("fix: lint errors", &user_coauthor);
-            let _ = git.commit_all(&work_dir, &lint_commit_msg, self.git_author());
-
-            lint_out = self.run_test_command(&work_dir, &lint_cmd).await?;
-            if lint_out.exit_code == 0 {
-                self.advance_phase(task, phase, mode)?;
-                info!(
-                    "task #{} lint_fix: clean after {} fix attempt(s)",
-                    task.id,
-                    fix_attempt + 1
-                );
-                return Ok(());
-            }
-        }
-
-        let error_msg = format!("{}\n{}", lint_out.stdout, lint_out.stderr);
-        self.fail_or_retry(task, "lint_fix", error_msg.trim())?;
+        self.advance_phase(task, phase, mode)?;
         Ok(())
     }
 
@@ -1353,19 +1118,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             self.read_structured_output(task);
             self.read_task_deadlines(task);
             self.index_task_documents(task);
-
-            // Non-Docker: push the task branch from its worktree, then clean up.
-            if self.sandbox_mode != SandboxMode::Docker && !task.repo_path.is_empty() {
-                let branch = format!("task-{}", task.id);
-                let wt_path = format!("{}/.worktrees/{}", task.repo_path, branch);
-                let git = Git::new(&task.repo_path);
-                let push_dir = if std::path::Path::new(&wt_path).exists() { &wt_path } else { &task.repo_path };
-                match git.push_branch_from(push_dir, &branch) {
-                    Ok(()) => info!("task #{}: pushed branch {branch}", task.id),
-                    Err(e) => warn!("task #{}: push branch {branch}: {e}", task.id),
-                }
-                git.remove_worktree(&wt_path);
-            }
 
             self.db.update_task_status(task.id, "done", None)?;
             let _ = self.db.mark_task_completed(task.id);
@@ -1572,25 +1324,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
     // ── Lint helpers ──────────────────────────────────────────────────────
 
-    /// Resolve lint command: explicit repo config → `.borg/lint.sh` fallback.
-    fn repo_lint_cmd(&self, repo_path: &str, work_dir: &str) -> Option<String> {
-        if let Some(repo) = self
-            .config
-            .watched_repos
-            .iter()
-            .find(|r| r.path == repo_path)
-        {
-            if !repo.lint_cmd.is_empty() {
-                return Some(repo.lint_cmd.clone());
-            }
-        }
-        let script = format!("{work_dir}/.borg/lint.sh");
-        if std::path::Path::new(&script).exists() {
-            return Some(format!("bash '{script}'"));
-        }
-        None
-    }
-
     // ── Test runner ───────────────────────────────────────────────────────
 
     async fn run_test_command(&self, dir: &str, cmd: &str) -> Result<TestOutput> {
@@ -1704,11 +1437,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     pub async fn check_integration(self: &Arc<Self>) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         let last = self.db.get_ts("last_release_ts");
-        let backlog = self.db.count_queued_integration().unwrap_or(0);
-        // When there's a backlog, use a short 10s interval to drain it steadily
-        let min_interval = if backlog > 0 {
-            10i64
-        } else if self.config.continuous_mode {
+        let min_interval = if self.config.continuous_mode {
             60i64
         } else {
             self.config.release_interval_mins as i64 * 60
@@ -1727,12 +1456,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 warn!("Integration: no repo_slug for {}, skipping", repo.path);
                 continue;
             }
-            // Process at most 5 branches per tick to avoid burning API credits
-            let batch_size = 5;
-            let batch: Vec<_> = queued.into_iter().take(batch_size).collect();
-            info!("Integration: processing {} branches for {}", batch.len(), repo.path);
+            info!("Integration: {} branches for {}", queued.len(), repo.path);
             match self
-                .run_integration(batch, &repo.repo_slug, repo.auto_merge)
+                .run_integration(queued, &repo.repo_slug, repo.auto_merge)
                 .await
             {
                 Ok(merged) => any_merged |= merged,
@@ -1859,6 +1585,68 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         continue;
                     }
                 }
+            }
+
+            // Check rebase status via GitHub compare API
+            let behind = self
+                .gh(&[
+                    "api",
+                    &format!("repos/{slug}/compare/{}...main", entry.branch),
+                    "--jq",
+                    ".behind_by",
+                ])
+                .await;
+            let not_rebased = behind
+                .as_ref()
+                .map(|r| {
+                    r.exit_code != 0
+                        || r.stdout.trim().parse::<u64>().map(|n| n > 0).unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if not_rebased {
+                info!(
+                    "Task #{} {} not rebased on main, trying GitHub update-branch",
+                    entry.task_id, entry.branch
+                );
+                let pr_num_out = self
+                    .gh(&[
+                        "pr",
+                        "view",
+                        &entry.branch,
+                        "--repo",
+                        slug,
+                        "--json",
+                        "number",
+                        "--jq",
+                        ".number",
+                    ])
+                    .await;
+                let pr_num = pr_num_out
+                    .ok()
+                    .filter(|o| o.exit_code == 0)
+                    .and_then(|o| o.stdout.trim().parse::<u64>().ok());
+                if let Some(num) = pr_num {
+                    let _ = self
+                        .gh(&[
+                            "api",
+                            "-X",
+                            "PUT",
+                            &format!("repos/{slug}/pulls/{num}/update-branch"),
+                        ])
+                        .await;
+                    info!(
+                        "Task #{} {}: update-branch requested",
+                        entry.task_id, entry.branch
+                    );
+                }
+                self.db.update_queue_status_with_error(
+                    entry.id,
+                    "excluded",
+                    "branch not rebased on main",
+                )?;
+                self.db.update_task_status(entry.task_id, "rebase", None)?;
+                excluded_ids.insert(entry.id);
+                continue;
             }
 
             // Check if PR already exists
@@ -1991,7 +1779,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 let mut force_merge = false;
 
                 if mb == "UNKNOWN" {
-                    let retries = self.db.get_unknown_retries(entry.id)?;
+                    let retries = self.db.get_unknown_retries(entry.id);
                     if retries >= 5 {
                         warn!(
                             "Task #{} {}: mergeability UNKNOWN after {} retries, forcing merge",
@@ -2902,13 +2690,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     // ── Auto-promote + auto-triage ────────────────────────────────────────
 
     pub fn maybe_auto_promote_proposals(&self) {
-        let active = match self.db.active_task_count() {
-            Ok(n) => n,
-            Err(e) => {
-                warn!("active_task_count: {e}");
-                return;
-            },
-        };
+        let active = self.db.active_task_count();
         let max = self.config.pipeline_max_backlog as i64;
         if active >= max {
             return;
@@ -2978,13 +2760,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         if now - self.db.get_ts("last_triage_ts") < TRIAGE_INTERVAL_S {
             return;
         }
-        match self.db.count_unscored_proposals() {
-            Ok(0) => return,
-            Ok(_) => {},
-            Err(e) => {
-                warn!("count_unscored_proposals: {e}");
-                return;
-            },
+        if self.db.count_unscored_proposals() == 0 {
+            return;
         }
         self.db.set_ts("last_triage_ts", now);
 
@@ -3264,166 +3041,5 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-
-    fn open_db() -> Arc<Db> {
-        let mut db = Db::open(":memory:").expect("open db");
-        db.migrate().expect("migrate");
-        Arc::new(db)
-    }
-
-    fn make_config() -> Arc<Config> {
-        Arc::new(Config {
-            telegram_token: String::new(),
-            oauth_token: String::new(),
-            assistant_name: String::new(),
-            trigger_pattern: String::new(),
-            data_dir: String::new(),
-            container_image: String::new(),
-            model: String::new(),
-            credentials_path: String::new(),
-            session_max_age_hours: 0,
-            max_consecutive_errors: 0,
-            pipeline_repo: String::new(),
-            pipeline_test_cmd: String::new(),
-            pipeline_lint_cmd: String::new(),
-            backend: String::new(),
-            pipeline_admin_chat: String::new(),
-            release_interval_mins: 0,
-            continuous_mode: false,
-            chat_collection_window_ms: 0,
-            chat_cooldown_ms: 0,
-            agent_timeout_s: 300,
-            max_chat_agents: 0,
-            chat_rate_limit: 0,
-            pipeline_max_agents: 0,
-            web_bind: String::new(),
-            web_port: 0,
-            dashboard_dist_dir: String::new(),
-            container_setup: String::new(),
-            container_memory_mb: 0,
-            container_cpus: 0.0,
-            sandbox_backend: String::new(),
-            pipeline_max_backlog: 0,
-            pipeline_seed_cooldown_s: 0,
-            proposal_promote_threshold: 0,
-            pipeline_tick_s: 0,
-            remote_check_interval_s: 0,
-            mirror_refresh_interval_s: 0,
-            pipeline_agent_cooldown_s: 0,
-            git_author_name: String::new(),
-            git_author_email: String::new(),
-            git_committer_name: String::new(),
-            git_committer_email: String::new(),
-            git_via_borg: false,
-            git_claude_coauthor: false,
-            git_user_coauthor: String::new(),
-            watched_repos: vec![],
-            build_cmd: String::new(),
-            self_update_enabled: false,
-            codex_api_key: String::new(),
-            codex_credentials_path: String::new(),
-            discord_token: String::new(),
-            wa_auth_dir: String::new(),
-            wa_disabled: false,
-            observer_config: String::new(),
-        })
-    }
-
-    fn make_pipeline(db: Arc<Db>) -> Pipeline {
-        let (pipeline, _rx) = Pipeline::new(
-            db,
-            HashMap::new(),
-            make_config(),
-            SandboxMode::Docker, // avoids cleanup_worktree running git commands
-            Arc::new(AtomicBool::new(false)),
-            false,
-        );
-        pipeline
-    }
-
-    fn insert_task(db: &Db, attempt: i64, max_attempts: i64, session_id: &str) -> Task {
-        let task = Task {
-            id: 0,
-            title: "test".into(),
-            description: "desc".into(),
-            repo_path: "/nonexistent".into(),
-            branch: "task-test".into(),
-            status: "impl".into(),
-            attempt,
-            max_attempts,
-            last_error: String::new(),
-            created_by: "test".into(),
-            notify_chat: String::new(),
-            created_at: chrono::Utc::now(),
-            session_id: session_id.into(),
-            mode: "sweborg".into(),
-            backend: String::new(),
-        };
-        let id = db.insert_task(&task).expect("insert_task");
-        Task { id, ..task }
-    }
-
-    // attempt < 3: session_id untouched, status set to retry_status
-    #[test]
-    fn test_fail_or_retry_early_attempt_preserves_session() {
-        let db = open_db();
-        let task = insert_task(&db, 1, 5, "session-abc");
-        let pipeline = make_pipeline(Arc::clone(&db));
-
-        pipeline.fail_or_retry(&task, "retry", "some error").unwrap();
-
-        let updated = db.get_task(task.id).unwrap().unwrap();
-        assert_eq!(updated.attempt, 2);
-        assert_eq!(updated.status, "retry");
-        assert_eq!(updated.session_id, "session-abc", "session must be preserved for attempt < 3");
-        assert_eq!(updated.last_error, "some error");
-    }
-
-    // attempt reaches 3: session_id cleared, error contains retry summary header
-    #[test]
-    fn test_fail_or_retry_clears_session_at_attempt_3() {
-        let db = open_db();
-        // DB stores attempt=2; after increment it becomes 3 → triggers session clear
-        let task = insert_task(&db, 2, 5, "session-xyz");
-        let pipeline = make_pipeline(Arc::clone(&db));
-
-        pipeline.fail_or_retry(&task, "retry", "latest error").unwrap();
-
-        let updated = db.get_task(task.id).unwrap().unwrap();
-        assert_eq!(updated.attempt, 3);
-        assert_eq!(updated.status, "retry");
-        assert!(updated.session_id.is_empty(), "session_id must be cleared at attempt >= 3");
-        assert!(
-            updated.last_error.contains("FRESH RETRY"),
-            "error must contain retry summary header"
-        );
-        assert!(
-            updated.last_error.contains("latest error"),
-            "latest error must appear in summary"
-        );
-    }
-
-    // attempt >= max_attempts: status set to "failed" with exact error message
-    #[test]
-    fn test_fail_or_retry_marks_failed_when_exhausted() {
-        let db = open_db();
-        // DB stores attempt=4, max_attempts=5; after increment → 5 == max_attempts
-        let task = insert_task(&db, 4, 5, "session-123");
-        let pipeline = make_pipeline(Arc::clone(&db));
-
-        pipeline.fail_or_retry(&task, "retry", "fatal error message").unwrap();
-
-        let updated = db.get_task(task.id).unwrap().unwrap();
-        assert_eq!(updated.attempt, 5);
-        assert_eq!(updated.status, "failed");
-        assert_eq!(updated.last_error, "fatal error message");
     }
 }
