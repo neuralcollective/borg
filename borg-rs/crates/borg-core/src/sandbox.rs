@@ -377,6 +377,40 @@ impl Sandbox {
         info!("sandbox: removed agent network {}", Self::AGENT_NETWORK);
     }
 
+    /// Force-stop and remove all containers labelled `borg-agent=1`, including running ones.
+    /// Call on graceful shutdown so active agent containers don't linger.
+    pub async fn kill_agent_containers() {
+        let Ok(out) = tokio::process::Command::new("docker")
+            .args([
+                "ps", "-a", "--filter", "label=borg-agent=1",
+                "--format", "{{.ID}}",
+            ])
+            .output()
+            .await
+        else {
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let ids: Vec<&str> = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let mut cmd = tokio::process::Command::new("docker");
+        cmd.arg("rm").arg("-f");
+        cmd.args(&ids);
+        cmd.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if let Ok(status) = cmd.status().await {
+            if status.success() {
+                info!("killed {} running borg-agent container(s) on shutdown", ids.len());
+            }
+        }
+    }
+
     /// Remove any containers with label `borg-agent=1` that are not running.
     /// Call once at startup to clean up orphans from a previous crash.
     pub async fn prune_orphan_containers() {

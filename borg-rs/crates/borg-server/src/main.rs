@@ -881,6 +881,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if agent_network_available {
+        Sandbox::kill_agent_containers().await;
         Sandbox::remove_network_rules().await;
         Sandbox::remove_agent_network().await;
     }
