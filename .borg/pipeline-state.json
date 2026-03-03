@@ -1,10 +1,10 @@
 {
-  "task_id": 199,
-  "task_title": "Add internal tests for `derive_compile_check` in `claude.rs`",
+  "task_id": 202,
+  "task_title": "Simplify redundant if/else assignment in `extract_phase_result`",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-199",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-202",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T05:38:33.520615707Z"
+  "generated_at": "2026-03-03T05:58:25.751722506Z"
 }
