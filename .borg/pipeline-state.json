@@ -1,10 +1,10 @@
 {
-  "task_id": 186,
-  "task_title": "Fix git option injection via unsanitised BRANCH and BASE in entrypoint.sh",
+  "task_id": 185,
+  "task_title": "Propagate create_dir_all failure instead of silencing it in pipeline.rs",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-186",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-185",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T05:10:48.299812095Z"
+  "generated_at": "2026-03-03T05:10:27.817710712Z"
 }
