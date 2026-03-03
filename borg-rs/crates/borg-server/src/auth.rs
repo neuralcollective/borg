@@ -8,6 +8,7 @@ use axum::{
 };
 use rand::Rng;
 use serde_json::json;
+use subtle::ConstantTimeEq;
 
 use crate::AppState;
 
@@ -58,7 +59,11 @@ pub async fn auth_middleware(
 
     let provided = header_token.or(query_token_buf.as_deref());
 
-    if provided == Some(state.api_token.as_str()) {
+    let valid = provided
+        .map(|t| t.as_bytes().ct_eq(state.api_token.as_bytes()).into())
+        .unwrap_or(false);
+
+    if valid {
         next.run(request).await
     } else {
         (
@@ -77,4 +82,74 @@ pub async fn get_token(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     Json(json!({"token": state.api_token})).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_token_is_64_hex_chars() {
+        let t = generate_token();
+        assert_eq!(t.len(), 64);
+        assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generate_token_produces_unique_values() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn is_exempt_health() {
+        assert!(is_exempt("/api/health"));
+    }
+
+    #[test]
+    fn is_exempt_auth_token() {
+        assert!(is_exempt("/api/auth/token"));
+    }
+
+    #[test]
+    fn is_exempt_non_api_paths() {
+        assert!(is_exempt("/"));
+        assert!(is_exempt("/index.html"));
+        assert!(is_exempt("/assets/app.js"));
+    }
+
+    #[test]
+    fn is_exempt_protected_api() {
+        assert!(!is_exempt("/api/tasks"));
+        assert!(!is_exempt("/api/status"));
+    }
+
+    #[test]
+    fn ct_eq_matching_tokens() {
+        let token = "abc123";
+        let result: bool = token.as_bytes().ct_eq(token.as_bytes()).into();
+        assert!(result);
+    }
+
+    #[test]
+    fn ct_eq_mismatched_tokens() {
+        let result: bool = "abc123".as_bytes().ct_eq("xyz789".as_bytes()).into();
+        assert!(!result);
+    }
+
+    #[test]
+    fn ct_eq_prefix_not_accepted() {
+        // A prefix of the real token must not be accepted.
+        let token = "abc123def";
+        let prefix = "abc123";
+        let result: bool = prefix.as_bytes().ct_eq(token.as_bytes()).into();
+        assert!(!result);
+    }
+
+    #[test]
+    fn ct_eq_empty_vs_nonempty() {
+        let result: bool = "".as_bytes().ct_eq("token".as_bytes()).into();
+        assert!(!result);
+    }
 }
