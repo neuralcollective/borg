@@ -1,0 +1,10 @@
+{
+  "task_id": 107,
+  "task_title": "`parse_ts` silently substitutes `Utc::now()` for unparseable timestamps",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-107",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T00:15:44.302685424Z"
+}
