@@ -447,7 +447,15 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN duration_secs INTEGER",
         ];
         for sql in alters {
-            let _ = conn.execute(sql, []);
+            if let Err(e) = conn.execute(sql, []) {
+                let is_duplicate = matches!(
+                    &e,
+                    rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("duplicate column name")
+                );
+                if !is_duplicate {
+                    tracing::warn!("schema migration ALTER TABLE failed: {e}");
+                }
+            }
         }
 
         // Backfill deadlines from legacy projects.deadline column
