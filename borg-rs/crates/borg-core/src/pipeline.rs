@@ -638,11 +638,7 @@ impl Pipeline {
         mode: &PipelineMode,
     ) -> Result<()> {
         let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        tokio::fs::create_dir_all(&session_dir_rel).await.ok();
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        let session_dir = make_session_dir(&session_dir_rel).await?;
 
         let work_dir = session_dir.clone();
 
@@ -3179,6 +3175,14 @@ pub fn collect_stale_session_dirs(
     stale
 }
 
+async fn make_session_dir(rel: &str) -> Result<String> {
+    tokio::fs::create_dir_all(rel)
+        .await
+        .with_context(|| format!("failed to create session dir {rel}"))?;
+    let abs = std::fs::canonicalize(rel).unwrap_or_else(|_| std::path::PathBuf::from(rel));
+    Ok(abs.to_string_lossy().to_string())
+}
+
 fn looks_like_field_key(line: &str) -> bool {
     let trimmed = line.trim();
     if let Some(colon) = trimmed.find(':') {
@@ -3193,7 +3197,7 @@ fn looks_like_field_key(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_compile_check, Pipeline};
+    use super::*;
 
     #[test]
     fn test_build_system_prompt_suffix_no_coauthor_no_user() {
@@ -3259,5 +3263,25 @@ mod tests {
     fn derive_compile_check_trims_whitespace() {
         let result = derive_compile_check("  cargo test  ");
         assert_eq!(result, Some("cargo test --no-run".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_make_session_dir_creates_dir_and_returns_absolute_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sub = tmp.path().join("task-999");
+        let result = make_session_dir(sub.to_str().expect("utf8")).await;
+        assert!(result.is_ok(), "should succeed for valid path: {result:?}");
+        let path = result.expect("ok");
+        assert!(std::path::Path::new(&path).is_absolute(), "path must be absolute");
+        assert!(std::path::Path::new(&path).is_dir(), "directory must exist after creation");
+    }
+
+    #[tokio::test]
+    async fn test_make_session_dir_propagates_error_on_invalid_parent() {
+        // /dev/null is a character device, not a directory; subdirs cannot be created under it.
+        let result = make_session_dir("/dev/null/borg_session_test").await;
+        assert!(result.is_err(), "must return Err when directory cannot be created");
+        let msg = format!("{:#}", result.expect_err("is err"));
+        assert!(msg.contains("session dir"), "error message must name the operation");
     }
 }
