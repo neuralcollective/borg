@@ -1,0 +1,10 @@
+{
+  "task_id": 232,
+  "task_title": "Test parse_stream NDJSON parsing and assistant fallback path",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-232",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T07:30:14.661533501Z"
+}
