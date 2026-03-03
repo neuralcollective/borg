@@ -637,3 +637,103 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_watched_repos;
+
+    #[test]
+    fn test_empty_watched_raw_produces_primary_only() {
+        let repos = parse_watched_repos("", "/home/user/myrepo", "just t", "just lint", "sweborg");
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+        assert_eq!(repos[0].path, "/home/user/myrepo");
+        assert_eq!(repos[0].test_cmd, "just t");
+        assert_eq!(repos[0].lint_cmd, "just lint");
+        assert_eq!(repos[0].mode, "sweborg");
+        assert!(repos[0].auto_merge);
+    }
+
+    #[test]
+    fn test_single_entry_all_six_fields() {
+        let repos = parse_watched_repos(
+            "/repo/a:just test:prompt.md:sweborg:just lint:owner/repo",
+            "",
+            "",
+            "",
+            "sweborg",
+        );
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/a");
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.prompt_file, "prompt.md");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "just lint");
+        assert_eq!(r.repo_slug, "owner/repo");
+        assert!(!r.is_self);
+        assert!(r.auto_merge);
+    }
+
+    #[test]
+    fn test_manual_suffix_sets_auto_merge_false() {
+        let repos = parse_watched_repos(
+            "/repo/b:just t!manual::::",
+            "",
+            "",
+            "",
+            "sweborg",
+        );
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just t");
+    }
+
+    #[test]
+    fn test_slug_override_replaces_remote_slug() {
+        let repos = parse_watched_repos(
+            "/repo/c:just t::::my-org/my-repo",
+            "",
+            "",
+            "",
+            "sweborg",
+        );
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo_slug, "my-org/my-repo");
+    }
+
+    #[test]
+    fn test_duplicate_pipeline_repo_is_skipped() {
+        let repos = parse_watched_repos(
+            "/repo/d:just t",
+            "/repo/d",
+            "just t",
+            "",
+            "sweborg",
+        );
+        // primary added first, then the watched entry is skipped as duplicate
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+    }
+
+    #[test]
+    fn test_multiple_pipe_separated_entries() {
+        let repos = parse_watched_repos(
+            "/repo/e:just e::::owner/e|/repo/f:just f::::owner/f|/repo/g:just g::::owner/g",
+            "/repo/primary",
+            "just t",
+            "",
+            "sweborg",
+        );
+        assert_eq!(repos.len(), 4);
+        assert!(repos[0].is_self);
+        assert_eq!(repos[0].path, "/repo/primary");
+        assert_eq!(repos[1].path, "/repo/e");
+        assert_eq!(repos[2].path, "/repo/f");
+        assert_eq!(repos[3].path, "/repo/g");
+        assert_eq!(repos[1].repo_slug, "owner/e");
+        assert_eq!(repos[2].repo_slug, "owner/f");
+        assert_eq!(repos[3].repo_slug, "owner/g");
+    }
+}
