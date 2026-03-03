@@ -1,0 +1,10 @@
+{
+  "task_id": 230,
+  "task_title": "Test chunk_text boundary conditions and overlap logic",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-230",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T07:28:03.970201477Z"
+}
