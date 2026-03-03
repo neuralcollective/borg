@@ -42,6 +42,16 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
     last_content
 }
 
+struct CidfileGuard(Option<String>);
+
+impl Drop for CidfileGuard {
+    fn drop(&mut self) {
+        if let Some(ref path) = self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
     if trimmed.contains("cargo test") {
@@ -450,6 +460,7 @@ impl AgentBackend for ClaudeBackend {
         } else {
             None
         };
+        let _cid_guard = CidfileGuard(cidfile_path.clone());
 
         let real_home = std::env::var("HOME").unwrap_or_default();
         let rustup_home = std::env::var("RUSTUP_HOME")
@@ -806,5 +817,35 @@ impl AgentBackend for ClaudeBackend {
     async fn interrupt(&self, session_id: &str) -> Result<()> {
         warn!(session_id = %session_id, "interrupt not yet implemented");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CidfileGuard;
+
+    #[test]
+    fn guard_none_does_nothing() {
+        let guard = CidfileGuard(None);
+        drop(guard);
+    }
+
+    #[test]
+    fn guard_deletes_existing_file_on_drop() {
+        let path = format!("/tmp/borg-cid-guard-test-{}.txt", std::process::id());
+        std::fs::write(&path, b"abc123").expect("write test cidfile");
+        assert!(std::path::Path::new(&path).exists());
+        {
+            let _g = CidfileGuard(Some(path.clone()));
+        }
+        assert!(!std::path::Path::new(&path).exists(), "cidfile should be deleted after guard drops");
+    }
+
+    #[test]
+    fn guard_ignores_missing_file() {
+        let path = format!("/tmp/borg-cid-guard-missing-{}.txt", std::process::id());
+        assert!(!std::path::Path::new(&path).exists());
+        let _g = CidfileGuard(Some(path));
+        drop(_g);
     }
 }
