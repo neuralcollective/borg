@@ -67,6 +67,18 @@ fn test_signal_malformed_json_returns_default() {
 }
 
 #[test]
+fn test_signal_invalid_status_accepted_as_string() {
+    // status is a plain String, so unrecognized values deserialize without error.
+    // The pipeline treats them as neither blocked nor abandon (i.e. effectively done).
+    let json = r#"{"status":"foobar","reason":"something weird"}"#;
+    let signal: AgentSignal = serde_json::from_str(json).unwrap();
+    assert_eq!(signal.status, "foobar");
+    assert!(!signal.is_blocked());
+    assert!(!signal.is_abandon());
+    assert_eq!(signal.reason, "something weird");
+}
+
+#[test]
 fn test_signal_roundtrip_serialize_deserialize() {
     let original = AgentSignal {
         status: "blocked".into(),
