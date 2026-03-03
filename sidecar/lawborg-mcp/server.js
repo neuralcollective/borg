@@ -7,6 +7,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 // ── BYOK keys (optional) ──────────────────────────────────────────────
 const LEXIS_KEY = process.env.LEXISNEXIS_API_KEY || "";
+const LEXMACHINA_KEY = process.env.LEXMACHINA_API_KEY || LEXIS_KEY;
+const INTELLIGIZE_KEY = process.env.INTELLIGIZE_API_KEY || LEXIS_KEY;
 const WESTLAW_KEY = process.env.WESTLAW_API_KEY || "";
 const CLIO_KEY = process.env.CLIO_API_KEY || "";
 const IMANAGE_KEY = process.env.IMANAGE_API_KEY || "";
@@ -1694,30 +1696,30 @@ async function handleTool(name, args) {
       break;
     }
 
-    // ── CanLII ─────────────────────────────────────────────────────
+    // ── CanLII (uses api_key query parameter, not header) ──────────
     case "canlii_search": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured. Request access at https://www.canlii.org/en/tools/api.html");
-      const params = { query: args.query };
+      const params = { api_key: CANLII_KEY, query: args.query };
       if (args.databases) params.databases = args.databases;
       if (args.resultCount) params.resultCount = args.resultCount;
       if (args.offset) params.offset = args.offset;
-      result = await fetchJSON(`${CANLII_BASE}/search?${qs(params)}`, { headers: { "X-Api-Key": CANLII_KEY } });
+      result = await fetchJSON(`${CANLII_BASE}/search?${qs(params)}`);
       break;
     }
     case "canlii_get_case": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured.");
-      result = await fetchJSON(`${CANLII_BASE}/caseBrowse/${validateId(args.databaseId)}/${validateId(args.caseId)}`, { headers: { "X-Api-Key": CANLII_KEY } });
+      result = await fetchJSON(`${CANLII_BASE}/caseBrowse/${validateId(args.databaseId)}/${validateId(args.caseId)}?api_key=${CANLII_KEY}`);
       break;
     }
     case "canlii_case_citations": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured.");
       const type = args.type || "citedCases";
-      result = await fetchJSON(`${CANLII_BASE}/caseCitator/${validateId(args.databaseId)}/${validateId(args.caseId)}/${validateId(type)}`, { headers: { "X-Api-Key": CANLII_KEY } });
+      result = await fetchJSON(`${CANLII_BASE}/caseCitator/${validateId(args.databaseId)}/${validateId(args.caseId)}/${validateId(type)}?api_key=${CANLII_KEY}`);
       break;
     }
     case "canlii_get_legislation": {
       if (!CANLII_KEY) throw new Error("CanLII API key not configured.");
-      result = await fetchJSON(`${CANLII_BASE}/legislationBrowse/${validateId(args.databaseId)}/${validateId(args.legislationId)}`, { headers: { "X-Api-Key": CANLII_KEY } });
+      result = await fetchJSON(`${CANLII_BASE}/legislationBrowse/${validateId(args.databaseId)}/${validateId(args.legislationId)}?api_key=${CANLII_KEY}`);
       break;
     }
 
@@ -1770,38 +1772,38 @@ async function handleTool(name, args) {
       result = await authedCall(STATENET_BASE, `/statutes/${encodeURIComponent(args.citation)}`, LEXIS_KEY);
       break;
     case "lexmachina_search_cases":
-      requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXMACHINA_BASE, "/cases/search", LEXIS_KEY, "POST", args);
+      requireKey("Lex Machina", LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, "/cases/search", LEXMACHINA_KEY, "POST", args);
       break;
     case "lexmachina_case_details":
-      requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/cases/${validateId(args.case_id)}`, LEXIS_KEY);
+      requireKey("Lex Machina", LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/cases/${validateId(args.case_id)}`, LEXMACHINA_KEY);
       break;
     case "lexmachina_judge_profile":
-      requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/judges/${validateId(args.judge_id)}`, LEXIS_KEY);
+      requireKey("Lex Machina", LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/judges/${validateId(args.judge_id)}`, LEXMACHINA_KEY);
       break;
     case "lexmachina_party_history": {
-      requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/parties?${qs({ name: args.party_name })}`, LEXIS_KEY);
+      requireKey("Lex Machina", LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/parties?${qs({ name: args.party_name })}`, LEXMACHINA_KEY);
       break;
     }
     case "intelligize_search_filings":
-      requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(INTELLIGIZE_BASE, "/filings/search", LEXIS_KEY, "POST", args);
+      requireKey("Intelligize", INTELLIGIZE_KEY);
+      result = await authedCall(INTELLIGIZE_BASE, "/filings/search", INTELLIGIZE_KEY, "POST", args);
       break;
     case "intelligize_get_filing": {
-      requireKey("LexisNexis", LEXIS_KEY);
+      requireKey("Intelligize", INTELLIGIZE_KEY);
       const fid = validateId(args.filing_id);
       const path = args.section
         ? `/filings/${fid}?section=${encodeURIComponent(args.section)}`
         : `/filings/${fid}`;
-      result = await authedCall(INTELLIGIZE_BASE, path, LEXIS_KEY);
+      result = await authedCall(INTELLIGIZE_BASE, path, INTELLIGIZE_KEY);
       break;
     }
     case "intelligize_search_clauses":
-      requireKey("LexisNexis", LEXIS_KEY);
-      result = await authedCall(INTELLIGIZE_BASE, "/clauses/search", LEXIS_KEY, "POST", args);
+      requireKey("Intelligize", INTELLIGIZE_KEY);
+      result = await authedCall(INTELLIGIZE_BASE, "/clauses/search", INTELLIGIZE_KEY, "POST", args);
       break;
     case "cognitive_resolve_judge":
       requireKey("LexisNexis", LEXIS_KEY);

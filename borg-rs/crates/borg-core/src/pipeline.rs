@@ -207,7 +207,8 @@ impl Pipeline {
         for provider in [
             "lexisnexis", "lexmachina", "intelligize", "westlaw",
             "clio", "imanage", "netdocuments", "congress", "openstates",
-            "canlii", "regulations_gov",
+            "canlii", "regulations_gov", "shovels",
+            "plaid_client_id", "plaid_secret", "plaid_env",
         ] {
             if let Ok(Some(key)) = self.db.get_api_key(key_owner, provider) {
                 api_keys.insert(provider.to_string(), key);

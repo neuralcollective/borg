@@ -270,6 +270,8 @@ impl AgentBackend for ClaudeBackend {
                         for (provider, key) in &ctx.api_keys {
                             let env_name = match provider.as_str() {
                                 "lexisnexis" => "LEXISNEXIS_API_KEY",
+                                "lexmachina" => "LEXMACHINA_API_KEY",
+                                "intelligize" => "INTELLIGIZE_API_KEY",
                                 "westlaw" => "WESTLAW_API_KEY",
                                 "clio" => "CLIO_API_KEY",
                                 "imanage" => "IMANAGE_API_KEY",
