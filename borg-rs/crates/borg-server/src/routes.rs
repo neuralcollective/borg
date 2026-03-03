@@ -1194,8 +1194,25 @@ pub(crate) async fn search_documents(
     Ok(Json(json!(items)))
 }
 
+fn is_safe_path(path: &str) -> bool {
+    if path.contains('?') || path.contains('#') {
+        return false;
+    }
+    path.split('/').all(|seg| seg != "..")
+}
+
+fn is_safe_ref(ref_name: &str) -> bool {
+    !ref_name.is_empty()
+        && ref_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+}
+
 /// Read a file from git: tries local `git show ref:path` first, falls back to `gh api`.
 async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) -> Option<Vec<u8>> {
+    if !is_safe_path(path) || !is_safe_ref(ref_name) {
+        return None;
+    }
     // Try local git first
     if !repo_path.is_empty() && std::path::Path::new(repo_path).join(".git").exists() {
         let out = tokio::time::timeout(
@@ -3561,3 +3578,61 @@ pub(crate) async fn get_task_container(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_path_accepts_normal_paths() {
+        assert!(is_safe_path("README.md"));
+        assert!(is_safe_path("src/lib.rs"));
+        assert!(is_safe_path("docs/legal/brief.md"));
+        assert!(is_safe_path("file-name_underscore.txt"));
+        assert!(is_safe_path("research.md"));
+        assert!(is_safe_path(""));
+    }
+
+    #[test]
+    fn safe_path_rejects_dotdot_segments() {
+        assert!(!is_safe_path("../../etc/passwd"));
+        assert!(!is_safe_path("../foo"));
+        assert!(!is_safe_path("foo/../../bar"));
+        assert!(!is_safe_path(".."));
+        assert!(!is_safe_path("foo/.."));
+        assert!(!is_safe_path("foo/../bar"));
+    }
+
+    #[test]
+    fn safe_path_rejects_query_and_fragment_chars() {
+        assert!(!is_safe_path("file.md?ref=main"));
+        assert!(!is_safe_path("file.md#section"));
+        assert!(!is_safe_path("../../users/octocat?ref=main"));
+    }
+
+    #[test]
+    fn safe_ref_accepts_valid_refs() {
+        assert!(is_safe_ref("main"));
+        assert!(is_safe_ref("feature/my-branch"));
+        assert!(is_safe_ref("v1.2.3"));
+        assert!(is_safe_ref("HEAD"));
+        assert!(is_safe_ref("abc123"));
+        assert!(is_safe_ref("my_branch"));
+        assert!(is_safe_ref("refs/heads/main"));
+    }
+
+    #[test]
+    fn safe_ref_rejects_empty() {
+        assert!(!is_safe_ref(""));
+    }
+
+    #[test]
+    fn safe_ref_rejects_special_chars() {
+        assert!(!is_safe_ref("main; rm -rf /"));
+        assert!(!is_safe_ref("branch&other"));
+        assert!(!is_safe_ref("ref|pipe"));
+        assert!(!is_safe_ref("branch?query=x"));
+        assert!(!is_safe_ref("branch#fragment"));
+        assert!(!is_safe_ref("branch\x00null"));
+        assert!(!is_safe_ref("branch$(cmd)"));
+    }
+}
