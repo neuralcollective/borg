@@ -334,6 +334,120 @@ fn parse_watched_repos(
     repos
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(raw: &str, pipeline_repo: &str) -> Vec<RepoConfig> {
+        parse_watched_repos(raw, pipeline_repo, "just test", "just lint", "sweborg")
+    }
+
+    #[test]
+    fn empty_raw_empty_pipeline_repo_returns_empty() {
+        let repos = parse("", "");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn empty_raw_with_pipeline_repo_returns_primary() {
+        let repos = parse_watched_repos("", "/repo/borg", "just t", "just lint", "sweborg");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/borg");
+        assert_eq!(r.test_cmd, "just t");
+        assert_eq!(r.lint_cmd, "just lint");
+        assert_eq!(r.mode, "sweborg");
+        assert!(r.is_self);
+        assert!(r.auto_merge);
+    }
+
+    #[test]
+    fn missing_optional_fields_get_defaults() {
+        // Only path provided — no colons.
+        let repos = parse("/some/repo", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/some/repo");
+        assert_eq!(r.test_cmd, "");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "");
+        assert!(r.auto_merge);
+        assert!(!r.is_self);
+    }
+
+    #[test]
+    fn manual_suffix_sets_auto_merge_false_and_strips_suffix() {
+        let repos = parse("/some/repo:just test!manual", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+    }
+
+    #[test]
+    fn manual_suffix_alone_leaves_empty_test_cmd() {
+        let repos = parse("/some/repo:!manual", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "");
+    }
+
+    #[test]
+    fn slug_override_used_from_field_6() {
+        let repos = parse("/some/repo:just t:.borg/prompt.md:sweborg:just lint:org/myrepo", "");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo_slug, "org/myrepo");
+    }
+
+    #[test]
+    fn pipeline_repo_path_skipped_in_watched() {
+        let repos = parse_watched_repos(
+            "/shared/repo:just t",
+            "/shared/repo",
+            "just t",
+            "",
+            "sweborg",
+        );
+        // Only the primary repo (is_self=true) should appear; the duplicate entry is skipped.
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+    }
+
+    #[test]
+    fn multiple_entries_pipe_delimited() {
+        // 5 colons → 6 fields: path:test_cmd:prompt_file:mode:lint_cmd:slug
+        let repos = parse("/a/repo:just ta::::org/a | /b/repo:just tb::::org/b", "");
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].path, "/a/repo");
+        assert_eq!(repos[0].test_cmd, "just ta");
+        assert_eq!(repos[0].repo_slug, "org/a");
+        assert_eq!(repos[1].path, "/b/repo");
+        assert_eq!(repos[1].test_cmd, "just tb");
+        assert_eq!(repos[1].repo_slug, "org/b");
+    }
+
+    #[test]
+    fn empty_entries_from_consecutive_pipes_are_ignored() {
+        let repos = parse("/a/repo::::org/a || /b/repo::::org/b", "");
+        // The empty entry between || is skipped.
+        assert_eq!(repos.len(), 2);
+    }
+
+    #[test]
+    fn mode_field_defaults_to_sweborg_when_absent() {
+        let repos = parse("/r:just t:prompt.md", "");
+        assert_eq!(repos[0].mode, "sweborg");
+    }
+
+    #[test]
+    fn mode_field_used_when_provided() {
+        let repos = parse("/r:just t:prompt.md:legalborg", "");
+        assert_eq!(repos[0].mode, "legalborg");
+    }
+}
+
 impl Config {
     /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
     pub fn chat_system_prompt(&self) -> String {
