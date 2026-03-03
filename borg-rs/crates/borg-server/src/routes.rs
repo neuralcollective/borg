@@ -2671,8 +2671,8 @@ pub(crate) async fn approve_proposal(
         started_at: None,
         completed_at: None,
         duration_secs: None,
-                    review_status: None,
-                    revision_count: 0,
+        review_status: None,
+        revision_count: 0,
     };
     let task_id = state.db.insert_task(&task).map_err(internal)?;
     Ok(Json(json!({ "task_id": task_id })))
@@ -2768,8 +2768,8 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
-        review_status: None,
-        revision_count: 0,
+                review_status: None,
+                revision_count: 0,
             };
 
             let phase = PhaseConfig {

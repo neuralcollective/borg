@@ -686,6 +686,7 @@ impl Db {
         .unwrap_or(0)
     }
 
+
     pub fn update_task_branch(&self, id: i64, branch: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
