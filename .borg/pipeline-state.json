@@ -1,10 +1,10 @@
 {
-  "task_id": 251,
-  "task_title": "Ollama HTTP client built with .expect() causes process crash on failure",
+  "task_id": 298,
+  "task_title": "Test TaskStreamManager::subscribe() on ended and non-existent streams",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-251",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-298",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T08:30:35.271384826Z"
+  "generated_at": "2026-03-03T10:54:02.461414607Z"
 }
