@@ -11,7 +11,13 @@
       "success": true,
       "output": "16 tests written and passing. The test module in `event.rs:158–310` covers every acceptance criterion:\n\n| Criterion | Test(s) |\n|---|---|\n| `session_id` from System event | `test_session_id_from_system_event` |\n| `session_id` from Result event | `test_session_id_from_result_event` |\n| Result overwrites System `session_id` | `test_result_session_id_overwrites_system` |\n| Result text beats assistant text | `test_result_text_beats_assistant_text` |\n| Fallback when `result` is `\"\"` | `test_fallback_when_result_is_empty_string` |\n| Fallback when `result` is `null` | `test_fallback_when_result_is_null` |\n| Multiple assistant turns joined with `\\n` | `test_multiple_assistant_turns_concatenated`, `test_single_assistant_turn_no_newline_prefix` |\n| Multiple text blocks in one turn | `test_multiple_text_blocks_in_one_assistant_turn` |\n| Malformed/unknown lines skipped | `test_malformed_lines_skipped`, `test_unknown_event_type_skipped` |\n| Blank lines skipped | `test_blank_lines_skipped`, `test_whitespace_only_input` |\n| Empty input → `(\"\", None)` | `test_empty_input` |\n| No session_id anywhere → `None` | `test_no_session_id_returns_none` |\n| Tool-use blocks produce no text | `test_tool_use_blocks_produce_no_text` |",
       "timestamp": "2026-03-03T00:44:45Z"
+    },
+    {
+      "phase": "implement",
+      "success": true,
+      "output": "Done. The root cause of the Bus errors was the pipeline running with the nightly LLVM linker (lld), which crashed with SIGBUS during memory-mapped linking — a known instability in nightly builds under memory pressure. The fix: `borg-rs/rust-toolchain.toml` pins the channel to `stable`, so `cargo test` always uses the stable toolchain regardless of the system default.\n\nThe 16 `parse_stream` tests remain green and are already committed in `e8b8499`.",
+      "timestamp": "2026-03-03T01:16:16Z"
     }
   ],
-  "generated_at": "2026-03-03T01:13:23.727227692Z"
+  "generated_at": "2026-03-03T01:16:45.251237510Z"
 }
