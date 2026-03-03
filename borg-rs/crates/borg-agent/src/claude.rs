@@ -284,11 +284,7 @@ impl AgentBackend for ClaudeBackend {
                             };
                             env_vars.insert(env_name.into(), serde_json::Value::String(key.clone()));
                         }
-                        mcp_servers.insert("legal".into(), serde_json::json!({
-                            "command": "bun",
-                            "args": ["run", p.to_string_lossy()],
-                            "env": env_vars,
-                        }));
+                        mcp_servers.insert("legal".into(), bun_mcp_entry(&p, env_vars));
                     }
                     Err(e) => {
                         tracing::warn!("lawborg MCP server not found at {}: {e}", legal_mcp_path.display());
@@ -305,11 +301,7 @@ impl AgentBackend for ClaudeBackend {
                         if let Some(key) = ctx.api_keys.get("shovels") {
                             env_vars.insert("SHOVELS_API_KEY".into(), serde_json::Value::String(key.clone()));
                         }
-                        mcp_servers.insert("shovels".into(), serde_json::json!({
-                            "command": "bun",
-                            "args": ["run", p.to_string_lossy()],
-                            "env": env_vars,
-                        }));
+                        mcp_servers.insert("shovels".into(), bun_mcp_entry(&p, env_vars));
                     }
                     Err(e) => {
                         tracing::warn!("shovels MCP server not found at {}: {e}", shovels_path.display());
@@ -327,11 +319,7 @@ impl AgentBackend for ClaudeBackend {
                     if let Some(env) = ctx.api_keys.get("plaid_env") {
                         env_vars.insert("PLAID_ENV".into(), serde_json::Value::String(env.clone()));
                     }
-                    mcp_servers.insert("plaid".into(), serde_json::json!({
-                        "command": "bun",
-                        "args": ["run", p.to_string_lossy()],
-                        "env": env_vars,
-                    }));
+                    mcp_servers.insert("plaid".into(), bun_mcp_entry(&p, env_vars));
                 }
             }
 
@@ -786,5 +774,49 @@ impl AgentBackend for ClaudeBackend {
     async fn interrupt(&self, session_id: &str) -> Result<()> {
         warn!(session_id = %session_id, "interrupt not yet implemented");
         Ok(())
+    }
+}
+
+fn bun_mcp_entry(
+    path: &std::path::Path,
+    env: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "command": "bun",
+        "args": ["run", path.to_string_lossy()],
+        "env": env,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bun_mcp_entry_command_and_args() {
+        let path = std::path::Path::new("/sidecar/lawborg-mcp/server.js");
+        let env = serde_json::Map::new();
+        let entry = bun_mcp_entry(path, env);
+        assert_eq!(entry["command"], "bun");
+        assert_eq!(entry["args"][0], "run");
+        assert_eq!(entry["args"][1], "/sidecar/lawborg-mcp/server.js");
+    }
+
+    #[test]
+    fn bun_mcp_entry_env_forwarded() {
+        let path = std::path::Path::new("/sidecar/plaid-mcp/server.js");
+        let mut env = serde_json::Map::new();
+        env.insert("PLAID_CLIENT_ID".into(), serde_json::Value::String("cid".into()));
+        env.insert("PLAID_SECRET".into(), serde_json::Value::String("sec".into()));
+        let entry = bun_mcp_entry(path, env);
+        assert_eq!(entry["env"]["PLAID_CLIENT_ID"], "cid");
+        assert_eq!(entry["env"]["PLAID_SECRET"], "sec");
+    }
+
+    #[test]
+    fn bun_mcp_entry_empty_env() {
+        let path = std::path::Path::new("/some/server.js");
+        let entry = bun_mcp_entry(path, serde_json::Map::new());
+        assert!(entry["env"].as_object().unwrap().is_empty());
     }
 }
