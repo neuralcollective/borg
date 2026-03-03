@@ -12,7 +12,7 @@
 //   EC2: whitespace-only content between markers → None.
 //   EC4: three marker pairs → last (third) is returned.
 
-use borg_agent::claude::extract_phase_result;
+use borg_agent::claude::{derive_compile_check, extract_phase_result};
 
 const START: &str = "---PHASE_RESULT_START---";
 const END: &str = "---PHASE_RESULT_END---";
@@ -177,6 +177,39 @@ fn test_markers_not_present_in_plain_ndjson_escape() {
     assert!(result.unwrap().contains("my summary"));
     // Raw NDJSON with escaped newlines must not falsely trigger on its own.
     let _ = raw; // used above as documentation only
+}
+
+// =============================================================================
+// =============================================================================
+// derive_compile_check
+// =============================================================================
+
+#[test]
+fn test_cargo_test_appends_no_run() {
+    let result = derive_compile_check("cargo test");
+    assert_eq!(result, Some("cargo test --no-run".to_string()));
+}
+
+#[test]
+fn test_cargo_test_with_flags_appends_no_run() {
+    let result = derive_compile_check("cargo test --release");
+    assert_eq!(result, Some("cargo test --release --no-run".to_string()));
+}
+
+#[test]
+fn test_pytest_returns_none() {
+    assert!(derive_compile_check("pytest").is_none());
+}
+
+#[test]
+fn test_empty_string_compile_check_returns_none() {
+    assert!(derive_compile_check("").is_none());
+}
+
+#[test]
+fn test_cargo_test_leading_whitespace_still_matches() {
+    let result = derive_compile_check("  cargo test --workspace");
+    assert_eq!(result, Some("cargo test --workspace --no-run".to_string()));
 }
 
 // =============================================================================

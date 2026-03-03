@@ -42,7 +42,7 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
     last_content
 }
 
-fn derive_compile_check(test_cmd: &str) -> Option<String> {
+pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
     if trimmed.contains("cargo test") {
         Some(format!("{trimmed} --no-run"))
