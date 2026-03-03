@@ -1,0 +1,10 @@
+{
+  "task_id": 108,
+  "task_title": "Test parse_stream() NDJSON extraction in event.rs",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-108",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T00:42:57.222269132Z"
+}
