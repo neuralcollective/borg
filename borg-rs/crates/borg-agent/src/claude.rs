@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use borg_core::{
     agent::AgentBackend,
+    pipeline::derive_compile_check,
     sandbox::{Sandbox, SandboxMode},
     types::{ContainerTestResult, PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
@@ -40,15 +41,6 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
         }
     }
     last_content
-}
-
-fn derive_compile_check(test_cmd: &str) -> Option<String> {
-    let trimmed = test_cmd.trim();
-    if trimmed.contains("cargo test") {
-        Some(format!("{trimmed} --no-run"))
-    } else {
-        None
-    }
 }
 
 /// Runs Claude Code as a subprocess, with configurable sandbox isolation.
