@@ -36,6 +36,7 @@ fn make_task(db: &Db) -> i64 {
         mode: "sweborg".into(),
         backend: String::new(),
         project_id: 0,
+        task_type: String::new(),
     };
     db.insert_task(&task).expect("insert_task")
 }

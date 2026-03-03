@@ -531,11 +531,7 @@ impl Db {
                     Some(task.backend.as_str())
                 },
                 project_id,
-                if task.task_type.is_empty() {
-                    None
-                } else {
-                    Some(task.task_type.as_str())
-                },
+                task.task_type.as_str(),
             ],
         )
         .context("insert_task")?;
