@@ -724,7 +724,7 @@ async fn main() -> anyhow::Result<()> {
             get(routes::get_project_chat_messages),
         )
         .route("/api/projects/:id/chat", post(routes::post_project_chat))
-        .route("/api/projects/:id", put(routes::update_project))
+        .route("/api/projects/:id", get(routes::get_project).put(routes::update_project))
         .route("/api/projects/:id/tasks", get(routes::list_project_tasks))
         .route("/api/projects/:id/documents", get(routes::list_project_documents))
         .route(

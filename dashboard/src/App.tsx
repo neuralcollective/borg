@@ -44,7 +44,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 type View = "tasks" | "projects" | "creator" | "proposals" | "logs" | "queue" | "chat" | "knowledge" | "settings";
-type MobileTab = "tasks" | "logs" | "queue" | "chat";
+type MobileTab = "tasks" | "projects" | "queue" | "chat";
 
 function useIsMobile() {
   const [mobile, setMobile] = useState(() =>
@@ -73,7 +73,7 @@ const ALL_NAV_ITEMS = [
 
 const MOBILE_TABS = [
   { key: "tasks" as const, label: "Tasks", Icon: ListTodo },
-  { key: "logs" as const, label: "Logs", Icon: Terminal },
+  { key: "projects" as const, label: "Matters", Icon: FolderOpen },
   { key: "queue" as const, label: "Queue", Icon: GitMerge },
   { key: "chat" as const, label: "Chat", Icon: MessageSquare },
 ] as const;
@@ -160,7 +160,7 @@ function AppInner() {
             </div>
           )}
 
-          {mobileTab === "logs" && <LogViewer logs={logs} />}
+          {mobileTab === "projects" && <ProjectsPanel />}
 
           {mobileTab === "queue" && (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">

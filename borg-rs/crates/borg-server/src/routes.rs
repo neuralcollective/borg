@@ -810,6 +810,18 @@ pub(crate) async fn create_project(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
+pub(crate) async fn get_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    let project = state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(json!(ProjectJson::from(project))))
+}
+
 pub(crate) async fn update_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
@@ -833,7 +845,8 @@ pub(crate) async fn update_project(
             body.status.as_deref(),
         )
         .map_err(internal)?;
-    Ok(Json(json!({ "ok": true })))
+    let updated = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(json!(ProjectJson::from(updated))))
 }
 
 pub(crate) async fn list_project_tasks(
@@ -845,6 +858,49 @@ pub(crate) async fn list_project_tasks(
     }
     let tasks = state.db.list_project_tasks(id).map_err(internal)?;
     Ok(Json(json!(tasks)))
+}
+
+/// Read a file from git: tries local `git show ref:path` first, falls back to `gh api`.
+async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) -> Option<Vec<u8>> {
+    // Try local git first
+    if !repo_path.is_empty() && std::path::Path::new(repo_path).join(".git").exists() {
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::process::Command::new("git")
+                .args(["-C", repo_path, "show", &format!("{ref_name}:{path}")])
+                .stderr(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        if let Ok(Ok(output)) = out {
+            if output.status.success() {
+                return Some(output.stdout);
+            }
+        }
+    }
+    // Fall back to GitHub API
+    if !slug.is_empty() {
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new("gh")
+                .args([
+                    "api",
+                    &format!("repos/{slug}/contents/{path}?ref={ref_name}"),
+                    "--jq",
+                    ".content",
+                ])
+                .stderr(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        if let Ok(Ok(output)) = out {
+            if output.status.success() {
+                let b64 = String::from_utf8_lossy(&output.stdout).trim().replace('\n', "");
+                return base64_decode(&b64).ok();
+            }
+        }
+    }
+    None
 }
 
 pub(crate) async fn list_project_documents(
@@ -867,43 +923,66 @@ pub(crate) async fn list_project_documents(
             .iter()
             .find(|r| r.path == task.repo_path);
         let slug = repo.map(|r| r.repo_slug.as_str()).unwrap_or("");
-        if slug.is_empty() {
-            continue;
-        }
+        let repo_path = &task.repo_path;
 
-        // List files on the task branch via GitHub API
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            tokio::process::Command::new("gh")
-                .args([
-                    "api",
-                    &format!("repos/{slug}/git/trees/{}", task.branch),
-                    "--jq",
-                    ".tree[] | select(.type==\"blob\") | .path",
-                ])
-                .stderr(std::process::Stdio::null())
-                .output(),
-        )
-        .await;
-
-        if let Ok(Ok(output)) = out {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let legal_files = ["research.md", "analysis.md", "memo.md", "brief.md",
-                    "demand-letter.md", "contract-analysis.md", "review_notes.md"];
-                for line in stdout.lines() {
-                    let name = line.trim();
-                    if legal_files.iter().any(|f| name == *f) || name.ends_with(".md") {
-                        documents.push(json!({
-                            "task_id": task.id,
-                            "branch": task.branch,
-                            "path": name,
-                            "repo_slug": slug,
-                            "task_title": task.title,
-                            "task_status": task.status,
-                        }));
-                    }
+        // Try local git ls-tree first
+        let file_list = if std::path::Path::new(repo_path).join(".git").exists() {
+            let out = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio::process::Command::new("git")
+                    .args(["-C", repo_path, "ls-tree", "--name-only", &task.branch])
+                    .stderr(std::process::Stdio::null())
+                    .output(),
+            )
+            .await;
+            match out {
+                Ok(Ok(output)) if output.status.success() => {
+                    Some(String::from_utf8_lossy(&output.stdout).to_string())
                 }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // Fall back to GitHub if local failed
+        let file_list = match file_list {
+            Some(f) => f,
+            None if !slug.is_empty() => {
+                let out = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    tokio::process::Command::new("gh")
+                        .args([
+                            "api",
+                            &format!("repos/{slug}/git/trees/{}", task.branch),
+                            "--jq",
+                            ".tree[] | select(.type==\"blob\") | .path",
+                        ])
+                        .stderr(std::process::Stdio::null())
+                        .output(),
+                )
+                .await;
+                match out {
+                    Ok(Ok(output)) if output.status.success() => {
+                        String::from_utf8_lossy(&output.stdout).to_string()
+                    }
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        for line in file_list.lines() {
+            let name = line.trim();
+            if name.ends_with(".md") && !name.starts_with('.') {
+                documents.push(json!({
+                    "task_id": task.id,
+                    "branch": task.branch,
+                    "path": name,
+                    "repo_slug": slug,
+                    "task_title": task.title,
+                    "task_status": task.status,
+                }));
             }
         }
     }
@@ -924,6 +1003,9 @@ pub(crate) async fn get_project_document_content(
         .get_task(task_id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if task.branch.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     let repo = state
         .config
@@ -931,36 +1013,13 @@ pub(crate) async fn get_project_document_content(
         .iter()
         .find(|r| r.path == task.repo_path);
     let slug = repo.map(|r| r.repo_slug.as_str()).unwrap_or("");
-    if slug.is_empty() || task.branch.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
-    }
 
     let path = q.path.as_deref().unwrap_or("research.md");
     let ref_name = q.ref_name.as_deref().unwrap_or(&task.branch);
 
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::process::Command::new("gh")
-            .args([
-                "api",
-                &format!("repos/{slug}/contents/{path}?ref={ref_name}"),
-                "--jq",
-                ".content",
-            ])
-            .stderr(std::process::Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(internal)?
-    .map_err(internal)?;
-
-    if !out.status.success() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    // GitHub returns base64-encoded content
-    let b64 = String::from_utf8_lossy(&out.stdout).trim().replace('\n', "");
-    let bytes = base64_decode(&b64).map_err(internal)?;
+    let bytes = git_show_file(&task.repo_path, slug, ref_name, path)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(axum::response::Response::builder()
         .header("content-type", "text/markdown; charset=utf-8")
@@ -981,18 +1040,61 @@ pub(crate) async fn get_project_document_versions(
         .get_task(task_id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if task.branch.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
+    let path = q.path.as_deref().unwrap_or("research.md");
+    let repo_path = &task.repo_path;
+
+    // Try local git log first
+    if std::path::Path::new(repo_path).join(".git").exists() {
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::process::Command::new("git")
+                .args([
+                    "-C", repo_path, "log", &task.branch,
+                    "--format=%H\t%s\t%aI\t%an",
+                    "--", path,
+                ])
+                .stderr(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        if let Ok(Ok(output)) = out {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let versions: Vec<Value> = stdout
+                    .lines()
+                    .filter_map(|line| {
+                        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+                        if parts.len() >= 4 {
+                            Some(json!({
+                                "sha": parts[0],
+                                "message": parts[1],
+                                "date": parts[2],
+                                "author": parts[3],
+                            }))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                return Ok(Json(json!(versions)));
+            }
+        }
+    }
+
+    // Fall back to GitHub API
     let repo = state
         .config
         .watched_repos
         .iter()
         .find(|r| r.path == task.repo_path);
     let slug = repo.map(|r| r.repo_slug.as_str()).unwrap_or("");
-    if slug.is_empty() || task.branch.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
+    if slug.is_empty() {
+        return Ok(Json(json!([])));
     }
-
-    let path = q.path.as_deref().unwrap_or("research.md");
 
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -1031,6 +1133,9 @@ pub(crate) async fn export_project_document(
         .get_task(task_id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if task.branch.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     let repo = state
         .config
@@ -1038,9 +1143,6 @@ pub(crate) async fn export_project_document(
         .iter()
         .find(|r| r.path == task.repo_path);
     let slug = repo.map(|r| r.repo_slug.as_str()).unwrap_or("");
-    if slug.is_empty() || task.branch.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
-    }
 
     let path = q.path.as_deref().unwrap_or("research.md");
     let ref_name = q.ref_name.as_deref().unwrap_or(&task.branch);
@@ -1070,29 +1172,9 @@ pub(crate) async fn export_project_document(
             .unwrap());
     }
 
-    // Fetch markdown content from GitHub
-    let gh_out = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::process::Command::new("gh")
-            .args([
-                "api",
-                &format!("repos/{slug}/contents/{path}?ref={ref_name}"),
-                "--jq",
-                ".content",
-            ])
-            .stderr(std::process::Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(internal)?
-    .map_err(internal)?;
-
-    if !gh_out.status.success() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let b64 = String::from_utf8_lossy(&gh_out.stdout).trim().replace('\n', "");
-    let md_bytes = base64_decode(&b64).map_err(internal)?;
+    let md_bytes = git_show_file(&task.repo_path, slug, ref_name, path)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     // Write markdown to a temp file
     let tmp_dir = tempfile::tempdir().map_err(internal)?;
@@ -1112,12 +1194,14 @@ pub(crate) async fn export_project_document(
     let mut cmd = tokio::process::Command::new("pandoc");
     cmd.arg(&md_path)
         .arg("-f").arg("markdown")
-        .arg("-t").arg(format)
         .arg("-o").arg(&out_path)
         .stderr(std::process::Stdio::piped());
 
     if format == "pdf" {
-        cmd.arg("--pdf-engine=xelatex");
+        // Try weasyprint-style HTML→PDF first (more commonly available than xelatex)
+        cmd.arg("-t").arg("html").arg("--pdf-engine=weasyprint");
+    } else {
+        cmd.arg("-t").arg(format);
     }
 
     let pandoc_out = tokio::time::timeout(
@@ -1128,7 +1212,32 @@ pub(crate) async fn export_project_document(
     .map_err(internal)?
     .map_err(internal)?;
 
-    if !pandoc_out.status.success() {
+    // If weasyprint failed for PDF, retry with xelatex
+    if !pandoc_out.status.success() && format == "pdf" {
+        let retry = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            tokio::process::Command::new("pandoc")
+                .arg(&md_path)
+                .arg("-f").arg("markdown")
+                .arg("-o").arg(&out_path)
+                .arg("--pdf-engine=xelatex")
+                .stderr(std::process::Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+
+        if !retry.status.success() {
+            let stderr = String::from_utf8_lossy(&retry.stderr);
+            tracing::warn!("pandoc export failed: {stderr}");
+            return Ok(axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header("content-type", "text/plain")
+                .body(axum::body::Body::from(format!("pandoc failed: {stderr}")))
+                .unwrap());
+        }
+    } else if !pandoc_out.status.success() {
         let stderr = String::from_utf8_lossy(&pandoc_out.stderr);
         tracing::warn!("pandoc export failed: {stderr}");
         return Ok(axum::response::Response::builder()
