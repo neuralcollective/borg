@@ -21,6 +21,10 @@ pub fn get_mode(name: &str) -> Option<PipelineMode> {
     let alias = match name {
         "swe" => "sweborg",
         "legal" => "lawborg",
+        "health" => "healthborg",
+        "chef" => "chefborg",
+        "construction" => "buildborg",
+        "medwrite" => "medborg",
         _ => name,
     };
     all_modes().into_iter().find(|m| m.name == alias)
