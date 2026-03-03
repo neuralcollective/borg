@@ -1958,7 +1958,7 @@ pub(crate) async fn get_project_file_content(
         .header("content-type", "application/octet-stream")
         .header("content-disposition", format!("attachment; filename=\"{safe_name}\""))
         .body(axum::body::Body::from(bytes))
-        .unwrap())
+        .map_err(internal)?)
 }
 
 pub(crate) async fn upload_project_files(
