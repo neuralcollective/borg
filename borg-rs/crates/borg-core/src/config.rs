@@ -334,6 +334,122 @@ fn parse_watched_repos(
     repos
 }
 
+#[cfg(test)]
+mod tests {
+    use super::parse_watched_repos;
+
+    #[test]
+    fn test_empty_watched_raw_no_primary_repo() {
+        let repos = parse_watched_repos("", "", "", "", "sweborg");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn test_empty_watched_raw_with_primary_repo() {
+        let repos = parse_watched_repos("", "/repo/borg", "just t", "just lint", "sweborg");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/borg");
+        assert_eq!(r.test_cmd, "just t");
+        assert_eq!(r.lint_cmd, "just lint");
+        assert_eq!(r.mode, "sweborg");
+        assert!(r.is_self);
+        assert!(r.auto_merge);
+        assert!(r.prompt_file.is_empty());
+    }
+
+    #[test]
+    fn test_single_repo_all_parts() {
+        let entry = "/repo/client:cargo test:.borg/prompt.md:sweborg:cargo clippy:owner/client";
+        let repos = parse_watched_repos(entry, "", "", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/client");
+        assert_eq!(r.test_cmd, "cargo test");
+        assert_eq!(r.prompt_file, ".borg/prompt.md");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "cargo clippy");
+        assert_eq!(r.repo_slug, "owner/client");
+        assert!(!r.is_self);
+        assert!(r.auto_merge);
+    }
+
+    #[test]
+    fn test_multiple_repos() {
+        let raw = "/repo/a:test_a|/repo/b:test_b";
+        let repos = parse_watched_repos(raw, "", "", "", "sweborg");
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].path, "/repo/a");
+        assert_eq!(repos[0].test_cmd, "test_a");
+        assert_eq!(repos[1].path, "/repo/b");
+        assert_eq!(repos[1].test_cmd, "test_b");
+    }
+
+    #[test]
+    fn test_manual_suffix_sets_auto_merge_false() {
+        let raw = "/repo/x:cargo test!manual";
+        let repos = parse_watched_repos(raw, "", "", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "cargo test");
+    }
+
+    #[test]
+    fn test_manual_suffix_stripped_from_test_cmd() {
+        let raw = "/repo/x:just t!manual";
+        let repos = parse_watched_repos(raw, "/repo/primary", "", "", "sweborg");
+        // 1 primary + 1 watched
+        assert_eq!(repos.len(), 2);
+        let watched = &repos[1];
+        assert_eq!(watched.test_cmd, "just t");
+        assert!(!watched.auto_merge);
+    }
+
+    #[test]
+    fn test_duplicate_of_primary_repo_is_skipped() {
+        let raw = "/repo/borg:cargo test|/repo/other:other test";
+        let repos = parse_watched_repos(raw, "/repo/borg", "just t", "", "sweborg");
+        // primary + /repo/other (duplicate /repo/borg skipped)
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].path, "/repo/borg");
+        assert!(repos[0].is_self);
+        assert_eq!(repos[1].path, "/repo/other");
+        assert!(!repos[1].is_self);
+    }
+
+    #[test]
+    fn test_missing_parts_default_correctly() {
+        let raw = "/repo/minimal";
+        let repos = parse_watched_repos(raw, "", "", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/minimal");
+        assert!(r.test_cmd.is_empty());
+        assert!(r.prompt_file.is_empty());
+        assert_eq!(r.mode, "sweborg");
+        assert!(r.lint_cmd.is_empty());
+        assert!(r.auto_merge);
+    }
+
+    #[test]
+    fn test_slug_override_used_when_provided() {
+        let raw = "/repo/x:test:prompt:sweborg:lint:myorg/myrepo";
+        let repos = parse_watched_repos(raw, "", "", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo_slug, "myorg/myrepo");
+    }
+
+    #[test]
+    fn test_empty_entries_between_pipes_skipped() {
+        let raw = "/repo/a:test_a||/repo/b:test_b|";
+        let repos = parse_watched_repos(raw, "", "", "", "sweborg");
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].path, "/repo/a");
+        assert_eq!(repos[1].path, "/repo/b");
+    }
+}
+
 impl Config {
     /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
     pub fn chat_system_prompt(&self) -> String {
