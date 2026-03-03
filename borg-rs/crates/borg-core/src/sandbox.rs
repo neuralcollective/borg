@@ -667,3 +667,43 @@ fn parse_docker_size(s: &str) -> Option<u64> {
     };
     Some((num * unit as f64) as u64)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_docker_size;
+
+    #[test]
+    fn fractional_gb() {
+        assert_eq!(parse_docker_size("1.5GB"), Some(1_500_000_000));
+    }
+
+    #[test]
+    fn integer_mb() {
+        assert_eq!(parse_docker_size("512MB"), Some(512_000_000));
+    }
+
+    #[test]
+    fn kilobytes() {
+        assert_eq!(parse_docker_size("100kB"), Some(100_000));
+    }
+
+    #[test]
+    fn bare_bytes() {
+        assert_eq!(parse_docker_size("256B"), Some(256));
+    }
+
+    #[test]
+    fn unknown_suffix_returns_none() {
+        assert_eq!(parse_docker_size("1TB"), None);
+    }
+
+    #[test]
+    fn whitespace_padded() {
+        assert_eq!(parse_docker_size("  2.0GB  "), Some(2_000_000_000));
+    }
+
+    #[test]
+    fn empty_string_returns_none() {
+        assert_eq!(parse_docker_size(""), None);
+    }
+}
