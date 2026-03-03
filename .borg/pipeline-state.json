@@ -1,10 +1,10 @@
 {
-  "task_id": 290,
-  "task_title": "Fix seeding TOCTOU: in_flight check and atomic CAS are not jointly atomic (pipeline.rs:411)",
+  "task_id": 318,
+  "task_title": "Test parse_reporter_parts with statute and edge inputs in citations.rs",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-290",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-318",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T10:25:57.721826441Z"
+  "generated_at": "2026-03-03T11:54:43.935030738Z"
 }
