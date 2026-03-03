@@ -455,20 +455,32 @@ fn is_binary_mime(mime: &str) -> bool {
         || mime.starts_with("application/octet-stream")
 }
 
-fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
+fn stage_project_files(data_dir: &str, session_dir: &str, files: &[ProjectFileRow]) {
     let dest_dir = format!("{session_dir}/project_files");
     let _ = std::fs::create_dir_all(&dest_dir);
+    let canonical_data_dir = match std::fs::canonicalize(data_dir) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
     for file in files {
+        let canonical_src = match std::fs::canonicalize(&file.stored_path) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !canonical_src.starts_with(&canonical_data_dir) {
+            tracing::warn!("stored_path {:?} escapes data_dir, skipping", file.stored_path);
+            continue;
+        }
         let safe_name = std::path::Path::new(&file.file_name)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed");
         let dest = format!("{dest_dir}/{safe_name}");
-        let _ = std::fs::copy(&file.stored_path, &dest);
+        let _ = std::fs::copy(&canonical_src, &dest);
     }
 }
 
-fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session_dir: &str, db: &Db) -> String {
+fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], data_dir: &str, session_dir: &str, db: &Db) -> String {
     let tasks = db.list_project_tasks(project.id).unwrap_or_default();
     let completed_tasks: Vec<_> = tasks.iter()
         .filter(|t| t.status == "merged" || t.status == "done" || t.status == "complete")
@@ -479,7 +491,7 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
     }
 
     if !files.is_empty() {
-        stage_project_files(session_dir, files);
+        stage_project_files(data_dir, session_dir, files);
     }
 
     const MAX_CONTEXT_BYTES: usize = 120_000;
@@ -624,7 +636,7 @@ pub(crate) async fn run_chat_agent(
         match db.get_project(project_id) {
             Ok(Some(project)) => {
                 let files = db.list_project_files(project_id).unwrap_or_default();
-                let ctx = build_project_context(&project, &files, &session_dir, db);
+                let ctx = build_project_context(&project, &files, &config.data_dir, &session_dir, db);
                 if ctx.is_empty() {
                     prompt
                 } else {
@@ -3695,3 +3707,85 @@ pub(crate) async fn get_task_container(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_file_row(file_name: &str, stored_path: &str) -> ProjectFileRow {
+        ProjectFileRow {
+            id: 1,
+            project_id: 1,
+            file_name: file_name.to_string(),
+            stored_path: stored_path.to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 0,
+            extracted_text: String::new(),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn stage_copies_file_within_data_dir() {
+        let data_tmp = tempfile::tempdir().unwrap();
+        let session_tmp = tempfile::tempdir().unwrap();
+
+        let src = data_tmp.path().join("test.txt");
+        std::fs::write(&src, b"hello").unwrap();
+
+        let row = make_file_row("test.txt", src.to_str().unwrap());
+        stage_project_files(
+            data_tmp.path().to_str().unwrap(),
+            session_tmp.path().to_str().unwrap(),
+            &[row],
+        );
+
+        let dest = session_tmp.path().join("project_files/test.txt");
+        assert!(dest.exists(), "file within data_dir should be copied");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn stage_rejects_path_outside_data_dir() {
+        let data_tmp = tempfile::tempdir().unwrap();
+        let outside_tmp = tempfile::tempdir().unwrap();
+        let session_tmp = tempfile::tempdir().unwrap();
+
+        let src = outside_tmp.path().join("secret.txt");
+        std::fs::write(&src, b"secret").unwrap();
+
+        let row = make_file_row("secret.txt", src.to_str().unwrap());
+        stage_project_files(
+            data_tmp.path().to_str().unwrap(),
+            session_tmp.path().to_str().unwrap(),
+            &[row],
+        );
+
+        let dest = session_tmp.path().join("project_files/secret.txt");
+        assert!(!dest.exists(), "file outside data_dir must not be copied");
+    }
+
+    #[test]
+    fn stage_rejects_symlink_escaping_data_dir() {
+        let data_tmp = tempfile::tempdir().unwrap();
+        let outside_tmp = tempfile::tempdir().unwrap();
+        let session_tmp = tempfile::tempdir().unwrap();
+
+        let real_file = outside_tmp.path().join("real.txt");
+        std::fs::write(&real_file, b"sensitive").unwrap();
+
+        // Symlink inside data_dir pointing outside
+        let link = data_tmp.path().join("link.txt");
+        std::os::unix::fs::symlink(&real_file, &link).unwrap();
+
+        let row = make_file_row("link.txt", link.to_str().unwrap());
+        stage_project_files(
+            data_tmp.path().to_str().unwrap(),
+            session_tmp.path().to_str().unwrap(),
+            &[row],
+        );
+
+        let dest = session_tmp.path().join("project_files/link.txt");
+        assert!(!dest.exists(), "symlink escaping data_dir must not be copied");
+    }
+}
