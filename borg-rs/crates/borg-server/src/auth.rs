@@ -78,3 +78,68 @@ pub async fn get_token(
 ) -> Response {
     Json(json!({"token": state.api_token})).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_exempt;
+
+    #[test]
+    fn health_endpoint_is_exempt() {
+        assert!(is_exempt("/api/health"));
+    }
+
+    #[test]
+    fn auth_token_endpoint_is_exempt() {
+        assert!(is_exempt("/api/auth/token"));
+    }
+
+    #[test]
+    fn root_path_is_exempt() {
+        assert!(is_exempt("/"));
+    }
+
+    #[test]
+    fn static_asset_is_exempt() {
+        assert!(is_exempt("/static/app.js"));
+    }
+
+    #[test]
+    fn dashboard_html_is_exempt() {
+        assert!(is_exempt("/index.html"));
+    }
+
+    #[test]
+    fn api_tasks_is_not_exempt() {
+        assert!(!is_exempt("/api/tasks"));
+    }
+
+    #[test]
+    fn api_settings_is_not_exempt() {
+        assert!(!is_exempt("/api/settings"));
+    }
+
+    #[test]
+    fn api_health_with_suffix_is_not_exempt() {
+        assert!(!is_exempt("/api/health-extra"));
+    }
+
+    #[test]
+    fn api_healthz_is_not_exempt() {
+        assert!(!is_exempt("/api/healthz"));
+    }
+
+    #[test]
+    fn api_health_with_trailing_slash_is_not_exempt() {
+        assert!(!is_exempt("/api/health/"));
+    }
+
+    #[test]
+    fn api_auth_token_with_suffix_is_not_exempt() {
+        assert!(!is_exempt("/api/auth/token/extra"));
+    }
+
+    #[test]
+    fn api_auth_tokens_is_not_exempt() {
+        assert!(!is_exempt("/api/auth/tokens"));
+    }
+}
