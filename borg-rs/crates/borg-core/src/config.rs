@@ -93,12 +93,9 @@ pub struct Config {
     pub observer_config: String,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
-    for line in contents.lines() {
+    for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -116,6 +113,13 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    let Ok(contents) = std::fs::read_to_string(".env") else {
+        return HashMap::new();
+    };
+    parse_dotenv_str(&contents)
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -159,13 +163,17 @@ fn get_u16(key: &str, dotenv: &HashMap<String, String>, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-fn resolve_tilde(path: &str) -> String {
+fn resolve_tilde_impl(path: &str, home: Option<&str>) -> String {
     if path.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{}/{}", home, path.strip_prefix("~/").unwrap_or(path));
+        if let Some(h) = home {
+            return format!("{}/{}", h, &path[2..]);
         }
     }
     path.to_string()
+}
+
+fn resolve_tilde(path: &str) -> String {
+    resolve_tilde_impl(path, std::env::var("HOME").ok().as_deref())
 }
 
 pub fn codex_has_credentials(path: &str) -> bool {
@@ -821,5 +829,144 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── resolve_tilde_impl ────────────────────────────────────────────────────
+
+    #[test]
+    fn tilde_path_expands_with_home() {
+        assert_eq!(
+            resolve_tilde_impl("~/projects/borg", Some("/home/alice")),
+            "/home/alice/projects/borg"
+        );
+    }
+
+    #[test]
+    fn tilde_path_expands_nested() {
+        assert_eq!(
+            resolve_tilde_impl("~/a/b/c", Some("/root")),
+            "/root/a/b/c"
+        );
+    }
+
+    #[test]
+    fn tilde_path_unchanged_when_home_missing() {
+        assert_eq!(
+            resolve_tilde_impl("~/projects/borg", None),
+            "~/projects/borg"
+        );
+    }
+
+    #[test]
+    fn absolute_path_unchanged() {
+        assert_eq!(
+            resolve_tilde_impl("/absolute/path", Some("/home/alice")),
+            "/absolute/path"
+        );
+    }
+
+    #[test]
+    fn relative_path_unchanged() {
+        assert_eq!(
+            resolve_tilde_impl("relative/path", Some("/home/alice")),
+            "relative/path"
+        );
+    }
+
+    #[test]
+    fn bare_tilde_unchanged() {
+        // "~" without trailing slash is not expanded
+        assert_eq!(resolve_tilde_impl("~", Some("/home/alice")), "~");
+    }
+
+    #[test]
+    fn tilde_slash_only_expands_correctly() {
+        assert_eq!(
+            resolve_tilde_impl("~/", Some("/home/alice")),
+            "/home/alice/"
+        );
+    }
+
+    // ── parse_dotenv_str ──────────────────────────────────────────────────────
+
+    #[test]
+    fn dotenv_basic_key_value() {
+        let map = parse_dotenv_str("FOO=bar\n");
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_skips_blank_lines() {
+        let map = parse_dotenv_str("FOO=bar\n\nBAZ=qux\n");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["FOO"], "bar");
+        assert_eq!(map["BAZ"], "qux");
+    }
+
+    #[test]
+    fn dotenv_skips_hash_comment_lines() {
+        let map = parse_dotenv_str("# comment\nFOO=bar\n");
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_strips_double_quotes() {
+        let map = parse_dotenv_str("TOKEN=\"abc123\"\n");
+        assert_eq!(map["TOKEN"], "abc123");
+    }
+
+    #[test]
+    fn dotenv_strips_single_quotes() {
+        let map = parse_dotenv_str("TOKEN='abc123'\n");
+        assert_eq!(map["TOKEN"], "abc123");
+    }
+
+    #[test]
+    fn dotenv_trims_key_whitespace() {
+        let map = parse_dotenv_str("  FOO  =bar\n");
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_trims_value_whitespace() {
+        let map = parse_dotenv_str("FOO=  bar  \n");
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_empty_content_returns_empty_map() {
+        assert!(parse_dotenv_str("").is_empty());
+    }
+
+    #[test]
+    fn dotenv_only_comments_returns_empty_map() {
+        assert!(parse_dotenv_str("# comment\n# another\n").is_empty());
+    }
+
+    #[test]
+    fn dotenv_line_without_equals_is_skipped() {
+        assert!(parse_dotenv_str("NOEQUALSSIGN\n").is_empty());
+    }
+
+    #[test]
+    fn dotenv_value_with_equals_uses_first_split() {
+        let map = parse_dotenv_str("URL=https://example.com?a=1\n");
+        assert_eq!(map["URL"], "https://example.com?a=1");
+    }
+
+    #[test]
+    fn dotenv_multiple_entries_parsed() {
+        let input = "A=1\nB=2\nC=3\n";
+        let map = parse_dotenv_str(input);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map["A"], "1");
+        assert_eq!(map["B"], "2");
+        assert_eq!(map["C"], "3");
     }
 }
