@@ -1443,7 +1443,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         }
         let script = format!("{wt_path}/.borg/lint.sh");
         if std::path::Path::new(&script).exists() {
-            return Some(format!("bash '{script}'"));
+            return Some(format!("bash {}", sq(&script)));
         }
         None
     }
@@ -1484,10 +1484,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let container_mirror = format!("/mirrors/{repo_name}.git");
 
         // Shallow clone — test containers only need the branch tip.
-        // Wrap a value in single quotes with internal single quotes escaped.
-        fn sq(s: &str) -> String {
-            format!("'{}'", s.replace('\'', "'\\''"))
-        }
         let repo_url_q = sq(&task.repo_path);
         let branch_q = sq(&branch);
         let cmd_q = sq(cmd);
@@ -3165,5 +3161,42 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+/// Wrap `s` in single quotes, escaping any embedded single quotes.
+fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sq;
+
+    #[test]
+    fn sq_plain_path() {
+        assert_eq!(sq("/home/user/repo/.borg/lint.sh"), "'/home/user/repo/.borg/lint.sh'");
+    }
+
+    #[test]
+    fn sq_path_with_single_quote() {
+        // /home/o'brien/repo/.borg/lint.sh → '/home/o'\''brien/repo/.borg/lint.sh'
+        let result = sq("/home/o'brien/repo/.borg/lint.sh");
+        assert_eq!(result, "'/home/o'\\''brien/repo/.borg/lint.sh'");
+    }
+
+    #[test]
+    fn sq_multiple_single_quotes() {
+        assert_eq!(sq("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn repo_lint_cmd_uses_sq_for_wt_path() {
+        // Verify the format string produced by repo_lint_cmd uses sq()-style quoting.
+        // We test the escaping logic directly since repo_lint_cmd checks filesystem existence.
+        let wt_path = "/tmp/path with 'quotes'";
+        let script = format!("{wt_path}/.borg/lint.sh");
+        let cmd = format!("bash {}", sq(&script));
+        assert_eq!(cmd, "bash '/tmp/path with '\\''quotes'\\''/.borg/lint.sh'");
     }
 }
