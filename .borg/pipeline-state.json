@@ -1,0 +1,10 @@
+{
+  "task_id": 150,
+  "task_title": "Add unit tests for ChatCollector::flush_expired() and mark_done()",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-150",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T03:25:37.041574055Z"
+}
