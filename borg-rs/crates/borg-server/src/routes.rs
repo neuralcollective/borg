@@ -2203,6 +2203,260 @@ pub(crate) async fn create_task(
         review_status: None,
         revision_count: 0,
     };
+    let id = state.db.insert_task(&task).map_err(internal)?;
+    let _ = state.db.log_event_full(Some(id), None, Some(task.project_id).filter(|&p| p > 0), "api", "task.created", &json!({ "title": task.title }));
+    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+}
+
+pub(crate) async fn patch_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<PatchTaskBody>,
+) -> Result<StatusCode, StatusCode> {
+    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let title = body.title.as_deref().unwrap_or(&task.title);
+    let desc = body.description.as_deref().unwrap_or(&task.description);
+    state.db.update_task_description(id, title, desc).map_err(internal)?;
+    Ok(StatusCode::OK)
+}
+
+pub(crate) async fn retry_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(_) => {
+            state.db.requeue_task(id).map_err(internal)?;
+            Ok(StatusCode::OK)
+        },
+    }
+}
+
+pub(crate) async fn retry_all_failed(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    const MAX_RETRY_BATCH: usize = 20;
+    let tasks = state.db.list_all_tasks(None).map_err(internal)?;
+    let mut count = 0;
+    for task in &tasks {
+        if task.status == "failed" {
+            if count >= MAX_RETRY_BATCH {
+                break;
+            }
+            state.db.requeue_task(task.id).map_err(internal)?;
+            count += 1;
+        }
+    }
+    Ok(Json(json!({ "requeued": count })))
+}
+
+// Unblock a blocked task
+
+#[derive(Deserialize)]
+pub(crate) struct UnblockBody {
+    pub response: String,
+}
+
+pub(crate) async fn unblock_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<UnblockBody>,
+) -> Result<StatusCode, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(task) if task.status != "blocked" => Err(StatusCode::CONFLICT),
+        Some(task) => {
+            state
+                .db
+                .insert_task_message(id, "user", &body.response)
+                .map_err(internal)?;
+            let next_phase = borg_core::modes::get_mode(&task.mode)
+                .map(|m| {
+                    m.phases.iter()
+                        .find(|p| p.phase_type == borg_core::types::PhaseType::Agent)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| "implement".to_string())
+                })
+                .unwrap_or_else(|| "implement".to_string());
+            state
+                .db
+                .update_task_status(id, &next_phase, None)
+                .map_err(internal)?;
+            Ok(StatusCode::OK)
+        },
+    }
+}
+
+// Task messages
+
+pub(crate) async fn get_task_messages(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(_) => {
+            let messages = state.db.get_task_messages(id).map_err(internal)?;
+            let messages_json: Vec<TaskMessageJson> =
+                messages.into_iter().map(TaskMessageJson::from).collect();
+            Ok(Json(json!({ "messages": messages_json })))
+        },
+    }
+}
+
+pub(crate) async fn post_task_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<CreateMessageBody>,
+) -> Result<StatusCode, StatusCode> {
+    match state.db.get_task(id).map_err(internal)? {
+        None => Err(StatusCode::NOT_FOUND),
+        Some(_) => {
+            if body.role != "user" && body.role != "system" {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            state
+                .db
+                .insert_task_message(id, &body.role, &body.content)
+                .map_err(internal)?;
+            let _ = state.pipeline_event_tx.send(PipelineEvent::Output {
+                task_id: Some(id),
+                message: body.content.clone(),
+            });
+            Ok(StatusCode::CREATED)
+        },
+    }
+}
+
+// Queue
+
+pub(crate) async fn list_queue(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let entries = state.db.list_queue().map_err(internal)?;
+    Ok(Json(json!(entries)))
+}
+
+// Status
+
+pub(crate) async fn get_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    let uptime_s = state.start_time.elapsed().as_secs();
+
+    let watched_repos: Vec<Value> = state.config.watched_repos
+        .iter()
+        .map(|r| {
+            json!({
+                "path": r.path,
+                "test_cmd": r.test_cmd,
+                "is_self": r.is_self,
+                "auto_merge": r.auto_merge,
+                "mode": r.mode,
+            })
+        })
+        .collect();
+
+    let (active, merged, failed, total) = state.db.task_stats().map_err(internal)?;
+
+    let model = state
+        .db
+        .get_config("model")
+        .map_err(internal)?
+        .unwrap_or_else(|| "claude-sonnet-4-6".into());
+
+    let release_interval_mins: i64 = state
+        .db
+        .get_config("release_interval_mins")
+        .map_err(internal)?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(180);
+
+    let continuous_mode: bool = state
+        .db
+        .get_config("continuous_mode")
+        .map_err(internal)?
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    let assistant_name = state
+        .db
+        .get_config("assistant_name")
+        .map_err(internal)?
+        .unwrap_or_else(|| "Borg".into());
+
+    Ok(Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_s": uptime_s,
+        "model": model,
+        "watched_repos": watched_repos,
+        "release_interval_mins": release_interval_mins,
+        "continuous_mode": continuous_mode,
+        "assistant_name": assistant_name,
+        "active_tasks": active,
+        "merged_tasks": merged,
+        "failed_tasks": failed,
+        "total_tasks": total,
+        "dispatched_agents": 0,
+    })))
+}
+
+// Proposals
+
+pub(crate) async fn list_proposals(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RepoQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let proposals = state
+        .db
+        .list_all_proposals(q.repo.as_deref())
+        .map_err(internal)?;
+    Ok(Json(json!(proposals)))
+}
+
+pub(crate) async fn approve_proposal(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    let proposal = state
+        .db
+        .get_proposal(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    state
+        .db
+        .update_proposal_status(id, "approved")
+        .map_err(internal)?;
+
+    let task = Task {
+        id: 0,
+        title: proposal.title.clone(),
+        description: proposal.description.clone(),
+        repo_path: proposal.repo_path.clone(),
+        branch: String::new(),
+        status: "backlog".into(),
+        attempt: 0,
+        max_attempts: 5,
+        last_error: String::new(),
+        created_by: "proposal".into(),
+        notify_chat: String::new(),
+        created_at: Utc::now(),
+        session_id: String::new(),
+        mode: state.config.watched_repos.iter()
+            .find(|r| r.path == proposal.repo_path)
+            .map(|r| r.mode.clone())
+            .unwrap_or_else(|| "sweborg".into()),
+        backend: String::new(),
+        project_id: 0,
+        task_type: String::new(),
+        started_at: None,
+        completed_at: None,
+        duration_secs: None,
+        review_status: None,
+        revision_count: 0,
+    };
     let task_id = state.db.insert_task(&task).map_err(internal)?;
     Ok(Json(json!({ "task_id": task_id })))
 
