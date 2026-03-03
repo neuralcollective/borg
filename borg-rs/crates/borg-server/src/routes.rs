@@ -1178,7 +1178,7 @@ pub(crate) async fn search_documents(
     }
 
     // Semantic search (when requested and embeddings exist)
-    if query.semantic && state.db.embedding_count() > 0 {
+    if query.semantic && state.db.embedding_count().unwrap_or(0) > 0 {
         if let Ok(query_emb) = state.embed_client.embed_single(&query.q).await {
             if let Ok(sem_results) = state.db.search_embeddings(&query_emb, query.limit as usize, query.project_id) {
                 for r in sem_results.iter().filter(|r| r.score > 0.5) {

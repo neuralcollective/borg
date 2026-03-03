@@ -434,7 +434,7 @@ impl Db {
     }
 
     pub fn migrate(&mut self) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute_batch(SCHEMA_SQL)
             .context("failed to apply schema migrations")?;
         // Idempotent column additions for DBs created before these columns existed.
@@ -546,7 +546,7 @@ impl Db {
     // ── Pipeline Tasks ────────────────────────────────────────────────────
 
     pub fn get_task(&self, id: i64) -> Result<Option<Task>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let result = conn
             .query_row(
                 &format!("SELECT {TASK_COLS} FROM pipeline_tasks WHERE id = ?1"),
@@ -559,7 +559,7 @@ impl Db {
     }
 
     pub fn list_active_tasks(&self) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!(
             "SELECT {TASK_COLS} FROM pipeline_tasks \
              WHERE status NOT IN ('done', 'merged', 'failed', 'blocked', 'pending_review') \
@@ -583,7 +583,7 @@ impl Db {
     }
 
     pub fn insert_task(&self, task: &Task) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = task.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
         let project_id = if task.project_id == 0 { None } else { Some(task.project_id) };
         conn.execute(
@@ -619,7 +619,7 @@ impl Db {
     }
 
     pub fn update_task_status(&self, id: i64, status: &str, error: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let updated_at = now_str();
         conn.execute(
             "UPDATE pipeline_tasks SET status = ?1, last_error = COALESCE(?2, last_error), \
@@ -631,7 +631,7 @@ impl Db {
     }
 
     pub fn mark_task_started(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let now = now_str();
         conn.execute(
             "UPDATE pipeline_tasks SET started_at = COALESCE(started_at, ?1) WHERE id = ?2",
@@ -642,7 +642,7 @@ impl Db {
     }
 
     pub fn mark_task_completed(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let now = now_str();
         conn.execute(
             "UPDATE pipeline_tasks SET completed_at = ?1, \
@@ -657,7 +657,7 @@ impl Db {
     }
 
     pub fn set_review_status(&self, id: i64, status: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET review_status = ?1, updated_at = ?2 WHERE id = ?3",
             params![status, now_str(), id],
@@ -667,7 +667,7 @@ impl Db {
     }
 
     pub fn increment_revision_count(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET revision_count = revision_count + 1, updated_at = ?1 WHERE id = ?2",
             params![now_str(), id],
@@ -676,18 +676,19 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_task_revision_count(&self, id: i64) -> i64 {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.query_row(
-            "SELECT revision_count FROM pipeline_tasks WHERE id = ?1",
-            params![id],
-            |r: &rusqlite::Row| r.get(0),
-        )
-        .unwrap_or(0)
+    pub fn get_task_revision_count(&self, id: i64) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        Ok(conn
+            .query_row(
+                "SELECT revision_count FROM pipeline_tasks WHERE id = ?1",
+                params![id],
+                |r: &rusqlite::Row| r.get(0),
+            )
+            .unwrap_or(0))
     }
 
     pub fn update_task_branch(&self, id: i64, branch: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET branch = ?1 WHERE id = ?2",
             params![branch, id],
@@ -697,7 +698,7 @@ impl Db {
     }
 
     pub fn update_task_session(&self, id: i64, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET session_id = ?1 WHERE id = ?2",
             params![session_id, id],
@@ -707,7 +708,7 @@ impl Db {
     }
 
     pub fn update_task_description(&self, id: i64, title: &str, description: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET title = ?1, description = ?2 WHERE id = ?3",
             params![title, description, id],
@@ -717,7 +718,7 @@ impl Db {
     }
 
     pub fn requeue_task(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let updated_at = now_str();
         conn.execute(
             "UPDATE pipeline_tasks SET status = 'backlog', attempt = 0, \
@@ -729,7 +730,7 @@ impl Db {
     }
 
     pub fn increment_attempt(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET attempt = attempt + 1 WHERE id = ?1",
             params![id],
@@ -739,7 +740,7 @@ impl Db {
     }
 
     pub fn update_task_backend(&self, id: i64, backend: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET backend = ?1 WHERE id = ?2",
             params![
@@ -756,7 +757,7 @@ impl Db {
     }
 
     pub fn update_task_structured_data(&self, id: i64, data: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET structured_data = ?1 WHERE id = ?2",
             params![data, id],
@@ -766,7 +767,7 @@ impl Db {
     }
 
     pub fn get_task_structured_data(&self, id: i64) -> Result<String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let data: String = conn
             .query_row(
                 "SELECT structured_data FROM pipeline_tasks WHERE id = ?1",
@@ -780,7 +781,7 @@ impl Db {
     // ── Proposals ─────────────────────────────────────────────────────────
 
     pub fn list_proposals(&self, repo_path: &str) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -795,7 +796,7 @@ impl Db {
     }
 
     pub fn list_all_proposals(&self, repo_path: Option<&str>) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -812,7 +813,7 @@ impl Db {
     }
 
     pub fn get_proposal(&self, id: i64) -> Result<Option<Proposal>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let result = conn
             .query_row(
                 "SELECT id, repo_path, title, description, rationale, status, created_at, \
@@ -828,7 +829,7 @@ impl Db {
     }
 
     pub fn task_stats(&self) -> Result<(i64, i64, i64, i64)> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM pipeline_tasks", [], |r| r.get(0))
             .context("task_stats total")?;
@@ -857,7 +858,7 @@ impl Db {
     }
 
     pub fn insert_proposal(&self, proposal: &Proposal) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = proposal.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
         conn.execute(
             "INSERT INTO proposals \
@@ -885,7 +886,7 @@ impl Db {
     }
 
     pub fn update_proposal_status(&self, id: i64, status: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE proposals SET status = ?1 WHERE id = ?2",
             params![status, id],
@@ -904,7 +905,7 @@ impl Db {
         effort: i64,
         reasoning: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE proposals SET triage_score=?1, triage_impact=?2, triage_feasibility=?3, \
              triage_risk=?4, triage_effort=?5, triage_reasoning=?6 WHERE id=?7",
@@ -917,7 +918,7 @@ impl Db {
     // ── Projects ──────────────────────────────────────────────────────────
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!("SELECT {PROJECT_COLS} FROM projects ORDER BY id DESC");
         let mut stmt = conn.prepare(&sql)?;
         let projects = stmt
@@ -928,7 +929,7 @@ impl Db {
     }
 
     pub fn search_projects(&self, query: &str) -> Result<Vec<ProjectRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let pattern = format!("%{query}%");
         let sql = format!(
             "SELECT {PROJECT_COLS} FROM projects \
@@ -945,7 +946,7 @@ impl Db {
     }
 
     pub fn get_project(&self, id: i64) -> Result<Option<ProjectRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!("SELECT {PROJECT_COLS} FROM projects WHERE id=?1");
         let project = conn
             .query_row(&sql, params![id], row_to_project)
@@ -964,7 +965,7 @@ impl Db {
         matter_type: &str,
         privilege_level: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
         conn.execute(
             "INSERT INTO projects (name, mode, repo_path, client_name, jurisdiction, matter_type, \
@@ -990,7 +991,7 @@ impl Db {
         repo_path: Option<&str>,
         default_template_id: Option<Option<i64>>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut sets = Vec::new();
         let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         let mut idx = 1;
@@ -1043,7 +1044,7 @@ impl Db {
     }
 
     pub fn delete_project(&self, id: i64) -> Result<bool> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let _ = conn.execute("DELETE FROM parties WHERE project_id=?1", params![id]);
         let _ = conn.execute("DELETE FROM project_files WHERE project_id=?1", params![id]);
         let affected = conn
@@ -1055,7 +1056,7 @@ impl Db {
     // ── Parties / Conflict Checking ────────────────────────────────────────
 
     pub fn sync_project_parties(&self, project_id: i64, client_name: &str, opposing_counsel: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute("DELETE FROM parties WHERE project_id=?1", params![project_id])?;
         let created_at = now_str();
         for (name, role) in [
@@ -1082,7 +1083,7 @@ impl Db {
         client_name: &str,
         opposing_counsel: &str,
     ) -> Result<Vec<ConflictHit>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut hits = Vec::new();
 
         for (name, field) in [
@@ -1122,7 +1123,7 @@ impl Db {
     // ── Deadlines ──────────────────────────────────────────────────────────
 
     pub fn list_project_deadlines(&self, project_id: i64) -> Result<Vec<DeadlineRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, project_id, label, due_date, rule_basis, status, created_at \
              FROM deadlines WHERE project_id = ?1 ORDER BY due_date ASC"
@@ -1143,7 +1144,7 @@ impl Db {
     }
 
     pub fn list_upcoming_deadlines(&self, limit: i64) -> Result<Vec<(DeadlineRow, String)>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT d.id, d.project_id, d.label, d.due_date, d.rule_basis, d.status, d.created_at, p.name \
              FROM deadlines d JOIN projects p ON d.project_id = p.id \
@@ -1165,7 +1166,7 @@ impl Db {
     }
 
     pub fn insert_deadline(&self, project_id: i64, label: &str, due_date: &str, rule_basis: &str) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO deadlines (project_id, label, due_date, rule_basis, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![project_id, label, due_date, rule_basis, now_str()],
@@ -1174,7 +1175,7 @@ impl Db {
     }
 
     pub fn update_deadline(&self, id: i64, label: Option<&str>, due_date: Option<&str>, rule_basis: Option<&str>, status: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         if let Some(v) = label { conn.execute("UPDATE deadlines SET label = ?1 WHERE id = ?2", params![v, id])?; }
         if let Some(v) = due_date { conn.execute("UPDATE deadlines SET due_date = ?1 WHERE id = ?2", params![v, id])?; }
         if let Some(v) = rule_basis { conn.execute("UPDATE deadlines SET rule_basis = ?1 WHERE id = ?2", params![v, id])?; }
@@ -1183,7 +1184,7 @@ impl Db {
     }
 
     pub fn delete_deadline(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute("DELETE FROM deadlines WHERE id = ?1", params![id]).context("delete_deadline")?;
         Ok(())
     }
@@ -1191,7 +1192,7 @@ impl Db {
     // ── FTS5 ──────────────────────────────────────────────────────────────
 
     pub fn fts_index_document(&self, project_id: i64, task_id: i64, file_path: &str, title: &str, content: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         // Delete existing entry for this task+file, then re-insert
         conn.execute(
             "DELETE FROM legal_fts WHERE task_id = ?1 AND file_path = ?2",
@@ -1205,13 +1206,13 @@ impl Db {
     }
 
     pub fn fts_remove_task(&self, task_id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute("DELETE FROM legal_fts WHERE task_id = ?1", params![task_id])?;
         Ok(())
     }
 
     pub fn fts_search(&self, query: &str, project_id: Option<i64>, limit: i64) -> Result<Vec<FtsResult>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = if project_id.is_some() {
             "SELECT project_id, task_id, file_path, \
                     snippet(legal_fts, 3, '<b>', '</b>', '…', 48) as title_snip, \
@@ -1255,7 +1256,7 @@ impl Db {
     }
 
     pub fn list_project_tasks(&self, project_id: i64) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!("SELECT {TASK_COLS} FROM pipeline_tasks WHERE project_id = ?1 ORDER BY id DESC");
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
@@ -1266,7 +1267,7 @@ impl Db {
     }
 
     pub fn list_project_files(&self, project_id: i64) -> Result<Vec<ProjectFileRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, created_at \
              FROM project_files WHERE project_id=?1 ORDER BY id ASC",
@@ -1283,7 +1284,7 @@ impl Db {
         project_id: i64,
         file_id: i64,
     ) -> Result<Option<ProjectFileRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, created_at \
              FROM project_files WHERE id=?1 AND project_id=?2",
@@ -1302,7 +1303,7 @@ impl Db {
         mime_type: &str,
         size_bytes: i64,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
         conn.execute(
             "INSERT INTO project_files \
@@ -1322,7 +1323,7 @@ impl Db {
     }
 
     pub fn update_project_file_text(&self, file_id: i64, text: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE project_files SET extracted_text = ?1 WHERE id = ?2",
             params![text, file_id],
@@ -1331,7 +1332,7 @@ impl Db {
     }
 
     pub fn total_project_file_bytes(&self, project_id: i64) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let total = conn
             .query_row(
                 "SELECT COALESCE(SUM(size_bytes), 0) FROM project_files WHERE project_id=?1",
@@ -1345,7 +1346,7 @@ impl Db {
     // ── Knowledge files ───────────────────────────────────────────────────
 
     pub fn list_knowledge_files(&self) -> Result<Vec<KnowledgeFile>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, file_name, description, size_bytes, inline, created_at, \
                     tags, category, jurisdiction, project_id \
@@ -1358,7 +1359,7 @@ impl Db {
     }
 
     pub fn get_knowledge_file(&self, id: i64) -> Result<Option<KnowledgeFile>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT id, file_name, description, size_bytes, inline, created_at, \
                     tags, category, jurisdiction, project_id \
@@ -1371,7 +1372,7 @@ impl Db {
     }
 
     pub fn list_templates(&self, category: Option<&str>, jurisdiction: Option<&str>) -> Result<Vec<KnowledgeFile>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, file_name, description, size_bytes, inline, created_at, \
                     tags, category, jurisdiction, project_id \
@@ -1392,7 +1393,7 @@ impl Db {
         size_bytes: i64,
         inline: bool,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO knowledge_files (file_name, description, size_bytes, inline) \
              VALUES (?1, ?2, ?3, ?4)",
@@ -1402,7 +1403,7 @@ impl Db {
     }
 
     pub fn delete_knowledge_file(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute("DELETE FROM knowledge_files WHERE id=?1", params![id])?;
         Ok(())
     }
@@ -1416,7 +1417,7 @@ impl Db {
         category: Option<&str>,
         jurisdiction: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         if let Some(d) = description { conn.execute("UPDATE knowledge_files SET description=?1 WHERE id=?2", params![d, id])?; }
         if let Some(i) = inline { conn.execute("UPDATE knowledge_files SET inline=?1 WHERE id=?2", params![i as i64, id])?; }
         if let Some(t) = tags { conn.execute("UPDATE knowledge_files SET tags=?1 WHERE id=?2", params![t, id])?; }
@@ -1435,7 +1436,7 @@ impl Db {
         file_path: &str,
         embedding: &[f32],
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let hash = crate::knowledge::hash_chunk(chunk_text);
         let blob = crate::knowledge::embedding_to_bytes(embedding);
         conn.execute(
@@ -1449,7 +1450,7 @@ impl Db {
     }
 
     pub fn remove_task_embeddings(&self, task_id: i64) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let n = conn
             .execute(
                 "DELETE FROM embeddings WHERE task_id = ?1",
@@ -1465,7 +1466,7 @@ impl Db {
         limit: usize,
         project_id: Option<i64>,
     ) -> Result<Vec<crate::knowledge::EmbeddingSearchResult>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project_id {
             Some(pid) => (
                 "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1".to_string(),
@@ -1511,10 +1512,11 @@ impl Db {
         Ok(results)
     }
 
-    pub fn embedding_count(&self) -> i64 {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.query_row("SELECT COUNT(*) FROM embeddings", [], |r: &rusqlite::Row| r.get(0))
-            .unwrap_or(0)
+    pub fn embedding_count(&self) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        Ok(conn
+            .query_row("SELECT COUNT(*) FROM embeddings", [], |r: &rusqlite::Row| r.get(0))
+            .unwrap_or(0))
     }
 
     // ── Citation verifications ──────────────────────────────────────────
@@ -1529,7 +1531,7 @@ impl Db {
         treatment: &str,
         checked_at: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO citation_verifications (task_id, citation_text, citation_type, status, source, treatment, checked_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1539,7 +1541,7 @@ impl Db {
     }
 
     pub fn get_task_citations(&self, task_id: i64) -> Result<Vec<CitationVerification>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, citation_text, citation_type, status, source, treatment, checked_at, created_at \
              FROM citation_verifications WHERE task_id = ?1 ORDER BY id"
@@ -1564,7 +1566,7 @@ impl Db {
     }
 
     pub fn delete_task_citations(&self, task_id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "DELETE FROM citation_verifications WHERE task_id = ?1",
             params![task_id],
@@ -1573,7 +1575,7 @@ impl Db {
     }
 
     pub fn get_top_scored_proposals(&self, threshold: i64, limit: i64) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -1588,18 +1590,18 @@ impl Db {
         Ok(proposals)
     }
 
-    pub fn count_unscored_proposals(&self) -> i64 {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+    pub fn count_unscored_proposals(&self) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT COUNT(*) FROM proposals WHERE status='proposed' AND triage_score=0",
             [],
             |r| r.get(0),
         )
-        .unwrap_or(0)
+        .context("count_unscored_proposals")
     }
 
     pub fn list_untriaged_proposals(&self) -> Result<Vec<Proposal>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, repo_path, title, description, rationale, status, created_at, \
              triage_score, triage_impact, triage_feasibility, triage_risk, triage_effort, \
@@ -1616,7 +1618,7 @@ impl Db {
     // ── Merge Queue ───────────────────────────────────────────────────────
 
     pub fn list_queue(&self) -> Result<Vec<QueueEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, branch, repo_path, status, queued_at, pr_number \
              FROM integration_queue WHERE status = 'queued' ORDER BY id ASC",
@@ -1635,7 +1637,7 @@ impl Db {
         repo_path: &str,
         pr_number: i64,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let queued_at = now_str();
         conn.execute(
             "INSERT INTO integration_queue (task_id, branch, repo_path, status, queued_at, pr_number) \
@@ -1656,7 +1658,7 @@ impl Db {
         status: &str,
         error_msg: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE integration_queue SET status = ?1, error_msg = ?2 WHERE id = ?3",
             params![status, error_msg, id],
@@ -1666,7 +1668,7 @@ impl Db {
     }
 
     pub fn get_queued_branches_for_repo(&self, repo_path: &str) -> Result<Vec<QueueEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, branch, repo_path, status, queued_at, pr_number \
              FROM integration_queue WHERE repo_path = ?1 AND status = 'queued' ORDER BY task_id ASC",
@@ -1679,7 +1681,7 @@ impl Db {
     }
 
     pub fn get_queue_entries_for_task(&self, task_id: i64) -> Result<Vec<QueueEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, branch, repo_path, status, queued_at, pr_number \
              FROM integration_queue WHERE task_id = ?1 ORDER BY id ASC",
@@ -1691,18 +1693,18 @@ impl Db {
         Ok(entries)
     }
 
-    pub fn get_unknown_retries(&self, id: i64) -> i64 {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+    pub fn get_unknown_retries(&self, id: i64) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT unknown_retries FROM integration_queue WHERE id = ?1",
             params![id],
             |r| r.get(0),
         )
-        .unwrap_or(0)
+        .context("get_unknown_retries")
     }
 
     pub fn increment_unknown_retries(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE integration_queue SET unknown_retries = unknown_retries + 1 WHERE id = ?1",
             params![id],
@@ -1712,7 +1714,7 @@ impl Db {
     }
 
     pub fn reset_unknown_retries(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE integration_queue SET unknown_retries = 0 WHERE id = ?1",
             params![id],
@@ -1731,7 +1733,7 @@ impl Db {
         raw_stream: &str,
         exit_code: i64,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
         conn.execute(
             "INSERT INTO task_outputs (task_id, phase, output, raw_stream, exit_code, created_at) \
@@ -1743,7 +1745,7 @@ impl Db {
     }
 
     pub fn get_task_outputs(&self, task_id: i64) -> Result<Vec<TaskOutput>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, phase, output, raw_stream, exit_code, created_at \
              FROM task_outputs WHERE task_id = ?1 ORDER BY id ASC",
@@ -1758,7 +1760,7 @@ impl Db {
     // ── Task Messages ─────────────────────────────────────────────────────
 
     pub fn insert_task_message(&self, task_id: i64, role: &str, content: &str) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
         conn.execute(
             "INSERT INTO task_messages (task_id, role, content, created_at) \
@@ -1770,7 +1772,7 @@ impl Db {
     }
 
     pub fn get_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, role, content, created_at, delivered_phase \
              FROM task_messages WHERE task_id = ?1 ORDER BY id ASC",
@@ -1783,7 +1785,7 @@ impl Db {
     }
 
     pub fn get_pending_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, role, content, created_at, delivered_phase \
              FROM task_messages WHERE task_id = ?1 AND delivered_phase IS NULL ORDER BY id ASC",
@@ -1796,7 +1798,7 @@ impl Db {
     }
 
     pub fn mark_messages_delivered(&self, task_id: i64, phase: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE task_messages SET delivered_phase = ?1 \
              WHERE task_id = ?2 AND delivered_phase IS NULL",
@@ -1819,7 +1821,7 @@ impl Db {
         backend: Option<&str>,
         repo_slug: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let auto_merge_int: i64 = if auto_merge { 1 } else { 0 };
         conn.execute(
             "INSERT INTO repos (path, name, mode, test_cmd, prompt_file, auto_merge, backend, repo_slug) \
@@ -1855,7 +1857,7 @@ impl Db {
     }
 
     pub fn list_repos(&self) -> Result<Vec<RepoRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge, repo_slug \
              FROM repos ORDER BY id ASC",
@@ -1868,7 +1870,7 @@ impl Db {
     }
 
     pub fn get_repo_by_path(&self, path: &str) -> Result<Option<RepoRow>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let result = conn
             .query_row(
                 "SELECT id, path, name, mode, backend, test_cmd, prompt_file, auto_merge, repo_slug \
@@ -1882,7 +1884,7 @@ impl Db {
     }
 
     pub fn update_repo_backend(&self, id: i64, backend: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE repos SET backend = ?1 WHERE id = ?2",
             params![
@@ -1919,7 +1921,7 @@ impl Db {
         kind: &str,
         payload: &serde_json::Value,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let payload_str = payload.to_string();
         let created_at = now_str();
         conn.execute(
@@ -1932,7 +1934,7 @@ impl Db {
     }
 
     pub fn list_project_events(&self, project_id: i64, limit: i64) -> Result<Vec<AuditEvent>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, task_id, project_id, actor, kind, payload, created_at \
              FROM pipeline_events WHERE project_id = ?1 \
@@ -1956,7 +1958,7 @@ impl Db {
     // ── Config ────────────────────────────────────────────────────────────
 
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let result = conn
             .query_row(
                 "SELECT value FROM config WHERE key = ?1",
@@ -1969,7 +1971,7 @@ impl Db {
     }
 
     pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let updated_at = now_str();
         conn.execute(
             "INSERT INTO config (key, value, updated_at) VALUES (?1, ?2, ?3) \
@@ -1989,7 +1991,7 @@ impl Db {
         message: &str,
         metadata: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let ts = Utc::now().timestamp();
         conn.execute(
             "INSERT INTO events (ts, level, category, message, metadata) \
@@ -2001,7 +2003,7 @@ impl Db {
     }
 
     pub fn get_recent_events(&self, limit: i64) -> Result<Vec<LegacyEvent>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, ts, level, category, message, metadata \
              FROM events ORDER BY ts DESC, id DESC LIMIT ?1",
@@ -2022,7 +2024,7 @@ impl Db {
         notify_chat: &str,
         mode: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO pipeline_tasks \
              (title, description, repo_path, status, attempt, max_attempts, last_error, \
@@ -2044,7 +2046,7 @@ impl Db {
 
     /// Return "done" tasks that have no integration_queue entry (orphaned after restart).
     pub fn list_done_tasks_without_queue(&self) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!(
             "SELECT {TASK_COLS} FROM pipeline_tasks \
              WHERE status = 'done' \
@@ -2064,7 +2066,7 @@ impl Db {
 
     /// Reset integration_queue entries stuck in "merging" where the task is not yet merged.
     pub fn reset_stale_merging_queue(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let n = conn.execute(
             "UPDATE integration_queue SET status = 'queued' \
              WHERE status = 'merging' \
@@ -2074,18 +2076,18 @@ impl Db {
         Ok(n)
     }
 
-    pub fn active_task_count(&self) -> i64 {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+    pub fn active_task_count(&self) -> Result<i64> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT COUNT(*) FROM pipeline_tasks WHERE status NOT IN ('done','merged','failed','blocked','pending_review')",
             [],
             |r| r.get(0),
         )
-        .unwrap_or(0)
+        .context("active_task_count")
     }
 
     pub fn get_recent_merged_tasks(&self, limit: i64) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!(
             "SELECT {TASK_COLS} FROM pipeline_tasks WHERE status = 'merged' ORDER BY id DESC LIMIT ?1"
         );
@@ -2098,7 +2100,7 @@ impl Db {
     }
 
     pub fn recycle_failed_tasks(&self, repo_path: &str) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let n = conn
             .execute(
                 "UPDATE pipeline_tasks SET status='backlog', attempt=0, last_error='' \
@@ -2110,7 +2112,7 @@ impl Db {
     }
 
     pub fn reset_task_attempt(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE pipeline_tasks SET attempt=0 WHERE id=?1",
             params![id],
@@ -2136,7 +2138,7 @@ impl Db {
     // ── Full Task List ────────────────────────────────────────────────────
 
     pub fn list_all_tasks(&self, repo_path: Option<&str>) -> Result<Vec<Task>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!(
             "SELECT {TASK_COLS} FROM pipeline_tasks \
              WHERE (?1 IS NULL OR repo_path = ?1) \
@@ -2174,7 +2176,7 @@ impl Db {
         is_from_me: bool,
         is_bot_message: bool,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let ts = now_str();
         conn.execute(
             "INSERT OR IGNORE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) \
@@ -2189,7 +2191,7 @@ impl Db {
 
     /// List all chat threads (distinct chat_jid values) with msg count and last timestamp.
     pub fn get_chat_threads(&self) -> Result<Vec<(String, i64, String)>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT chat_jid, COUNT(*) as msg_count, MAX(timestamp) as last_ts \
              FROM messages GROUP BY chat_jid ORDER BY last_ts DESC",
@@ -2209,7 +2211,7 @@ impl Db {
 
     /// Get messages for a specific chat thread, newest last.
     pub fn get_chat_messages(&self, chat_jid: &str, limit: i64) -> Result<Vec<ChatMessage>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message \
              FROM messages WHERE chat_jid = ?1 ORDER BY timestamp ASC LIMIT ?2",
@@ -2235,7 +2237,7 @@ impl Db {
     // ── Registered groups ─────────────────────────────────────────────────
 
     pub fn get_all_groups(&self) -> Result<Vec<RegisteredGroup>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT jid, name, folder, trigger_pattern, requires_trigger FROM registered_groups ORDER BY added_at ASC",
         )?;
@@ -2264,7 +2266,7 @@ impl Db {
         trigger_pattern: &str,
         requires_trigger: bool,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO registered_groups (jid, name, folder, trigger_pattern, requires_trigger) \
              VALUES (?1, ?2, ?3, ?4, ?5) \
@@ -2277,7 +2279,7 @@ impl Db {
     }
 
     pub fn unregister_group(&self, jid: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute("DELETE FROM registered_groups WHERE jid = ?1", params![jid])
             .context("unregister_group")?;
         Ok(())
@@ -2286,7 +2288,7 @@ impl Db {
     // ── Chat sessions ─────────────────────────────────────────────────────
 
     pub fn get_session(&self, folder: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT session_id FROM sessions WHERE folder = ?1",
             params![folder],
@@ -2297,7 +2299,7 @@ impl Db {
     }
 
     pub fn set_session(&self, folder: &str, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO sessions (folder, session_id) VALUES (?1, ?2) \
              ON CONFLICT(folder) DO UPDATE SET session_id=excluded.session_id, created_at=datetime('now')",
@@ -2308,7 +2310,7 @@ impl Db {
     }
 
     pub fn get_seed_cooldowns(&self) -> Result<HashMap<(String, String), i64>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn
             .prepare("SELECT folder, session_id FROM sessions WHERE folder LIKE 'seed:%'")
             .context("get_seed_cooldowns")?;
@@ -2339,7 +2341,7 @@ impl Db {
     }
 
     pub fn expire_sessions(&self, max_age_hours: i64) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let n = conn
             .execute(
                 "DELETE FROM sessions WHERE created_at < datetime('now', ?1)",
@@ -2359,7 +2361,7 @@ impl Db {
         trigger_msg_id: &str,
         folder: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO chat_agent_runs (jid, status, transport, original_id, trigger_msg_id, folder) \
              VALUES (?1, 'running', ?2, ?3, ?4, ?5)",
@@ -2376,7 +2378,7 @@ impl Db {
         new_session_id: &str,
         last_msg_timestamp: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE chat_agent_runs SET status='completed', output=?1, new_session_id=?2, \
              last_msg_timestamp=?3, completed_at=datetime('now') WHERE id=?4",
@@ -2387,7 +2389,7 @@ impl Db {
     }
 
     pub fn mark_chat_agent_run_delivered(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE chat_agent_runs SET status='delivered' WHERE id=?1",
             params![id],
@@ -2397,7 +2399,7 @@ impl Db {
     }
 
     pub fn get_undelivered_runs(&self, jid: &str) -> Result<Vec<ChatAgentRun>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, jid, status, transport, original_id, trigger_msg_id, folder, \
              output, new_session_id, last_msg_timestamp, started_at, completed_at \
@@ -2411,7 +2413,7 @@ impl Db {
     }
 
     pub fn abandon_running_agents(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let n = conn
             .execute(
                 "UPDATE chat_agent_runs SET status='abandoned' WHERE status='running'",
@@ -2427,7 +2429,7 @@ impl Db {
         since_ts: &str,
         limit: i64,
     ) -> Result<Vec<ChatMessage>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message \
              FROM messages WHERE chat_jid=?1 AND timestamp > ?2 ORDER BY timestamp ASC LIMIT ?3",
@@ -2460,7 +2462,7 @@ impl Db {
         since_ts: Option<i64>,
         limit: i64,
     ) -> Result<Vec<LegacyEvent>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, ts, level, category, message, metadata FROM events \
              WHERE (?1 IS NULL OR category = ?1) \
@@ -2487,7 +2489,7 @@ impl Db {
         key_name: &str,
         key_value: &str,
     ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "INSERT INTO api_keys (owner, provider, key_name, key_value) VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(owner, provider) DO UPDATE SET key_name=excluded.key_name, key_value=excluded.key_value",
@@ -2497,7 +2499,7 @@ impl Db {
     }
 
     pub fn get_api_key(&self, owner: &str, provider: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         // Try owner-specific first, then fall back to global
         let result = conn
             .query_row(
@@ -2525,7 +2527,7 @@ impl Db {
     }
 
     pub fn list_api_keys(&self, owner: &str) -> Result<Vec<ApiKeyEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, owner, provider, key_name, created_at FROM api_keys \
              WHERE owner = ?1 OR owner = 'global' ORDER BY provider",
@@ -2546,7 +2548,7 @@ impl Db {
     }
 
     pub fn delete_api_key(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id])?;
         Ok(())
     }
