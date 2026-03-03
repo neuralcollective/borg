@@ -27,3 +27,6 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 rand = "0.8"
 tempfile = "3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

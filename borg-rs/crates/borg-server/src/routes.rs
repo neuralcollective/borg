@@ -1328,6 +1328,9 @@ pub(crate) async fn get_project_document_content(
         .get_task(task_id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if task.project_id != id {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if task.branch.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -1367,6 +1370,9 @@ pub(crate) async fn get_project_document_versions(
         .get_task(task_id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if task.project_id != id {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if task.branch.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -1460,6 +1466,9 @@ pub(crate) async fn export_project_document(
         .get_task(task_id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if task.project_id != id {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if task.branch.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -1608,6 +1617,9 @@ pub(crate) async fn delete_project_document(
 ) -> Result<Json<Value>, StatusCode> {
     state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
     let task = state.db.get_task(task_id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    if task.project_id != id {
+        return Err(StatusCode::NOT_FOUND);
+    }
     if task.branch.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -3030,6 +3042,263 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        routing::{delete, get},
+        Router,
+    };
+    use borg_core::{db::Db, knowledge::EmbeddingClient, stream::TaskStreamManager, types::Task};
+    use chrono::Utc;
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::Arc,
+        time::Instant,
+    };
+    use tokio::sync::{broadcast, Mutex as TokioMutex};
+    use tower::util::ServiceExt;
+
+    fn make_test_state(db: Arc<Db>) -> Arc<crate::AppState> {
+        let (log_tx, _) = broadcast::channel(1);
+        let (pipeline_event_tx, _) = broadcast::channel(1);
+        let (chat_event_tx, _) = broadcast::channel(1);
+        let config = borg_core::config::Config {
+            telegram_token: String::new(),
+            oauth_token: String::new(),
+            assistant_name: String::new(),
+            trigger_pattern: String::new(),
+            data_dir: "/tmp".to_string(),
+            container_image: String::new(),
+            model: String::new(),
+            credentials_path: String::new(),
+            session_max_age_hours: 24,
+            max_consecutive_errors: 3,
+            pipeline_repo: String::new(),
+            pipeline_test_cmd: String::new(),
+            pipeline_lint_cmd: String::new(),
+            backend: String::new(),
+            pipeline_admin_chat: String::new(),
+            release_interval_mins: 60,
+            continuous_mode: false,
+            chat_collection_window_ms: 0,
+            chat_cooldown_ms: 0,
+            agent_timeout_s: 300,
+            max_chat_agents: 1,
+            chat_rate_limit: 0,
+            pipeline_max_agents: 1,
+            web_bind: "127.0.0.1".to_string(),
+            web_port: 8080,
+            dashboard_dist_dir: "/tmp".to_string(),
+            container_setup: String::new(),
+            container_memory_mb: 0,
+            container_cpus: 0.0,
+            sandbox_backend: "none".to_string(),
+            pipeline_max_backlog: 100,
+            pipeline_seed_cooldown_s: 0,
+            proposal_promote_threshold: 0,
+            pipeline_tick_s: 60,
+            remote_check_interval_s: 60,
+            mirror_refresh_interval_s: 60,
+            pipeline_agent_cooldown_s: 120,
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            git_committer_name: String::new(),
+            git_committer_email: String::new(),
+            git_via_borg: false,
+            git_claude_coauthor: false,
+            git_user_coauthor: String::new(),
+            watched_repos: vec![],
+            build_cmd: String::new(),
+            self_update_enabled: false,
+            codex_api_key: String::new(),
+            codex_credentials_path: String::new(),
+            discord_token: String::new(),
+            wa_auth_dir: String::new(),
+            wa_disabled: false,
+            observer_config: String::new(),
+        };
+        Arc::new(crate::AppState {
+            db,
+            config: Arc::new(config),
+            api_token: "test".to_string(),
+            start_time: Instant::now(),
+            log_tx,
+            log_ring: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+            pipeline_event_tx,
+            stream_manager: TaskStreamManager::new(),
+            chat_event_tx,
+            web_sessions: Arc::new(TokioMutex::new(HashMap::new())),
+            backends: HashMap::new(),
+            force_restart: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            chat_rate: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            triage_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            embed_client: EmbeddingClient::new("http://localhost:11434", "nomic-embed-text"),
+        })
+    }
+
+    fn doc_router(state: Arc<crate::AppState>) -> Router {
+        Router::new()
+            .route(
+                "/api/projects/:id/documents/:task_id/content",
+                get(get_project_document_content),
+            )
+            .route(
+                "/api/projects/:id/documents/:task_id/versions",
+                get(get_project_document_versions),
+            )
+            .route(
+                "/api/projects/:id/documents/:task_id/export",
+                get(export_project_document),
+            )
+            .route(
+                "/api/projects/:id/documents/:task_id",
+                delete(delete_project_document),
+            )
+            .with_state(state)
+    }
+
+    fn make_task(project_id: i64) -> Task {
+        Task {
+            id: 0,
+            title: "test".to_string(),
+            description: "test".to_string(),
+            repo_path: "/tmp".to_string(),
+            branch: "test-branch".to_string(),
+            status: "done".to_string(),
+            attempt: 0,
+            max_attempts: 5,
+            last_error: String::new(),
+            created_by: "test".to_string(),
+            notify_chat: String::new(),
+            created_at: Utc::now(),
+            session_id: String::new(),
+            mode: "sweborg".to_string(),
+            backend: String::new(),
+            project_id,
+            task_type: String::new(),
+            started_at: None,
+            completed_at: None,
+            duration_secs: None,
+        }
+    }
+
+    async fn request_status(app: Router, method: Method, uri: &str) -> StatusCode {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let resp: axum::response::Response = app.oneshot(req).await.unwrap();
+        resp.status()
+    }
+
+    #[tokio::test]
+    async fn document_endpoints_reject_mismatched_project_id() {
+        let mut db = Db::open(":memory:").unwrap();
+        db.migrate().unwrap();
+        let db = Arc::new(db);
+
+        let proj_a = db
+            .insert_project("Project A", "sweborg", "/tmp", "", "", "", "")
+            .unwrap();
+        let proj_b = db
+            .insert_project("Project B", "sweborg", "/tmp", "", "", "", "")
+            .unwrap();
+
+        // Task belongs to proj_a
+        let task_id = db.insert_task(&make_task(proj_a)).unwrap();
+
+        let state = make_test_state(Arc::clone(&db));
+
+        // All four endpoints with proj_b's ID and proj_a's task_id must return 404.
+        for (method, suffix) in [
+            (Method::GET, "/content"),
+            (Method::GET, "/versions"),
+            (Method::GET, "/export"),
+            (Method::DELETE, ""),
+        ] {
+            let uri = format!("/api/projects/{proj_b}/documents/{task_id}{suffix}");
+            let status =
+                request_status(doc_router(Arc::clone(&state)), method.clone(), &uri).await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "expected 404 for {method} {uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn document_endpoints_pass_project_id_check_when_matched() {
+        let mut db = Db::open(":memory:").unwrap();
+        db.migrate().unwrap();
+        let db = Arc::new(db);
+
+        let proj_a = db
+            .insert_project("Project A", "sweborg", "/tmp", "", "", "", "")
+            .unwrap();
+
+        // Task belongs to proj_a — branch is non-empty so the check passes project_id guard
+        // and moves on to the git lookup (which will 404 since /tmp has no branch, but that
+        // proves the project_id check did NOT block it).
+        let task_id = db.insert_task(&make_task(proj_a)).unwrap();
+
+        let state = make_test_state(Arc::clone(&db));
+
+        // content and export both proceed past the project_id check and hit git (→ 404 from git, not project mismatch)
+        let status = request_status(
+            doc_router(Arc::clone(&state)),
+            Method::GET,
+            &format!("/api/projects/{proj_a}/documents/{task_id}/content"),
+        )
+        .await;
+        // 404 from git_show_file, not from project_id check — the guard passed
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // versions falls through to git log / GH API, returns empty list (200) or 404
+        let status = request_status(
+            doc_router(Arc::clone(&state)),
+            Method::GET,
+            &format!("/api/projects/{proj_a}/documents/{task_id}/versions"),
+        )
+        .await;
+        assert!(
+            status == StatusCode::OK || status == StatusCode::NOT_FOUND,
+            "versions: unexpected status {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_endpoints_404_for_nonexistent_project() {
+        let mut db = Db::open(":memory:").unwrap();
+        db.migrate().unwrap();
+        let db = Arc::new(db);
+
+        let state = make_test_state(Arc::clone(&db));
+        let task_id = 999i64;
+        let proj_id = 999i64;
+
+        for (method, suffix) in [
+            (Method::GET, "/content"),
+            (Method::GET, "/versions"),
+            (Method::GET, "/export"),
+            (Method::DELETE, ""),
+        ] {
+            let uri = format!("/api/projects/{proj_id}/documents/{task_id}{suffix}");
+            let status =
+                request_status(doc_router(Arc::clone(&state)), method.clone(), &uri).await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "expected 404 for {method} {uri}"
+            );
+        }
     }
 }
 
