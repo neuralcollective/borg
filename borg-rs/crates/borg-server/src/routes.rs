@@ -3524,6 +3524,9 @@ pub(crate) async fn upload_knowledge(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, StatusCode> {
+    const MAX_KNOWLEDGE_FILE_BYTES: i64 = 50 * 1024 * 1024;
+    const MAX_KNOWLEDGE_TOTAL_BYTES: i64 = 1024 * 1024 * 1024;
+
     let knowledge_dir = format!("{}/knowledge", state.config.data_dir);
     std::fs::create_dir_all(&knowledge_dir).map_err(internal)?;
 
@@ -3557,6 +3560,16 @@ pub(crate) async fn upload_knowledge(
 
     if file_name.is_empty() || file_bytes.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let file_size = file_bytes.len() as i64;
+    if file_size > MAX_KNOWLEDGE_FILE_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let total_bytes = state.db.total_knowledge_file_bytes().map_err(internal)?;
+    if total_bytes + file_size > MAX_KNOWLEDGE_TOTAL_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     let dest = format!("{knowledge_dir}/{file_name}");

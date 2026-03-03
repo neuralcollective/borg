@@ -1353,6 +1353,18 @@ impl Db {
 
     // ── Knowledge files ───────────────────────────────────────────────────
 
+    pub fn total_knowledge_file_bytes(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let total = conn
+            .query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM knowledge_files",
+                [],
+                |r| r.get(0),
+            )
+            .context("total_knowledge_file_bytes")?;
+        Ok(total)
+    }
+
     pub fn list_knowledge_files(&self) -> Result<Vec<KnowledgeFile>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
