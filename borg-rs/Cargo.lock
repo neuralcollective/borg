@@ -231,6 +231,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "borg-agent",
  "borg-core",
  "borg-domains",
