@@ -269,17 +269,22 @@ pub(crate) struct ProjectFileJson {
     pub file_name: String,
     pub mime_type: String,
     pub size_bytes: i64,
+    pub has_text: bool,
+    pub text_chars: usize,
     pub created_at: String,
 }
 
 impl From<ProjectFileRow> for ProjectFileJson {
     fn from(f: ProjectFileRow) -> Self {
+        let text_chars = f.extracted_text.len();
         Self {
             id: f.id,
             project_id: f.project_id,
             file_name: f.file_name,
             mime_type: f.mime_type,
             size_bytes: f.size_bytes,
+            has_text: text_chars > 0,
+            text_chars,
             created_at: f.created_at.to_rfc3339(),
         }
     }
@@ -1730,7 +1735,87 @@ pub(crate) async fn upload_project_files(
         }
     }
 
+    // Extract text from uploaded files in background
+    let db = state.db.clone();
+    let project_id = id;
+    tokio::spawn(async move {
+        for file in db.list_project_files(project_id).unwrap_or_default() {
+            if !file.extracted_text.is_empty() { continue; }
+            if let Ok(text) = extract_text(&file.stored_path, &file.mime_type).await {
+                if !text.is_empty() {
+                    let _ = db.update_project_file_text(file.id, &text);
+                    let _ = db.fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text);
+                    tracing::info!("extracted {} chars from {}", text.len(), file.file_name);
+                }
+            }
+        }
+    });
+
     Ok(Json(json!({ "uploaded": uploaded })))
+}
+
+async fn extract_text(path: &str, mime: &str) -> Result<String, StatusCode> {
+    let path = path.to_string();
+    let mime = mime.to_string();
+    let text = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+        let is_pdf = mime.contains("pdf") || ext == "pdf";
+        let is_docx = mime.contains("wordprocessingml") || mime.contains("msword")
+            || ext == "docx" || ext == "doc";
+        let is_text = mime.starts_with("text/") || ext == "txt" || ext == "md"
+            || ext == "csv" || ext == "json" || ext == "xml";
+
+        if is_pdf {
+            let out = std::process::Command::new("pdftotext")
+                .args(["-layout", &path, "-"])
+                .output()?;
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else if is_docx {
+            let out = std::process::Command::new("pandoc")
+                .args([&path, "-t", "plain", "--wrap=none"])
+                .output()?;
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else if is_text {
+            let content = std::fs::read_to_string(&path)?;
+            Ok(content)
+        } else {
+            Ok(String::new())
+        }
+    }).await.map_err(internal)?.map_err(internal)?;
+    Ok(text)
+}
+
+pub(crate) async fn get_project_file_text(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, file_id)): Path<(i64, i64)>,
+) -> Result<Json<Value>, StatusCode> {
+    let file = state.db.get_project_file(project_id, file_id).map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(json!({
+        "id": file.id,
+        "file_name": file.file_name,
+        "extracted_text": file.extracted_text,
+        "has_text": !file.extracted_text.is_empty(),
+    })))
+}
+
+pub(crate) async fn reextract_project_file(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, file_id)): Path<(i64, i64)>,
+) -> Result<Json<Value>, StatusCode> {
+    let file = state.db.get_project_file(project_id, file_id).map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let text = extract_text(&file.stored_path, &file.mime_type).await?;
+    if !text.is_empty() {
+        state.db.update_project_file_text(file_id, &text).map_err(internal)?;
+        state.db.fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text)
+            .map_err(internal)?;
+    }
+    Ok(Json(json!({
+        "id": file_id,
+        "extracted_text_chars": text.len(),
+        "has_text": !text.is_empty(),
+    })))
 }
 
 // Tasks

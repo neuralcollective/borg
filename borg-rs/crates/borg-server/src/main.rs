@@ -731,6 +731,14 @@ async fn main() -> anyhow::Result<()> {
             get(routes::get_project_file_content),
         )
         .route(
+            "/api/projects/:id/files/:file_id/text",
+            get(routes::get_project_file_text),
+        )
+        .route(
+            "/api/projects/:id/files/:file_id/reextract",
+            post(routes::reextract_project_file),
+        )
+        .route(
             "/api/projects/:id/files/upload",
             post(routes::upload_project_files).layer(DefaultBodyLimit::max(110 * 1024 * 1024)),
         )

@@ -139,6 +139,7 @@ pub struct ProjectFileRow {
     pub stored_path: String,
     pub mime_type: String,
     pub size_bytes: i64,
+    pub extracted_text: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -400,7 +401,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
 }
 
 fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileRow> {
-    let created_at_str: String = row.get(6)?;
+    let created_at_str: String = row.get(7)?;
     Ok(ProjectFileRow {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -408,6 +409,7 @@ fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileR
         stored_path: row.get(3)?,
         mime_type: row.get(4)?,
         size_bytes: row.get(5)?,
+        extracted_text: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
         created_at: parse_ts(&created_at_str),
     })
 }
@@ -463,6 +465,7 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN duration_secs INTEGER",
             "ALTER TABLE pipeline_tasks ADD COLUMN review_status TEXT",
             "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -1244,7 +1247,7 @@ impl Db {
     pub fn list_project_files(&self, project_id: i64) -> Result<Vec<ProjectFileRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, created_at \
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, created_at \
              FROM project_files WHERE project_id=?1 ORDER BY id ASC",
         )?;
         let files = stmt
@@ -1261,7 +1264,7 @@ impl Db {
     ) -> Result<Option<ProjectFileRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, created_at \
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, created_at \
              FROM project_files WHERE id=?1 AND project_id=?2",
             params![file_id, project_id],
             row_to_project_file,
@@ -1295,6 +1298,15 @@ impl Db {
         )
         .context("insert_project_file")?;
         Ok(conn.last_insert_rowid())
+    }
+
+    pub fn update_project_file_text(&self, file_id: i64, text: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE project_files SET extracted_text = ?1 WHERE id = ?2",
+            params![text, file_id],
+        )?;
+        Ok(())
     }
 
     pub fn total_project_file_bytes(&self, project_id: i64) -> Result<i64> {

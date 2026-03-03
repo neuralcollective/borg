@@ -225,6 +225,8 @@ export interface ProjectFile {
   file_name: string;
   mime_type: string;
   size_bytes: number;
+  has_text: boolean;
+  text_chars: number;
   created_at: string;
 }
 

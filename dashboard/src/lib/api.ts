@@ -551,6 +551,24 @@ export async function uploadProjectFiles(
   return res.json();
 }
 
+export async function fetchProjectFileText(
+  projectId: number,
+  fileId: number
+): Promise<{ id: number; file_name: string; extracted_text: string; has_text: boolean }> {
+  return fetchJson(`/api/projects/${projectId}/files/${fileId}/text`);
+}
+
+export async function reextractProjectFile(
+  projectId: number,
+  fileId: number
+): Promise<{ id: number; extracted_text_chars: number; has_text: boolean }> {
+  const res = await apiFetch(`/api/projects/${projectId}/files/${fileId}/reextract`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 // ── Deadlines ──────────────────────────────────────────────────────────
 
 export interface Deadline {

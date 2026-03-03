@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS project_files (
   stored_path TEXT NOT NULL,
   mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
   size_bytes INTEGER NOT NULL DEFAULT 0,
+  extracted_text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
