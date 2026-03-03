@@ -1505,9 +1505,10 @@ and report what went wrong.",
         let repo_url_q = sq(&task.repo_path);
         let branch_q = sq(&branch);
         let cmd_q = sq(cmd);
+        let container_mirror_q = sq(&container_mirror);
         let clone_cmd = if std::path::Path::new(&host_mirror).exists() {
             format!(
-                "git clone --depth 1 --single-branch --reference {container_mirror} {repo_url_q} /workspace/repo"
+                "git clone --depth 1 --single-branch --reference {container_mirror_q} {repo_url_q} /workspace/repo"
             )
         } else {
             format!(
@@ -3215,6 +3216,10 @@ fn looks_like_field_key(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn sq(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+
     #[test]
     fn test_build_system_prompt_suffix_no_coauthor_no_user() {
         let s = Pipeline::build_system_prompt_suffix(false, "");
@@ -3299,5 +3304,36 @@ mod tests {
         assert!(result.is_err(), "must return Err when directory cannot be created");
         let msg = format!("{:#}", result.expect_err("is err"));
         assert!(msg.contains("session dir"), "error message must name the operation");
+    }
+
+    #[test]
+    fn sq_plain() {
+        assert_eq!(sq("hello"), "'hello'");
+    }
+
+    #[test]
+    fn sq_with_spaces() {
+        assert_eq!(sq("my repo"), "'my repo'");
+    }
+
+    #[test]
+    fn sq_with_single_quote() {
+        assert_eq!(sq("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn container_mirror_quoted_in_clone_cmd() {
+        // Simulate the clone_cmd construction for a repo name with spaces.
+        let repo_name = "my repo";
+        let container_mirror = format!("/mirrors/{repo_name}.git");
+        let container_mirror_q = sq(&container_mirror);
+        let repo_url_q = sq("/path/to/repo");
+        let clone_cmd = format!(
+            "git clone --depth 1 --single-branch --reference {container_mirror_q} {repo_url_q} /workspace/repo"
+        );
+        // The mirror path must be single-quoted so spaces don't split the argument.
+        assert!(clone_cmd.contains("'/mirrors/my repo.git'"));
+        // Sanity-check the unquoted form is NOT present (would be split by bash).
+        assert!(!clone_cmd.contains(" /mirrors/my repo.git "));
     }
 }
