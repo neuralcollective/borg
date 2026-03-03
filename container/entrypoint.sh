@@ -15,6 +15,10 @@ log_event() {
     echo "---BORG_EVENT---${1}" >&2
 }
 
+json_str() {
+    printf '%s' "$1" | bun -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(s)));"
+}
+
 run_check() {
     local phase="$1"
     local cmd="$2"
@@ -59,11 +63,11 @@ source "$VARS_FILE"
 
 REPO_DIR=/workspace/repo
 
-log_event "{\"type\":\"container_event\",\"event\":\"agent_started\",\"model\":\"${MODEL}\",\"repo\":\"${REPO_URL}\"}"
+log_event "{\"type\":\"container_event\",\"event\":\"agent_started\",\"model\":$(json_str "${MODEL}"),\"repo\":$(json_str "${REPO_URL}")}"
 
 if [ -n "$REPO_URL" ]; then
     CLONE_START=$(date +%s%3N)
-    log_event "{\"type\":\"container_event\",\"event\":\"clone_started\",\"repo\":\"${REPO_URL}\",\"branch\":\"${BRANCH}\"}"
+    log_event "{\"type\":\"container_event\",\"event\":\"clone_started\",\"repo\":$(json_str "${REPO_URL}"),\"branch\":$(json_str "${BRANCH}")}"
 
     CLONE_ARGS=(--depth 50 --single-branch)
     if [ -n "$MIRROR_PATH" ] && [ -d "$MIRROR_PATH" ]; then
@@ -121,8 +125,8 @@ fi
 if [ "$exitcode" -eq 0 ]; then
     log_event "{\"type\":\"container_event\",\"event\":\"agent_complete\"}"
 else
-    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | tr '\n' ' ' | sed 's/"/\\"/g')
-    log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":\"${STDERR_TAIL}\"}"
+    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE")
+    log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":$(json_str "${STDERR_TAIL}")}"
 fi
 
 # Run test/lint/compile checks before committing (only when a repo was cloned)
@@ -141,16 +145,16 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
     if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
         git add -A
         git commit -m "$COMMIT_MSG" || true
-        log_event "{\"type\":\"container_event\",\"event\":\"commit_complete\",\"message\":\"${COMMIT_MSG}\"}"
+        log_event "{\"type\":\"container_event\",\"event\":\"commit_complete\",\"message\":$(json_str "${COMMIT_MSG}")}"
     else
         log_event "{\"type\":\"container_event\",\"event\":\"commit_skipped\"}"
     fi
 
     if [ -n "$PUSH_AFTER_COMMIT" ] && [ -n "$BRANCH" ]; then
         if git push origin "$BRANCH"; then
-            log_event "{\"type\":\"container_event\",\"event\":\"push_complete\",\"branch\":\"${BRANCH}\"}"
+            log_event "{\"type\":\"container_event\",\"event\":\"push_complete\",\"branch\":$(json_str "${BRANCH}")}"
         else
-            log_event "{\"type\":\"container_event\",\"event\":\"push_failed\",\"branch\":\"${BRANCH}\"}"
+            log_event "{\"type\":\"container_event\",\"event\":\"push_failed\",\"branch\":$(json_str "${BRANCH}")}"
         fi
     fi
 
