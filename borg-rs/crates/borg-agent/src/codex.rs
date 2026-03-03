@@ -176,19 +176,4 @@ impl AgentBackend for CodexBackend {
             container_test_results: Vec::new(),
         })
     }
-
-    async fn inject_message(&self, session_id: &str, message: &str) -> Result<()> {
-        // Codex app-server JSON-RPC injection — not yet implemented
-        warn!(
-            session_id = %session_id,
-            msg_len = message.len(),
-            "inject_message not yet implemented for CodexBackend"
-        );
-        Ok(())
-    }
-
-    async fn interrupt(&self, session_id: &str) -> Result<()> {
-        warn!(session_id = %session_id, "interrupt not yet implemented for CodexBackend");
-        Ok(())
-    }
 }

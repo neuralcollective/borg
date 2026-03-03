@@ -793,18 +793,4 @@ impl AgentBackend for ClaudeBackend {
             container_test_results,
         })
     }
-
-    async fn inject_message(&self, session_id: &str, message: &str) -> Result<()> {
-        warn!(
-            session_id = %session_id,
-            msg_len = message.len(),
-            "inject_message not yet implemented (requires TypeScript sidecar extension)"
-        );
-        Ok(())
-    }
-
-    async fn interrupt(&self, session_id: &str) -> Result<()> {
-        warn!(session_id = %session_id, "interrupt not yet implemented");
-        Ok(())
-    }
 }

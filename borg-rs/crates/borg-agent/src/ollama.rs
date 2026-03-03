@@ -193,18 +193,4 @@ impl AgentBackend for OllamaBackend {
             container_test_results: Vec::new(),
         })
     }
-
-    async fn inject_message(&self, session_id: &str, message: &str) -> Result<()> {
-        warn!(
-            session_id = %session_id,
-            msg_len = message.len(),
-            "inject_message not supported for OllamaBackend (stateless)"
-        );
-        Ok(())
-    }
-
-    async fn interrupt(&self, session_id: &str) -> Result<()> {
-        warn!(session_id = %session_id, "interrupt not supported for OllamaBackend");
-        Ok(())
-    }
 }
