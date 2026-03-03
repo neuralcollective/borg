@@ -162,7 +162,7 @@ pub struct PipelineStateSnapshot {
     pub task_id: i64,
     pub task_title: String,
     pub phase: String,
-    pub work_dir: String,
+    pub worktree_path: String,
     /// GitHub PR URL, or null if no PR has been opened yet.
     pub pr_url: Option<String>,
     /// Queue entries for this task that are in `pending_review` status

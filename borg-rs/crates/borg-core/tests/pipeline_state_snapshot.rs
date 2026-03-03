@@ -36,12 +36,7 @@ fn make_task(db: &Db) -> i64 {
         mode: "sweborg".into(),
         backend: String::new(),
         project_id: 0,
-        task_type: "swe".into(),
-        started_at: None,
-        completed_at: None,
-        duration_secs: None,
-        review_status: None,
-        revision_count: 0,
+        task_type: String::new(),
     };
     db.insert_task(&task).expect("insert_task")
 }
@@ -51,7 +46,7 @@ fn make_snapshot(phase: &str) -> PipelineStateSnapshot {
         task_id: 42,
         task_title: "Fix the thing".into(),
         phase: phase.into(),
-        work_dir: "/repo/sessions/task-42".into(),
+        worktree_path: "/repo/.worktrees/task-42".into(),
         pr_url: Some("https://github.com/org/repo/pull/7".into()),
         pending_approvals: vec!["task-42".into()],
         phase_history: vec![PhaseHistoryEntry {
@@ -75,7 +70,7 @@ fn test_pipeline_state_snapshot_serialization() {
         task_id: 7,
         task_title: "Round-trip test".into(),
         phase: "impl".into(),
-        work_dir: "/repo/sessions/task-7".into(),
+        worktree_path: "/repo/.worktrees/task-7".into(),
         pr_url: Some("https://github.com/org/repo/pull/42".into()),
         pending_approvals: vec!["task-7".into()],
         phase_history: vec![PhaseHistoryEntry {
@@ -93,7 +88,7 @@ fn test_pipeline_state_snapshot_serialization() {
     assert_eq!(restored.task_id, original.task_id);
     assert_eq!(restored.task_title, original.task_title);
     assert_eq!(restored.phase, original.phase);
-    assert_eq!(restored.work_dir, original.work_dir);
+    assert_eq!(restored.worktree_path, original.worktree_path);
     assert_eq!(restored.pr_url, original.pr_url);
     assert_eq!(restored.pending_approvals, original.pending_approvals);
     assert_eq!(restored.phase_history.len(), original.phase_history.len());
@@ -113,7 +108,7 @@ fn test_pipeline_state_snapshot_serialization() {
 
 // ── AC #2 ─────────────────────────────────────────────────────────────────────
 // "The JSON object contains exactly the fields defined in PipelineStateSnapshot:
-//  task_id, task_title, phase, work_dir, pr_url, pending_approvals,
+//  task_id, task_title, phase, worktree_path, pr_url, pending_approvals,
 //  phase_history, generated_at."
 
 #[test]
@@ -127,7 +122,7 @@ fn test_snapshot_json_has_all_required_fields() {
         "task_id",
         "task_title",
         "phase",
-        "work_dir",  // serialized field name
+        "worktree_path",
         "pr_url",
         "pending_approvals",
         "phase_history",
@@ -321,20 +316,20 @@ fn test_pr_url_is_none_when_no_queue_entry_exists() {
 #[test]
 fn test_snapshot_written_to_correct_path_and_parseable() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let work_dir = dir.path();
+    let wt_path = dir.path();
 
     // .borg/ does NOT exist yet — the implementation must create it.
-    assert!(!work_dir.join(".borg").exists());
+    assert!(!wt_path.join(".borg").exists());
 
     let snapshot = make_snapshot("impl");
 
     // Replicate what write_pipeline_state_snapshot must do:
-    std::fs::create_dir_all(work_dir.join(".borg")).expect("create .borg");
+    std::fs::create_dir_all(wt_path.join(".borg")).expect("create .borg");
     let json = serde_json::to_string_pretty(&snapshot).expect("serialize");
-    std::fs::write(work_dir.join(".borg/pipeline-state.json"), &json).expect("write");
+    std::fs::write(wt_path.join(".borg/pipeline-state.json"), &json).expect("write");
 
     // File must exist at the exact path.
-    let file_path = work_dir.join(".borg/pipeline-state.json");
+    let file_path = wt_path.join(".borg/pipeline-state.json");
     assert!(file_path.exists(), ".borg/pipeline-state.json must exist");
 
     // Content must be valid JSON parseable back to PipelineStateSnapshot.
@@ -343,7 +338,7 @@ fn test_snapshot_written_to_correct_path_and_parseable() {
         serde_json::from_str(&content).expect("parse pipeline-state.json");
     assert_eq!(restored.task_id, snapshot.task_id);
     assert_eq!(restored.phase, snapshot.phase);
-    assert_eq!(restored.work_dir, snapshot.work_dir);
+    assert_eq!(restored.worktree_path, snapshot.worktree_path);
 }
 
 // Edge case: retry overwrites stale snapshot from previous attempt.
@@ -406,8 +401,8 @@ fn test_phase_history_is_empty_when_no_prior_outputs() {
 #[test]
 fn test_concurrent_tasks_have_distinct_snapshot_paths() {
     let root = tempfile::tempdir().expect("tempdir");
-    let wt_a = root.path().join("sessions/task-1/.borg");
-    let wt_b = root.path().join("sessions/task-2/.borg");
+    let wt_a = root.path().join(".worktrees/task-1/.borg");
+    let wt_b = root.path().join(".worktrees/task-2/.borg");
     std::fs::create_dir_all(&wt_a).unwrap();
     std::fs::create_dir_all(&wt_b).unwrap();
 
