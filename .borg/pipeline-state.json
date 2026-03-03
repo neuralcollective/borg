@@ -1,0 +1,10 @@
+{
+  "task_id": 292,
+  "task_title": "Test ChatCollector flush_expired() and mark_done() lifecycle",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-292",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T10:42:59.074256390Z"
+}
