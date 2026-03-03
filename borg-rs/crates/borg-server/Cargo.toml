@@ -29,3 +29,6 @@ rand = "0.8"
 tempfile = "3"
 zip = "2"
 reqwest = { workspace = true }
+aws-config = "1"
+aws-credential-types = "1"
+aws-sdk-s3 = "1"

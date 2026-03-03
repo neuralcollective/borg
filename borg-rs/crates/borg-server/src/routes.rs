@@ -25,7 +25,7 @@ use tokio_stream::{
     StreamExt,
 };
 
-use crate::AppState;
+use crate::{storage::FileStorage, AppState};
 
 // ── Error helper ──────────────────────────────────────────────────────────
 
@@ -338,6 +338,11 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "google_client_secret",
     "ms_client_id",
     "ms_client_secret",
+    "storage_backend",
+    "s3_bucket",
+    "s3_region",
+    "s3_endpoint",
+    "s3_prefix",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -365,6 +370,11 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("google_client_secret", ""),
     ("ms_client_id", ""),
     ("ms_client_secret", ""),
+    ("storage_backend", "local"),
+    ("s3_bucket", ""),
+    ("s3_region", "us-east-1"),
+    ("s3_endpoint", ""),
+    ("s3_prefix", "borg/"),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────
@@ -469,7 +479,7 @@ fn is_binary_mime(mime: &str) -> bool {
         || mime.starts_with("application/octet-stream")
 }
 
-fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
+async fn stage_project_files(session_dir: &str, files: &[ProjectFileRow], storage: &FileStorage) {
     let dest_dir = format!("{session_dir}/project_files");
     let _ = std::fs::create_dir_all(&dest_dir);
     for file in files {
@@ -478,11 +488,19 @@ fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed");
         let dest = format!("{dest_dir}/{safe_name}");
-        let _ = std::fs::copy(&file.stored_path, &dest);
+        if let Ok(bytes) = storage.read_all(&file.stored_path).await {
+            let _ = tokio::fs::write(&dest, bytes).await;
+        }
     }
 }
 
-fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session_dir: &str, db: &Db) -> String {
+async fn build_project_context(
+    project: &ProjectRow,
+    files: &[ProjectFileRow],
+    session_dir: &str,
+    db: &Db,
+    storage: &FileStorage,
+) -> String {
     let tasks = db.list_project_tasks(project.id).unwrap_or_default();
     let completed_tasks: Vec<_> = tasks.iter()
         .filter(|t| t.status == "merged" || t.status == "done" || t.status == "complete")
@@ -493,7 +511,7 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
     }
 
     if !files.is_empty() {
-        stage_project_files(session_dir, files);
+        stage_project_files(session_dir, files, storage).await;
     }
 
     const MAX_CONTEXT_BYTES: usize = 120_000;
@@ -546,7 +564,7 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
         remaining -= header.len();
 
         let preview_budget = remaining.min(MAX_FILE_PREVIEW_BYTES);
-        let preview = match std::fs::read(&file.stored_path) {
+        let preview = match storage.read_all(&file.stored_path).await {
             Ok(raw) => {
                 let clipped = &raw[..raw.len().min(preview_budget)];
                 String::from_utf8_lossy(clipped).to_string()
@@ -599,6 +617,7 @@ pub(crate) async fn run_chat_agent(
     sessions: &Arc<TokioMutex<HashMap<String, String>>>,
     config: &Config,
     db: &Arc<Db>,
+    storage: &Arc<FileStorage>,
     chat_event_tx: &broadcast::Sender<String>,
 ) -> anyhow::Result<String> {
     let session_dir = format!(
@@ -642,7 +661,7 @@ pub(crate) async fn run_chat_agent(
         match db.get_project(project_id) {
             Ok(Some(project)) => {
                 let files = db.list_project_files(project_id).unwrap_or_default();
-                let ctx = build_project_context(&project, &files, &session_dir, db);
+                let ctx = build_project_context(&project, &files, &session_dir, db, storage).await;
                 if ctx.is_empty() {
                     prompt
                 } else {
@@ -1977,7 +1996,9 @@ pub(crate) async fn get_project_file_content(
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let bytes = tokio::fs::read(&row.stored_path)
+    let bytes = state
+        .file_storage
+        .read_all(&row.stored_path)
         .await
         .map_err(internal)?;
 
@@ -2001,11 +2022,6 @@ pub(crate) async fn upload_project_files(
 
     let mut total_bytes = state.db.total_project_file_bytes(id).map_err(internal)?;
     let mut uploaded: Vec<ProjectFileJson> = Vec::new();
-    let files_dir = format!("{}/projects/{}/files", state.config.data_dir, id);
-    tokio::fs::create_dir_all(&files_dir)
-        .await
-        .map_err(internal)?;
-
     while let Some(field) = multipart.next_field().await.map_err(internal)? {
         let raw_name = field
             .file_name()
@@ -2031,8 +2047,9 @@ pub(crate) async fn upload_project_files(
             rand_suffix(),
             file_name
         );
-        let stored_path = format!("{}/{}", files_dir, unique_name);
-        tokio::fs::write(&stored_path, &bytes)
+        let stored_path = state
+            .file_storage
+            .put_project_file(id, &unique_name, &bytes)
             .await
             .map_err(internal)?;
 
@@ -2055,11 +2072,16 @@ pub(crate) async fn upload_project_files(
 
     // Extract text from uploaded files in background
     let db = state.db.clone();
+    let storage = state.file_storage.clone();
     let project_id = id;
     tokio::spawn(async move {
         for file in db.list_project_files(project_id).unwrap_or_default() {
             if !file.extracted_text.is_empty() { continue; }
-            if let Ok(text) = extract_text(&file.stored_path, &file.mime_type).await {
+            let bytes = match storage.read_all(&file.stored_path).await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if let Ok(text) = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await {
                 if !text.is_empty() {
                     let _ = db.update_project_file_text(file.id, &text);
                     let _ = db.fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text);
@@ -2072,11 +2094,12 @@ pub(crate) async fn upload_project_files(
     Ok(Json(json!({ "uploaded": uploaded })))
 }
 
-async fn extract_text(path: &str, mime: &str) -> Result<String, StatusCode> {
-    let path = path.to_string();
+async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String, StatusCode> {
+    let file_name = file_name.to_string();
     let mime = mime.to_string();
+    let bytes = bytes.to_vec();
     let text = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+        let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
         let is_pdf = mime.contains("pdf") || ext == "pdf";
         let is_docx = mime.contains("wordprocessingml") || mime.contains("msword")
             || ext == "docx" || ext == "doc";
@@ -2084,18 +2107,22 @@ async fn extract_text(path: &str, mime: &str) -> Result<String, StatusCode> {
             || ext == "csv" || ext == "json" || ext == "xml";
 
         if is_pdf {
+            let tmp = tempfile::NamedTempFile::new()?;
+            std::fs::write(tmp.path(), &bytes)?;
             let out = std::process::Command::new("pdftotext")
-                .args(["-layout", &path, "-"])
+                .args(["-layout", tmp.path().to_str().unwrap_or(""), "-"])
                 .output()?;
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         } else if is_docx {
+            let suffix = if ext.is_empty() { "docx" } else { &ext };
+            let tmp = tempfile::Builder::new().suffix(&format!(".{suffix}")).tempfile()?;
+            std::fs::write(tmp.path(), &bytes)?;
             let out = std::process::Command::new("pandoc")
-                .args([&path, "-t", "plain", "--wrap=none"])
+                .args([tmp.path().to_str().unwrap_or(""), "-t", "plain", "--wrap=none"])
                 .output()?;
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         } else if is_text {
-            let content = std::fs::read_to_string(&path)?;
-            Ok(content)
+            Ok(String::from_utf8_lossy(&bytes).to_string())
         } else {
             Ok(String::new())
         }
@@ -2123,7 +2150,8 @@ pub(crate) async fn reextract_project_file(
 ) -> Result<Json<Value>, StatusCode> {
     let file = state.db.get_project_file(project_id, file_id).map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let text = extract_text(&file.stored_path, &file.mime_type).await?;
+    let bytes = state.file_storage.read_all(&file.stored_path).await.map_err(internal)?;
+    let text = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await?;
     if !text.is_empty() {
         state.db.update_project_file_text(file_id, &text).map_err(internal)?;
         state.db.fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text)
@@ -3270,6 +3298,7 @@ pub(crate) async fn post_project_chat(
             &state2.web_sessions,
             &state2.config,
             &state2.db,
+            &state2.file_storage,
             &state2.chat_event_tx,
         )
         .await
@@ -3351,6 +3380,7 @@ pub(crate) async fn post_chat(
             &state2.web_sessions,
             &state2.config,
             &state2.db,
+            &state2.file_storage,
             &state2.chat_event_tx,
         )
         .await
@@ -4092,9 +4122,6 @@ pub(crate) async fn import_cloud_files(
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(internal)?;
-    let files_dir = format!("{}/projects/{}/files", state.config.data_dir, id);
-    tokio::fs::create_dir_all(&files_dir).await.map_err(internal)?;
-
     let mut imported: Vec<Value> = Vec::new();
     let mut total_bytes = state.db.total_project_file_bytes(id).map_err(internal)?;
 
@@ -4120,8 +4147,11 @@ pub(crate) async fn import_cloud_files(
         }
         let safe_name = sanitize_upload_name(&file.name);
         let unique_name = format!("{}_{}_cloud_{}", Utc::now().timestamp_millis(), rand_suffix(), safe_name);
-        let stored_path = format!("{files_dir}/{unique_name}");
-        tokio::fs::write(&stored_path, &bytes).await.map_err(internal)?;
+        let stored_path = state
+            .file_storage
+            .put_project_file(id, &unique_name, &bytes)
+            .await
+            .map_err(internal)?;
 
         let mime = guess_mime(&file.name);
         let file_id = state.db.insert_project_file(id, &safe_name, &stored_path, &mime, file_size)
@@ -4131,12 +4161,12 @@ pub(crate) async fn import_cloud_files(
 
         // Kick off text extraction
         let db2 = state.db.clone();
-        let path2 = stored_path.clone();
         let mime2 = mime.clone();
+        let bytes2 = bytes.clone();
         let proj_id = id;
         let fname = safe_name.clone();
         tokio::spawn(async move {
-            if let Ok(text) = extract_text(&path2, &mime2).await {
+            if let Ok(text) = extract_text_from_bytes(&fname, &mime2, &bytes2).await {
                 if !text.is_empty() {
                     let _ = db2.update_project_file_text(file_id, &text);
                     let _ = db2.fts_index_document(proj_id, 0, &fname, &fname, &text);

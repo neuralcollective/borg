@@ -95,6 +95,15 @@ pub struct Config {
     /// Public base URL for OAuth callbacks (e.g. "https://app.borg.legal").
     /// Falls back to http://localhost:{web_port} if unset.
     pub public_url: String,
+
+    // File storage backend
+    pub storage_backend: String, // "local" | "s3"
+    pub s3_bucket: String,
+    pub s3_region: String,
+    pub s3_endpoint: String,
+    pub s3_access_key: String,
+    pub s3_secret_key: String,
+    pub s3_prefix: String,
 }
 
 impl Config {
@@ -629,6 +638,11 @@ impl Config {
             ("self_update_enabled", self.self_update_enabled.to_string()),
             ("observer_config", self.observer_config.clone()),
             ("wa_disabled", self.wa_disabled.to_string()),
+            ("storage_backend", self.storage_backend.clone()),
+            ("s3_bucket", self.s3_bucket.clone()),
+            ("s3_region", self.s3_region.clone()),
+            ("s3_endpoint", self.s3_endpoint.clone()),
+            ("s3_prefix", self.s3_prefix.clone()),
         ];
         let conn_guard = db.raw_conn();
         let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
@@ -689,6 +703,11 @@ impl Config {
         c.git_user_coauthor = get_str("git_user_coauthor", &c.git_user_coauthor);
         c.observer_config = get_str("observer_config", &c.observer_config);
         c.public_url = get_str("public_url", &c.public_url);
+        c.storage_backend = get_str("storage_backend", &c.storage_backend);
+        c.s3_bucket = get_str("s3_bucket", &c.s3_bucket);
+        c.s3_region = get_str("s3_region", &c.s3_region);
+        c.s3_endpoint = get_str("s3_endpoint", &c.s3_endpoint);
+        c.s3_prefix = get_str("s3_prefix", &c.s3_prefix);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
@@ -844,6 +863,13 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
             public_url: get_str("PUBLIC_URL", &dotenv, ""),
+            storage_backend: get_str("STORAGE_BACKEND", &dotenv, "local"),
+            s3_bucket: get_str("S3_BUCKET", &dotenv, ""),
+            s3_region: get_str("AWS_REGION", &dotenv, "us-east-1"),
+            s3_endpoint: get_str("S3_ENDPOINT", &dotenv, ""),
+            s3_access_key: get_str("AWS_ACCESS_KEY_ID", &dotenv, ""),
+            s3_secret_key: get_str("AWS_SECRET_ACCESS_KEY", &dotenv, ""),
+            s3_prefix: get_str("S3_PREFIX", &dotenv, "borg/"),
         })
     }
 }
