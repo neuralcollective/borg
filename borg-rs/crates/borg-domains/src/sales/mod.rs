@@ -8,7 +8,6 @@ pub fn sales_mode() -> PipelineMode {
         label: "Sales Outreach".into(),
         category: "Professional Services".into(),
         initial_status: "backlog".into(),
-        uses_git_worktrees: true,
         uses_docker: false,
         uses_test_cmd: false,
         integration: IntegrationType::None,

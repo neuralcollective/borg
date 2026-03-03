@@ -8,7 +8,6 @@ pub fn crew_mode() -> PipelineMode {
         label: "Talent Search".into(),
         category: "People & Ops".into(),
         initial_status: "backlog".into(),
-        uses_git_worktrees: true,
         uses_docker: false,
         uses_test_cmd: false,
         integration: IntegrationType::None,

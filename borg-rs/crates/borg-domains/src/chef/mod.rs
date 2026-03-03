@@ -8,7 +8,6 @@ pub fn chef_mode() -> PipelineMode {
         label: "Recipe".into(),
         category: "Creative".into(),
         initial_status: "backlog".into(),
-        uses_git_worktrees: true,
         uses_docker: false,
         uses_test_cmd: false,
         integration: IntegrationType::None,

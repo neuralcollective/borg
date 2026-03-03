@@ -50,7 +50,7 @@ impl Default for PhaseType {
 pub enum IntegrationType {
     /// Creates GitHub PRs and manages merge queue.
     GitPr,
-    /// Commits to a branch but no PR — worktree kept for versioned document history.
+    /// Commits to a branch but no PR — branch preserved for versioned document history.
     GitBranch,
     /// No VCS integration.
     None,
@@ -72,7 +72,7 @@ pub struct Task {
     pub title: String,
     pub description: String,
     pub repo_path: String,
-    /// Git branch name for this task's worktree.
+    /// Git branch name for this task.
     pub branch: String,
     /// Current pipeline phase / status (e.g. "backlog", "implement", "validate", "done", "failed", "blocked").
     pub status: String,
@@ -247,7 +247,6 @@ pub struct PipelineMode {
     pub phases: Vec<PhaseConfig>,
     pub seed_modes: Vec<SeedConfig>,
     pub initial_status: String,
-    pub uses_git_worktrees: bool,
     pub uses_docker: bool,
     pub uses_test_cmd: bool,
     pub integration: IntegrationType,

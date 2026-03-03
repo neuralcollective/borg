@@ -8,7 +8,6 @@ pub fn medwrite_mode() -> PipelineMode {
         label: "Medical Writing".into(),
         category: "Professional Services".into(),
         initial_status: "backlog".into(),
-        uses_git_worktrees: true,
         uses_docker: false,
         uses_test_cmd: false,
         integration: IntegrationType::GitBranch,

@@ -162,7 +162,6 @@ export interface PipelineModeFull {
   phases: PhaseConfigFull[];
   seed_modes: SeedConfigFull[];
   initial_status: string;
-  uses_git_worktrees: boolean;
   uses_docker: boolean;
   uses_test_cmd: boolean;
   integration: IntegrationType;

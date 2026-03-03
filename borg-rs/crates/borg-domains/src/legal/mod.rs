@@ -23,7 +23,6 @@ pub fn legal_mode() -> PipelineMode {
         label: "Legal".into(),
         category: "Professional Services".into(),
         initial_status: "backlog".into(),
-        uses_git_worktrees: false,
         uses_docker: true,
         uses_test_cmd: false,
         integration: IntegrationType::GitBranch,

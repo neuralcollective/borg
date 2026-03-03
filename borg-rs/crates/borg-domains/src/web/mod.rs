@@ -9,7 +9,6 @@ pub fn web_mode() -> PipelineMode {
         label: "Frontend".into(),
         category: "Engineering".into(),
         initial_status: "backlog".into(),
-        uses_git_worktrees: true,
         uses_docker: true,
         uses_test_cmd: true,
         integration: IntegrationType::GitPr,

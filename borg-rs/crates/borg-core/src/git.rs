@@ -56,20 +56,6 @@ impl Git {
         })
     }
 
-    pub fn remove_worktree(&self, worktree_path: &str) -> Result<()> {
-        let result = self.exec(
-            &self.repo_path,
-            &["worktree", "remove", "--force", worktree_path],
-        )?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git worktree remove failed for {worktree_path}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
     pub fn rev_parse_head(&self) -> Result<String> {
         self.rev_parse("HEAD")
     }
@@ -94,39 +80,6 @@ impl Git {
             ));
         }
         Ok(())
-    }
-
-    pub fn rebase_onto_main(&self, worktree_path: &str) -> Result<()> {
-        let result = self.exec(worktree_path, &["rebase", "origin/main"])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git rebase origin/main failed in {worktree_path}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn rebase_abort(&self, worktree_path: &str) -> Result<()> {
-        let result = self.exec(worktree_path, &["rebase", "--abort"])?;
-        if !result.success() {
-            return Err(anyhow!(
-                "git rebase --abort failed in {worktree_path}: {}",
-                result.combined_output()
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn rebase_in_progress(&self, worktree_path: &str) -> Result<bool> {
-        let merge = self.exec(worktree_path, &["rev-parse", "--git-path", "rebase-merge"])?;
-        let apply = self.exec(worktree_path, &["rev-parse", "--git-path", "rebase-apply"])?;
-        if !merge.success() || !apply.success() {
-            anyhow::bail!("git rev-parse --git-path failed in {worktree_path}");
-        }
-        let merge_path = std::path::PathBuf::from(merge.stdout.trim());
-        let apply_path = std::path::PathBuf::from(apply.stdout.trim());
-        Ok(merge_path.exists() || apply_path.exists())
     }
 
     pub fn commit_all(

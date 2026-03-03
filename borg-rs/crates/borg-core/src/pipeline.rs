@@ -43,8 +43,6 @@ pub struct Pipeline {
     in_flight: Mutex<HashSet<i64>>,
     /// Per-task last agent dispatch timestamp (epoch seconds) for rate limiting.
     last_agent_dispatch: Mutex<HashMap<i64, i64>>,
-    /// Serializes git worktree creation to avoid .git/config lock contention.
-    worktree_create_lock: Mutex<()>,
     /// Prevents overlapping seed runs (seeding is spawned in background).
     seeding_active: std::sync::atomic::AtomicBool,
     /// Whether the borg-agent-net Docker bridge network was successfully created at startup.
@@ -123,7 +121,6 @@ impl Pipeline {
             startup_heads,
             in_flight: Mutex::new(HashSet::new()),
             last_agent_dispatch: Mutex::new(HashMap::new()),
-            worktree_create_lock: Mutex::new(()),
             seeding_active: std::sync::atomic::AtomicBool::new(false),
             agent_network_available,
         };
@@ -253,7 +250,6 @@ impl Pipeline {
         let current = self.db.get_task(task.id)?.unwrap_or_else(|| task.clone());
         if current.attempt >= current.max_attempts {
             self.db.update_task_status(task.id, "failed", Some(error))?;
-            self.cleanup_worktree(task);
         } else {
             // After 3 attempts, force a fresh session with a summary of what was tried
             let error_ctx = if current.attempt >= 3 {
@@ -290,19 +286,6 @@ impl Pipeline {
             current_error.chars().take(2000).collect::<String>()
         ));
         summary
-    }
-
-    /// Remove the git worktree for a task (best-effort, silent on error).
-    fn cleanup_worktree(&self, task: &Task) {
-        if self.sandbox_mode == SandboxMode::Docker {
-            return;
-        }
-        let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
-        let git = Git::new(&task.repo_path);
-        let _ = git.remove_worktree(&wt_path);
-        std::fs::remove_dir_all(&wt_path).ok();
-        let _ = git.exec(&task.repo_path, &["worktree", "prune"]);
-        info!("cleaned up worktree {} for task #{}", wt_path, task.id);
     }
 
     /// Git author pair from config, or None if not configured.
@@ -583,7 +566,7 @@ impl Pipeline {
 
     // ── Phase handlers ────────────────────────────────────────────────────
 
-    /// Setup phase: create git worktree and advance to first agent phase.
+    /// Setup phase: record branch name and advance to first agent phase.
     async fn setup_branch(&self, task: &Task, mode: &PipelineMode) -> Result<()> {
         let next = mode
             .phases
@@ -592,51 +575,10 @@ impl Pipeline {
             .map(|p| p.name.as_str())
             .unwrap_or("spec");
 
-        if !mode.uses_git_worktrees || self.sandbox_mode == SandboxMode::Docker {
-            // Docker mode: container handles its own clone; branch is created inside.
-            // Record the branch name so integration/rebase can reference it.
-            let branch = format!("task-{}", task.id);
-            self.db.update_task_branch(task.id, &branch)?;
-            self.db.update_task_status(task.id, next, None)?;
-            return Ok(());
-        }
-
-        let git = Git::new(&task.repo_path);
-        let _ = git.fetch_origin();
-
         let branch = format!("task-{}", task.id);
-        let wt_dir = format!("{}/.worktrees", task.repo_path);
-        tokio::fs::create_dir_all(&wt_dir).await.ok();
-        let wt_path = format!("{wt_dir}/task-{}", task.id);
-
-        // Serialize worktree creation to avoid .git/config lock contention.
-        let _wt_lock = self.worktree_create_lock.lock().await;
-
-        let _ = git.remove_worktree(&wt_path);
-        tokio::fs::remove_dir_all(&wt_path).await.ok();
-        let _ = git.exec(&task.repo_path, &["worktree", "prune"]);
-        let _ = git.exec(&task.repo_path, &["branch", "-D", &branch]);
-
-        let wt_result = git.exec(
-            &task.repo_path,
-            &["worktree", "add", &wt_path, "-b", &branch, "origin/main"],
-        )?;
-
-        drop(_wt_lock);
-
-        if !wt_result.success() {
-            self.db
-                .update_task_status(task.id, "failed", Some(&wt_result.stderr))?;
-            return Ok(());
-        }
-
         self.db.update_task_branch(task.id, &branch)?;
         self.db.update_task_status(task.id, next, None)?;
 
-        info!(
-            "created worktree {} (branch {}) for task #{}",
-            wt_path, branch, task.id
-        );
         self.emit(PipelineEvent::Phase {
             task_id: Some(task.id),
             message: format!("task #{} started branch {}", task.id, branch),
@@ -659,12 +601,10 @@ impl Pipeline {
             .to_string_lossy()
             .to_string();
 
-        // In Docker mode the container handles its own clone; wt_path is only
-        // used for local file ops (signal.json, state snapshot), so use session_dir.
+        // Docker: container handles its own clone; wt_path is only used for
+        // local file ops (signal.json, state snapshot). Non-Docker: use repo directly.
         let wt_path = if self.sandbox_mode == SandboxMode::Docker {
             session_dir.clone()
-        } else if mode.uses_git_worktrees {
-            format!("{}/.worktrees/task-{}", task.repo_path, task.id)
         } else {
             task.repo_path.clone()
         };
@@ -768,7 +708,6 @@ impl Pipeline {
             };
             self.db
                 .update_task_status(task.id, "failed", Some(&reason))?;
-            self.cleanup_worktree(task);
             return Ok(());
         }
 
@@ -817,21 +756,6 @@ impl Pipeline {
                     &format!("missing artifact: {artifact}"),
                 )?;
                 return Ok(());
-            }
-        }
-
-        if phase.commits && mode.uses_git_worktrees && !result.ran_in_docker {
-            let git = Git::new(&task.repo_path);
-            let (_, user_coauthor) = self.git_coauthor_settings();
-            let commit_msg = Self::with_user_coauthor(&phase.commit_message, &user_coauthor);
-            match git.commit_all(&wt_path, &commit_msg, self.git_author()) {
-                Ok(changed) => {
-                    if !changed && !phase.allow_no_changes {
-                        self.fail_or_retry(task, &phase.name, "agent made no changes")?;
-                        return Ok(());
-                    }
-                },
-                Err(e) => warn!("commit_all for task #{}: {}", task.id, e),
             }
         }
 
@@ -916,11 +840,7 @@ impl Pipeline {
         phase: &PhaseConfig,
         mode: &PipelineMode,
     ) -> Result<()> {
-        let wt_path = if mode.uses_git_worktrees {
-            format!("{}/.worktrees/task-{}", task.repo_path, task.id)
-        } else {
-            task.repo_path.clone()
-        };
+        let wt_path = task.repo_path.clone();
 
         let test_cmd = self.repo_config(task).test_cmd;
         if test_cmd.is_empty() {
@@ -980,124 +900,20 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Run a rebase phase.
+    /// Run a rebase phase (Docker-only — uses GitHub API to update the PR branch).
     async fn run_rebase_phase(
         &self,
         task: &Task,
         phase: &PhaseConfig,
         _mode: &PipelineMode,
     ) -> Result<()> {
-        // In Docker mode, the container manages git state. Use GitHub's update-branch
-        // API to rebase the PR branch onto main, then advance directly.
         if self.sandbox_mode == SandboxMode::Docker {
             return self.run_rebase_phase_docker(task, phase).await;
         }
 
-        let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
-        let git = Git::new(&task.repo_path);
-
-        if !std::path::Path::new(&wt_path).exists() {
-            warn!(
-                "task #{} rebase: worktree missing at {wt_path}, resetting to backlog",
-                task.id
-            );
-            self.db.update_task_status(task.id, "backlog", None)?;
-            return Ok(());
-        }
-
-        git.fetch_origin().ok();
-
-        // Abort any stale rebase left from a previous attempt
-        if git.rebase_in_progress(&wt_path).unwrap_or(false) {
-            info!("task #{} aborting stale in-progress rebase", task.id);
-            git.rebase_abort(&wt_path).ok();
-        }
-
-        match git.rebase_onto_main(&wt_path) {
-            Ok(()) => {
-                self.db.update_task_status(task.id, &phase.next, None)?;
-                info!("task #{} rebase succeeded", task.id);
-            },
-            Err(e) => {
-                let mut rebase_err = e.to_string();
-                if !phase.fix_instruction.is_empty() {
-                    info!("task #{} rebase failed, running fix agent", task.id);
-
-                    let fix_phase = PhaseConfig {
-                        name: "rebase_fix".into(),
-                        label: "Rebase Fix".into(),
-                        instruction: phase.fix_instruction.replace("{ERROR}", &rebase_err),
-                        fresh_session: true,
-                        allowed_tools: "Read,Glob,Grep,Write,Edit,Bash".into(),
-                        ..Default::default()
-                    };
-
-                    let session_dir_rel = format!("store/sessions/task-{}", task.id);
-                    let session_dir = std::fs::canonicalize(&session_dir_rel)
-                        .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-                        .to_string_lossy()
-                        .to_string();
-                    let ctx = self.make_context(task, wt_path.clone(), session_dir, Vec::new());
-
-                    if let Some(backend) = self.resolve_backend(task) {
-                        if let Err(e) = self
-                            .write_pipeline_state_snapshot(task, "rebase_fix", &wt_path)
-                            .await
-                        {
-                            warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
-                        }
-                        if let Err(fix_err) = backend.run_phase(task, &fix_phase, ctx).await {
-                            warn!("task #{} fix agent error: {fix_err}", task.id);
-                        }
-                    }
-
-                    // If the fix agent didn't complete the rebase, try --continue
-                    if git.rebase_in_progress(&wt_path).unwrap_or(false) {
-                        let cont = git.exec_env(
-                            &wt_path,
-                            &["rebase", "--continue"],
-                            &[("GIT_EDITOR", "true")],
-                        );
-                        match cont {
-                            Ok(r) if r.success() => {
-                                self.db.update_task_status(task.id, &phase.next, None)?;
-                                info!("task #{} rebase succeeded after fix (--continue)", task.id);
-                                return Ok(());
-                            },
-                            Ok(r) => {
-                                warn!(
-                                    "task #{} rebase --continue failed: {}",
-                                    task.id,
-                                    r.combined_output()
-                                );
-                            },
-                            Err(e) => warn!("task #{} rebase --continue error: {e}", task.id),
-                        }
-                        // --continue failed, abort and retry fresh
-                        git.rebase_abort(&wt_path).ok();
-                    }
-
-                    // Rebase completed or was aborted — try once more from clean state
-                    match git.rebase_onto_main(&wt_path) {
-                        Ok(()) => {
-                            self.db.update_task_status(task.id, &phase.next, None)?;
-                            info!("task #{} rebase succeeded after fix", task.id);
-                            return Ok(());
-                        },
-                        Err(e2) => {
-                            rebase_err = e2.to_string();
-                            // Clean up any rebase state from the failed retry
-                            if git.rebase_in_progress(&wt_path).unwrap_or(false) {
-                                git.rebase_abort(&wt_path).ok();
-                            }
-                        },
-                    }
-                }
-
-                self.fail_or_retry(task, "rebase", &rebase_err)?;
-            },
-        }
-
+        // Non-Docker rebase: no worktree, just advance.
+        info!("task #{} rebase: non-Docker mode, advancing", task.id);
+        self.db.update_task_status(task.id, &phase.next, None)?;
         Ok(())
     }
 
@@ -1165,7 +981,7 @@ impl Pipeline {
             return Ok(());
         }
 
-        let wt_path = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
+        let wt_path = task.repo_path.clone();
 
         let lint_cmd = match self.repo_lint_cmd(&task.repo_path, &wt_path) {
             Some(cmd) => cmd,
@@ -1381,10 +1197,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     }
                 }
                 IntegrationType::GitBranch => {
-                    info!("task #{} done, worktree preserved on branch", task.id);
-                }
-                IntegrationType::None if mode.uses_git_worktrees => {
-                    self.cleanup_worktree(task);
+                    info!("task #{} done, branch preserved", task.id);
                 }
                 IntegrationType::None => {}
             }
@@ -1400,7 +1213,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
     // ── Pipeline state snapshot ───────────────────────────────────────────
 
-    /// Write `.borg/pipeline-state.json` into the worktree before agent launch.
+    /// Write `.borg/pipeline-state.json` into the working directory before agent launch.
     /// Logs a warning and returns Ok(()) on any error so phase execution is
     /// never aborted by snapshot failures.
     async fn write_pipeline_state_snapshot(

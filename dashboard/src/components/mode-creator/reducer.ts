@@ -65,7 +65,6 @@ export function blankMode(): PipelineModeFull {
     ],
     seed_modes: [],
     initial_status: "backlog",
-    uses_git_worktrees: true,
     uses_docker: true,
     uses_test_cmd: false,
     integration: "git_pr",

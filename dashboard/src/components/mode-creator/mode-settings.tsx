@@ -88,8 +88,6 @@ export function ModeSettings({
           onChange={(v) => onChange("uses_docker", v)} />
         <Toggle label="Test Cmd" checked={mode.uses_test_cmd} disabled={readOnly}
           onChange={(v) => onChange("uses_test_cmd", v)} />
-        <Toggle label="Git Worktrees" checked={mode.uses_git_worktrees} disabled={readOnly}
-          onChange={(v) => onChange("uses_git_worktrees", v)} />
       </div>
     </div>
   );
