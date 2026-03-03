@@ -684,7 +684,7 @@ async fn main() -> anyhow::Result<()> {
         // Tasks
         .route("/api/tasks", get(routes::list_tasks))
         .route("/api/tasks/create", post(routes::create_task))
-        .route("/api/tasks/:id", get(routes::get_task))
+        .route("/api/tasks/:id", get(routes::get_task).patch(routes::patch_task))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
         .route("/api/tasks/:id/unblock", post(routes::unblock_task))
         .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))
@@ -710,6 +710,7 @@ async fn main() -> anyhow::Result<()> {
         // Projects
         .route("/api/projects", get(routes::list_projects))
         .route("/api/projects", post(routes::create_project))
+        .route("/api/projects/search", get(routes::search_projects))
         .route("/api/projects/:id/files", get(routes::list_project_files))
         .route(
             "/api/projects/:id/files/:file_id/content",
@@ -724,7 +725,7 @@ async fn main() -> anyhow::Result<()> {
             get(routes::get_project_chat_messages),
         )
         .route("/api/projects/:id/chat", post(routes::post_project_chat))
-        .route("/api/projects/:id", get(routes::get_project).put(routes::update_project))
+        .route("/api/projects/:id", get(routes::get_project).put(routes::update_project).delete(routes::delete_project))
         .route("/api/projects/:id/tasks", get(routes::list_project_tasks))
         .route("/api/projects/:id/documents", get(routes::list_project_documents))
         .route(

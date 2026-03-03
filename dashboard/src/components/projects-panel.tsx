@@ -102,9 +102,22 @@ export function ProjectsPanel() {
   const { data: projects = [], refetch: refetchProjects } = useProjects();
   const { data: modes = [] } = useModes();
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectMode, setNewProjectMode] = useState("general");
   const [creating, setCreating] = useState(false);
+
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery.trim()) return projects;
+    const q = searchQuery.toLowerCase();
+    return projects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.client_name && p.client_name.toLowerCase().includes(q)) ||
+        (p.case_number && p.case_number.toLowerCase().includes(q)) ||
+        (p.jurisdiction && p.jurisdiction.toLowerCase().includes(q))
+    );
+  }, [projects, searchQuery]);
 
   const selectedProject =
     projects.find((p) => p.id === selectedProjectId) ?? projects[0] ?? null;
@@ -255,11 +268,19 @@ export function ProjectsPanel() {
   return (
     <div className="flex h-full min-h-0">
       <div className="w-[260px] shrink-0 border-r border-white/[0.06] p-3">
-        <div className="mb-3 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
           Projects
         </div>
+        {projects.length > 5 && (
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search matters..."
+            className="mb-2 w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600 focus:border-blue-500/40"
+          />
+        )}
         <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
-          {projects.map((p) => (
+          {filteredProjects.map((p) => (
             <button
               key={p.id}
               onClick={() => setSelectedProjectId(p.id)}
@@ -311,8 +332,25 @@ export function ProjectsPanel() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {!selectedProject ? (
-          <div className="flex h-full items-center justify-center text-[12px] text-zinc-500">
-            Create a project to start.
+          <div className="flex h-full items-center justify-center">
+            <div className="max-w-[320px] text-center">
+              <div className="text-[14px] font-medium text-zinc-300">Get Started</div>
+              <div className="mt-2 text-[12px] leading-relaxed text-zinc-500">
+                Create a matter in the sidebar to start. Each matter gets its own
+                dedicated repository for documents and task outputs.
+              </div>
+              <div className="mt-4 space-y-2 text-left text-[11px] text-zinc-600">
+                <div className="rounded border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                  <span className="text-zinc-400">1.</span> Name your matter and select <span className="text-blue-400">lawborg</span> mode
+                </div>
+                <div className="rounded border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                  <span className="text-zinc-400">2.</span> Upload reference documents (contracts, briefs, filings)
+                </div>
+                <div className="rounded border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                  <span className="text-zinc-400">3.</span> Create tasks — research memos, contract reviews, case analysis
+                </div>
+              </div>
+            </div>
           </div>
         ) : (selectedProject.mode === "lawborg" || selectedProject.mode === "legal") ? (
           selectedDoc ? (
@@ -329,7 +367,7 @@ export function ProjectsPanel() {
                 <LegalTaskCreator />
               </div>
               <div className="min-h-0 flex-1">
-                <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} />
+                <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} onDelete={() => setSelectedProjectId(null)} />
               </div>
             </div>
           )

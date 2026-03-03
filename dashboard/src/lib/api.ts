@@ -253,6 +253,15 @@ export async function reopenProposal(id: number): Promise<void> {
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+export async function patchTask(id: number, patch: { title?: string; description?: string }): Promise<void> {
+  const res = await apiFetch(`/api/tasks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 export async function retryTask(id: number): Promise<void> {
   const res = await apiFetch(`/api/tasks/${id}/retry`, { method: "POST" });
   if (!res.ok) throw new Error(`${res.status}`);
@@ -514,6 +523,19 @@ export function useUpdateProject(projectId: number) {
     },
     onSuccess: (data) => {
       queryClient.setQueryData(["project", projectId], data);
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+export function useDeleteProject() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, number>({
+    mutationFn: async (projectId) => {
+      const res = await apiFetch(`/api/projects/${projectId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`${res.status}`);
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
   });

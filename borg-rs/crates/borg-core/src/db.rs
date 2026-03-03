@@ -106,6 +106,7 @@ pub struct ProjectRow {
     pub id: i64,
     pub name: String,
     pub mode: String,
+    pub repo_path: String,
     pub client_name: String,
     pub case_number: String,
     pub jurisdiction: String,
@@ -281,23 +282,24 @@ fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent>
     })
 }
 
-const PROJECT_COLS: &str = "id, name, mode, client_name, case_number, jurisdiction, \
+const PROJECT_COLS: &str = "id, name, mode, repo_path, client_name, case_number, jurisdiction, \
     matter_type, opposing_counsel, deadline, privilege_level, status, created_at";
 
 fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
-    let created_at_str: String = row.get(11)?;
+    let created_at_str: String = row.get(12)?;
     Ok(ProjectRow {
         id: row.get(0)?,
         name: row.get(1)?,
         mode: row.get(2)?,
-        client_name: row.get(3)?,
-        case_number: row.get(4)?,
-        jurisdiction: row.get(5)?,
-        matter_type: row.get(6)?,
-        opposing_counsel: row.get(7)?,
-        deadline: row.get(8)?,
-        privilege_level: row.get(9)?,
-        status: row.get(10)?,
+        repo_path: row.get(3)?,
+        client_name: row.get(4)?,
+        case_number: row.get(5)?,
+        jurisdiction: row.get(6)?,
+        matter_type: row.get(7)?,
+        opposing_counsel: row.get(8)?,
+        deadline: row.get(9)?,
+        privilege_level: row.get(10)?,
+        status: row.get(11)?,
         created_at: parse_ts(&created_at_str),
     })
 }
@@ -344,6 +346,7 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN project_id INTEGER REFERENCES projects(id)",
             "ALTER TABLE proposals ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
             "ALTER TABLE repos ADD COLUMN repo_slug TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE projects ADD COLUMN repo_path TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN client_name TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN case_number TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN jurisdiction TEXT NOT NULL DEFAULT ''",
@@ -462,6 +465,16 @@ impl Db {
             params![session_id, id],
         )
         .context("update_task_session")?;
+        Ok(())
+    }
+
+    pub fn update_task_description(&self, id: i64, title: &str, description: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipeline_tasks SET title = ?1, description = ?2 WHERE id = ?3",
+            params![title, description, id],
+        )
+        .context("update_task_description")?;
         Ok(())
     }
 
@@ -654,6 +667,23 @@ impl Db {
         Ok(projects)
     }
 
+    pub fn search_projects(&self, query: &str) -> Result<Vec<ProjectRow>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let pattern = format!("%{query}%");
+        let sql = format!(
+            "SELECT {PROJECT_COLS} FROM projects \
+             WHERE name LIKE ?1 OR client_name LIKE ?1 OR case_number LIKE ?1 \
+             OR jurisdiction LIKE ?1 OR matter_type LIKE ?1 \
+             ORDER BY id DESC LIMIT 50"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let projects = stmt
+            .query_map(params![pattern], row_to_project)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("search_projects")?;
+        Ok(projects)
+    }
+
     pub fn get_project(&self, id: i64) -> Result<Option<ProjectRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let sql = format!("SELECT {PROJECT_COLS} FROM projects WHERE id=?1");
@@ -668,6 +698,7 @@ impl Db {
         &self,
         name: &str,
         mode: &str,
+        repo_path: &str,
         client_name: &str,
         jurisdiction: &str,
         matter_type: &str,
@@ -676,9 +707,9 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = now_str();
         conn.execute(
-            "INSERT INTO projects (name, mode, client_name, jurisdiction, matter_type, \
-             privilege_level, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![name, mode, client_name, jurisdiction, matter_type, privilege_level, created_at],
+            "INSERT INTO projects (name, mode, repo_path, client_name, jurisdiction, matter_type, \
+             privilege_level, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![name, mode, repo_path, client_name, jurisdiction, matter_type, privilege_level, created_at],
         )
         .context("insert_project")?;
         Ok(conn.last_insert_rowid())
@@ -696,6 +727,7 @@ impl Db {
         deadline: Option<Option<&str>>,
         privilege_level: Option<&str>,
         status: Option<&str>,
+        repo_path: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut sets = Vec::new();
@@ -719,6 +751,7 @@ impl Db {
         maybe_set!(opposing_counsel, "opposing_counsel");
         maybe_set!(privilege_level, "privilege_level");
         maybe_set!(status, "status");
+        maybe_set!(repo_path, "repo_path");
 
         if let Some(dl) = deadline {
             sets.push(format!("deadline = ?{}", idx));
@@ -740,6 +773,15 @@ impl Db {
         conn.execute(&sql, params.as_slice())
             .context("update_project")?;
         Ok(())
+    }
+
+    pub fn delete_project(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute("DELETE FROM project_files WHERE project_id=?1", params![id]);
+        let affected = conn
+            .execute("DELETE FROM projects WHERE id=?1", params![id])
+            .context("delete_project")?;
+        Ok(affected > 0)
     }
 
     pub fn list_project_tasks(&self, project_id: i64) -> Result<Vec<Task>> {

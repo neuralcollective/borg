@@ -66,6 +66,17 @@ pub(crate) struct CreateTaskBody {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct PatchTaskBody {
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SearchQuery {
+    pub q: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct DocQuery {
     pub path: Option<String>,
     pub ref_name: Option<String>,
@@ -207,6 +218,7 @@ pub(crate) struct ProjectJson {
     pub id: i64,
     pub name: String,
     pub mode: String,
+    pub repo_path: String,
     pub client_name: String,
     pub case_number: String,
     pub jurisdiction: String,
@@ -224,6 +236,7 @@ impl From<ProjectRow> for ProjectJson {
             id: p.id,
             name: p.name,
             mode: p.mode,
+            repo_path: p.repo_path,
             client_name: p.client_name,
             case_number: p.case_number,
             jurisdiction: p.jurisdiction,
@@ -815,6 +828,19 @@ pub(crate) async fn list_projects(
     Ok(Json(json!(out)))
 }
 
+pub(crate) async fn search_projects(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SearchQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let q = params.q.unwrap_or_default();
+    if q.is_empty() {
+        return list_projects(State(state)).await;
+    }
+    let projects = state.db.search_projects(&q).map_err(internal)?;
+    let out: Vec<ProjectJson> = projects.into_iter().map(ProjectJson::from).collect();
+    Ok(Json(json!(out)))
+}
+
 pub(crate) async fn create_project(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateProjectBody>,
@@ -828,10 +854,33 @@ pub(crate) async fn create_project(
     let jurisdiction = body.jurisdiction.as_deref().unwrap_or("");
     let matter_type = body.matter_type.as_deref().unwrap_or("");
     let privilege_level = body.privilege_level.as_deref().unwrap_or("");
+
+    // Insert with empty repo_path first to get the ID
     let id = state
         .db
-        .insert_project(name, &mode, client_name, jurisdiction, matter_type, privilege_level)
+        .insert_project(name, &mode, "", client_name, jurisdiction, matter_type, privilege_level)
         .map_err(internal)?;
+
+    // Auto-init a dedicated git repo for legal projects
+    let repo_dir = format!("{}/legal-repos/{}", state.config.data_dir, id);
+    tokio::fs::create_dir_all(&repo_dir).await.map_err(internal)?;
+    let init = tokio::process::Command::new("git")
+        .args(["init", &repo_dir])
+        .output()
+        .await
+        .map_err(internal)?;
+    if init.status.success() {
+        // Initial commit so branches can be created
+        let _ = tokio::process::Command::new("git")
+            .args(["-C", &repo_dir, "commit", "--allow-empty", "-m", "init"])
+            .output()
+            .await;
+        state
+            .db
+            .update_project(id, None, None, None, None, None, None, None, None, None, Some(&repo_dir))
+            .map_err(internal)?;
+    }
+
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
@@ -868,10 +917,24 @@ pub(crate) async fn update_project(
             body.deadline.as_ref().map(|d| d.as_deref()),
             body.privilege_level.as_deref(),
             body.status.as_deref(),
+            None,
         )
         .map_err(internal)?;
     let updated = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(json!(ProjectJson::from(updated))))
+}
+
+pub(crate) async fn delete_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    let project = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    // Clean up dedicated repo if it exists
+    if !project.repo_path.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&project.repo_path).await;
+    }
+    state.db.delete_project(id).map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn list_project_tasks(
@@ -1471,9 +1534,19 @@ pub(crate) async fn create_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateTaskBody>,
 ) -> Result<(StatusCode, Json<Value>), StatusCode> {
-    let repo = body
-        .repo
-        .unwrap_or_else(|| state.config.pipeline_repo.clone());
+    let repo = if let Some(r) = body.repo {
+        r
+    } else if let Some(pid) = body.project_id {
+        // Resolve project's dedicated repo
+        state
+            .db
+            .get_project(pid)
+            .map_err(internal)?
+            .and_then(|p| if p.repo_path.is_empty() { None } else { Some(p.repo_path) })
+            .unwrap_or_else(|| state.config.pipeline_repo.clone())
+    } else {
+        state.config.pipeline_repo.clone()
+    };
     let mode = body.mode.unwrap_or_else(|| "sweborg".into());
     let task = Task {
         id: 0,
@@ -1495,6 +1568,18 @@ pub(crate) async fn create_task(
     };
     let id = state.db.insert_task(&task).map_err(internal)?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+}
+
+pub(crate) async fn patch_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<PatchTaskBody>,
+) -> Result<StatusCode, StatusCode> {
+    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let title = body.title.as_deref().unwrap_or(&task.title);
+    let desc = body.description.as_deref().unwrap_or(&task.description);
+    state.db.update_task_description(id, title, desc).map_err(internal)?;
+    Ok(StatusCode::OK)
 }
 
 pub(crate) async fn retry_task(

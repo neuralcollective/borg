@@ -31,15 +31,18 @@ const OPENSTATES = "https://v3.openstates.org";
 const CANLII_BASE = "https://api.canlii.org/v1";
 const USPTO = "https://developer.uspto.gov/ibd-api/v1";
 
-const LEXIS_BASE = process.env.LEXIS_BASE_URL || "https://api.lexisnexis.com/v1";
-const STATENET_BASE = process.env.STATENET_BASE_URL || "https://api.lexisnexis.com/statenet/v1";
-const LEXMACHINA_BASE = process.env.LEXMACHINA_BASE_URL || "https://api.lexmachina.com/v1";
-const INTELLIGIZE_BASE = process.env.INTELLIGIZE_BASE_URL || "https://api.intelligize.com/v1";
-const COGNITIVE_BASE = process.env.COGNITIVE_BASE_URL || "https://api.lexisnexis.com/cognitive/v1";
-const WESTLAW_BASE = process.env.WESTLAW_BASE_URL || "https://api.thomsonreuters.com/legal/v1";
+// Lex Machina is the only provider with confirmed public API base URL.
+// LexisNexis, Westlaw, Intelligize, State Net, iManage, NetDocuments require
+// portal registration to get actual API endpoints — set via env vars.
+const LEXIS_BASE = process.env.LEXIS_BASE_URL || "";
+const STATENET_BASE = process.env.STATENET_BASE_URL || "";
+const LEXMACHINA_BASE = process.env.LEXMACHINA_BASE_URL || "https://api.lexmachina.com";
+const INTELLIGIZE_BASE = process.env.INTELLIGIZE_BASE_URL || "";
+const COGNITIVE_BASE = process.env.COGNITIVE_BASE_URL || "";
+const WESTLAW_BASE = process.env.WESTLAW_BASE_URL || "";
 const CLIO_BASE = process.env.CLIO_BASE_URL || "https://app.clio.com/api/v4";
-const IMANAGE_BASE = process.env.IMANAGE_BASE_URL || "https://cloudimanage.com/work/api/v2";
-const NETDOCS_BASE = process.env.NETDOCUMENTS_BASE_URL || "https://api.vault.netvoyage.com/v2";
+const IMANAGE_BASE = process.env.IMANAGE_BASE_URL || "";
+const NETDOCS_BASE = process.env.NETDOCUMENTS_BASE_URL || "";
 
 // ── Rate limiting ────────────────────────────────────────────────────
 class RateLimiter {
@@ -118,6 +121,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 async function authedCall(base, path, key, method = "GET", body = null) {
+  if (!base) throw new Error("API base URL not configured. Set the appropriate *_BASE_URL env var.");
   const url = `${base}${path}`;
   const opts = {
     method,
@@ -1773,19 +1777,19 @@ async function handleTool(name, args) {
       break;
     case "lexmachina_search_cases":
       requireKey("Lex Machina", LEXMACHINA_KEY);
-      result = await authedCall(LEXMACHINA_BASE, "/cases/search", LEXMACHINA_KEY, "POST", args);
+      result = await authedCall(LEXMACHINA_BASE, "/query-district-cases", LEXMACHINA_KEY, "POST", args);
       break;
     case "lexmachina_case_details":
       requireKey("Lex Machina", LEXMACHINA_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/cases/${validateId(args.case_id)}`, LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/district-cases/${validateId(args.case_id)}`, LEXMACHINA_KEY);
       break;
     case "lexmachina_judge_profile":
       requireKey("Lex Machina", LEXMACHINA_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/judges/${validateId(args.judge_id)}`, LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/federal-judges/${validateId(args.judge_id)}`, LEXMACHINA_KEY);
       break;
     case "lexmachina_party_history": {
       requireKey("Lex Machina", LEXMACHINA_KEY);
-      result = await authedCall(LEXMACHINA_BASE, `/parties?${qs({ name: args.party_name })}`, LEXMACHINA_KEY);
+      result = await authedCall(LEXMACHINA_BASE, `/search-parties?${qs({ q: args.party_name })}`, LEXMACHINA_KEY);
       break;
     }
     case "intelligize_search_filings":

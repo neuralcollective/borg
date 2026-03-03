@@ -4,6 +4,7 @@ import {
   useProjectTasks,
   useProjectDocuments,
   useUpdateProject,
+  useDeleteProject,
   useTaskStream,
   getProjectChatMessages,
   sendProjectChat,
@@ -17,9 +18,9 @@ import { BorgingIndicator } from "./borging";
 import { ChatMarkdown } from "./chat-markdown";
 import { useDictation } from "@/lib/dictation";
 import { cn } from "@/lib/utils";
-import { retryTask } from "@/lib/api";
+import { retryTask, patchTask } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, Edit2, Check, X, FileText, RotateCcw, Mic, MicOff } from "lucide-react";
+import { ChevronDown, ChevronUp, Edit2, Check, X, FileText, RotateCcw, Mic, MicOff, Trash2 } from "lucide-react";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -32,6 +33,7 @@ type ChatMessage = {
 interface MatterDetailProps {
   projectId: number;
   onDocumentSelect?: (doc: ProjectDocument) => void;
+  onDelete?: () => void;
 }
 
 // ── Inline edit field ────────────────────────────────────────────────────────
@@ -189,7 +191,8 @@ function fmtDateTime(ts: string): string {
 
 // ── Matter header ─────────────────────────────────────────────────────────────
 
-function MatterHeader({ project }: { project: Project }) {
+function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () => void }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <div className="border-b border-white/[0.06] px-5 py-3">
       <div className="flex items-start gap-3">
@@ -227,6 +230,19 @@ function MatterHeader({ project }: { project: Project }) {
             )}
           </div>
         </div>
+        {onDelete && (
+          confirmDelete ? (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[10px] text-red-400">Delete?</span>
+              <button onClick={onDelete} className="rounded px-1.5 py-0.5 text-[10px] bg-red-500/20 text-red-400 hover:bg-red-500/30">Yes</button>
+              <button onClick={() => setConfirmDelete(false)} className="rounded px-1.5 py-0.5 text-[10px] bg-zinc-700 text-zinc-400 hover:bg-zinc-600">No</button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmDelete(true)} className="shrink-0 rounded p-1 text-zinc-600 hover:text-red-400 hover:bg-red-500/10" title="Delete matter">
+              <Trash2 size={14} />
+            </button>
+          )
+        )}
       </div>
     </div>
   );
@@ -431,6 +447,9 @@ function TasksTab({ projectId }: { projectId: number }) {
   const queryClient = useQueryClient();
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [expandedStream, setExpandedStream] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDesc, setEditDesc] = useState("");
 
   if (isLoading) {
     return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
@@ -482,25 +501,61 @@ function TasksTab({ projectId }: { projectId: number }) {
                   </button>
                 )}
                 {task.status === "failed" && (
-                  <button
-                    onClick={async () => {
-                      setRetryingId(task.id);
-                      try {
-                        await retryTask(task.id);
-                        await queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
-                      } finally {
-                        setRetryingId(null);
-                      }
-                    }}
-                    disabled={retryingId === task.id}
-                    className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[11px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-50 transition-colors"
-                  >
-                    <RotateCcw className="h-3 w-3" />
-                    {retryingId === task.id ? "…" : "Retry"}
-                  </button>
+                  <>
+                    <button
+                      onClick={() => {
+                        if (editingId === task.id) { setEditingId(null); } else {
+                          setEditTitle(task.title);
+                          setEditDesc(task.description || "");
+                          setEditingId(task.id);
+                        }
+                      }}
+                      className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-amber-500/30 hover:text-amber-400 transition-colors"
+                    >
+                      <Edit2 className="h-3 w-3" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setRetryingId(task.id);
+                        try {
+                          if (editingId === task.id) {
+                            await patchTask(task.id, { title: editTitle, description: editDesc });
+                            setEditingId(null);
+                          }
+                          await retryTask(task.id);
+                          await queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
+                        } finally {
+                          setRetryingId(null);
+                        }
+                      }}
+                      disabled={retryingId === task.id}
+                      className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[11px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-50 transition-colors"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      {retryingId === task.id ? "…" : "Retry"}
+                    </button>
+                  </>
                 )}
               </div>
             </div>
+            {editingId === task.id && (
+              <div className="mt-2 space-y-1.5 rounded border border-amber-500/20 bg-amber-500/5 p-2">
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[12px] text-zinc-200 outline-none focus:border-amber-500/40"
+                  placeholder="Title"
+                />
+                <textarea
+                  value={editDesc}
+                  onChange={(e) => setEditDesc(e.target.value)}
+                  rows={4}
+                  className="w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-300 outline-none focus:border-amber-500/40 resize-y"
+                  placeholder="Description / instructions"
+                />
+              </div>
+            )}
             <div className="mt-2">
               <PhaseTracker status={task.status} mode={task.mode} />
             </div>
@@ -690,9 +745,14 @@ const TABS: { key: TabKey; label: string }[] = [
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function MatterDetail({ projectId, onDocumentSelect }: MatterDetailProps) {
+export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDetailProps) {
   const { data: project, isLoading } = useProjectDetail(projectId);
   const [activeTab, setActiveTab] = useState<TabKey>("timeline");
+  const deleteMut = useDeleteProject();
+
+  const handleDelete = () => {
+    deleteMut.mutate(projectId, { onSuccess: () => onDelete?.() });
+  };
 
   if (isLoading || !project) {
     return (
@@ -704,7 +764,7 @@ export function MatterDetail({ projectId, onDocumentSelect }: MatterDetailProps)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <MatterHeader project={project} />
+      <MatterHeader project={project} onDelete={handleDelete} />
       <MetadataPanel project={project} projectId={projectId} />
 
       <div className="shrink-0 flex gap-0 border-b border-white/[0.06] px-5">
