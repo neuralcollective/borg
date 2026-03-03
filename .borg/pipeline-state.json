@@ -1,0 +1,10 @@
+{
+  "task_id": 346,
+  "task_title": "Quote `container_mirror` in bash script to prevent shell injection",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-346",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T13:18:03.233733752Z"
+}
