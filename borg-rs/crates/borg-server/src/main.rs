@@ -839,7 +839,7 @@ async fn main() -> anyhow::Result<()> {
                 "http://localhost:3131",
             ]
             .iter()
-            .map(|o| o.parse().unwrap())
+            .map(|o| o.parse().expect("invalid CORS origin in config"))
             .collect();
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(origins))
@@ -886,4 +886,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn cors_origins_all_valid() {
+        let origins = [
+            "https://borg.legal",
+            "https://app.borg.legal",
+            "https://borg.neuralcollective.ai",
+            "http://localhost:5173",
+            "http://localhost:3131",
+        ];
+        for o in &origins {
+            o.parse::<HeaderValue>()
+                .expect("invalid CORS origin in config");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid CORS origin in config")]
+    fn cors_invalid_origin_panics_with_message() {
+        "not a valid\x00origin"
+            .parse::<HeaderValue>()
+            .expect("invalid CORS origin in config");
+    }
 }
