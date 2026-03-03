@@ -67,6 +67,17 @@ struct GithubIssue {
     labels: Vec<GithubIssueLabel>,
 }
 
+/// Resets `seeding_active` to `false` when dropped, ensuring cleanup even on panic.
+struct SeedingGuard(Arc<Pipeline>);
+
+impl Drop for SeedingGuard {
+    fn drop(&mut self) {
+        self.0
+            .seeding_active
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 impl Pipeline {
     fn custom_modes_from_db(&self) -> Vec<PipelineMode> {
         let raw = match self.db.get_config("custom_modes") {
@@ -422,12 +433,10 @@ impl Pipeline {
         {
             let pipeline = Arc::clone(&self);
             tokio::spawn(async move {
+                let _guard = SeedingGuard(Arc::clone(&pipeline));
                 if let Err(e) = pipeline.seed_if_idle().await {
                     warn!("seed_if_idle error: {e}");
                 }
-                pipeline
-                    .seeding_active
-                    .store(false, std::sync::atomic::Ordering::Release);
             });
         }
 
@@ -3055,5 +3064,60 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    #[tokio::test]
+    async fn test_seeding_guard_resets_on_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+
+        struct Guard(Arc<AtomicBool>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+
+        let flag2 = Arc::clone(&flag);
+        let handle = tokio::spawn(async move {
+            let _guard = Guard(flag2);
+            panic!("simulated panic");
+        });
+        let _ = handle.await;
+
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "seeding_active must be reset to false after task panic"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_seeding_guard_resets_on_normal_exit() {
+        let flag = Arc::new(AtomicBool::new(true));
+
+        struct Guard(Arc<AtomicBool>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+
+        let flag2 = Arc::clone(&flag);
+        let handle = tokio::spawn(async move {
+            let _guard = Guard(flag2);
+        });
+        handle.await.expect("task should complete without panic");
+
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "seeding_active must be reset to false on normal exit"
+        );
     }
 }
