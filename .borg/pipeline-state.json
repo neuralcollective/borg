@@ -1,10 +1,10 @@
 {
-  "task_id": 193,
-  "task_title": "Add unit tests for `SandboxMode::from_str_or_auto` parsing",
+  "task_id": 194,
+  "task_title": "Add unit tests for `Sandbox::bwrap_args` argument construction",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-193",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-194",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T05:28:11.549452266Z"
+  "generated_at": "2026-03-03T05:29:31.853532735Z"
 }

@@ -97,7 +97,7 @@ impl Sandbox {
     /// 2. `--dev /dev`       — minimal device tree (null, random, urandom, tty)
     /// 3. `--bind X X`       — per writable_dir (repo, session dir)
     /// 4. `--bind /tmp /tmp` — shared /tmp (needed by compilers, git, etc.)
-    /// 5. `--unshare-pid`    — isolated PID namespace
+    /// 5. `--unshare-all`    — isolate all namespaces (pid, user, net, uts, ipc, cgroup)
     /// 6. `--new-session`    — setsid (detach terminal)
     /// 7. `--die-with-parent`— auto-cleanup
     /// 8. `--proc /proc`     — fresh procfs for PID namespace
@@ -124,7 +124,7 @@ impl Sandbox {
 
         args.extend(
             [
-                "--unshare-pid",
+                "--unshare-all",
                 "--new-session",
                 "--die-with-parent",
                 "--proc",
