@@ -809,9 +809,15 @@ pub(crate) async fn run_chat_agent(
 /// Returns true only if execve was invoked (this process should be replaced).
 pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
     let build_dir = format!("{repo_path}/borg-rs");
-    let parts: Vec<&str> = build_cmd.split_whitespace().collect();
+    let parts = match shell_words::split(build_cmd) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("invalid build_cmd: {e}");
+            return false;
+        }
+    };
     let (cmd, args) = match parts.split_first() {
-        Some((c, a)) => (*c, a),
+        Some(pair) => pair,
         None => {
             tracing::error!("empty build_cmd");
             return false;
@@ -3692,6 +3698,38 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn build_cmd_split_simple() {
+        let parts = shell_words::split("cargo build --release").unwrap();
+        assert_eq!(parts, vec!["cargo", "build", "--release"]);
+    }
+
+    #[test]
+    fn build_cmd_split_double_quoted_path_with_spaces() {
+        let parts = shell_words::split(r#"cargo build --target-dir "/tmp/my build""#).unwrap();
+        assert_eq!(parts, vec!["cargo", "build", "--target-dir", "/tmp/my build"]);
+    }
+
+    #[test]
+    fn build_cmd_split_single_quoted_path_with_spaces() {
+        let parts = shell_words::split("cargo build --target-dir '/tmp/my build'").unwrap();
+        assert_eq!(parts, vec!["cargo", "build", "--target-dir", "/tmp/my build"]);
+    }
+
+    #[test]
+    fn build_cmd_split_empty_returns_empty_vec() {
+        let parts = shell_words::split("").unwrap();
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn build_cmd_split_unclosed_quote_returns_err() {
+        assert!(shell_words::split(r#"cargo build --target-dir "/tmp/my build"#).is_err());
     }
 }
 
