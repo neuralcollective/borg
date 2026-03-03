@@ -93,11 +93,8 @@ pub struct Config {
     pub observer_config: String,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+pub(crate) fn parse_dotenv_content(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -116,6 +113,13 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    match std::fs::read_to_string(".env") {
+        Ok(contents) => parse_dotenv_content(&contents),
+        Err(_) => HashMap::new(),
+    }
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -635,5 +639,78 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_dotenv_content;
+
+    #[test]
+    fn blank_lines_skipped() {
+        let map = parse_dotenv_content("\n\n  \nFOO=bar\n\n");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn comment_lines_skipped() {
+        let map = parse_dotenv_content("# this is a comment\n# another\nFOO=bar");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn double_quoted_value_stripped() {
+        let map = parse_dotenv_content(r#"FOO="hello world""#);
+        assert_eq!(map.get("FOO").map(String::as_str), Some("hello world"));
+    }
+
+    #[test]
+    fn single_quoted_value_stripped() {
+        let map = parse_dotenv_content("FOO='hello world'");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("hello world"));
+    }
+
+    #[test]
+    fn key_without_value_not_inserted() {
+        // Lines with no `=` must be skipped, not panic
+        let map = parse_dotenv_content("ORPHAN_KEY\nFOO=bar");
+        assert!(!map.contains_key("ORPHAN_KEY"));
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn multiple_equals_value_contains_rest() {
+        // split_once('=') splits on the first `=`; value gets the remainder
+        let map = parse_dotenv_content("URL=https://example.com/path?a=1&b=2");
+        assert_eq!(
+            map.get("URL").map(String::as_str),
+            Some("https://example.com/path?a=1&b=2")
+        );
+    }
+
+    #[test]
+    fn whitespace_around_key_and_value_trimmed() {
+        let map = parse_dotenv_content("  FOO  =  bar  ");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn empty_value_stored_as_empty_string() {
+        let map = parse_dotenv_content("FOO=");
+        assert_eq!(map.get("FOO").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn mismatched_quotes_not_stripped() {
+        // Starts with `"` but ends with `'` — must not strip quotes
+        let map = parse_dotenv_content("FOO=\"bad'");
+        assert_eq!(map.get("FOO").map(String::as_str), Some("\"bad'"));
+    }
+
+    #[test]
+    fn empty_input_returns_empty_map() {
+        assert!(parse_dotenv_content("").is_empty());
     }
 }
