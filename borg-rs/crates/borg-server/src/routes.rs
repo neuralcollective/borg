@@ -458,7 +458,7 @@ fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
     let dest_dir = format!("{session_dir}/project_files");
     let _ = std::fs::create_dir_all(&dest_dir);
     for file in files {
-        let safe_name = std::path::Path::new(&file.file_name)
+        let safe_name = std::path::Path::new(&file.stored_path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed");
@@ -501,7 +501,11 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
             break;
         }
 
-        let file_path = format!("{files_dir}/{}", file.file_name);
+        let staged_name = std::path::Path::new(&file.stored_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed");
+        let file_path = format!("{files_dir}/{staged_name}");
 
         if is_binary_mime(&file.mime_type) {
             let note = format!(
@@ -3320,6 +3324,69 @@ mod tests {
         assert!(path.is_some());
         let p = path.unwrap();
         assert!(p.to_string_lossy().ends_with("knowledge/report.pdf"));
+    use chrono::Utc;
+
+    fn make_file(file_name: &str, stored_path: &str) -> ProjectFileRow {
+        ProjectFileRow {
+            id: 1,
+            project_id: 1,
+            file_name: file_name.to_string(),
+            stored_path: stored_path.to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 0,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn stage_project_files_uses_stored_path_basename() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().to_str().unwrap();
+
+        // Two source files with different content but same display file_name
+        let src1 = dir.path().join("1700000001_aaa_report.pdf");
+        let src2 = dir.path().join("1700000002_bbb_report.pdf");
+        std::fs::write(&src1, b"content-one").unwrap();
+        std::fs::write(&src2, b"content-two").unwrap();
+
+        let files = vec![
+            make_file("report.pdf", src1.to_str().unwrap()),
+            make_file("report.pdf", src2.to_str().unwrap()),
+        ];
+
+        stage_project_files(session_dir, &files);
+
+        let dest_dir = dir.path().join("project_files");
+        let staged1 = std::fs::read(dest_dir.join("1700000001_aaa_report.pdf")).unwrap();
+        let staged2 = std::fs::read(dest_dir.join("1700000002_bbb_report.pdf")).unwrap();
+        assert_eq!(staged1, b"content-one");
+        assert_eq!(staged2, b"content-two");
+    }
+
+    #[test]
+    fn stage_project_files_unique_names_no_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().to_str().unwrap();
+
+        let src1 = dir.path().join("1700000001_aaa_doc.txt");
+        let src2 = dir.path().join("1700000002_bbb_doc.txt");
+        std::fs::write(&src1, b"first").unwrap();
+        std::fs::write(&src2, b"second").unwrap();
+
+        let files = vec![
+            make_file("doc.txt", src1.to_str().unwrap()),
+            make_file("doc.txt", src2.to_str().unwrap()),
+        ];
+
+        stage_project_files(session_dir, &files);
+
+        let dest_dir = dir.path().join("project_files");
+        let entries: Vec<_> = std::fs::read_dir(&dest_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        // Both files must be present — no collision
+        assert_eq!(entries.len(), 2);
     }
 }
 
