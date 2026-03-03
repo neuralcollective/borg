@@ -1,10 +1,10 @@
 {
-  "task_id": 191,
-  "task_title": "Add unit tests for `chunk_text` boundary and overlap behavior",
+  "task_id": 192,
+  "task_title": "Add roundtrip tests for `embedding_to_bytes` / `bytes_to_embedding`",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-191",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-192",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T05:25:20.874887958Z"
+  "generated_at": "2026-03-03T05:27:31.240592131Z"
 }
