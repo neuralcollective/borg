@@ -40,7 +40,7 @@ pub struct Pipeline {
     last_self_update_secs: std::sync::atomic::AtomicI64,
     last_cache_prune_secs: std::sync::atomic::AtomicI64,
     startup_heads: HashMap<String, String>,
-    in_flight: Mutex<HashSet<i64>>,
+    in_flight: std::sync::Mutex<HashSet<i64>>,
     /// Per-task last agent dispatch timestamp (epoch seconds) for rate limiting.
     last_agent_dispatch: Mutex<HashMap<i64, i64>>,
     /// Serializes git worktree creation to avoid .git/config lock contention.
@@ -121,7 +121,7 @@ impl Pipeline {
             last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
             last_cache_prune_secs: std::sync::atomic::AtomicI64::new(0),
             startup_heads,
-            in_flight: Mutex::new(HashSet::new()),
+            in_flight: std::sync::Mutex::new(HashSet::new()),
             last_agent_dispatch: Mutex::new(HashMap::new()),
             worktree_create_lock: Mutex::new(()),
             seeding_active: std::sync::atomic::AtomicBool::new(false),
@@ -353,7 +353,7 @@ impl Pipeline {
         let mut dispatched = 0usize;
 
         for task in tasks {
-            let mut guard = self.in_flight.lock().await;
+            let mut guard = self.in_flight.lock().unwrap();
             if guard.len() >= max_agents {
                 break;
             }
@@ -376,11 +376,7 @@ impl Pipeline {
                 }
                 impl Drop for InFlightGuard {
                     fn drop(&mut self) {
-                        let pipeline = Arc::clone(&self.pipeline);
-                        let task_id = self.task_id;
-                        tokio::spawn(async move {
-                            pipeline.in_flight.lock().await.remove(&task_id);
-                        });
+                        self.pipeline.in_flight.lock().unwrap().remove(&self.task_id);
                     }
                 }
                 let _guard = InFlightGuard { pipeline: Arc::clone(&pipeline), task_id };
@@ -420,7 +416,7 @@ impl Pipeline {
         }
 
         if dispatched == 0
-            && self.in_flight.lock().await.is_empty()
+            && self.in_flight.lock().unwrap().is_empty()
             && self
                 .seeding_active
                 .compare_exchange(
