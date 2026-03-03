@@ -1,0 +1,10 @@
+{
+  "task_id": 101,
+  "task_title": "`run_claude_print` hangs indefinitely — no timeout",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-101",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T00:02:01.494045812Z"
+}
