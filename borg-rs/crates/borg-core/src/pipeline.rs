@@ -1189,6 +1189,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         if next == "done" {
             self.read_structured_output(task);
             self.read_task_deadlines(task);
+            self.index_task_documents(task);
             self.db.update_task_status(task.id, "done", None)?;
             match mode.integration {
                 IntegrationType::GitPr => {
@@ -1263,6 +1264,46 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     tracing::info!("task #{}: imported deadlines from branch", task.id);
                 }
             }
+        }
+    }
+
+    fn index_task_documents(&self, task: &Task) {
+        if task.repo_path.is_empty() || task.project_id == 0 { return; }
+        let branch = format!("task-{}", task.id);
+        let path = std::path::Path::new(&task.repo_path);
+        if !path.join(".git").exists() { return; }
+        // List .md files on the task branch
+        let out = std::process::Command::new("git")
+            .args(["-C", &task.repo_path, "ls-tree", "-r", "--name-only", &branch])
+            .stderr(std::process::Stdio::null())
+            .output();
+        let files = match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => return,
+        };
+        // Clear old index for this task
+        let _ = self.db.fts_remove_task(task.id);
+        let mut count = 0;
+        for file in files.lines() {
+            if !file.ends_with(".md") { continue; }
+            let show = std::process::Command::new("git")
+                .args(["-C", &task.repo_path, "show", &format!("{branch}:{file}")])
+                .stderr(std::process::Stdio::null())
+                .output();
+            if let Ok(o) = show {
+                if o.status.success() {
+                    let content = String::from_utf8_lossy(&o.stdout);
+                    let title = content.lines().next().unwrap_or(file).trim_start_matches('#').trim();
+                    if let Err(e) = self.db.fts_index_document(task.project_id, task.id, file, title, &content) {
+                        tracing::warn!("task #{}: FTS index failed for {file}: {e}", task.id);
+                    } else {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            tracing::info!("task #{}: indexed {count} documents for FTS", task.id);
         }
     }
 

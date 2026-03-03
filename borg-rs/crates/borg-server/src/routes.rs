@@ -1093,6 +1093,47 @@ pub(crate) async fn list_upcoming_deadlines(
     Ok(Json(json!(items)))
 }
 
+// ── Search ───────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct FtsSearchQuery {
+    q: String,
+    #[serde(default)]
+    project_id: Option<i64>,
+    #[serde(default = "default_search_limit")]
+    limit: i64,
+}
+fn default_search_limit() -> i64 { 50 }
+
+pub(crate) async fn search_documents(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FtsSearchQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    if query.q.trim().is_empty() {
+        return Ok(Json(json!([])));
+    }
+    let results = state.db.fts_search(&query.q, query.project_id, query.limit).map_err(internal)?;
+    // Enrich with project names
+    let mut items: Vec<Value> = Vec::new();
+    for r in results {
+        let project_name = state.db.get_project(r.project_id)
+            .ok()
+            .flatten()
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        items.push(json!({
+            "project_id": r.project_id,
+            "project_name": project_name,
+            "task_id": r.task_id,
+            "file_path": r.file_path,
+            "title_snippet": r.title_snippet,
+            "content_snippet": r.content_snippet,
+            "rank": r.rank,
+        }));
+    }
+    Ok(Json(json!(items)))
+}
+
 /// Read a file from git: tries local `git show ref:path` first, falls back to `gh api`.
 async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) -> Option<Vec<u8>> {
     // Try local git first

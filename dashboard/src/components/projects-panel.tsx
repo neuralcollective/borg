@@ -7,10 +7,12 @@ import {
   useModes,
   useProjectFiles,
   useProjects,
+  searchDocuments,
   sseUrl,
   tokenReady,
 } from "@/lib/api";
-import { Eye, Mic, MicOff, ArrowLeft } from "lucide-react";
+import type { FtsSearchResult } from "@/lib/api";
+import { Eye, Mic, MicOff, ArrowLeft, Search } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -103,6 +105,10 @@ export function ProjectsPanel() {
   const { data: modes = [] } = useModes();
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [ftsQuery, setFtsQuery] = useState("");
+  const [ftsResults, setFtsResults] = useState<FtsSearchResult[]>([]);
+  const [ftsSearching, setFtsSearching] = useState(false);
+  const ftsDebounce = useRef<ReturnType<typeof setTimeout>>(null);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectMode, setNewProjectMode] = useState("general");
   const [creating, setCreating] = useState(false);
@@ -219,6 +225,20 @@ export function ProjectsPanel() {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [messages.length]);
 
+  function handleFtsSearch(q: string) {
+    setFtsQuery(q);
+    if (ftsDebounce.current) clearTimeout(ftsDebounce.current);
+    if (!q.trim()) { setFtsResults([]); return; }
+    ftsDebounce.current = setTimeout(async () => {
+      setFtsSearching(true);
+      try {
+        const results = await searchDocuments(q.trim());
+        setFtsResults(results);
+      } catch { setFtsResults([]); }
+      finally { setFtsSearching(false); }
+    }, 300);
+  }
+
   async function handleCreateProject() {
     const name = newProjectName.trim();
     if (!name || creating) return;
@@ -271,15 +291,44 @@ export function ProjectsPanel() {
         <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
           Projects
         </div>
+        <div className="relative mb-2">
+          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-zinc-600" />
+          <input
+            value={ftsQuery}
+            onChange={(e) => handleFtsSearch(e.target.value)}
+            placeholder="Search all documents..."
+            className="w-full rounded border border-white/[0.08] bg-black/30 pl-7 pr-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600 focus:border-blue-500/40"
+          />
+        </div>
+        {ftsQuery.trim() && (ftsSearching || ftsResults.length > 0) ? (
+          <div className="space-y-1 overflow-y-auto mb-3" style={{ maxHeight: "calc(100vh - 280px)" }}>
+            {ftsSearching && <div className="text-[10px] text-zinc-600 px-1">Searching…</div>}
+            {ftsResults.map((r, i) => (
+              <button
+                key={`${r.task_id}-${r.file_path}-${i}`}
+                onClick={() => { setSelectedProjectId(r.project_id); setFtsQuery(""); setFtsResults([]); }}
+                className="w-full rounded-md border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 text-left hover:bg-white/[0.06] transition-colors"
+              >
+                <div className="text-[10px] text-zinc-500 truncate">{r.project_name}</div>
+                <div className="text-[11px] text-zinc-300 truncate" dangerouslySetInnerHTML={{ __html: r.title_snippet }} />
+                <div className="text-[10px] text-zinc-500 line-clamp-2" dangerouslySetInnerHTML={{ __html: r.content_snippet }} />
+              </button>
+            ))}
+            {!ftsSearching && ftsResults.length === 0 && (
+              <div className="text-[10px] text-zinc-600 px-1">No results.</div>
+            )}
+          </div>
+        ) : (
+          <>
         {projects.length > 5 && (
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search matters..."
+            placeholder="Filter matters..."
             className="mb-2 w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600 focus:border-blue-500/40"
           />
         )}
-        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
+        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 280px)" }}>
           {filteredProjects.map((p) => (
             <button
               key={p.id}
@@ -300,6 +349,8 @@ export function ProjectsPanel() {
             </div>
           )}
         </div>
+          </>
+        )}
         <div className="mt-3 border-t border-white/[0.06] pt-3">
           <input
             value={newProjectName}

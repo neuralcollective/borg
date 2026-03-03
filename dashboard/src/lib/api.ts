@@ -561,6 +561,24 @@ export function useUpcomingDeadlines(limit = 50) {
   });
 }
 
+// ── Full-text search ──────────────────────────────────────────────────
+
+export interface FtsSearchResult {
+  project_id: number;
+  project_name: string;
+  task_id: number;
+  file_path: string;
+  title_snippet: string;
+  content_snippet: string;
+  rank: number;
+}
+
+export async function searchDocuments(query: string, projectId?: number): Promise<FtsSearchResult[]> {
+  const params = new URLSearchParams({ q: query });
+  if (projectId) params.set("project_id", String(projectId));
+  return fetchJson(`/api/search?${params}`);
+}
+
 export function useProjectTasks(projectId: number | null) {
   return useQuery<ProjectTask[]>({
     queryKey: ["project_tasks", projectId],

@@ -149,6 +149,16 @@ pub struct ConflictHit {
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
+pub struct FtsResult {
+    pub project_id: i64,
+    pub task_id: i64,
+    pub file_path: String,
+    pub title_snippet: String,
+    pub content_snippet: String,
+    pub rank: f64,
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct DeadlineRow {
     pub id: i64,
     pub project_id: i64,
@@ -1037,6 +1047,72 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM deadlines WHERE id = ?1", params![id]).context("delete_deadline")?;
         Ok(())
+    }
+
+    // ── FTS5 ──────────────────────────────────────────────────────────────
+
+    pub fn fts_index_document(&self, project_id: i64, task_id: i64, file_path: &str, title: &str, content: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Delete existing entry for this task+file, then re-insert
+        conn.execute(
+            "DELETE FROM legal_fts WHERE task_id = ?1 AND file_path = ?2",
+            params![task_id, file_path],
+        )?;
+        conn.execute(
+            "INSERT INTO legal_fts (project_id, task_id, file_path, title, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![project_id, task_id, file_path, title, content],
+        ).context("fts_index_document")?;
+        Ok(())
+    }
+
+    pub fn fts_remove_task(&self, task_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DELETE FROM legal_fts WHERE task_id = ?1", params![task_id])?;
+        Ok(())
+    }
+
+    pub fn fts_search(&self, query: &str, project_id: Option<i64>, limit: i64) -> Result<Vec<FtsResult>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let sql = if project_id.is_some() {
+            "SELECT project_id, task_id, file_path, \
+                    snippet(legal_fts, 3, '<b>', '</b>', '…', 48) as title_snip, \
+                    snippet(legal_fts, 4, '<b>', '</b>', '…', 80) as content_snip, \
+                    rank \
+             FROM legal_fts WHERE legal_fts MATCH ?1 AND project_id = ?2 \
+             ORDER BY rank LIMIT ?3"
+        } else {
+            "SELECT project_id, task_id, file_path, \
+                    snippet(legal_fts, 3, '<b>', '</b>', '…', 48) as title_snip, \
+                    snippet(legal_fts, 4, '<b>', '</b>', '…', 80) as content_snip, \
+                    rank \
+             FROM legal_fts WHERE legal_fts MATCH ?1 \
+             ORDER BY rank LIMIT ?3"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let results = if let Some(pid) = project_id {
+            stmt.query_map(params![query, pid, limit], |r| {
+                Ok(FtsResult {
+                    project_id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    file_path: r.get(2)?,
+                    title_snippet: r.get(3)?,
+                    content_snippet: r.get(4)?,
+                    rank: r.get(5)?,
+                })
+            })?.collect::<rusqlite::Result<Vec<_>>>().context("fts_search")?
+        } else {
+            stmt.query_map(params![query, limit], |r| {
+                Ok(FtsResult {
+                    project_id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    file_path: r.get(2)?,
+                    title_snippet: r.get(3)?,
+                    content_snippet: r.get(4)?,
+                    rank: r.get(5)?,
+                })
+            })?.collect::<rusqlite::Result<Vec<_>>>().context("fts_search")?
+        };
+        Ok(results)
     }
 
     pub fn list_project_tasks(&self, project_id: i64) -> Result<Vec<Task>> {

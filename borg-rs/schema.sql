@@ -273,6 +273,17 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_category ON events(category, ts);
 
+-- ── Full-text search ─────────────────────────────────────────────────────
+
+CREATE VIRTUAL TABLE IF NOT EXISTS legal_fts USING fts5(
+  project_id UNINDEXED,
+  task_id UNINDEXED,
+  file_path UNINDEXED,
+  title,
+  content,
+  tokenize='porter unicode61'
+);
+
 -- Knowledge base files for agent context injection
 CREATE TABLE IF NOT EXISTS knowledge_files (
   id INTEGER PRIMARY KEY,
