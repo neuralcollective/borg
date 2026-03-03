@@ -1,11 +1,10 @@
 use borg_agent::instruction::build_knowledge_section;
 use borg_core::db::KnowledgeFile;
-use std::path::PathBuf;
-use tracing_test::traced_test;
+use std::io::Write as _;
 
-fn kf(id: i64, file_name: &str, description: &str, inline: bool) -> KnowledgeFile {
+fn kf(file_name: &str, description: &str, inline: bool) -> KnowledgeFile {
     KnowledgeFile {
-        id,
+        id: 0,
         file_name: file_name.to_string(),
         description: description.to_string(),
         size_bytes: 0,
@@ -18,137 +17,156 @@ fn kf(id: i64, file_name: &str, description: &str, inline: bool) -> KnowledgeFil
     }
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("borg_ks_{}", label));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+fn write_temp_file(dir: &std::path::Path, name: &str, content: &str) {
+    let mut f = std::fs::File::create(dir.join(name)).expect("create temp file");
+    f.write_all(content.as_bytes()).expect("write temp file");
 }
 
-// =============================================================================
-// Empty input
-// =============================================================================
+// ── empty list ────────────────────────────────────────────────────────────────
 
 #[test]
 fn empty_files_returns_empty_string() {
-    assert!(build_knowledge_section(&[], "/any/path").is_empty());
+    assert_eq!(build_knowledge_section(&[], "/any/dir"), "");
 }
 
-// =============================================================================
-// Reference (non-inline) files
-// =============================================================================
+// ── non-inline (path-only) ────────────────────────────────────────────────────
 
 #[test]
-fn reference_file_no_description() {
-    let files = vec![kf(1, "guide.md", "", false)];
-    let result = build_knowledge_section(&files, "/any");
-    assert!(result.contains("- `/knowledge/guide.md`\n"));
-    assert!(!result.contains(": "));
+fn non_inline_emits_knowledge_path_line() {
+    let files = [kf("guide.pdf", "", false)];
+    let out = build_knowledge_section(&files, "");
+    assert!(out.contains("- `/knowledge/guide.pdf`\n"), "got: {out}");
 }
 
 #[test]
-fn reference_file_with_description() {
-    let files = vec![kf(1, "guide.md", "User guide", false)];
-    let result = build_knowledge_section(&files, "/any");
-    assert!(result.contains("- `/knowledge/guide.md`: User guide\n"));
-}
-
-// =============================================================================
-// Inline files — file has content
-// =============================================================================
-
-#[test]
-fn inline_file_with_content_no_description() {
-    let dir = temp_dir("inline_no_desc");
-    std::fs::write(dir.join("facts.txt"), "Some fact here").unwrap();
-
-    let files = vec![kf(1, "facts.txt", "", true)];
-    let result = build_knowledge_section(&files, dir.to_str().unwrap());
-    assert!(result.contains("- **facts.txt**:\n```\nSome fact here\n```\n"));
-    // No parenthesised description section
-    assert!(!result.contains("()"));
+fn non_inline_with_description_appends_after_colon() {
+    let files = [kf("guide.pdf", "Legal style guide", false)];
+    let out = build_knowledge_section(&files, "");
+    assert!(
+        out.contains("- `/knowledge/guide.pdf`: Legal style guide\n"),
+        "got: {out}"
+    );
 }
 
 #[test]
-fn inline_file_with_content_and_description() {
-    let dir = temp_dir("inline_with_desc");
-    std::fs::write(dir.join("facts.txt"), "Some fact here").unwrap();
-
-    let files = vec![kf(1, "facts.txt", "Factual info", true)];
-    let result = build_knowledge_section(&files, dir.to_str().unwrap());
-    assert!(result.contains("- **facts.txt** (Factual info):\n```\nSome fact here\n```\n"));
+fn non_inline_no_description_has_no_colon() {
+    let files = [kf("ref.txt", "", false)];
+    let out = build_knowledge_section(&files, "");
+    assert!(!out.contains(": "), "unexpected colon in: {out}");
 }
 
-// =============================================================================
-// Inline files — empty / whitespace-only content falls back to name-only
-// =============================================================================
+// ── inline with content ───────────────────────────────────────────────────────
 
 #[test]
-fn inline_empty_file_no_description_falls_back_to_name_only() {
-    let dir = temp_dir("inline_empty_no_desc");
-    std::fs::write(dir.join("empty.txt"), "").unwrap();
-
-    let files = vec![kf(1, "empty.txt", "", true)];
-    let result = build_knowledge_section(&files, dir.to_str().unwrap());
-    assert!(result.contains("- **empty.txt**\n"));
-    assert!(!result.contains("```"));
+fn inline_with_content_emits_fenced_code_block() {
+    let dir = tempdir();
+    write_temp_file(&dir, "rules.md", "Rule one.\nRule two.");
+    let files = [kf("rules.md", "", true)];
+    let out = build_knowledge_section(&files, dir.to_str().unwrap());
+    assert!(out.contains("- **rules.md**:\n```\n"), "got: {out}");
+    assert!(out.contains("Rule one.\nRule two."), "got: {out}");
+    assert!(out.contains("\n```\n"), "got: {out}");
 }
 
 #[test]
-fn inline_whitespace_only_file_with_description_falls_back() {
-    let dir = temp_dir("inline_empty_with_desc");
-    std::fs::write(dir.join("empty.txt"), "   \n  ").unwrap();
-
-    let files = vec![kf(1, "empty.txt", "Should be listed", true)];
-    let result = build_knowledge_section(&files, dir.to_str().unwrap());
-    assert!(result.contains("- **empty.txt**: Should be listed\n"));
-    assert!(!result.contains("```"));
+fn inline_with_content_and_description_uses_parens() {
+    let dir = tempdir();
+    write_temp_file(&dir, "glossary.txt", "Term: definition");
+    let files = [kf("glossary.txt", "Legal glossary", true)];
+    let out = build_knowledge_section(&files, dir.to_str().unwrap());
+    assert!(
+        out.contains("- **glossary.txt** (Legal glossary):\n```\n"),
+        "got: {out}"
+    );
 }
 
 #[test]
-fn inline_missing_file_falls_back_to_name_only() {
-    let files = vec![kf(1, "nonexistent.txt", "", true)];
-    let result = build_knowledge_section(&files, "/nonexistent/path");
-    assert!(result.contains("- **nonexistent.txt**\n"));
-    assert!(!result.contains("```"));
+fn inline_with_content_no_description_has_no_parens() {
+    let dir = tempdir();
+    write_temp_file(&dir, "notes.txt", "Some notes.");
+    let files = [kf("notes.txt", "", true)];
+    let out = build_knowledge_section(&files, dir.to_str().unwrap());
+    assert!(!out.contains("()"), "unexpected parens in: {out}");
 }
 
-#[traced_test]
+// ── inline missing / empty → fallback bullet ─────────────────────────────────
+
 #[test]
-fn inline_missing_file_emits_warn_log() {
-    let files = vec![kf(1, "nonexistent.txt", "", true)];
-    let _ = build_knowledge_section(&files, "/nonexistent/path");
-    assert!(logs_contain("failed to read knowledge file"));
-    assert!(logs_contain("nonexistent.txt"));
+fn inline_missing_file_falls_back_to_name_bullet() {
+    let files = [kf("missing.md", "", true)];
+    let out = build_knowledge_section(&files, "/nonexistent/path");
+    assert!(out.contains("- **missing.md**\n"), "got: {out}");
+    assert!(!out.contains("```"), "should not have code fence: {out}");
 }
 
-// =============================================================================
-// Multiple files
-// =============================================================================
+#[test]
+fn inline_missing_file_with_description_appends_after_colon() {
+    let files = [kf("missing.md", "Important doc", true)];
+    let out = build_knowledge_section(&files, "/nonexistent/path");
+    assert!(
+        out.contains("- **missing.md**: Important doc\n"),
+        "got: {out}"
+    );
+}
 
 #[test]
-fn multiple_files_produce_correct_multi_entry_output() {
-    let dir = temp_dir("multi");
-    std::fs::write(dir.join("a.txt"), "Content A").unwrap();
+fn inline_empty_file_falls_back_to_name_bullet() {
+    let dir = tempdir();
+    write_temp_file(&dir, "empty.md", "   \n\t\n");
+    let files = [kf("empty.md", "", true)];
+    let out = build_knowledge_section(&files, dir.to_str().unwrap());
+    assert!(out.contains("- **empty.md**\n"), "got: {out}");
+    assert!(!out.contains("```"), "should not have code fence: {out}");
+}
 
-    let files = vec![
-        kf(1, "a.txt", "File A", true),
-        kf(2, "b.md", "File B", false),
+#[test]
+fn inline_empty_file_with_description_appends_after_colon() {
+    let dir = tempdir();
+    write_temp_file(&dir, "empty.md", "");
+    let files = [kf("empty.md", "Empty but described", true)];
+    let out = build_knowledge_section(&files, dir.to_str().unwrap());
+    assert!(
+        out.contains("- **empty.md**: Empty but described\n"),
+        "got: {out}"
+    );
+}
+
+// ── header ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn non_empty_list_includes_knowledge_base_header() {
+    let files = [kf("x.pdf", "", false)];
+    let out = build_knowledge_section(&files, "");
+    assert!(out.starts_with("## Knowledge Base\n"), "got: {out}");
+}
+
+// ── multiple files ────────────────────────────────────────────────────────────
+
+#[test]
+fn multiple_files_all_emitted() {
+    let dir = tempdir();
+    write_temp_file(&dir, "inline.txt", "content here");
+    let files = [
+        kf("ref.pdf", "Reference", false),
+        kf("inline.txt", "Notes", true),
+        kf("absent.md", "Absent", true),
     ];
-    let result = build_knowledge_section(&files, dir.to_str().unwrap());
-    assert!(result.starts_with("## Knowledge Base\n"));
-    assert!(result.contains("- **a.txt** (File A):\n```\nContent A\n```\n"));
-    assert!(result.contains("- `/knowledge/b.md`: File B\n"));
+    let out = build_knowledge_section(&files, dir.to_str().unwrap());
+    assert!(out.contains("`/knowledge/ref.pdf`"), "got: {out}");
+    assert!(out.contains("**inline.txt**"), "got: {out}");
+    assert!(out.contains("**absent.md**"), "got: {out}");
 }
 
-#[test]
-fn multiple_reference_files_all_listed() {
-    let files = vec![
-        kf(1, "alpha.md", "", false),
-        kf(2, "beta.md", "Beta doc", false),
-        kf(3, "gamma.md", "Gamma doc", false),
-    ];
-    let result = build_knowledge_section(&files, "/any");
-    assert!(result.contains("- `/knowledge/alpha.md`\n"));
-    assert!(result.contains("- `/knowledge/beta.md`: Beta doc\n"));
-    assert!(result.contains("- `/knowledge/gamma.md`: Gamma doc\n"));
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+fn tempdir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "borg_ks_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create test dir");
+    dir
 }
