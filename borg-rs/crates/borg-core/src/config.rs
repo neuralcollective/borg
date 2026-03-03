@@ -168,6 +168,53 @@ fn resolve_tilde(path: &str) -> String {
     path.to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Serialize tests that mutate env vars to avoid races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn tilde_slash_expanded_using_home() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("HOME").ok();
+        std::env::set_var("HOME", "/home/testuser");
+        let result = resolve_tilde("~/documents/file.txt");
+        match saved {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(result, "/home/testuser/documents/file.txt");
+    }
+
+    #[test]
+    fn path_without_tilde_returned_unchanged() {
+        assert_eq!(resolve_tilde("/absolute/path"), "/absolute/path");
+        assert_eq!(resolve_tilde("relative/path"), "relative/path");
+        assert_eq!(resolve_tilde("./local"), "./local");
+    }
+
+    #[test]
+    fn bare_tilde_no_slash_returned_unchanged() {
+        assert_eq!(resolve_tilde("~"), "~");
+    }
+
+    #[test]
+    fn tilde_slash_without_home_returns_original() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("HOME").ok();
+        std::env::remove_var("HOME");
+        let result = resolve_tilde("~/foo/bar");
+        match saved {
+            Some(v) => std::env::set_var("HOME", v),
+            None => {}
+        }
+        assert_eq!(result, "~/foo/bar");
+    }
+}
+
 pub fn codex_has_credentials(path: &str) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
