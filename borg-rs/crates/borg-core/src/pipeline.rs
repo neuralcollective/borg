@@ -856,15 +856,19 @@ impl Pipeline {
     }
 
     /// Read `.borg/signal.json` from the worktree. Returns default (done) if missing or malformed.
-    fn read_agent_signal(wt_path: &str) -> crate::types::AgentSignal {
+    pub fn read_agent_signal(wt_path: &str) -> crate::types::AgentSignal {
         let path = format!("{wt_path}/.borg/signal.json");
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => {
+        match crate::ipc::read_file(wt_path, ".borg/signal.json") {
+            crate::ipc::IpcReadResult::Ok(contents) => {
                 // Clean up the signal file so it doesn't carry over to next run
                 std::fs::remove_file(&path).ok();
                 serde_json::from_str(&contents).unwrap_or_default()
             },
-            Err(_) => crate::types::AgentSignal::default(),
+            crate::ipc::IpcReadResult::NotFound => crate::types::AgentSignal::default(),
+            crate::ipc::IpcReadResult::Quarantined(reason) => {
+                warn!("signal.json quarantined: {reason}");
+                crate::types::AgentSignal::default()
+            },
         }
     }
 

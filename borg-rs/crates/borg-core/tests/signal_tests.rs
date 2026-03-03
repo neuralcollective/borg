@@ -1,4 +1,9 @@
-use borg_core::types::AgentSignal;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+
+use borg_core::{pipeline::Pipeline, types::AgentSignal};
+use tempfile::TempDir;
 
 #[test]
 fn test_signal_default_is_done() {
@@ -78,4 +83,75 @@ fn test_signal_roundtrip_serialize_deserialize() {
     assert_eq!(parsed.status, "blocked");
     assert_eq!(parsed.reason, "need clarification");
     assert_eq!(parsed.question, "what scope?");
+}
+
+// ── read_agent_signal: O_NOFOLLOW protection ──────────────────────────────────
+
+fn make_worktree_with_signal(dir: &TempDir, json: &str) {
+    fs::create_dir_all(dir.path().join(".borg")).unwrap();
+    fs::write(dir.path().join(".borg/signal.json"), json).unwrap();
+}
+
+#[test]
+fn read_agent_signal_parses_valid_file() {
+    let dir = TempDir::new().unwrap();
+    make_worktree_with_signal(&dir, r#"{"status":"blocked","reason":"ambiguous"}"#);
+
+    let signal = Pipeline::read_agent_signal(dir.path().to_str().unwrap());
+    assert!(signal.is_blocked());
+    assert_eq!(signal.reason, "ambiguous");
+}
+
+#[test]
+fn read_agent_signal_removes_file_after_read() {
+    let dir = TempDir::new().unwrap();
+    make_worktree_with_signal(&dir, r#"{"status":"done"}"#);
+
+    Pipeline::read_agent_signal(dir.path().to_str().unwrap());
+
+    assert!(
+        !dir.path().join(".borg/signal.json").exists(),
+        "signal.json should be removed after a successful read"
+    );
+}
+
+#[test]
+fn read_agent_signal_missing_returns_default() {
+    let dir = TempDir::new().unwrap();
+    let signal = Pipeline::read_agent_signal(dir.path().to_str().unwrap());
+    assert_eq!(signal.status, "done");
+}
+
+#[test]
+fn read_agent_signal_malformed_json_returns_default() {
+    let dir = TempDir::new().unwrap();
+    make_worktree_with_signal(&dir, "not valid json {{");
+    let signal = Pipeline::read_agent_signal(dir.path().to_str().unwrap());
+    assert_eq!(signal.status, "done");
+}
+
+#[cfg(unix)]
+#[test]
+fn read_agent_signal_symlink_returns_default_and_quarantines() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".borg")).unwrap();
+
+    // Create a "sensitive" file outside the worktree
+    let secret = dir.path().join("secret.txt");
+    fs::write(&secret, r#"{"status":"abandon","reason":"injected"}"#).unwrap();
+
+    // Replace signal.json with a symlink pointing at it
+    unix_fs::symlink(&secret, dir.path().join(".borg/signal.json")).unwrap();
+
+    let signal = Pipeline::read_agent_signal(dir.path().to_str().unwrap());
+
+    // Must not follow the symlink — returns safe default
+    assert_eq!(signal.status, "done", "symlink must not be followed");
+
+    // The symlink must have been quarantined (no longer exists at original path)
+    assert!(
+        !dir.path().join(".borg/signal.json").exists()
+            && dir.path().join(".borg/signal.json").symlink_metadata().is_err(),
+        "symlink should have been quarantined"
+    );
 }
