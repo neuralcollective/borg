@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -69,12 +69,56 @@ pub async fn auth_middleware(
     }
 }
 
-// GET /api/auth/token — returns the token to any caller that can reach the
-// dashboard. The token protects against rogue local processes (e.g. a
-// compromised container), not against someone who already has HTTP access to
-// the dashboard. If the dashboard page loads, the caller is authorized.
+// GET /api/auth/token — only reachable from loopback so agent containers on
+// borg-agent-net cannot obtain the master token by calling this endpoint.
 pub async fn get_token(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
+    if !addr.ip().is_loopback() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "token endpoint is localhost-only"})),
+        )
+            .into_response();
+    }
     Json(json!({"token": state.api_token})).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    fn is_loopback(addr: SocketAddr) -> bool {
+        addr.ip().is_loopback()
+    }
+
+    #[test]
+    fn localhost_ipv4_is_allowed() {
+        assert!(is_loopback(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234)));
+    }
+
+    #[test]
+    fn localhost_ipv6_is_allowed() {
+        assert!(is_loopback(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1234)));
+    }
+
+    #[test]
+    fn docker_bridge_ip_is_rejected() {
+        // Typical Docker bridge gateway — agent containers appear from this range
+        let docker_ip: IpAddr = "172.17.0.1".parse().unwrap();
+        assert!(!is_loopback(SocketAddr::new(docker_ip, 1234)));
+    }
+
+    #[test]
+    fn private_network_ip_is_rejected() {
+        let private_ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(!is_loopback(SocketAddr::new(private_ip, 1234)));
+    }
+
+    #[test]
+    fn public_ip_is_rejected() {
+        let public_ip: IpAddr = "203.0.113.5".parse().unwrap();
+        assert!(!is_loopback(SocketAddr::new(public_ip, 1234)));
+    }
 }
