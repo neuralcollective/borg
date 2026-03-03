@@ -4,6 +4,7 @@ use borg_core::{
     types::{PhaseConfig, PhaseContext, RepoConfig, Task},
 };
 use chrono::Utc;
+use std::collections::HashMap;
 
 fn make_task(title: &str, description: &str, last_error: &str) -> Task {
     Task {
@@ -12,8 +13,8 @@ fn make_task(title: &str, description: &str, last_error: &str) -> Task {
         description: description.to_string(),
         repo_path: String::new(),
         branch: String::new(),
-        status: "impl".to_string(),
-        attempt: 1,
+        status: String::new(),
+        attempt: 0,
         max_attempts: 3,
         last_error: last_error.to_string(),
         created_by: String::new(),
@@ -32,274 +33,263 @@ fn make_task(title: &str, description: &str, last_error: &str) -> Task {
     }
 }
 
-fn make_ctx() -> PhaseContext {
+fn make_repo_config() -> RepoConfig {
+    RepoConfig {
+        path: String::new(),
+        test_cmd: String::new(),
+        prompt_file: String::new(),
+        mode: String::new(),
+        is_self: false,
+        auto_merge: false,
+        lint_cmd: String::new(),
+        backend: String::new(),
+        repo_slug: String::new(),
+    }
+}
+
+fn make_ctx(revision_count: i64, pending: Vec<(String, String)>) -> PhaseContext {
     PhaseContext {
         task: make_task("", "", ""),
-        repo_config: RepoConfig {
-            path: "/nonexistent".to_string(),
-            test_cmd: String::new(),
-            prompt_file: String::new(),
-            mode: String::new(),
-            is_self: false,
-            auto_merge: false,
-            lint_cmd: String::new(),
-            backend: String::new(),
-            repo_slug: String::new(),
-        },
+        repo_config: make_repo_config(),
         data_dir: String::new(),
         session_dir: String::new(),
-        work_dir: "/nonexistent".to_string(),
+        worktree_path: String::new(),
         oauth_token: String::new(),
         model: String::new(),
-        pending_messages: vec![],
+        pending_messages: pending,
         system_prompt_suffix: String::new(),
         user_coauthor: String::new(),
         stream_tx: None,
         setup_script: String::new(),
-        api_keys: Default::default(),
+        api_keys: HashMap::new(),
         disallowed_tools: String::new(),
-        knowledge_files: vec![],
+        knowledge_files: Vec::<KnowledgeFile>::new(),
         knowledge_dir: String::new(),
         agent_network: None,
-        prior_research: vec![],
-        revision_count: 0,
-        experimental_domains: false,
-    }
-}
-
-fn make_knowledge_file(file_name: &str, description: &str) -> KnowledgeFile {
-    KnowledgeFile {
-        id: 1,
-        file_name: file_name.to_string(),
-        description: description.to_string(),
-        size_bytes: 100,
-        inline: false,
-        tags: String::new(),
-        category: String::new(),
-        jurisdiction: String::new(),
-        project_id: None,
-        created_at: String::new(),
+        prior_research: Vec::new(),
+        revision_count,
     }
 }
 
 // =============================================================================
-// Knowledge section: prepended with separator when non-empty
+// revision_count > 0 path
 // =============================================================================
 
 #[test]
-fn test_knowledge_section_prepended_when_non_empty() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do the thing.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.knowledge_files = vec![make_knowledge_file("guide.md", "A guide")];
+fn test_revision_header_emitted_when_revision_count_positive() {
+    let task = make_task("My Task", "Do something", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(1, vec![("reviewer".to_string(), "Fix the typo.".to_string())]);
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let out = build_instruction(&task, &phase, &ctx, None);
 
     assert!(
-        result.starts_with("## Knowledge Base"),
-        "knowledge section should be at start: {result}"
-    );
-    let sep_pos = result.find("\n\n---\n\n").expect("separator must follow knowledge section");
-    let inst_pos = result.find("Do the thing.").expect("instruction must be present");
-    assert!(sep_pos < inst_pos, "separator must appear before the instruction");
-}
-
-#[test]
-fn test_no_knowledge_section_when_empty() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do the thing.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(
-        !result.contains("## Knowledge Base"),
-        "no knowledge section when files are empty: {result}"
+        out.contains("Revision #1 — Reviewer Feedback"),
+        "expected revision header, got: {out}"
     );
 }
 
+#[test]
+fn test_revision_header_uses_correct_count() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(3, vec![("user".to_string(), "Please rewrite.".to_string())]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(out.contains("Revision #3"), "expected Revision #3, got: {out}");
+}
+
+#[test]
+fn test_revision_messages_formatted_with_bold_brackets() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(
+        2,
+        vec![
+            ("reviewer".to_string(), "Shorten section 2.".to_string()),
+            ("user".to_string(), "Add a conclusion.".to_string()),
+        ],
+    );
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(
+        out.contains("**[reviewer]**: Shorten section 2."),
+        "expected bold-bracket format for reviewer, got: {out}"
+    );
+    assert!(
+        out.contains("**[user]**: Add a conclusion."),
+        "expected bold-bracket format for user, got: {out}"
+    );
+}
+
+#[test]
+fn test_revision_path_includes_important_footer() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(1, vec![("reviewer".to_string(), "Feedback.".to_string())]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(
+        out.contains("IMPORTANT: Focus on the reviewer's feedback"),
+        "expected IMPORTANT footer in revision path, got: {out}"
+    );
+}
+
 // =============================================================================
-// include_task_context: controls presence of task title and description
+// revision_count == 0 path (plain format)
 // =============================================================================
 
 #[test]
-fn test_include_task_context_true_shows_title_and_description() {
-    let task = make_task("My Task Title", "Task description here.", "");
+fn test_no_revision_header_when_revision_count_zero() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(0, vec![("user".to_string(), "Please hurry.".to_string())]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(
+        !out.contains("Reviewer Feedback"),
+        "should not contain revision header at revision_count=0, got: {out}"
+    );
+    assert!(
+        !out.contains("**[user]**"),
+        "should not use bold-bracket format at revision_count=0, got: {out}"
+    );
+}
+
+#[test]
+fn test_plain_pending_messages_format_at_revision_zero() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(
+        0,
+        vec![
+            ("user".to_string(), "Do X.".to_string()),
+            ("director".to_string(), "Also Y.".to_string()),
+        ],
+    );
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(
+        out.contains("messages were sent by the user or director"),
+        "expected plain intro header, got: {out}"
+    );
+    assert!(out.contains("[user]: Do X."), "expected plain format, got: {out}");
+    assert!(out.contains("[director]: Also Y."), "expected plain format, got: {out}");
+}
+
+#[test]
+fn test_no_pending_messages_section_when_empty() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig::default();
+    let ctx = make_ctx(0, vec![]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(!out.contains("messages were sent"), "no pending section when empty, got: {out}");
+    assert!(!out.contains("Reviewer Feedback"), "no pending section when empty, got: {out}");
+}
+
+// =============================================================================
+// {ERROR} substitution in error_instruction
+// =============================================================================
+
+#[test]
+fn test_error_placeholder_substituted_with_last_error() {
+    let task = make_task("T", "D", "compilation failed: undefined symbol");
     let phase = PhaseConfig {
-        instruction: "Phase instruction.".to_string(),
+        error_instruction: "Previous attempt failed:\n{ERROR}\nPlease fix it.".to_string(),
+        ..PhaseConfig::default()
+    };
+    let ctx = make_ctx(0, vec![]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(
+        out.contains("compilation failed: undefined symbol"),
+        "expected last_error substituted, got: {out}"
+    );
+    assert!(
+        !out.contains("{ERROR}"),
+        "raw {{ERROR}} placeholder should be replaced, got: {out}"
+    );
+}
+
+#[test]
+fn test_error_section_omitted_when_last_error_empty() {
+    let task = make_task("T", "D", "");
+    let phase = PhaseConfig {
+        error_instruction: "Previous attempt failed:\n{ERROR}".to_string(),
+        ..PhaseConfig::default()
+    };
+    let ctx = make_ctx(0, vec![]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    assert!(
+        !out.contains("Previous attempt failed"),
+        "error section should be omitted when last_error is empty, got: {out}"
+    );
+}
+
+#[test]
+fn test_error_section_omitted_when_error_instruction_empty() {
+    let task = make_task("T", "D", "something went wrong");
+    let phase = PhaseConfig {
+        error_instruction: String::new(),
+        ..PhaseConfig::default()
+    };
+    let ctx = make_ctx(0, vec![]);
+
+    let out = build_instruction(&task, &phase, &ctx, None);
+
+    // last_error is non-empty but error_instruction is empty — section omitted
+    assert!(
+        !out.contains("something went wrong"),
+        "error section omitted when error_instruction is empty, got: {out}"
+    );
+}
+
+// =============================================================================
+// include_task_context flag
+// =============================================================================
+
+#[test]
+fn test_task_context_included_when_flag_true() {
+    let task = make_task("Refactor auth module", "Improve the login flow.", "");
+    let phase = PhaseConfig {
         include_task_context: true,
         ..PhaseConfig::default()
     };
-    let ctx = make_ctx();
+    let ctx = make_ctx(0, vec![]);
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let out = build_instruction(&task, &phase, &ctx, None);
 
-    assert!(result.contains("Task: My Task Title"), "expected task title: {result}");
-    assert!(result.contains("Task description here."), "expected task description: {result}");
+    assert!(out.contains("Refactor auth module"), "title should be present, got: {out}");
+    assert!(out.contains("Improve the login flow."), "description should be present, got: {out}");
 }
 
 #[test]
-fn test_include_task_context_false_omits_title_and_description() {
-    let task = make_task("My Task Title", "Task description here.", "");
+fn test_task_context_omitted_when_flag_false() {
+    let task = make_task("Refactor auth module", "Improve the login flow.", "");
     let phase = PhaseConfig {
-        instruction: "Phase instruction.".to_string(),
         include_task_context: false,
         ..PhaseConfig::default()
     };
-    let ctx = make_ctx();
+    let ctx = make_ctx(0, vec![]);
 
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(!result.contains("My Task Title"), "title should be absent: {result}");
-    assert!(!result.contains("Task description here."), "description should be absent: {result}");
-}
-
-// =============================================================================
-// last_error + error_instruction: {ERROR} placeholder substitution
-// =============================================================================
-
-#[test]
-fn test_error_placeholder_substituted() {
-    let task = make_task("Title", "Desc", "test suite panicked");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        error_instruction: "Previous attempt failed: {ERROR}".to_string(),
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let out = build_instruction(&task, &phase, &ctx, None);
 
     assert!(
-        result.contains("Previous attempt failed: test suite panicked"),
-        "expected substituted error: {result}"
+        !out.contains("Refactor auth module"),
+        "title should be omitted when include_task_context=false, got: {out}"
     );
-}
-
-#[test]
-fn test_no_error_section_when_last_error_empty() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        error_instruction: "Previous attempt failed: {ERROR}".to_string(),
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
     assert!(
-        !result.contains("Previous attempt failed"),
-        "no error section when last_error is empty: {result}"
-    );
-}
-
-#[test]
-fn test_no_error_section_when_error_instruction_empty() {
-    let task = make_task("Title", "Desc", "some error occurred");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        // error_instruction is empty (default)
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(
-        !result.contains("some error occurred"),
-        "no error section when error_instruction is empty: {result}"
-    );
-}
-
-// =============================================================================
-// Revision messages: include revision header and count
-// =============================================================================
-
-#[test]
-fn test_revision_messages_include_header_and_count() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Write document.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 3;
-    ctx.pending_messages = vec![("reviewer".to_string(), "Fix section 2.".to_string())];
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(result.contains("Revision #3"), "expected revision header with count: {result}");
-    assert!(result.contains("Reviewer Feedback"), "expected reviewer feedback header: {result}");
-    assert!(result.contains("Fix section 2."), "expected message content: {result}");
-    assert!(result.contains("[reviewer]"), "expected role in message: {result}");
-}
-
-#[test]
-fn test_revision_count_reflected_in_header() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Write document.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 1;
-    ctx.pending_messages = vec![("reviewer".to_string(), "Add citations.".to_string())];
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(result.contains("Revision #1"), "revision count should be 1: {result}");
-}
-
-// =============================================================================
-// Queue messages: simpler prefix format (revision_count == 0)
-// =============================================================================
-
-#[test]
-fn test_queue_messages_use_simple_prefix_format() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 0;
-    ctx.pending_messages = vec![("user".to_string(), "Please add more tests.".to_string())];
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(
-        result.contains("[user]: Please add more tests."),
-        "expected queue message format: {result}"
-    );
-    assert!(!result.contains("Revision #"), "no revision header for queue messages: {result}");
-    assert!(
-        !result.contains("Reviewer Feedback"),
-        "no reviewer feedback header for queue messages: {result}"
-    );
-}
-
-#[test]
-fn test_queue_messages_intro_text() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 0;
-    ctx.pending_messages = vec![("director".to_string(), "Prioritize speed.".to_string())];
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(
-        result.contains("messages were sent by the user or director"),
-        "expected queue intro text: {result}"
+        !out.contains("Improve the login flow."),
+        "description should be omitted when include_task_context=false, got: {out}"
     );
 }

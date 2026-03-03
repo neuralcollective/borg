@@ -17,5 +17,4 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tracing-test = { version = "0.2", features = ["no-env-filter"] }
 chrono = { workspace = true }
