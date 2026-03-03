@@ -1,0 +1,10 @@
+{
+  "task_id": 153,
+  "task_title": "Add unit tests for config::parse_watched_repos()",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-153",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T03:30:58.097148958Z"
+}
