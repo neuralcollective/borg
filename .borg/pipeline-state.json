@@ -1,10 +1,10 @@
 {
-  "task_id": 241,
-  "task_title": "Shell injection in entrypoint.sh via unquoted bash -c variable",
+  "task_id": 239,
+  "task_title": "Implement the `OBSERVER_MODEL` env-var override that the TODO promises",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-241",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-239",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T08:01:30.266373840Z"
+  "generated_at": "2026-03-03T07:57:39.493873643Z"
 }
