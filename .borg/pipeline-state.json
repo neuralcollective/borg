@@ -1,0 +1,10 @@
+{
+  "task_id": 124,
+  "task_title": "Fix incomplete JSON escaping of stderr_tail in entrypoint.sh",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-124",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T01:59:01.728326144Z"
+}
