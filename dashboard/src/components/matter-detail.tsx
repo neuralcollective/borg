@@ -1822,6 +1822,61 @@ function ActivityTab({ projectId }: { projectId: number }) {
   );
 }
 
+// ── Activity tab ──────────────────────────────────────────────────────────────
+
+const AUDIT_KIND_LABELS: Record<string, string> = {
+  "matter.created": "Matter created",
+  "matter.updated": "Matter updated",
+  "matter.deleted": "Matter deleted",
+  "task.created": "Task created",
+  "task.completed": "Task completed",
+  "task.failed": "Task failed",
+  "deadline.created": "Deadline added",
+  "document.exported": "Document exported",
+  "file.uploaded": "File uploaded",
+  "conflict.acknowledged": "Conflict acknowledged",
+};
+
+function ActivityTab({ projectId }: { projectId: number }) {
+  const { data: events = [], isLoading } = useProjectAudit(projectId);
+
+  if (isLoading) return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
+  if (events.length === 0) return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">No activity logged yet.</div>;
+
+  return (
+    <div className="space-y-0 overflow-y-auto p-4">
+      {events.map((ev, idx) => {
+        let detail = "";
+        try {
+          const p = JSON.parse(ev.payload);
+          if (p.title) detail = p.title;
+          else if (p.name) detail = p.name;
+          else if (p.label) detail = p.label;
+        } catch { /* ignore */ }
+        return (
+          <div key={ev.id} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-zinc-500/60" />
+              {idx < events.length - 1 && <div className="mt-1 w-px flex-1 bg-white/[0.06]" style={{ minHeight: "24px" }} />}
+            </div>
+            <div className="pb-3 min-w-0">
+              <div className="text-[11px] font-medium text-zinc-300">
+                {AUDIT_KIND_LABELS[ev.kind] || ev.kind}
+              </div>
+              {detail && <div className="text-[11px] text-zinc-500 truncate">{detail}</div>}
+              <div className="mt-0.5 text-[10px] text-zinc-600">
+                {ev.actor && <span>{ev.actor} · </span>}
+                {fmtDateTime(ev.created_at)}
+                {ev.task_id && <span className="ml-1 font-mono">#{ev.task_id}</span>}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Chat tab ──────────────────────────────────────────────────────────────────
 
 function ChatTab({ projectId }: { projectId: number }) {
