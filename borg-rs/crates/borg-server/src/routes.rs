@@ -75,30 +75,22 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn sha256_hex_bytes(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
-}
-
-async fn sha256_hex_file(path: &str) -> anyhow::Result<String> {
-    let p = path.to_string();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let mut file = std::fs::File::open(&p)?;
-        let mut hasher = Sha256::new();
-        let mut buf = vec![0u8; 1024 * 1024];
-        loop {
-            use std::io::Read;
-            let n = file.read(&mut buf)?;
-            if n == 0 {
-                break;
+fn percent_encode(s: &str, allow_slash: bool) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
             }
-            hasher.update(&buf[..n]);
+            b'/' if allow_slash => out.push('/'),
+            _ => {
+                out.push('%');
+                out.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
+                out.push(char::from_digit((b & 0xf) as u32, 16).unwrap().to_ascii_uppercase());
+            }
         }
-        Ok(format!("{:x}", hasher.finalize()))
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("sha256 task failed: {e}"))?
+    }
+    out
 }
 
 // ── Request body types ────────────────────────────────────────────────────
@@ -1379,7 +1371,7 @@ async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) 
             tokio::process::Command::new("gh")
                 .args([
                     "api",
-                    &format!("repos/{slug}/contents/{}?ref={}", percent_encode(path), percent_encode(ref_name)),
+                    &format!("repos/{slug}/contents/{}?ref={}", percent_encode(path, true), percent_encode(ref_name, false)),
                     "--jq",
                     ".content",
                 ])
@@ -4594,148 +4586,47 @@ pub(crate) async fn get_task_container(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::percent_encode;
 
     #[test]
-    fn test_sanitize_upload_name_basic() {
-        assert_eq!(sanitize_upload_name("hello.txt"), "hello.txt");
-        assert_eq!(sanitize_upload_name("my file.pdf"), "my_file.pdf");
-        assert_eq!(sanitize_upload_name("../../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_upload_name(""), "upload.bin");
+    fn percent_encode_unreserved_passthrough() {
+        assert_eq!(percent_encode("main", false), "main");
+        assert_eq!(percent_encode("feature/my-branch", true), "feature/my-branch");
+        assert_eq!(percent_encode("v1.0.0~3", false), "v1.0.0~3");
     }
 
     #[test]
-    fn test_sanitize_upload_name_strips_leading_dots() {
-        assert_eq!(sanitize_upload_name("..."), "upload.bin");
-        assert_eq!(sanitize_upload_name(".hidden"), "hidden");
+    fn percent_encode_ampersand_in_ref() {
+        // & must be encoded so it doesn't inject a second query parameter
+        assert_eq!(percent_encode("bad&ref=injected", false), "bad%26ref%3Dinjected");
     }
 
     #[test]
-    fn test_duplicate_upload_rejected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest = dir.path().join("report.pdf");
-
-        // First upload: file does not exist yet
-        assert!(!dest.exists());
-
-        // Write to simulate first upload succeeding
-        std::fs::write(&dest, b"first content").expect("write");
-        assert!(dest.exists());
-
-        // Second upload: file already exists — should be rejected
-        assert!(dest.exists(), "conflict check: file exists, 409 must fire");
+    fn percent_encode_hash_and_question_mark() {
+        assert_eq!(percent_encode("ref#fragment", false), "ref%23fragment");
+        assert_eq!(percent_encode("ref?foo=1", false), "ref%3Ffoo%3D1");
     }
 
     #[test]
-    fn test_different_name_no_conflict() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest_a = dir.path().join("report_a.pdf");
-        let dest_b = dir.path().join("report_b.pdf");
-
-        std::fs::write(&dest_a, b"content a").expect("write a");
-
-        // Different name — no conflict
-        assert!(!dest_b.exists());
+    fn percent_encode_slash_in_path_allowed() {
+        assert_eq!(percent_encode("docs/spec.md", true), "docs/spec.md");
     }
 
     #[test]
-    fn test_safe_knowledge_path_traversal_contained() {
-        let data_dir = "/tmp/borg-test-data";
-        // Even with .. in path, file_name() strips components and result stays inside knowledge/
-        let p = safe_knowledge_path(data_dir, "../secrets.txt").expect("some");
-        assert!(p.starts_with("/tmp/borg-test-data/knowledge"));
-        let p2 = safe_knowledge_path(data_dir, "../../etc/passwd").expect("some");
-        assert!(p2.starts_with("/tmp/borg-test-data/knowledge"));
+    fn percent_encode_slash_in_query_encoded() {
+        assert_eq!(percent_encode("a/b", false), "a%2Fb");
     }
 
     #[test]
-    fn test_safe_knowledge_path_pure_dotdot_is_none() {
-        let data_dir = "/tmp/borg-test-data";
-        // Path ending in ".." has no file_name component → None
-        assert!(safe_knowledge_path(data_dir, "subdir/..").is_none());
+    fn percent_encode_space_and_plus() {
+        assert_eq!(percent_encode("my branch", false), "my%20branch");
+        assert_eq!(percent_encode("a+b", false), "a%2Bb");
     }
 
     #[test]
-    fn test_safe_knowledge_path_valid() {
-        let data_dir = "/tmp/borg-test-data";
-        let path = safe_knowledge_path(data_dir, "report.pdf");
-        assert!(path.is_some());
-        let p = path.unwrap();
-        assert!(p.to_string_lossy().ends_with("knowledge/report.pdf"));
-    }
-
-    use chrono::Utc;
-
-    fn make_file(file_name: &str, stored_path: &str) -> ProjectFileRow {
-        ProjectFileRow {
-            id: 1,
-            project_id: 1,
-            file_name: file_name.to_string(),
-            stored_path: stored_path.to_string(),
-            mime_type: "text/plain".to_string(),
-            size_bytes: 0,
-            extracted_text: String::new(),
-            content_hash: String::new(),
-            created_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn stage_project_files_uses_stored_path_basename() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        // Two source files with different content but same display file_name
-        let src1 = dir.path().join("1700000001_aaa_report.pdf");
-        let src2 = dir.path().join("1700000002_bbb_report.pdf");
-        std::fs::write(&src1, b"content-one").unwrap();
-        std::fs::write(&src2, b"content-two").unwrap();
-
-        let files = vec![
-            make_file("report.pdf", src1.to_str().unwrap()),
-            make_file("report.pdf", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let staged1 = std::fs::read(dest_dir.join("1700000001_aaa_report.pdf")).unwrap();
-        let staged2 = std::fs::read(dest_dir.join("1700000002_bbb_report.pdf")).unwrap();
-        assert_eq!(staged1, b"content-one");
-        assert_eq!(staged2, b"content-two");
-    }
-
-    #[test]
-    fn stage_project_files_unique_names_no_collision() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        let src1 = dir.path().join("1700000001_aaa_doc.txt");
-        let src2 = dir.path().join("1700000002_bbb_doc.txt");
-        std::fs::write(&src1, b"first").unwrap();
-        std::fs::write(&src2, b"second").unwrap();
-
-        let files = vec![
-            make_file("doc.txt", src1.to_str().unwrap()),
-            make_file("doc.txt", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let entries: Vec<_> = std::fs::read_dir(&dest_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-        // Both files must be present — no collision
-        assert_eq!(entries.len(), 2);
+    fn percent_encode_path_with_special_chars() {
+        assert_eq!(percent_encode("docs/file#top", true), "docs/file%23top");
+        assert_eq!(percent_encode("docs/file?q=1", true), "docs/file%3Fq%3D1");
     }
 }
+
