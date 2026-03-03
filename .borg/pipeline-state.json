@@ -1,0 +1,10 @@
+{
+  "task_id": 324,
+  "task_title": "Quote `container_mirror` in bash clone command to handle spaces in repo names",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-324",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T12:15:37.113570226Z"
+}
