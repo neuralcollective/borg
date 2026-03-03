@@ -1,0 +1,10 @@
+{
+  "task_id": 285,
+  "task_title": "Add busy_timeout PRAGMA to SQLite connection setup (db.rs:424)",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-285",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T10:15:44.631502889Z"
+}
