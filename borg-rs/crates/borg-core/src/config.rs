@@ -264,6 +264,64 @@ fn slug_from_remote(path: &str) -> String {
     String::new()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::read_oauth_from_credentials;
+    use std::io::Write;
+
+    #[test]
+    fn non_existent_path_returns_none() {
+        assert!(read_oauth_from_credentials("/tmp/borg_test_does_not_exist_xyz.json").is_none());
+    }
+
+    #[test]
+    fn malformed_json_returns_none() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"not valid json {{").unwrap();
+        assert!(read_oauth_from_credentials(f.path().to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn claude_ai_oauth_access_token_is_returned() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(br#"{"claudeAiOauth":{"accessToken":"tok-abc"}}"#).unwrap();
+        assert_eq!(
+            read_oauth_from_credentials(f.path().to_str().unwrap()),
+            Some("tok-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn root_oauth_token_fallback() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(br#"{"oauthToken":"fallback-tok"}"#).unwrap();
+        assert_eq!(
+            read_oauth_from_credentials(f.path().to_str().unwrap()),
+            Some("fallback-tok".to_string())
+        );
+    }
+
+    #[test]
+    fn claude_ai_oauth_preferred_over_root_oauth_token() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(br#"{"claudeAiOauth":{"accessToken":"primary"},"oauthToken":"secondary"}"#).unwrap();
+        assert_eq!(
+            read_oauth_from_credentials(f.path().to_str().unwrap()),
+            Some("primary".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_access_token_string_is_returned() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(br#"{"claudeAiOauth":{"accessToken":""}}"#).unwrap();
+        assert_eq!(
+            read_oauth_from_credentials(f.path().to_str().unwrap()),
+            Some("".to_string())
+        );
+    }
+}
+
 fn parse_watched_repos(
     watched_raw: &str,
     pipeline_repo: &str,
