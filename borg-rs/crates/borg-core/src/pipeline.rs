@@ -3057,3 +3057,46 @@ fn looks_like_field_key(line: &str) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Pipeline;
+
+    #[test]
+    fn test_build_system_prompt_suffix_no_coauthor_no_user() {
+        let s = Pipeline::build_system_prompt_suffix(false, "");
+        assert!(s.contains("Do not add Co-Authored-By trailers to commit messages."));
+    }
+
+    #[test]
+    fn test_build_system_prompt_suffix_claude_coauthor_no_user() {
+        let s = Pipeline::build_system_prompt_suffix(true, "");
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn test_build_system_prompt_suffix_no_coauthor_with_user() {
+        let s = Pipeline::build_system_prompt_suffix(false, "User Name <u@e.com>");
+        assert!(s.contains("Do not add Co-Authored-By trailers to commit messages."));
+        assert!(s.contains("Git author is configured via environment variables"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_suffix_claude_coauthor_with_user() {
+        let s = Pipeline::build_system_prompt_suffix(true, "User Name <u@e.com>");
+        assert!(!s.contains("Do not add Co-Authored-By trailers"));
+        assert!(s.contains("Git author is configured via environment variables"));
+    }
+
+    #[test]
+    fn test_with_user_coauthor_empty_returns_message_unchanged() {
+        let msg = "fix: some bug";
+        assert_eq!(Pipeline::with_user_coauthor(msg, ""), msg);
+    }
+
+    #[test]
+    fn test_with_user_coauthor_appends_trailer() {
+        let result = Pipeline::with_user_coauthor("fix: some bug", "Name <email>");
+        assert_eq!(result, "fix: some bug\n\nCo-Authored-By: Name <email>");
+    }
+}
