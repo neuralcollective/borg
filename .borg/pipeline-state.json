@@ -1,10 +1,10 @@
 {
-  "task_id": 181,
-  "task_title": "Extract shared HTTP client builder in `OllamaBackend`",
+  "task_id": 179,
+  "task_title": "Test ExecResult::combined_output stderr-only and both-streams cases",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-181",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-179",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T04:57:46.151845514Z"
+  "generated_at": "2026-03-03T04:51:05.295445892Z"
 }
