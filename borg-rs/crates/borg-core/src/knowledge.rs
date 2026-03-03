@@ -293,7 +293,7 @@ pub async fn get_prior_research(
     project_id: Option<i64>,
     limit: usize,
 ) -> Vec<EmbeddingSearchResult> {
-    if db.embedding_count() == 0 {
+    if db.embedding_count().unwrap_or(0) == 0 {
         return vec![];
     }
     if !embed_client.is_available().await {
