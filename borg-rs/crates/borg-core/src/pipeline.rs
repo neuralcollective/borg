@@ -1436,16 +1436,13 @@ and report what went wrong.",
         let container_mirror = format!("/mirrors/{repo_name}.git");
 
         // Shallow clone — test containers only need the branch tip.
-        // Wrap a value in single quotes with internal single quotes escaped.
-        fn sq(s: &str) -> String {
-            format!("'{}'", s.replace('\'', "'\\''"))
-        }
         let repo_url_q = sq(&task.repo_path);
         let branch_q = sq(&branch);
         let cmd_q = sq(cmd);
+        let container_mirror_q = sq(&container_mirror);
         let clone_cmd = if std::path::Path::new(&host_mirror).exists() {
             format!(
-                "git clone --depth 1 --single-branch --reference {container_mirror} {repo_url_q} /workspace/repo"
+                "git clone --depth 1 --single-branch --reference {container_mirror_q} {repo_url_q} /workspace/repo"
             )
         } else {
             format!(
@@ -3046,6 +3043,11 @@ fn extract_field(block: &str, field: &str) -> Option<String> {
     None
 }
 
+/// Wrap a value in single quotes with internal single quotes escaped (POSIX shell quoting).
+fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 fn looks_like_field_key(line: &str) -> bool {
     let trimmed = line.trim();
     if let Some(colon) = trimmed.find(':') {
@@ -3055,5 +3057,54 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sq;
+
+    #[test]
+    fn sq_plain() {
+        assert_eq!(sq("/mirrors/myrepo.git"), "'/mirrors/myrepo.git'");
+    }
+
+    #[test]
+    fn sq_single_quote() {
+        assert_eq!(sq("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn sq_shell_metacharacters() {
+        // $() inside single quotes is literal — the shell never expands it.
+        assert_eq!(sq("/mirrors/$(evil cmd).git"), "'/mirrors/$(evil cmd).git'");
+    }
+
+    #[test]
+    fn sq_backtick() {
+        // Backticks inside single quotes are also literal.
+        assert_eq!(sq("/mirrors/`evil`.git"), "'/mirrors/`evil`.git'");
+    }
+
+    #[test]
+    fn sq_empty() {
+        assert_eq!(sq(""), "''");
+    }
+
+    #[test]
+    fn container_mirror_q_used_in_clone_cmd() {
+        let repo_name = "$(touch /pwned)";
+        let container_mirror = format!("/mirrors/{repo_name}.git");
+        let container_mirror_q = sq(&container_mirror);
+
+        // The value is fully single-quoted.
+        assert_eq!(container_mirror_q, "'/mirrors/$(touch /pwned).git'");
+
+        let clone_cmd = format!(
+            "git clone --depth 1 --single-branch --reference {container_mirror_q} 'dummy' /workspace/repo"
+        );
+
+        // The --reference argument must appear properly quoted in the command.
+        assert!(clone_cmd.contains("--reference '/mirrors/$(touch /pwned).git'"));
     }
 }
