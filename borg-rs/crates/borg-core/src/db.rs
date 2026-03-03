@@ -250,12 +250,15 @@ pub struct ThemeSummary {
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────
 
-fn parse_ts(s: &str) -> DateTime<Utc> {
+fn parse_ts(s: &str) -> rusqlite::Result<DateTime<Utc>> {
     NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
         .map(|ndt| ndt.and_utc())
-        .unwrap_or_else(|e| {
-            tracing::warn!("failed to parse timestamp '{s}': {e}");
-            Utc::now()
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            )
         })
 }
 
@@ -396,14 +399,14 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         last_error: row.get(8)?,
         created_by: row.get(9)?,
         notify_chat: row.get(10)?,
-        created_at: parse_ts(&created_at_str),
+        created_at: parse_ts(&created_at_str)?,
         session_id: row.get(12)?,
         mode: row.get(13)?,
         backend: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
         project_id: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
         task_type: row.get::<_, Option<String>>(16)?.unwrap_or_default(),
-        started_at: started_at.map(|s| parse_ts(&s)),
-        completed_at: completed_at.map(|s| parse_ts(&s)),
+        started_at: started_at.map(|s| parse_ts(&s)).transpose()?,
+        completed_at: completed_at.map(|s| parse_ts(&s)).transpose()?,
         duration_secs: row.get(19)?,
         review_status: row.get(20)?,
         revision_count: row.get::<_, Option<i64>>(21)?.unwrap_or(0),
@@ -419,7 +422,7 @@ fn row_to_proposal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Proposal> {
         description: row.get(3)?,
         rationale: row.get(4)?,
         status: row.get(5)?,
-        created_at: parse_ts(&created_at_str),
+        created_at: parse_ts(&created_at_str)?,
         triage_score: row.get(7)?,
         triage_impact: row.get(8)?,
         triage_feasibility: row.get(9)?,
@@ -437,7 +440,7 @@ fn row_to_queue_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
         branch: row.get(2)?,
         repo_path: row.get(3)?,
         status: row.get(4)?,
-        queued_at: parse_ts(&queued_at_str),
+        queued_at: parse_ts(&queued_at_str)?,
         pr_number: row.get(6)?,
     })
 }
@@ -451,7 +454,7 @@ fn row_to_task_output(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutput> {
         output: row.get(3)?,
         raw_stream: row.get(4)?,
         exit_code: row.get(5)?,
-        created_at: parse_ts(&created_at_str),
+        created_at: parse_ts(&created_at_str)?,
     })
 }
 
@@ -462,7 +465,7 @@ fn row_to_task_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage>
         task_id: row.get(1)?,
         role: row.get(2)?,
         content: row.get(3)?,
-        created_at: parse_ts(&created_at_str),
+        created_at: parse_ts(&created_at_str)?,
         delivered_phase: row.get(5)?,
     })
 }
@@ -528,8 +531,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
         deadline: row.get(9)?,
         privilege_level: row.get(10)?,
         status: row.get(11)?,
-        default_template_id: row.get(12)?,
-        created_at: parse_ts(&created_at_str),
+        created_at: parse_ts(&created_at_str)?,
     })
 }
 
@@ -543,8 +545,7 @@ fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileR
         mime_type: row.get(4)?,
         size_bytes: row.get(5)?,
         extracted_text: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-        content_hash: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-        created_at: parse_ts(&created_at_str),
+        created_at: parse_ts(&created_at_str)?,
     })
 }
 
@@ -1305,7 +1306,7 @@ impl Db {
                 due_date: r.get(3)?,
                 rule_basis: r.get(4)?,
                 status: r.get(5)?,
-                created_at: parse_ts(&ts),
+                created_at: parse_ts(&ts)?,
             })
         })?.collect::<rusqlite::Result<Vec<_>>>().context("list_project_deadlines")?;
         Ok(rows)
@@ -1327,7 +1328,7 @@ impl Db {
                 due_date: r.get(3)?,
                 rule_basis: r.get(4)?,
                 status: r.get(5)?,
-                created_at: parse_ts(&ts),
+                created_at: parse_ts(&ts)?,
             }, r.get::<_, String>(7)?))
         })?.collect::<rusqlite::Result<Vec<_>>>().context("list_upcoming_deadlines")?;
         Ok(rows)
@@ -2552,7 +2553,7 @@ impl Db {
                 actor: r.get(3)?,
                 kind: r.get(4)?,
                 payload: r.get(5)?,
-                created_at: parse_ts(&ts),
+                created_at: parse_ts(&ts)?,
             })
         })?.collect::<rusqlite::Result<Vec<_>>>().context("list_project_events")?;
         Ok(rows)
