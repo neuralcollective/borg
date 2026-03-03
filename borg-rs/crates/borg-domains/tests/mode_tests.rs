@@ -153,3 +153,47 @@ fn test_swe_signal_instructions_in_prompt() {
     assert!(implement.instruction.contains("blocked"));
     assert!(implement.instruction.contains("abandon"));
 }
+
+// ── get_mode registry tests ──────────────────────────────────────────────
+
+fn init_registry() {
+    borg_core::modes::register_modes(borg_domains::all_modes());
+}
+
+#[test]
+fn get_mode_exact_name_sweborg() {
+    init_registry();
+    let mode = borg_core::modes::get_mode("sweborg");
+    assert!(mode.is_some());
+    assert_eq!(mode.unwrap().name, "sweborg");
+}
+
+#[test]
+fn get_mode_exact_name_lawborg() {
+    init_registry();
+    let mode = borg_core::modes::get_mode("lawborg");
+    assert!(mode.is_some());
+    assert_eq!(mode.unwrap().name, "lawborg");
+}
+
+#[test]
+fn get_mode_alias_swe_resolves_to_sweborg() {
+    init_registry();
+    let mode = borg_core::modes::get_mode("swe");
+    assert!(mode.is_some());
+    assert_eq!(mode.unwrap().name, "sweborg");
+}
+
+#[test]
+fn get_mode_alias_legal_resolves_to_lawborg() {
+    init_registry();
+    let mode = borg_core::modes::get_mode("legal");
+    assert!(mode.is_some());
+    assert_eq!(mode.unwrap().name, "lawborg");
+}
+
+#[test]
+fn get_mode_unknown_returns_none() {
+    init_registry();
+    assert!(borg_core::modes::get_mode("unknown_xyz").is_none());
+}
