@@ -232,3 +232,131 @@ impl ChatCollector {
         inner.running
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn msg(chat_key: &str, text: &str) -> IncomingMessage {
+        IncomingMessage {
+            chat_key: chat_key.to_string(),
+            sender_name: "alice".to_string(),
+            text: text.to_string(),
+            timestamp: 0,
+            reply_to_message_id: None,
+        }
+    }
+
+    // flush_expired: skip chats whose window has not expired
+    #[tokio::test]
+    async fn flush_expired_skips_non_expired_window() {
+        let c = ChatCollector::new(10_000, 0, 0);
+        assert!(c.process(msg("chat1", "hello")).await.is_none());
+
+        let batches = c.flush_expired().await;
+        assert!(batches.is_empty());
+        assert_eq!(c.active_count().await, 0);
+    }
+
+    // flush_expired: transition expired Collecting chat to Running
+    #[tokio::test]
+    async fn flush_expired_transitions_expired_chat_to_running() {
+        let c = ChatCollector::new(1, 0, 0);
+        assert!(c.process(msg("chat1", "hello")).await.is_none());
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let batches = c.flush_expired().await;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].chat_key, "chat1");
+        assert_eq!(batches[0].sender_name, "alice");
+        assert_eq!(batches[0].messages, vec!["hello"]);
+        assert_eq!(c.active_count().await, 1);
+
+        // Chat is now Running: new messages are dropped
+        assert!(c.process(msg("chat1", "dropped")).await.is_none());
+    }
+
+    // flush_expired: all messages collected in the window are included in the batch
+    #[tokio::test]
+    async fn flush_expired_includes_all_collected_messages() {
+        let c = ChatCollector::new(1, 0, 0);
+        c.process(msg("chat1", "msg1")).await;
+        c.process(msg("chat1", "msg2")).await;
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let batches = c.flush_expired().await;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].messages, vec!["msg1", "msg2"]);
+    }
+
+    // flush_expired: respects max_agents concurrency limit
+    #[tokio::test]
+    async fn flush_expired_respects_max_agents_limit() {
+        let c = ChatCollector::new(1, 1, 0); // max 1 concurrent agent
+        c.process(msg("chat1", "hi")).await;
+        c.process(msg("chat2", "yo")).await;
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let batches = c.flush_expired().await;
+
+        assert_eq!(batches.len(), 1, "only one chat dispatched at max_agents=1");
+        assert_eq!(c.active_count().await, 1);
+    }
+
+    // flush_expired: expires Cooldown state → Idle
+    #[tokio::test]
+    async fn flush_expired_transitions_expired_cooldown_to_idle() {
+        let c = ChatCollector::new(0, 0, 1); // 1ms cooldown
+        let batch = c.process(msg("chat1", "hi")).await;
+        assert!(batch.is_some());
+
+        c.mark_done("chat1").await;
+        // Immediately in Cooldown: messages dropped
+        assert!(c.process(msg("chat1", "dropped")).await.is_none());
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        c.flush_expired().await;
+
+        // Now Idle: message dispatches immediately (window_ms=0)
+        assert!(c.process(msg("chat1", "new")).await.is_some());
+    }
+
+    // mark_done: enters Cooldown when cooldown_ms > 0
+    #[tokio::test]
+    async fn mark_done_enters_cooldown_when_configured() {
+        let c = ChatCollector::new(0, 0, 60_000);
+        assert!(c.process(msg("chat1", "hi")).await.is_some());
+        assert_eq!(c.active_count().await, 1);
+
+        c.mark_done("chat1").await;
+        assert_eq!(c.active_count().await, 0);
+
+        // Cooldown: new messages are dropped
+        assert!(c.process(msg("chat1", "new")).await.is_none());
+    }
+
+    // mark_done: returns to Idle when cooldown_ms == 0
+    #[tokio::test]
+    async fn mark_done_returns_to_idle_when_no_cooldown() {
+        let c = ChatCollector::new(0, 0, 0);
+        assert!(c.process(msg("chat1", "hi")).await.is_some());
+        assert_eq!(c.active_count().await, 1);
+
+        c.mark_done("chat1").await;
+        assert_eq!(c.active_count().await, 0);
+
+        // Idle: message dispatches immediately
+        assert!(c.process(msg("chat1", "again")).await.is_some());
+    }
+
+    // mark_done: saturating_sub does not underflow when running == 0
+    #[tokio::test]
+    async fn mark_done_saturating_sub_prevents_underflow() {
+        let c = ChatCollector::new(0, 0, 0);
+        c.mark_done("nonexistent").await;
+        assert_eq!(c.active_count().await, 0);
+    }
+}
