@@ -2566,3 +2566,39 @@ impl Db {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_party_name;
+
+    #[test]
+    fn punctuation_and_hyphens_stripped() {
+        assert_eq!(normalize_party_name("Smith-Jones, LLC"), "smith jones");
+    }
+
+    #[test]
+    fn all_stop_words_removed() {
+        // Each legal stop-word must be filtered out on its own.
+        for word in &["inc", "llc", "ltd", "corp", "co", "plc", "the", "of", "and"] {
+            let result = normalize_party_name(&format!("Acme {}", word));
+            assert_eq!(result, "acme", "stop word '{word}' was not removed");
+        }
+    }
+
+    #[test]
+    fn mixed_case_normalised() {
+        assert_eq!(normalize_party_name("ACME CORP"), "acme");
+        assert_eq!(normalize_party_name("Smith And Jones"), "smith jones");
+    }
+
+    #[test]
+    fn multiple_spaces_collapsed() {
+        assert_eq!(normalize_party_name("Foo   Bar   Inc"), "foo bar");
+    }
+
+    #[test]
+    fn fully_empty_after_stop_word_removal() {
+        // A name composed solely of stop words should yield an empty string.
+        assert_eq!(normalize_party_name("The Co LLC Inc"), "");
+    }
+}
