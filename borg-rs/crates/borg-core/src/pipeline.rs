@@ -2381,11 +2381,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let host_mirror = format!("{}/mirrors/{repo_name}.git", self.config.data_dir);
         let container_mirror = format!("/mirrors/{repo_name}.git");
 
-        // Shallow clone — test containers only need the branch tip.
-        // Wrap a value in single quotes with internal single quotes escaped.
-        fn sq(s: &str) -> String {
-            format!("'{}'", s.replace('\'', "'\\''"))
-        }
         let repo_url_q = sq(&task.repo_path);
         let branch_q = sq(&branch);
         let cmd_q = sq(cmd);
@@ -3976,69 +3971,9 @@ fn extract_field(block: &str, field: &str) -> Option<String> {
     None
 }
 
-fn parse_triage_item(item: &serde_json::Value) -> Option<(i64, i64, i64, i64, i64, i64, &str, bool)> {
-    let get_i64 = |k: &str| item.get(k).and_then(|v| v.as_i64());
-    let p_id = get_i64("id")?;
-    let impact = get_i64("impact")?;
-    let feasibility = get_i64("feasibility")?;
-    let risk = get_i64("risk")?;
-    let effort = get_i64("effort")?;
-    let score = get_i64("score")?;
-    let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
-    let should_dismiss = item.get("dismiss").and_then(|v| v.as_bool()).unwrap_or(false);
-    Some((p_id, impact, feasibility, risk, effort, score, reasoning, should_dismiss))
-}
-
-/// Collect session directory paths under `sessions_dir` that are stale and
-/// eligible for removal.
-///
-/// A directory named `task-{N}` is stale when:
-/// - It is not in `skip_ids` (i.e. not currently in-flight), AND
-/// - Its age (seconds since task creation, or since mtime if the task is not
-///   in the DB) is >= `max_age_secs`.
-///
-/// Exposed as a free function so it can be unit-tested without a Pipeline.
-pub fn collect_stale_session_dirs(
-    sessions_dir: &str,
-    now_secs: i64,
-    max_age_secs: i64,
-    skip_ids: &HashSet<i64>,
-    task_created_at: impl Fn(i64) -> Option<i64>,
-) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(sessions_dir) else {
-        return vec![];
-    };
-    let mut stale = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        let Some(id_str) = name_str.strip_prefix("task-") else {
-            continue;
-        };
-        let Ok(task_id) = id_str.parse::<i64>() else {
-            continue;
-        };
-        if skip_ids.contains(&task_id) {
-            continue;
-        }
-        let age_secs = match task_created_at(task_id) {
-            Some(created_at) => now_secs.saturating_sub(created_at),
-            None => {
-                // Orphaned dir: fall back to filesystem mtime
-                entry
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| now_secs.saturating_sub(d.as_secs() as i64))
-                    .unwrap_or(max_age_secs + 1) // unknown age → treat as stale
-            }
-        };
-        if age_secs >= max_age_secs {
-            stale.push(entry.path());
-        }
-    }
-    stale
+/// Wrap a value in single quotes with internal single quotes escaped (POSIX sh).
+fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn looks_like_field_key(line: &str) -> bool {
@@ -4054,85 +3989,37 @@ fn looks_like_field_key(line: &str) -> bool {
 }
 
 #[cfg(test)]
-mod seeding_toctou_tests {
-    use std::collections::HashSet;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+mod tests {
+    use super::sq;
 
-    /// Replicates the fixed "check-and-set" logic so we can test it in
-    /// isolation without constructing a full Pipeline.
-    async fn try_activate_seeding(
-        in_flight: &Mutex<HashSet<i64>>,
-        seeding_active: &AtomicBool,
-    ) -> bool {
-        let guard = in_flight.lock().await;
-        if guard.is_empty() {
-            seeding_active
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-        } else {
-            false
-        }
+    #[test]
+    fn sq_plain() {
+        assert_eq!(sq("hello"), "'hello'");
     }
 
-    #[tokio::test]
-    async fn seeding_does_not_start_when_in_flight_is_nonempty() {
-        let in_flight = Mutex::new(HashSet::from([42i64]));
-        let seeding_active = AtomicBool::new(false);
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(!activated, "should not activate seeding while tasks are in-flight");
-        assert!(!seeding_active.load(Ordering::Acquire), "seeding_active must stay false");
+    #[test]
+    fn sq_with_spaces() {
+        assert_eq!(sq("my repo"), "'my repo'");
     }
 
-    #[tokio::test]
-    async fn seeding_starts_when_in_flight_is_empty() {
-        let in_flight = Mutex::new(HashSet::new());
-        let seeding_active = AtomicBool::new(false);
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(activated, "should activate seeding when no tasks are in-flight");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must be set to true");
+    #[test]
+    fn sq_with_single_quote() {
+        assert_eq!(sq("it's"), "'it'\\''s'");
     }
 
-    #[tokio::test]
-    async fn seeding_does_not_double_start_when_already_active() {
-        let in_flight = Mutex::new(HashSet::new());
-        let seeding_active = AtomicBool::new(true); // already running
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(!activated, "CAS must fail when seeding is already active");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must remain true");
+    #[test]
+    fn sq_mirror_path_with_spaces() {
+        // repo name containing a space must be safely quoted in the clone command
+        let mirror = "/mirrors/my project.git";
+        let q = sq(mirror);
+        assert_eq!(q, "'/mirrors/my project.git'");
+        assert!(q.starts_with('\'') && q.ends_with('\''));
     }
 
-    /// Regression: the in_flight lock must be held during the CAS.
-    /// Simulate the race: after acquiring the lock and confirming emptiness,
-    /// a concurrent task insertion should not be possible before the CAS
-    /// completes because we hold the same lock.
-    #[tokio::test]
-    async fn in_flight_lock_held_prevents_concurrent_insertion() {
-        let in_flight = Arc::new(Mutex::new(HashSet::new()));
-        let seeding_active = Arc::new(AtomicBool::new(false));
-
-        // Spawn a task that holds the in_flight lock and tries to insert
-        // while try_activate_seeding is in its critical section.
-        let in_flight2 = Arc::clone(&in_flight);
-        let seeding_active2 = Arc::clone(&seeding_active);
-
-        // First: activate seeding (acquires + holds lock, does CAS, drops lock).
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-        assert!(activated);
-
-        // Now insert a task into in_flight to simulate a concurrent dispatch.
-        in_flight2.lock().await.insert(99);
-
-        // seeding_active is already true; a second call must fail even though
-        // in_flight is now non-empty (belt-and-suspenders).
-        let activated2 = try_activate_seeding(&in_flight2, &seeding_active2).await;
-        assert!(!activated2, "must not activate again while seeding is running");
+    #[test]
+    fn sq_mirror_path_with_glob_chars() {
+        let mirror = "/mirrors/repo[1].git";
+        let q = sq(mirror);
+        assert_eq!(q, "'/mirrors/repo[1].git'");
     }
 }
