@@ -1902,7 +1902,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     if now - cooldowns.get(&key).copied().unwrap_or(0) >= cooldown {
                         cooldowns.insert(key.clone(), now);
                         drop(cooldowns);
-                        let _ = self.db.set_seed_cooldown(&key.0, &key.1, now);
+                        if let Err(e) = self.db.set_seed_cooldown(&key.0, &key.1, now) {
+                            warn!("set_seed_cooldown for {} / github_open_issues: {e}", key.0);
+                        }
                         info!("seed scan: 'github_open_issues' for {}", repo.path);
                         if let Err(e) = self.seed_from_open_issues(repo) {
                             warn!("seed github_open_issues for {}: {e}", repo.path);
@@ -1936,7 +1938,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     }
                     cooldowns.insert(key.clone(), now);
                 }
-                let _ = self.db.set_seed_cooldown(&key.0, &key.1, now);
+                if let Err(e) = self.db.set_seed_cooldown(&key.0, &key.1, now) {
+                    warn!("set_seed_cooldown for {} / {}: {e}", key.0, key.1);
+                }
                 info!("seed scan: '{}' for {}", seed_cfg.name, repo.path);
                 if let Err(e) = self.run_seed(repo, &mode.name, &seed_cfg).await {
                     warn!("seed {} for {}: {e}", seed_cfg.name, repo.path);
