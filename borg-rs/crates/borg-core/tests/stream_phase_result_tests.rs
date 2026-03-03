@@ -234,3 +234,63 @@ async fn test_push_phase_result_only_affects_specified_task() {
         "task B stream must be unaffected, got: {joined_b}"
     );
 }
+
+// =============================================================================
+// MAX_HISTORY_LINES overflow tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_push_exactly_max_history_lines_keeps_all() {
+    let manager = TaskStreamManager::new();
+    let task_id: i64 = 100;
+    manager.start(task_id).await;
+
+    for i in 0..10_000usize {
+        manager.push_line(task_id, format!("line-{i}")).await;
+    }
+
+    let (history, _rx) = manager.subscribe(task_id).await;
+    assert_eq!(history.len(), 10_000, "all 10,000 lines must be retained");
+    assert_eq!(history[0], "line-0", "first line must be line-0");
+    assert_eq!(history[9_999], "line-9999", "last line must be line-9999");
+}
+
+#[tokio::test]
+async fn test_push_one_over_max_drops_oldest() {
+    let manager = TaskStreamManager::new();
+    let task_id: i64 = 101;
+    manager.start(task_id).await;
+
+    for i in 0..10_001usize {
+        manager.push_line(task_id, format!("line-{i}")).await;
+    }
+
+    let (history, _rx) = manager.subscribe(task_id).await;
+    assert_eq!(history.len(), 10_000, "history must be capped at 10,000");
+    assert!(
+        !history.contains(&"line-0".to_string()),
+        "oldest line must have been dropped"
+    );
+    assert_eq!(history[9_999], "line-10000", "last line must be line-10000");
+    assert_eq!(history[0], "line-1", "new oldest line must be line-1");
+}
+
+#[tokio::test]
+async fn test_subscribe_after_overflow_returns_exactly_max_history_lines() {
+    let manager = TaskStreamManager::new();
+    let task_id: i64 = 102;
+    manager.start(task_id).await;
+
+    for i in 0..15_000usize {
+        manager.push_line(task_id, format!("line-{i}")).await;
+    }
+
+    let (history, _rx) = manager.subscribe(task_id).await;
+    assert_eq!(
+        history.len(),
+        10_000,
+        "subscribe must return exactly 10,000 entries after overflow"
+    );
+    assert_eq!(history[0], "line-5000", "oldest retained line must be line-5000");
+    assert_eq!(history[9_999], "line-14999", "newest line must be line-14999");
+}
