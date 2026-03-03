@@ -108,6 +108,11 @@ export function useTaskDetail(id: number | null) {
   });
 }
 
+export async function getTaskStructuredData(id: number): Promise<Record<string, unknown> | null> {
+  const detail: TaskDetail = await fetchJson(`/api/tasks/${id}`);
+  return detail.structured_data ?? null;
+}
+
 export function useQueue() {
   return useQuery<QueueEntry[]>({
     queryKey: ["queue"],

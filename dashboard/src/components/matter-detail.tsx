@@ -9,6 +9,7 @@ import {
   getProjectChatMessages,
   sendProjectChat,
   checkConflicts,
+  getTaskStructuredData,
   sseUrl,
   tokenReady,
 } from "@/lib/api";
@@ -468,6 +469,147 @@ function TaskStreamMini({ taskId }: { taskId: number }) {
   );
 }
 
+// ── Structured data panel ─────────────────────────────────────────────────────
+
+function StructuredDataPanel({ taskId }: { taskId: number }) {
+  const [data, setData] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getTaskStructuredData(taskId)
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [taskId]);
+
+  if (loading) return <div className="mt-2 text-[10px] text-zinc-600">Loading results…</div>;
+  if (!data) return <div className="mt-2 text-[10px] text-zinc-600">No structured data.</div>;
+
+  const summary = data.summary as string | undefined;
+  const riskFlags = data.risk_flags as { severity: string; issue: string; section?: string; recommendation?: string }[] | undefined;
+  const keyObligations = data.key_obligations as { party: string; obligation: string; section?: string }[] | undefined;
+  const parties = data.parties as string[] | undefined;
+  const complianceItems = data.compliance_items as { requirement: string; status: string; evidence?: string; recommendation?: string }[] | undefined;
+  const deadlines = data.deadlines as { date: string; description: string; authority?: string }[] | undefined;
+  const regulations = data.regulations as { name: string; jurisdiction?: string; status?: string }[] | undefined;
+
+  const severityColor: Record<string, string> = {
+    high: "text-red-400 bg-red-500/10 border-red-500/20",
+    medium: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    low: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+  };
+
+  const complianceColor: Record<string, string> = {
+    compliant: "text-emerald-400",
+    non_compliant: "text-red-400",
+    partial: "text-amber-400",
+    unknown: "text-zinc-500",
+  };
+
+  return (
+    <div className="mt-2 rounded border border-white/[0.06] bg-black/20 p-3 space-y-3">
+      {summary && (
+        <p className="text-[11px] text-zinc-300 leading-relaxed">{summary}</p>
+      )}
+
+      {parties && parties.length > 0 && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 mb-1">Parties</div>
+          <div className="flex flex-wrap gap-1.5">
+            {parties.map((p, i) => (
+              <span key={i} className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-zinc-300">{p}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {keyObligations && keyObligations.length > 0 && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 mb-1">Key Obligations</div>
+          <div className="space-y-1">
+            {keyObligations.map((o, i) => (
+              <div key={i} className="rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+                <span className="text-zinc-400 font-medium">{o.party}</span>
+                <span className="text-zinc-500"> — </span>
+                <span className="text-zinc-300">{o.obligation}</span>
+                {o.section && <span className="text-zinc-600 ml-1">§{o.section}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {riskFlags && riskFlags.length > 0 && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 mb-1">Risk Flags</div>
+          <div className="space-y-1">
+            {riskFlags.map((r, i) => (
+              <div key={i} className={cn("rounded border px-2 py-1.5 text-[10px]", severityColor[r.severity] || severityColor.low)}>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium uppercase text-[9px]">{r.severity}</span>
+                  <span className="text-zinc-300">{r.issue}</span>
+                  {r.section && <span className="text-zinc-600 ml-auto">§{r.section}</span>}
+                </div>
+                {r.recommendation && <div className="mt-0.5 text-zinc-400">{r.recommendation}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {regulations && regulations.length > 0 && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 mb-1">Regulations</div>
+          <div className="space-y-1">
+            {regulations.map((r, i) => (
+              <div key={i} className="flex items-center gap-2 rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+                <span className="text-zinc-300 font-medium">{r.name}</span>
+                {r.jurisdiction && <span className="text-zinc-500">{r.jurisdiction}</span>}
+                {r.status && <span className="ml-auto text-zinc-500">{r.status}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {complianceItems && complianceItems.length > 0 && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 mb-1">Compliance</div>
+          <div className="space-y-1">
+            {complianceItems.map((c, i) => (
+              <div key={i} className="rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+                <div className="flex items-center gap-2">
+                  <span className={cn("font-medium", complianceColor[c.status] || "text-zinc-500")}>
+                    {c.status === "compliant" ? "✓" : c.status === "non_compliant" ? "✗" : "○"}
+                  </span>
+                  <span className="text-zinc-300">{c.requirement}</span>
+                </div>
+                {c.evidence && <div className="mt-0.5 pl-4 text-zinc-500">{c.evidence}</div>}
+                {c.recommendation && <div className="mt-0.5 pl-4 text-zinc-400">{c.recommendation}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {deadlines && deadlines.length > 0 && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 mb-1">Deadlines</div>
+          <div className="space-y-1">
+            {deadlines.map((d, i) => (
+              <div key={i} className="flex items-center gap-2 rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+                <span className="font-mono text-zinc-400">{d.date}</span>
+                <span className="text-zinc-300">{d.description}</span>
+                {d.authority && <span className="ml-auto text-zinc-500">{d.authority}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Tasks tab ─────────────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = new Set(["implement", "review", "validate", "lint_fix", "rebase", "spec", "qa", "qa_fix", "retry"]);
@@ -477,6 +619,7 @@ function TasksTab({ projectId }: { projectId: number }) {
   const queryClient = useQueryClient();
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [expandedStream, setExpandedStream] = useState<number | null>(null);
+  const [expandedResults, setExpandedResults] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -522,6 +665,14 @@ function TasksTab({ projectId }: { projectId: number }) {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                {(task.status === "done" || task.status === "merged") && (
+                  <button
+                    onClick={() => setExpandedResults(expandedResults === task.id ? null : task.id)}
+                    className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-emerald-500/30 hover:text-emerald-400 transition-colors"
+                  >
+                    {expandedResults === task.id ? "Hide" : "Results"}
+                  </button>
+                )}
                 {isActive && (
                   <button
                     onClick={() => setExpandedStream(expandedStream === task.id ? null : task.id)}
@@ -595,6 +746,9 @@ function TasksTab({ projectId }: { projectId: number }) {
             </div>
             {(isActive && expandedStream === task.id) && (
               <TaskStreamMini taskId={task.id} />
+            )}
+            {expandedResults === task.id && (
+              <StructuredDataPanel taskId={task.id} />
             )}
           </div>
         );

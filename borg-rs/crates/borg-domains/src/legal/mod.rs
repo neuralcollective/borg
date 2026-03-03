@@ -371,10 +371,16 @@ Read the Task Type from the task description. Adapt your workflow accordingly:
 
 **Contract Analysis:** Focus on extraction first:
 1. Identify all parties, dates, terms, and key obligations
-2. Write a structured key-terms summary (parties, effective_date, term, termination, indemnification, change_of_control)
-3. Flag risk areas with severity ratings (High/Medium/Low)
-4. Write specific recommendations for each risk area
-5. Save structured data as structured.json alongside the document
+2. Flag risk areas with severity ratings (High/Medium/Low)
+3. Write specific recommendations for each risk area
+4. Write `structured.json` with extracted terms:
+```json
+{\"task_type\":\"contract_analysis\",\"parties\":[{\"name\":\"\",\"role\":\"\"}],
+\"effective_date\":\"\",\"term\":\"\",\"termination_triggers\":[\"\"],
+\"key_obligations\":[{\"party\":\"\",\"obligation\":\"\"}],
+\"indemnification\":{\"cap\":\"\",\"carve_outs\":[\"\"]},
+\"change_of_control\":\"\",\"risk_flags\":[{\"description\":\"\",\"severity\":\"High|Medium|Low\",\"recommendation\":\"\"}]}
+```
 
 **Demand Letter:** Focus on factual precision and tone:
 1. Research establishes legal basis for the demand
@@ -393,6 +399,11 @@ Read the Task Type from the task description. Adapt your workflow accordingly:
 2. Map each regulation to the client's current compliance status
 3. Flag gaps with remediation timelines
 4. Track pending regulatory changes that could alter requirements
+5. Write `structured.json`:
+```json
+{\"task_type\":\"regulatory_analysis\",\"regulations\":[{\"name\":\"\",\"citation\":\"\",\"status\":\"compliant|gap|pending\",\"notes\":\"\",\"remediation\":\"\"}],
+\"pending_changes\":[{\"source\":\"\",\"description\":\"\",\"effective_date\":\"\",\"impact\":\"\"}]}
+```
 
 Add confidentiality header if the task involves client matters:
 \"PRIVILEGED AND CONFIDENTIAL — ATTORNEY WORK PRODUCT\"

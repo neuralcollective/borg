@@ -1187,6 +1187,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     fn advance_phase(&self, task: &Task, phase: &PhaseConfig, mode: &PipelineMode) -> Result<()> {
         let next = phase.next.as_str();
         if next == "done" {
+            // Read structured.json from the task branch if it exists
+            self.read_structured_output(task);
             self.db.update_task_status(task.id, "done", None)?;
             match mode.integration {
                 IntegrationType::GitPr => {
@@ -1210,6 +1212,30 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             message: format!("task #{} advanced to '{}'", task.id, next),
         });
         Ok(())
+    }
+
+    fn read_structured_output(&self, task: &Task) {
+        if task.repo_path.is_empty() { return; }
+        let branch = format!("task-{}", task.id);
+        let path = std::path::Path::new(&task.repo_path);
+        if !path.join(".git").exists() { return; }
+        let out = std::process::Command::new("git")
+            .args(["-C", &task.repo_path, "show", &format!("{branch}:structured.json")])
+            .stderr(std::process::Stdio::null())
+            .output();
+        if let Ok(output) = out {
+            if output.status.success() {
+                let data = String::from_utf8_lossy(&output.stdout);
+                let trimmed = data.trim();
+                if !trimmed.is_empty() {
+                    if let Err(e) = self.db.update_task_structured_data(task.id, trimmed) {
+                        tracing::warn!("task #{}: failed to save structured data: {e}", task.id);
+                    } else {
+                        tracing::info!("task #{}: saved structured output ({} bytes)", task.id, trimmed.len());
+                    }
+                }
+            }
+        }
     }
 
     // ── Pipeline state snapshot ───────────────────────────────────────────

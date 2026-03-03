@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS pipeline_tasks (
   backend TEXT,                  -- backend that actually ran this task
   project_id INTEGER REFERENCES projects(id),
   task_type TEXT NOT NULL DEFAULT '',
+  structured_data TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

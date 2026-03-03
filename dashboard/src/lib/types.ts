@@ -17,6 +17,7 @@ export interface Task {
 export interface TaskDetail extends Task {
   last_error: string;
   outputs: TaskOutput[];
+  structured_data?: Record<string, unknown>;
 }
 
 export interface TaskOutput {

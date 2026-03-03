@@ -378,6 +378,7 @@ impl Db {
             "ALTER TABLE projects ADD COLUMN privilege_level TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
             "ALTER TABLE pipeline_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE pipeline_tasks ADD COLUMN structured_data TEXT NOT NULL DEFAULT ''",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -576,6 +577,28 @@ impl Db {
         )
         .context("update_task_backend")?;
         Ok(())
+    }
+
+    pub fn update_task_structured_data(&self, id: i64, data: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipeline_tasks SET structured_data = ?1 WHERE id = ?2",
+            params![data, id],
+        )
+        .context("update_task_structured_data")?;
+        Ok(())
+    }
+
+    pub fn get_task_structured_data(&self, id: i64) -> Result<String> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let data: String = conn
+            .query_row(
+                "SELECT structured_data FROM pipeline_tasks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+        Ok(data)
     }
 
     // ── Proposals ─────────────────────────────────────────────────────────

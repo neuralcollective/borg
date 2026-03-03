@@ -1579,12 +1579,18 @@ pub(crate) async fn get_task(
         Some((task, outputs)) => {
             let outputs_json: Vec<TaskOutputJson> =
                 outputs.into_iter().map(TaskOutputJson::from).collect();
+            let structured = state.db.get_task_structured_data(task.id).unwrap_or_default();
             let mut v = serde_json::to_value(&task).map_err(internal)?;
             if let Some(obj) = v.as_object_mut() {
                 obj.insert(
                     "outputs".into(),
                     serde_json::to_value(outputs_json).map_err(internal)?,
                 );
+                if !structured.is_empty() {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&structured) {
+                        obj.insert("structured_data".into(), parsed);
+                    }
+                }
             }
             Ok(Json(v))
         },
