@@ -1,0 +1,10 @@
+{
+  "task_id": 264,
+  "task_title": "Document or propagate silently-ignored critical DB state transitions",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-264",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T09:10:41.548166945Z"
+}
