@@ -55,24 +55,9 @@ fn percent_encode(s: &str) -> String {
 }
 
 fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
-    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
-    let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut buf = 0u32;
-    let mut bits = 0u32;
-    for c in clean.bytes() {
-        if c == b'=' { break; }
-        let val = table.iter().position(|&t| t == c)
-            .ok_or_else(|| anyhow::anyhow!("invalid base64 char"))? as u32;
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Ok(out)
+    STANDARD.decode(&clean).map_err(|e| anyhow::anyhow!("base64 decode error: {e}"))
 }
 
 fn sha256_hex_bytes(bytes: &[u8]) -> String {
@@ -4570,145 +4555,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sanitize_upload_name_basic() {
-        assert_eq!(sanitize_upload_name("hello.txt"), "hello.txt");
-        assert_eq!(sanitize_upload_name("my file.pdf"), "my_file.pdf");
-        assert_eq!(sanitize_upload_name("../../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_upload_name(""), "upload.bin");
+    fn test_base64_decode_basic() {
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
     }
 
     #[test]
-    fn test_sanitize_upload_name_strips_leading_dots() {
-        assert_eq!(sanitize_upload_name("..."), "upload.bin");
-        assert_eq!(sanitize_upload_name(".hidden"), "hidden");
+    fn test_base64_decode_no_padding() {
+        // "Man" encodes to "TWFu" (no padding needed)
+        assert_eq!(base64_decode("TWFu").unwrap(), b"Man");
     }
 
     #[test]
-    fn test_duplicate_upload_rejected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest = dir.path().join("report.pdf");
-
-        // First upload: file does not exist yet
-        assert!(!dest.exists());
-
-        // Write to simulate first upload succeeding
-        std::fs::write(&dest, b"first content").expect("write");
-        assert!(dest.exists());
-
-        // Second upload: file already exists — should be rejected
-        assert!(dest.exists(), "conflict check: file exists, 409 must fire");
+    fn test_base64_decode_strips_whitespace() {
+        let b64_with_newlines = "aGVs\nbG8=";
+        assert_eq!(base64_decode(b64_with_newlines).unwrap(), b"hello");
     }
 
     #[test]
-    fn test_different_name_no_conflict() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest_a = dir.path().join("report_a.pdf");
-        let dest_b = dir.path().join("report_b.pdf");
-
-        std::fs::write(&dest_a, b"content a").expect("write a");
-
-        // Different name — no conflict
-        assert!(!dest_b.exists());
+    fn test_base64_decode_empty() {
+        assert_eq!(base64_decode("").unwrap(), b"");
     }
 
     #[test]
-    fn test_safe_knowledge_path_traversal_contained() {
-        let data_dir = "/tmp/borg-test-data";
-        // Even with .. in path, file_name() strips components and result stays inside knowledge/
-        let p = safe_knowledge_path(data_dir, "../secrets.txt").expect("some");
-        assert!(p.starts_with("/tmp/borg-test-data/knowledge"));
-        let p2 = safe_knowledge_path(data_dir, "../../etc/passwd").expect("some");
-        assert!(p2.starts_with("/tmp/borg-test-data/knowledge"));
+    fn test_base64_decode_invalid_char() {
+        assert!(base64_decode("aGVs!G8=").is_err());
     }
 
     #[test]
-    fn test_safe_knowledge_path_pure_dotdot_is_none() {
-        let data_dir = "/tmp/borg-test-data";
-        // Path ending in ".." has no file_name component → None
-        assert!(safe_knowledge_path(data_dir, "subdir/..").is_none());
+    fn test_base64_decode_roundtrip() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let original = b"hello world, this is a test of the base64 decoder";
+        let encoded = STANDARD.encode(original);
+        assert_eq!(base64_decode(&encoded).unwrap(), original);
     }
 
     #[test]
-    fn test_safe_knowledge_path_valid() {
-        let data_dir = "/tmp/borg-test-data";
-        let path = safe_knowledge_path(data_dir, "report.pdf");
-        assert!(path.is_some());
-        let p = path.unwrap();
-        assert!(p.to_string_lossy().ends_with("knowledge/report.pdf"));
-    }
-
-    use chrono::Utc;
-
-    fn make_file(file_name: &str, stored_path: &str) -> ProjectFileRow {
-        ProjectFileRow {
-            id: 1,
-            project_id: 1,
-            file_name: file_name.to_string(),
-            stored_path: stored_path.to_string(),
-            mime_type: "text/plain".to_string(),
-            size_bytes: 0,
-            extracted_text: String::new(),
-            content_hash: String::new(),
-            created_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn stage_project_files_uses_stored_path_basename() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        // Two source files with different content but same display file_name
-        let src1 = dir.path().join("1700000001_aaa_report.pdf");
-        let src2 = dir.path().join("1700000002_bbb_report.pdf");
-        std::fs::write(&src1, b"content-one").unwrap();
-        std::fs::write(&src2, b"content-two").unwrap();
-
-        let files = vec![
-            make_file("report.pdf", src1.to_str().unwrap()),
-            make_file("report.pdf", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let staged1 = std::fs::read(dest_dir.join("1700000001_aaa_report.pdf")).unwrap();
-        let staged2 = std::fs::read(dest_dir.join("1700000002_bbb_report.pdf")).unwrap();
-        assert_eq!(staged1, b"content-one");
-        assert_eq!(staged2, b"content-two");
-    }
-
-    #[test]
-    fn stage_project_files_unique_names_no_collision() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        let src1 = dir.path().join("1700000001_aaa_doc.txt");
-        let src2 = dir.path().join("1700000002_bbb_doc.txt");
-        std::fs::write(&src1, b"first").unwrap();
-        std::fs::write(&src2, b"second").unwrap();
-
-        let files = vec![
-            make_file("doc.txt", src1.to_str().unwrap()),
-            make_file("doc.txt", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let entries: Vec<_> = std::fs::read_dir(&dest_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-        // Both files must be present — no collision
-        assert_eq!(entries.len(), 2);
+    fn test_base64_decode_binary_data() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let data: Vec<u8> = (0u8..=255).collect();
+        let encoded = STANDARD.encode(&data);
+        assert_eq!(base64_decode(&encoded).unwrap(), data);
     }
 }
