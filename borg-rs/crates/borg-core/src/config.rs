@@ -334,6 +334,102 @@ fn parse_watched_repos(
     repos
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(watched: &str, pipeline_repo: &str) -> Vec<RepoConfig> {
+        parse_watched_repos(watched, pipeline_repo, "just test", "just lint", "sweborg")
+    }
+
+    #[test]
+    fn empty_watched_empty_pipeline_repo_returns_empty() {
+        let repos = parse_watched_repos("", "", "", "", "sweborg");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn empty_watched_returns_only_primary() {
+        let repos = parse("", "/repo/primary");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/primary");
+        assert!(r.is_self);
+        assert!(r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.lint_cmd, "just lint");
+        assert_eq!(r.mode, "sweborg");
+    }
+
+    #[test]
+    fn manual_suffix_sets_auto_merge_false_and_is_stripped() {
+        // slug override in field 6 avoids calling git
+        let repos = parse("/repo/foo:cargo test!manual:.borg/prompt.md:sweborg::owner/foo", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "cargo test");
+    }
+
+    #[test]
+    fn slug_override_used_instead_of_git_remote() {
+        let repos = parse("/repo/foo:just test:.borg/prompt.md:sweborg::owner/myrepo", "");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo_slug, "owner/myrepo");
+    }
+
+    #[test]
+    fn entry_matching_pipeline_repo_is_skipped() {
+        let repos = parse("/repo/primary:just test2::swe:::owner/other", "/repo/primary");
+        // Only the primary (self) entry should remain
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+        assert_eq!(repos[0].path, "/repo/primary");
+    }
+
+    #[test]
+    fn missing_optional_fields_default_correctly() {
+        // Only path, no colon-separated fields
+        let repos = parse("/repo/bar", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert_eq!(r.path, "/repo/bar");
+        assert_eq!(r.test_cmd, "");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "");
+        assert!(r.auto_merge);
+        assert!(!r.is_self);
+    }
+
+    #[test]
+    fn multiple_entries_parsed() {
+        let repos = parse(
+            "/repo/a:test_a:::lint_a:org/a|/repo/b:test_b::custom_mode::org/b",
+            "",
+        );
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].path, "/repo/a");
+        assert_eq!(repos[0].test_cmd, "test_a");
+        assert_eq!(repos[0].lint_cmd, "lint_a");
+        assert_eq!(repos[0].repo_slug, "org/a");
+        assert_eq!(repos[1].path, "/repo/b");
+        assert_eq!(repos[1].test_cmd, "test_b");
+        assert_eq!(repos[1].mode, "custom_mode");
+        assert_eq!(repos[1].repo_slug, "org/b");
+    }
+
+    #[test]
+    fn primary_repo_is_first_and_is_self() {
+        let repos = parse("/repo/extra:test_extra::::org/extra", "/repo/main");
+        assert_eq!(repos.len(), 2);
+        assert!(repos[0].is_self);
+        assert_eq!(repos[0].path, "/repo/main");
+        assert!(!repos[1].is_self);
+        assert_eq!(repos[1].path, "/repo/extra");
+    }
+}
+
 impl Config {
     /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
     pub fn chat_system_prompt(&self) -> String {
