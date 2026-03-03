@@ -733,6 +733,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/:id/deadlines/:did", put(routes::update_deadline).delete(routes::delete_deadline))
         .route("/api/deadlines", get(routes::list_upcoming_deadlines))
         .route("/api/search", get(routes::search_documents))
+        .route("/api/projects/:id/audit", get(routes::list_project_audit))
         .route("/api/projects/:id/documents", get(routes::list_project_documents))
         .route(
             "/api/projects/:id/documents/:task_id/content",

@@ -213,6 +213,8 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
   id INTEGER PRIMARY KEY,
   task_id INTEGER REFERENCES pipeline_tasks(id),
   repo_id INTEGER REFERENCES repos(id),
+  project_id INTEGER REFERENCES projects(id),
+  actor TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -220,6 +222,7 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_task_id ON pipeline_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_kind ON pipeline_events(kind);
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_created_at ON pipeline_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_project ON pipeline_events(project_id);
 
 -- ── Per-task chat ─────────────────────────────────────────────────────────
 

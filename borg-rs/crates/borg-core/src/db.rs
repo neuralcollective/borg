@@ -149,6 +149,17 @@ pub struct ConflictHit {
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
+pub struct AuditEvent {
+    pub id: i64,
+    pub task_id: Option<i64>,
+    pub project_id: Option<i64>,
+    pub actor: String,
+    pub kind: String,
+    pub payload: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct FtsResult {
     pub project_id: i64,
     pub task_id: i64,
@@ -400,6 +411,8 @@ impl Db {
             "ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
             "ALTER TABLE pipeline_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE pipeline_tasks ADD COLUMN structured_data TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE pipeline_events ADD COLUMN project_id INTEGER REFERENCES projects(id)",
+            "ALTER TABLE pipeline_events ADD COLUMN actor TEXT NOT NULL DEFAULT ''",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -1621,16 +1634,50 @@ impl Db {
         kind: &str,
         payload: &serde_json::Value,
     ) -> Result<i64> {
+        self.log_event_full(task_id, repo_id, None, "", kind, payload)
+    }
+
+    pub fn log_event_full(
+        &self,
+        task_id: Option<i64>,
+        repo_id: Option<i64>,
+        project_id: Option<i64>,
+        actor: &str,
+        kind: &str,
+        payload: &serde_json::Value,
+    ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let payload_str = payload.to_string();
         let created_at = now_str();
         conn.execute(
-            "INSERT INTO pipeline_events (task_id, repo_id, kind, payload, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![task_id, repo_id, kind, payload_str, created_at],
+            "INSERT INTO pipeline_events (task_id, repo_id, project_id, actor, kind, payload, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![task_id, repo_id, project_id, actor, kind, payload_str, created_at],
         )
         .context("log_event")?;
         Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_project_events(&self, project_id: i64, limit: i64) -> Result<Vec<AuditEvent>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, project_id, actor, kind, payload, created_at \
+             FROM pipeline_events WHERE project_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![project_id, limit], |r| {
+            let ts: String = r.get(6)?;
+            Ok(AuditEvent {
+                id: r.get(0)?,
+                task_id: r.get::<_, Option<i64>>(1)?,
+                project_id: r.get::<_, Option<i64>>(2)?,
+                actor: r.get(3)?,
+                kind: r.get(4)?,
+                payload: r.get(5)?,
+                created_at: parse_ts(&ts),
+            })
+        })?.collect::<rusqlite::Result<Vec<_>>>().context("list_project_events")?;
+        Ok(rows)
     }
 
     // ── Config ────────────────────────────────────────────────────────────

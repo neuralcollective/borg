@@ -900,6 +900,8 @@ pub(crate) async fn create_project(
             .map_err(internal)?;
     }
 
+    let _ = state.db.log_event_full(None, None, Some(id), "api", "matter.created", &json!({ "name": name, "mode": mode }));
+
     let mut resp = json!({ "id": id });
     if !conflicts.is_empty() {
         resp["conflicts"] = json!(conflicts);
@@ -994,6 +996,7 @@ pub(crate) async fn delete_project(
     if !project.repo_path.is_empty() {
         let _ = tokio::fs::remove_dir_all(&project.repo_path).await;
     }
+    let _ = state.db.log_event_full(None, None, Some(id), "api", "matter.deleted", &json!({ "name": project.name }));
     state.db.delete_project(id).map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1039,6 +1042,7 @@ pub(crate) async fn create_deadline(
         return Err(StatusCode::NOT_FOUND);
     }
     let did = state.db.insert_deadline(id, &body.label, &body.due_date, &body.rule_basis).map_err(internal)?;
+    let _ = state.db.log_event_full(None, None, Some(id), "api", "deadline.created", &json!({ "label": body.label, "due_date": body.due_date }));
     Ok(Json(json!({ "id": did })))
 }
 
@@ -1104,6 +1108,27 @@ pub(crate) struct FtsSearchQuery {
     limit: i64,
 }
 fn default_search_limit() -> i64 { 50 }
+
+// ── Audit ────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct AuditQuery {
+    #[serde(default = "default_audit_limit")]
+    limit: i64,
+}
+fn default_audit_limit() -> i64 { 100 }
+
+pub(crate) async fn list_project_audit(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Query(q): Query<AuditQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.db.get_project(id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let events = state.db.list_project_events(id, q.limit).map_err(internal)?;
+    Ok(Json(json!(events)))
+}
 
 pub(crate) async fn search_documents(
     State(state): State<Arc<AppState>>,
@@ -1760,6 +1785,7 @@ pub(crate) async fn create_task(
         task_type: body.task_type.unwrap_or_default(),
     };
     let id = state.db.insert_task(&task).map_err(internal)?;
+    let _ = state.db.log_event_full(Some(id), None, Some(task.project_id).filter(|&p| p > 0), "api", "task.created", &json!({ "title": task.title }));
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 

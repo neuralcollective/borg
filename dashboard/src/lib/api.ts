@@ -573,6 +573,27 @@ export interface FtsSearchResult {
   rank: number;
 }
 
+// ── Audit ─────────────────────────────────────────────────────────────
+
+export interface AuditEvent {
+  id: number;
+  task_id: number | null;
+  project_id: number | null;
+  actor: string;
+  kind: string;
+  payload: string;
+  created_at: string;
+}
+
+export function useProjectAudit(projectId: number | null) {
+  return useQuery<AuditEvent[]>({
+    queryKey: ["project_audit", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}/audit`),
+    enabled: projectId !== null,
+    refetchInterval: REFETCH_PROJECTS,
+  });
+}
+
 export async function searchDocuments(query: string, projectId?: number): Promise<FtsSearchResult[]> {
   const params = new URLSearchParams({ q: query });
   if (projectId) params.set("project_id", String(projectId));

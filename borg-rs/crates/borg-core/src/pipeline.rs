@@ -1191,6 +1191,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             self.read_task_deadlines(task);
             self.index_task_documents(task);
             self.db.update_task_status(task.id, "done", None)?;
+            let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
+            let _ = self.db.log_event_full(Some(task.id), None, pid, "pipeline", "task.completed", &serde_json::json!({ "title": task.title }));
             match mode.integration {
                 IntegrationType::GitPr => {
                     let branch = format!("task-{}", task.id);
