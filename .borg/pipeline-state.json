@@ -1,0 +1,10 @@
+{
+  "task_id": 312,
+  "task_title": "Test cosine_similarity and embedding serialization round-trip in knowledge.rs",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-312",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T11:46:20.287280439Z"
+}
