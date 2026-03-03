@@ -1,0 +1,10 @@
+{
+  "task_id": 213,
+  "task_title": "Test ChatCollector flush_expired and mark_done",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-213",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T06:31:21.549722235Z"
+}
