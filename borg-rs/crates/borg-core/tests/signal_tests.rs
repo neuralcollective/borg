@@ -79,3 +79,48 @@ fn test_signal_roundtrip_serialize_deserialize() {
     assert_eq!(parsed.reason, "need clarification");
     assert_eq!(parsed.question, "what scope?");
 }
+
+#[test]
+fn test_signal_done_predicates() {
+    let signal = AgentSignal::done();
+    assert!(!signal.is_blocked());
+    assert!(!signal.is_abandon());
+}
+
+#[test]
+fn test_signal_blocked_constructor() {
+    let signal = AgentSignal::blocked("need more info");
+    assert!(signal.is_blocked());
+    assert!(!signal.is_abandon());
+    assert_eq!(signal.reason, "need more info");
+    assert!(signal.question.is_empty());
+}
+
+#[test]
+fn test_signal_abandon_constructor() {
+    let signal = AgentSignal::abandon("task already completed");
+    assert!(!signal.is_blocked());
+    assert!(signal.is_abandon());
+    assert_eq!(signal.reason, "task already completed");
+    assert!(signal.question.is_empty());
+}
+
+#[test]
+fn test_signal_abandon_roundtrip() {
+    let original = AgentSignal::abandon("already done");
+    let json = serde_json::to_string(&original).unwrap();
+    let parsed: AgentSignal = serde_json::from_str(&json).unwrap();
+    assert!(parsed.is_abandon());
+    assert!(!parsed.is_blocked());
+    assert_eq!(parsed.reason, "already done");
+}
+
+#[test]
+fn test_signal_blocked_roundtrip() {
+    let original = AgentSignal::blocked("unclear requirements");
+    let json = serde_json::to_string(&original).unwrap();
+    let parsed: AgentSignal = serde_json::from_str(&json).unwrap();
+    assert!(parsed.is_blocked());
+    assert!(!parsed.is_abandon());
+    assert_eq!(parsed.reason, "unclear requirements");
+}

@@ -421,6 +421,22 @@ impl AgentSignal {
         Self::default()
     }
 
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        Self {
+            status: "blocked".into(),
+            reason: reason.into(),
+            question: String::new(),
+        }
+    }
+
+    pub fn abandon(reason: impl Into<String>) -> Self {
+        Self {
+            status: "abandon".into(),
+            reason: reason.into(),
+            question: String::new(),
+        }
+    }
+
     pub fn is_blocked(&self) -> bool {
         self.status == "blocked"
     }
