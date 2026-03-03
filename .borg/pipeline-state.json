@@ -1,0 +1,10 @@
+{
+  "task_id": 267,
+  "task_title": "search_embeddings loads entire embeddings table into RAM",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-267",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T09:17:33.741570235Z"
+}
