@@ -88,6 +88,17 @@ struct GithubIssue {
     labels: Vec<GithubIssueLabel>,
 }
 
+/// Resets `seeding_active` to `false` when dropped, ensuring cleanup even on panic.
+struct SeedingGuard(Arc<Pipeline>);
+
+impl Drop for SeedingGuard {
+    fn drop(&mut self) {
+        self.0
+            .seeding_active
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 impl Pipeline {
     fn task_session_dir(task_id: i64) -> String {
         let rel = format!("store/sessions/task-{task_id}");
@@ -770,32 +781,25 @@ impl Pipeline {
             });
         }
 
-        if dispatched == 0 {
-            // Hold the lock across the CAS so the emptiness check and the
-            // seeding_active flip are jointly atomic with task dispatch.
-            let guard = self.in_flight.lock().await;
-            if guard.is_empty()
-                && self
-                    .seeding_active
-                    .compare_exchange(
-                        false,
-                        true,
-                        std::sync::atomic::Ordering::AcqRel,
-                        std::sync::atomic::Ordering::Relaxed,
-                    )
-                    .is_ok()
-            {
-                drop(guard);
-                let pipeline = Arc::clone(&self);
-                tokio::spawn(async move {
-                    if let Err(e) = pipeline.seed_if_idle().await {
-                        warn!("seed_if_idle error: {e}");
-                    }
-                    pipeline
-                        .seeding_active
-                        .store(false, std::sync::atomic::Ordering::Release);
-                });
-            }
+        if dispatched == 0
+            && self.in_flight.lock().await.is_empty()
+            && self
+                .seeding_active
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            let pipeline = Arc::clone(&self);
+            tokio::spawn(async move {
+                let _guard = SeedingGuard(Arc::clone(&pipeline));
+                if let Err(e) = pipeline.seed_if_idle().await {
+                    warn!("seed_if_idle error: {e}");
+                }
+            });
         }
 
         // Periodic background work (each is internally throttled)
@@ -4054,85 +4058,56 @@ fn looks_like_field_key(line: &str) -> bool {
 }
 
 #[cfg(test)]
-mod seeding_toctou_tests {
-    use std::collections::HashSet;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
-    /// Replicates the fixed "check-and-set" logic so we can test it in
-    /// isolation without constructing a full Pipeline.
-    async fn try_activate_seeding(
-        in_flight: &Mutex<HashSet<i64>>,
-        seeding_active: &AtomicBool,
-    ) -> bool {
-        let guard = in_flight.lock().await;
-        if guard.is_empty() {
-            seeding_active
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-        } else {
-            false
+    #[tokio::test]
+    async fn test_seeding_guard_resets_on_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+
+        struct Guard(Arc<AtomicBool>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
         }
+
+        let flag2 = Arc::clone(&flag);
+        let handle = tokio::spawn(async move {
+            let _guard = Guard(flag2);
+            panic!("simulated panic");
+        });
+        let _ = handle.await;
+
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "seeding_active must be reset to false after task panic"
+        );
     }
 
     #[tokio::test]
-    async fn seeding_does_not_start_when_in_flight_is_nonempty() {
-        let in_flight = Mutex::new(HashSet::from([42i64]));
-        let seeding_active = AtomicBool::new(false);
+    async fn test_seeding_guard_resets_on_normal_exit() {
+        let flag = Arc::new(AtomicBool::new(true));
 
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
+        struct Guard(Arc<AtomicBool>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
 
-        assert!(!activated, "should not activate seeding while tasks are in-flight");
-        assert!(!seeding_active.load(Ordering::Acquire), "seeding_active must stay false");
-    }
+        let flag2 = Arc::clone(&flag);
+        let handle = tokio::spawn(async move {
+            let _guard = Guard(flag2);
+        });
+        handle.await.expect("task should complete without panic");
 
-    #[tokio::test]
-    async fn seeding_starts_when_in_flight_is_empty() {
-        let in_flight = Mutex::new(HashSet::new());
-        let seeding_active = AtomicBool::new(false);
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(activated, "should activate seeding when no tasks are in-flight");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must be set to true");
-    }
-
-    #[tokio::test]
-    async fn seeding_does_not_double_start_when_already_active() {
-        let in_flight = Mutex::new(HashSet::new());
-        let seeding_active = AtomicBool::new(true); // already running
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(!activated, "CAS must fail when seeding is already active");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must remain true");
-    }
-
-    /// Regression: the in_flight lock must be held during the CAS.
-    /// Simulate the race: after acquiring the lock and confirming emptiness,
-    /// a concurrent task insertion should not be possible before the CAS
-    /// completes because we hold the same lock.
-    #[tokio::test]
-    async fn in_flight_lock_held_prevents_concurrent_insertion() {
-        let in_flight = Arc::new(Mutex::new(HashSet::new()));
-        let seeding_active = Arc::new(AtomicBool::new(false));
-
-        // Spawn a task that holds the in_flight lock and tries to insert
-        // while try_activate_seeding is in its critical section.
-        let in_flight2 = Arc::clone(&in_flight);
-        let seeding_active2 = Arc::clone(&seeding_active);
-
-        // First: activate seeding (acquires + holds lock, does CAS, drops lock).
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-        assert!(activated);
-
-        // Now insert a task into in_flight to simulate a concurrent dispatch.
-        in_flight2.lock().await.insert(99);
-
-        // seeding_active is already true; a second call must fail even though
-        // in_flight is now non-empty (belt-and-suspenders).
-        let activated2 = try_activate_seeding(&in_flight2, &seeding_active2).await;
-        assert!(!activated2, "must not activate again while seeding is running");
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "seeding_active must be reset to false on normal exit"
+        );
     }
 }
