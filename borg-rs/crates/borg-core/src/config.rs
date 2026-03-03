@@ -334,6 +334,69 @@ fn parse_watched_repos(
     repos
 }
 
+#[cfg(test)]
+mod tests {
+    use super::parse_watched_repos;
+
+    #[test]
+    fn empty_pipeline_repo_produces_no_primary() {
+        let repos = parse_watched_repos("", "", "", "", "sweborg");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn nonempty_pipeline_repo_produces_primary_with_is_self() {
+        let repos = parse_watched_repos("", "/some/repo", "just t", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, "/some/repo");
+        assert!(repos[0].is_self);
+        assert!(repos[0].auto_merge);
+    }
+
+    #[test]
+    fn manual_suffix_strips_and_disables_auto_merge() {
+        let repos = parse_watched_repos("/other/repo:just t!manual", "", "", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, "/other/repo");
+        assert!(!repos[0].auto_merge);
+        assert_eq!(repos[0].test_cmd, "just t");
+    }
+
+    #[test]
+    fn watched_entry_matching_pipeline_repo_is_skipped() {
+        let repos = parse_watched_repos(
+            "/primary/repo:just t",
+            "/primary/repo",
+            "just t",
+            "",
+            "sweborg",
+        );
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+    }
+
+    #[test]
+    fn six_part_entry_uses_slug_override() {
+        let repos = parse_watched_repos(
+            "/path/to/repo:just t:.borg/prompt.md:sweborg::owner/myrepo",
+            "",
+            "",
+            "",
+            "sweborg",
+        );
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo_slug, "owner/myrepo");
+    }
+
+    #[test]
+    fn entry_with_only_path_defaults_mode_to_sweborg() {
+        let repos = parse_watched_repos("/only/path", "", "", "", "sweborg");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, "/only/path");
+        assert_eq!(repos[0].mode, "sweborg");
+    }
+}
+
 impl Config {
     /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
     pub fn chat_system_prompt(&self) -> String {
