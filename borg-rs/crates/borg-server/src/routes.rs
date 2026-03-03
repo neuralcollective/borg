@@ -2233,7 +2233,7 @@ pub(crate) async fn approve_task(
     // Resolve the mode and find the current phase to advance
     let mode = borg_core::modes::get_mode(&task.mode)
         .or_else(|| {
-            state.db.get_config("custom_modes").ok().flatten()
+            state.db.get_config_str("custom_modes")
                 .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
                 .and_then(|modes| modes.into_iter().find(|m| m.name == task.mode))
         })
@@ -2275,7 +2275,7 @@ pub(crate) async fn request_revision(
     // Find the previous agent phase by walking backwards through the mode's phases
     let mode = borg_core::modes::get_mode(&task.mode)
         .or_else(|| {
-            state.db.get_config("custom_modes").ok().flatten()
+            state.db.get_config_str("custom_modes")
                 .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
                 .and_then(|modes| modes.into_iter().find(|m| m.name == task.mode))
         })
@@ -2760,9 +2760,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
         return Json(json!({ "scored": 0 }));
     };
     let model = db
-        .get_config("model")
-        .ok()
-        .flatten()
+        .get_config_str("model")
         .unwrap_or_else(|| "claude-sonnet-4-6".into());
     let oauth = state.config.oauth_token.clone();
 

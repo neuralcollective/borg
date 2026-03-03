@@ -197,15 +197,11 @@ async fn main() -> anyhow::Result<()> {
         || borg_core::config::codex_has_credentials(&config.codex_credentials_path)
     {
         let codex_model = db
-            .get_config("codex_model")
-            .ok()
-            .flatten()
+            .get_config_str("codex_model")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "gpt-5.3-codex".to_string());
         let codex_reasoning_effort = db
-            .get_config("codex_reasoning_effort")
-            .ok()
-            .flatten()
+            .get_config_str("codex_reasoning_effort")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "medium".to_string());
         backends.insert(
