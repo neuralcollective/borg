@@ -1,10 +1,10 @@
 {
-  "task_id": 250,
-  "task_title": "Stream subscriber can miss final event due to ended-flag race",
+  "task_id": 256,
+  "task_title": "Test build_knowledge_section renders inline vs external files correctly",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-250",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-256",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T08:22:24.642836021Z"
+  "generated_at": "2026-03-03T08:45:27.465124964Z"
 }
