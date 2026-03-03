@@ -18,9 +18,13 @@ impl Severity {
     fn from_str(s: &str) -> Self {
         match s {
             "low" => Self::Low,
+            "medium" => Self::Medium,
             "high" => Self::High,
             "critical" => Self::Critical,
-            _ => Self::Medium,
+            _ => {
+                warn!("Observer: unrecognized severity {:?}, defaulting to medium", s);
+                Self::Medium
+            },
         }
     }
 
@@ -455,6 +459,7 @@ fn parse_entry(v: &Value) -> Result<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     #[test]
     fn severity_ordering() {
@@ -466,9 +471,18 @@ mod tests {
     #[test]
     fn severity_from_str() {
         assert_eq!(Severity::from_str("low"), Severity::Low);
+        assert_eq!(Severity::from_str("medium"), Severity::Medium);
         assert_eq!(Severity::from_str("high"), Severity::High);
         assert_eq!(Severity::from_str("critical"), Severity::Critical);
         assert_eq!(Severity::from_str("unknown"), Severity::Medium);
+    }
+
+    #[test]
+    #[traced_test]
+    fn severity_from_str_warns_on_unrecognized() {
+        let result = Severity::from_str("crticial"); // deliberate typo
+        assert_eq!(result, Severity::Medium);
+        assert!(logs_contain("unrecognized severity"));
     }
 
     #[test]
