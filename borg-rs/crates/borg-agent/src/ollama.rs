@@ -114,27 +114,14 @@ impl AgentBackend for OllamaBackend {
                     timeout_secs = self.timeout_secs,
                     "ollama request timed out"
                 );
-                return Ok(PhaseOutput {
-                    output: format!("Ollama request timed out after {}s", self.timeout_secs),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                    signal_json: None,
-                    ran_in_docker: false,
-                    container_test_results: Vec::new(),
-                });
+                return Ok(PhaseOutput::failed(format!(
+                    "Ollama request timed out after {}s",
+                    self.timeout_secs
+                )));
             },
             Err(e) => {
                 warn!(task_id = task.id, phase = %phase.name, "ollama request failed: {}", e);
-                return Ok(PhaseOutput {
-                    output: format!("Ollama request failed: {}", e),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                    signal_json: None,
-                    ran_in_docker: false,
-                    container_test_results: Vec::new(),
-                });
+                return Ok(PhaseOutput::failed(format!("Ollama request failed: {}", e)));
             },
         };
 
@@ -148,30 +135,17 @@ impl AgentBackend for OllamaBackend {
                 "ollama returned non-200: {}",
                 body
             );
-            return Ok(PhaseOutput {
-                output: format!("Ollama error {}: {}", status, body),
-                new_session_id: None,
-                raw_stream: String::new(),
-                success: false,
-                signal_json: None,
-                ran_in_docker: false,
-                container_test_results: Vec::new(),
-            });
+            return Ok(PhaseOutput::failed(format!("Ollama error {}: {}", status, body)));
         }
 
         let parsed: OllamaChatResponse = match response.json().await {
             Ok(v) => v,
             Err(e) => {
                 warn!(task_id = task.id, phase = %phase.name, "failed to parse ollama response: {}", e);
-                return Ok(PhaseOutput {
-                    output: format!("Failed to parse Ollama response: {}", e),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                    signal_json: None,
-                    ran_in_docker: false,
-                    container_test_results: Vec::new(),
-                });
+                return Ok(PhaseOutput::failed(format!(
+                    "Failed to parse Ollama response: {}",
+                    e
+                )));
             },
         };
 

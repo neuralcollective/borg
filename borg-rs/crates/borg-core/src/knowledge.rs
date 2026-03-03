@@ -20,7 +20,7 @@ impl EmbeddingClient {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .unwrap_or_default(),
+                .expect("failed to build HTTP client"),
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
         }
