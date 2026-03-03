@@ -750,8 +750,6 @@ impl Pipeline {
             &result.output,
             &result.raw_stream,
             exit_code,
-            &phase_started_at,
-            &phase_completed_at,
         ) {
             warn!("task #{}: insert_task_output: {e}", task.id);
         }
@@ -945,8 +943,6 @@ impl Pipeline {
                     error_msg.trim(),
                     "",
                     out.exit_code as i64,
-                    &started_at,
-                    &completed_at,
                 ) {
                     warn!("task #{}: insert_task_output(validate): {e}", task.id);
                 }
@@ -981,8 +977,6 @@ impl Pipeline {
             full_output.trim(),
             "",
             out.exit_code as i64,
-            &validate_started_at,
-            &validate_completed_at,
         ) {
             warn!("task #{}: insert_task_output(validate): {e}", task.id);
         }
@@ -1177,8 +1171,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     &agent_result.output,
                     &agent_result.raw_stream,
                     if agent_result.success { 0 } else { 1 },
-                    &lint_fix_started_at,
-                    &lint_fix_completed_at,
                 )
                 .ok();
 
@@ -1268,8 +1260,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     &result.output,
                     &result.raw_stream,
                     if result.success { 0 } else { 1 },
-                    &compile_fix_started_at,
-                    &compile_fix_completed_at,
                 )
                 .ok();
 

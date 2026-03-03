@@ -743,8 +743,24 @@ impl AgentBackend for ClaudeBackend {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => return Err(e),
                 Err(_elapsed) => {
-                    warn!(task_id = task.id, phase = %phase.name, timeout_s, "claude subprocess timed out");
-                    return Ok(PhaseOutput::failed(String::new()));
+                    warn!(task_id = task.id, phase = %phase.name, timeout_s, "agent timed out");
+                    // Killing the `docker run` process (via kill_on_drop) only stops
+                    // the CLI wrapper; the container keeps running until we stop it.
+                    // `docker stop --time N` sends SIGTERM then SIGKILL after N seconds.
+                    if let Some(ref cid_path) = cidfile_path {
+                        if let Ok(cid) = tokio::fs::read_to_string(cid_path).await {
+                            let cid = cid.trim().to_string();
+                            if !cid.is_empty() {
+                                info!(task_id = task.id, container_id = %cid, "stopping timed-out container");
+                                let _ = tokio::process::Command::new("docker")
+                                    .args(["stop", "--time", "10", &cid])
+                                    .status()
+                                    .await;
+                            }
+                        }
+                        let _ = tokio::fs::remove_file(cid_path).await;
+                    }
+                    return Ok(PhaseOutput::failed("timed out"));
                 },
             }
         } else {
