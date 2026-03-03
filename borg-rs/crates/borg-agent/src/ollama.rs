@@ -22,13 +22,12 @@ pub struct OllamaBackend {
 impl OllamaBackend {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let timeout_secs = 300u64;
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .build()?;
         Ok(Self {
             base_url: base_url.into(),
             model: model.into(),
-            http,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .build()?,
             timeout_secs,
         })
     }
