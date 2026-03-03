@@ -1,0 +1,10 @@
+{
+  "task_id": 88,
+  "task_title": "Test ExecResult::combined_output merging of stdout and stderr",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-88",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-02T23:33:01.781028594Z"
+}
