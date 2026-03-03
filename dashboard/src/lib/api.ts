@@ -11,6 +11,8 @@ import type {
   TaskMessage,
   Project,
   ProjectFile,
+  ProjectTask,
+  ProjectDocument,
   PipelineModeFull,
   KnowledgeFile,
 } from "./types";
@@ -297,11 +299,17 @@ export async function setRepoBackend(id: number, backend: string): Promise<void>
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
-export async function createTask(title: string, description: string, mode: string, repo_path?: string): Promise<{ id: number }> {
+export async function createTask(
+  title: string,
+  description: string,
+  mode: string,
+  repo_path?: string,
+  project_id?: number
+): Promise<{ id: number }> {
   const res = await apiFetch("/api/tasks/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, description, mode, repo: repo_path }),
+    body: JSON.stringify({ title, description, mode, repo: repo_path, project_id }),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
@@ -401,14 +409,23 @@ export function useProjects() {
   });
 }
 
+export interface CreateProjectOptions {
+  mode?: string;
+  client_name?: string;
+  jurisdiction?: string;
+  matter_type?: string;
+  privilege_level?: string;
+}
+
 export async function createProject(
   name: string,
-  mode = "general"
+  mode = "general",
+  opts: CreateProjectOptions = {}
 ): Promise<{ id: number }> {
   const res = await apiFetch("/api/projects", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, mode }),
+    body: JSON.stringify({ name, mode, ...opts }),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
@@ -446,6 +463,52 @@ export async function uploadProjectFiles(
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
+}
+
+export function useProjectTasks(projectId: number | null) {
+  return useQuery<ProjectTask[]>({
+    queryKey: ["project_tasks", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}/tasks`),
+    enabled: projectId !== null,
+    refetchInterval: REFETCH_PROJECTS,
+  });
+}
+
+export function useProjectDocuments(projectId: number | null) {
+  return useQuery<ProjectDocument[]>({
+    queryKey: ["project_documents", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}/documents`),
+    enabled: projectId !== null,
+    refetchInterval: REFETCH_PROJECTS,
+  });
+}
+
+export function useProjectDetail(projectId: number | null) {
+  return useQuery<Project>({
+    queryKey: ["project", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}`),
+    enabled: projectId !== null,
+    refetchInterval: REFETCH_PROJECTS,
+  });
+}
+
+export function useUpdateProject(projectId: number) {
+  const queryClient = useQueryClient();
+  return useMutation<Project, Error, Partial<Project>>({
+    mutationFn: async (patch) => {
+      const res = await apiFetch(`/api/projects/${projectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["project", projectId], data);
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
 }
 
 export async function getProjectChatMessages(

@@ -173,6 +173,37 @@ export interface Project {
   name: string;
   mode: string;
   created_at: string;
+  // legal/lawborg fields
+  client_name?: string;
+  case_number?: string;
+  jurisdiction?: string;
+  matter_type?: string;
+  opposing_counsel?: string;
+  deadline?: string;
+  privilege_level?: string;
+  status?: string;
+}
+
+export interface ProjectTask {
+  id: number;
+  title: string;
+  description: string;
+  status: string;
+  branch: string;
+  mode?: string;
+  created_at: string;
+  attempt: number;
+  max_attempts: number;
+}
+
+export interface ProjectDocument {
+  task_id: number;
+  task_title: string;
+  task_status: string;
+  file_name: string;
+  content: string;
+  created_at: string;
+  branch: string;
 }
 
 export interface ProjectFile {

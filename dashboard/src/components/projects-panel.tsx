@@ -10,13 +10,16 @@ import {
   sseUrl,
   tokenReady,
 } from "@/lib/api";
-import { Eye, Mic, MicOff } from "lucide-react";
+import { Eye, Mic, MicOff, ArrowLeft } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
-import type { ProjectFile } from "@/lib/types";
+import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { BorgingIndicator } from "./borging";
 import { ChatMarkdown } from "./chat-markdown";
+import { MatterDetail } from "./matter-detail";
+import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
+import { LegalTaskCreator } from "./legal-task-creator";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -51,6 +54,7 @@ export function ProjectsPanel() {
   } = useProjectFiles(activeProjectId);
 
   const [previewFile, setPreviewFile] = useState<ProjectFile | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<ProjectDocument | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -74,6 +78,10 @@ export function ProjectsPanel() {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId]);
+
+  useEffect(() => {
+    setSelectedDoc(null);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (!activeProjectId) {
@@ -241,6 +249,38 @@ export function ProjectsPanel() {
           <div className="flex h-full items-center justify-center text-[12px] text-zinc-500">
             Create a project to start.
           </div>
+        ) : (selectedProject.mode === "lawborg" || selectedProject.mode === "legal") ? (
+          selectedDoc ? (
+            <div className="flex h-full flex-col">
+              <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] px-3 py-2">
+                <button
+                  onClick={() => setSelectedDoc(null)}
+                  className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  <ArrowLeft className="h-3 w-3" />
+                  Back to matter
+                </button>
+                <span className="text-[11px] text-zinc-600">·</span>
+                <span className="truncate text-[11px] text-zinc-400">{selectedDoc.file_name}</span>
+              </div>
+              <div className="min-h-0 flex-1">
+                <MarkdownLegalViewer
+                  projectId={selectedProject.id}
+                  taskId={selectedDoc.task_id}
+                  path={selectedDoc.file_name}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col">
+              <div className="flex shrink-0 items-center justify-end border-b border-white/[0.06] px-4 py-2">
+                <LegalTaskCreator />
+              </div>
+              <div className="min-h-0 flex-1">
+                <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} />
+              </div>
+            </div>
+          )
         ) : (
           <>
             <div className="border-b border-white/[0.06] p-3">
