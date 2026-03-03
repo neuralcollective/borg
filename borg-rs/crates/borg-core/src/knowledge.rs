@@ -228,6 +228,82 @@ pub async fn index_task_embeddings(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cosine_similarity_identical_vectors_returns_one() {
+        let v = vec![1.0f32, 2.0, 3.0];
+        let result = cosine_similarity(&v, &v);
+        assert!((result - 1.0).abs() < 1e-6, "got {result}");
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors_returns_zero() {
+        let a = vec![1.0f32, 0.0];
+        let b = vec![0.0f32, 1.0];
+        let result = cosine_similarity(&a, &b);
+        assert!(result.abs() < 1e-6, "got {result}");
+    }
+
+    #[test]
+    fn cosine_similarity_zero_vector_returns_zero() {
+        let a = vec![0.0f32, 0.0, 0.0];
+        let b = vec![1.0f32, 2.0, 3.0];
+        let result = cosine_similarity(&a, &b);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_both_zero_vectors_returns_zero() {
+        let z = vec![0.0f32, 0.0];
+        let result = cosine_similarity(&z, &z);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_mismatched_lengths_returns_zero() {
+        let a = vec![1.0f32, 2.0, 3.0];
+        let b = vec![1.0f32, 2.0];
+        assert_eq!(cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_empty_slices_returns_zero() {
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+    }
+
+    #[test]
+    fn embedding_roundtrip_restores_values() {
+        let original = vec![1.0f32, -0.5, 0.0, 3.14159, f32::MIN_POSITIVE];
+        let bytes = embedding_to_bytes(&original);
+        let restored = bytes_to_embedding(&bytes);
+        assert_eq!(original.len(), restored.len());
+        for (a, b) in original.iter().zip(restored.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits(), "bit mismatch: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn embedding_roundtrip_empty() {
+        let bytes = embedding_to_bytes(&[]);
+        let restored = bytes_to_embedding(&bytes);
+        assert!(restored.is_empty());
+    }
+
+    #[test]
+    fn bytes_to_embedding_ignores_trailing_partial_bytes() {
+        // 9 bytes: 2 complete f32s (8 bytes) + 1 leftover byte ignored
+        let mut bytes = embedding_to_bytes(&[1.0f32, 2.0]);
+        bytes.push(0xff);
+        let restored = bytes_to_embedding(&bytes);
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].to_bits(), 1.0f32.to_bits());
+        assert_eq!(restored[1].to_bits(), 2.0f32.to_bits());
+    }
+}
+
 pub async fn get_prior_research(
     db: &Db,
     embed_client: &EmbeddingClient,
