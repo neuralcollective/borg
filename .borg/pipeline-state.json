@@ -1,10 +1,10 @@
 {
-  "task_id": 202,
-  "task_title": "Simplify redundant if/else assignment in `extract_phase_result`",
+  "task_id": 162,
+  "task_title": "Add locked_conn() helper to Db to remove repeated lock boilerplate",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-202",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-162",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T05:58:25.751722506Z"
+  "generated_at": "2026-03-03T03:55:12.323098116Z"
 }
