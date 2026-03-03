@@ -244,6 +244,8 @@ fn normalize_party_name(name: &str) -> String {
     tokens.join(" ")
 }
 
+const TERMINAL_STATUSES_SQL: &str = "'done','merged','failed','blocked','pending_review'";
+
 // ── Row mappers ───────────────────────────────────────────────────────────
 
 const TASK_COLS: &str = "id, title, description, repo_path, branch, status, attempt, \
@@ -570,7 +572,7 @@ impl Db {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = format!(
             "SELECT {TASK_COLS} FROM pipeline_tasks \
-             WHERE status NOT IN ('done', 'merged', 'failed', 'blocked', 'pending_review') \
+             WHERE status NOT IN ({TERMINAL_STATUSES_SQL}) \
              ORDER BY CASE status \
                WHEN 'rebase' THEN 0 \
                WHEN 'validate' THEN 1 \
@@ -843,7 +845,7 @@ impl Db {
             .context("task_stats total")?;
         let active: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM pipeline_tasks WHERE status NOT IN ('done','merged','failed','blocked','pending_review')",
+                &format!("SELECT COUNT(*) FROM pipeline_tasks WHERE status NOT IN ({TERMINAL_STATUSES_SQL})"),
                 [],
                 |r| r.get(0),
             )
@@ -2114,7 +2116,7 @@ impl Db {
     pub fn active_task_count(&self) -> Result<i64> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
-            "SELECT COUNT(*) FROM pipeline_tasks WHERE status NOT IN ('done','merged','failed','blocked','pending_review')",
+            &format!("SELECT COUNT(*) FROM pipeline_tasks WHERE status NOT IN ({TERMINAL_STATUSES_SQL})"),
             [],
             |r| r.get(0),
         )
