@@ -1,0 +1,10 @@
+{
+  "task_id": 119,
+  "task_title": "Extract duplicate network rules array in `sandbox.rs`",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-119",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T01:50:20.043445372Z"
+}
