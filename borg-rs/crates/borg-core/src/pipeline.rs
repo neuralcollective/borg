@@ -509,7 +509,9 @@ impl Pipeline {
         );
 
         if phase.phase_type == PhaseType::Agent {
-            let _ = self.db.mark_task_started(task.id);
+            if let Err(e) = self.db.mark_task_started(task.id) {
+                warn!("task #{}: mark_task_started failed: {e}", task.id);
+            }
         }
 
         match phase.phase_type {
@@ -1196,9 +1198,13 @@ and report what went wrong.",
             self.index_task_documents(task);
 
             self.db.update_task_status(task.id, "done", None)?;
-            let _ = self.db.mark_task_completed(task.id);
+            if let Err(e) = self.db.mark_task_completed(task.id) {
+                warn!("task #{}: mark_task_completed failed: {e}", task.id);
+            }
             let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
-            let _ = self.db.log_event_full(Some(task.id), None, pid, "pipeline", "task.completed", &serde_json::json!({ "title": task.title }));
+            if let Err(e) = self.db.log_event_full(Some(task.id), None, pid, "pipeline", "task.completed", &serde_json::json!({ "title": task.title })) {
+                warn!("task #{}: log_event_full failed: {e}", task.id);
+            }
             match mode.integration {
                 IntegrationType::GitPr => {
                     let branch = format!("task-{}", task.id);
@@ -1290,7 +1296,9 @@ and report what went wrong.",
             _ => return,
         };
         // Clear old index for this task
-        let _ = self.db.fts_remove_task(task.id);
+        if let Err(e) = self.db.fts_remove_task(task.id) {
+            warn!("task #{}: fts_remove_task failed: {e}", task.id);
+        }
         let mut count = 0;
         for file in files.lines() {
             if !file.ends_with(".md") { continue; }
@@ -1925,7 +1933,9 @@ and report what went wrong.",
                     if now - cooldowns.get(&key).copied().unwrap_or(0) >= cooldown {
                         cooldowns.insert(key.clone(), now);
                         drop(cooldowns);
-                        let _ = self.db.set_seed_cooldown(&key.0, &key.1, now);
+                        if let Err(e) = self.db.set_seed_cooldown(&key.0, &key.1, now) {
+                            warn!("set_seed_cooldown {}/{}: {e}", key.0, key.1);
+                        }
                         info!("seed scan: 'github_open_issues' for {}", repo.path);
                         if let Err(e) = self.seed_from_open_issues(repo) {
                             warn!("seed github_open_issues for {}: {e}", repo.path);
@@ -1959,7 +1969,9 @@ and report what went wrong.",
                     }
                     cooldowns.insert(key.clone(), now);
                 }
-                let _ = self.db.set_seed_cooldown(&key.0, &key.1, now);
+                if let Err(e) = self.db.set_seed_cooldown(&key.0, &key.1, now) {
+                    warn!("set_seed_cooldown {}/{}: {e}", key.0, key.1);
+                }
                 info!("seed scan: '{}' for {}", seed_cfg.name, repo.path);
                 if let Err(e) = self.run_seed(repo, &mode.name, &seed_cfg).await {
                     warn!("seed {} for {}: {e}", seed_cfg.name, repo.path);
