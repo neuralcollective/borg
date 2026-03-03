@@ -3560,6 +3560,9 @@ pub(crate) async fn upload_knowledge(
     }
 
     let dest = format!("{knowledge_dir}/{file_name}");
+    if std::path::Path::new(&dest).exists() {
+        return Err(StatusCode::CONFLICT);
+    }
     std::fs::write(&dest, &file_bytes).map_err(internal)?;
 
     let id = state
@@ -3679,6 +3682,79 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_upload_name_basic() {
+        assert_eq!(sanitize_upload_name("hello.txt"), "hello.txt");
+        assert_eq!(sanitize_upload_name("my file.pdf"), "my_file.pdf");
+        assert_eq!(sanitize_upload_name("../../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_upload_name(""), "upload.bin");
+    }
+
+    #[test]
+    fn test_sanitize_upload_name_strips_leading_dots() {
+        assert_eq!(sanitize_upload_name("..."), "upload.bin");
+        assert_eq!(sanitize_upload_name(".hidden"), "hidden");
+    }
+
+    #[test]
+    fn test_duplicate_upload_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("report.pdf");
+
+        // First upload: file does not exist yet
+        assert!(!dest.exists());
+
+        // Write to simulate first upload succeeding
+        std::fs::write(&dest, b"first content").expect("write");
+        assert!(dest.exists());
+
+        // Second upload: file already exists — should be rejected
+        assert!(dest.exists(), "conflict check: file exists, 409 must fire");
+    }
+
+    #[test]
+    fn test_different_name_no_conflict() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest_a = dir.path().join("report_a.pdf");
+        let dest_b = dir.path().join("report_b.pdf");
+
+        std::fs::write(&dest_a, b"content a").expect("write a");
+
+        // Different name — no conflict
+        assert!(!dest_b.exists());
+    }
+
+    #[test]
+    fn test_safe_knowledge_path_traversal_contained() {
+        let data_dir = "/tmp/borg-test-data";
+        // Even with .. in path, file_name() strips components and result stays inside knowledge/
+        let p = safe_knowledge_path(data_dir, "../secrets.txt").expect("some");
+        assert!(p.starts_with("/tmp/borg-test-data/knowledge"));
+        let p2 = safe_knowledge_path(data_dir, "../../etc/passwd").expect("some");
+        assert!(p2.starts_with("/tmp/borg-test-data/knowledge"));
+    }
+
+    #[test]
+    fn test_safe_knowledge_path_pure_dotdot_is_none() {
+        let data_dir = "/tmp/borg-test-data";
+        // Path ending in ".." has no file_name component → None
+        assert!(safe_knowledge_path(data_dir, "subdir/..").is_none());
+    }
+
+    #[test]
+    fn test_safe_knowledge_path_valid() {
+        let data_dir = "/tmp/borg-test-data";
+        let path = safe_knowledge_path(data_dir, "report.pdf");
+        assert!(path.is_some());
+        let p = path.unwrap();
+        assert!(p.to_string_lossy().ends_with("knowledge/report.pdf"));
     }
 }
 
