@@ -822,3 +822,39 @@ impl AgentBackend for ClaudeBackend {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::derive_compile_check;
+
+    #[test]
+    fn bare_cargo_test() {
+        assert_eq!(derive_compile_check("cargo test"), Some("cargo test --no-run".into()));
+    }
+
+    #[test]
+    fn cargo_test_with_flags() {
+        assert_eq!(
+            derive_compile_check("cargo test --workspace"),
+            Some("cargo test --workspace --no-run".into())
+        );
+    }
+
+    #[test]
+    fn whitespace_is_trimmed() {
+        assert_eq!(
+            derive_compile_check("  cargo test --workspace  "),
+            Some("cargo test --workspace --no-run".into())
+        );
+    }
+
+    #[test]
+    fn non_cargo_command_returns_none() {
+        assert_eq!(derive_compile_check("npm test"), None);
+    }
+
+    #[test]
+    fn empty_string_returns_none() {
+        assert_eq!(derive_compile_check(""), None);
+    }
+}
