@@ -1,10 +1,10 @@
 {
-  "task_id": 187,
-  "task_title": "Log and handle stdin write failure when sending input to Docker container",
+  "task_id": 190,
+  "task_title": "Add unit tests for `cosine_similarity` edge cases",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-187",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-190",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T05:15:59.084875616Z"
+  "generated_at": "2026-03-03T05:25:20.874908316Z"
 }
