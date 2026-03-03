@@ -2858,36 +2858,11 @@ and report what went wrong.",
         let mut scored = 0u32;
         let mut dismissed = 0u32;
         for item in &items {
-            let get_i64 = |k: &str| item.get(k).and_then(|v| v.as_i64());
-            let p_id = match get_i64("id") {
-                Some(v) => v,
-                None => continue,
+            let Some((p_id, impact, feasibility, risk, effort, score, reasoning, should_dismiss)) =
+                parse_triage_item(item)
+            else {
+                continue;
             };
-            let impact = match get_i64("impact") {
-                Some(v) => v,
-                None => continue,
-            };
-            let feasibility = match get_i64("feasibility") {
-                Some(v) => v,
-                None => continue,
-            };
-            let risk = match get_i64("risk") {
-                Some(v) => v,
-                None => continue,
-            };
-            let effort = match get_i64("effort") {
-                Some(v) => v,
-                None => continue,
-            };
-            let score = match get_i64("score") {
-                Some(v) => v,
-                None => continue,
-            };
-            let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
-            let should_dismiss = item
-                .get("dismiss")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
 
             if let Err(e) = self.db.update_proposal_triage(
                 p_id,
@@ -3044,6 +3019,19 @@ fn extract_field(block: &str, field: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn parse_triage_item(item: &serde_json::Value) -> Option<(i64, i64, i64, i64, i64, i64, &str, bool)> {
+    let get_i64 = |k: &str| item.get(k).and_then(|v| v.as_i64());
+    let p_id = get_i64("id")?;
+    let impact = get_i64("impact")?;
+    let feasibility = get_i64("feasibility")?;
+    let risk = get_i64("risk")?;
+    let effort = get_i64("effort")?;
+    let score = get_i64("score")?;
+    let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
+    let should_dismiss = item.get("dismiss").and_then(|v| v.as_bool()).unwrap_or(false);
+    Some((p_id, impact, feasibility, risk, effort, score, reasoning, should_dismiss))
 }
 
 fn looks_like_field_key(line: &str) -> bool {
