@@ -5,6 +5,13 @@
   "worktree_path": "/home/shulgin/borg/.worktrees/task-203",
   "pr_url": null,
   "pending_approvals": [],
-  "phase_history": [],
-  "generated_at": "2026-03-03T06:03:56.508904760Z"
+  "phase_history": [
+    {
+      "phase": "implement",
+      "success": true,
+      "output": "Done. Here's a summary of what was changed:\n\n**Fix** (`routes.rs`): Added `task.project_id != id → 404` after the task lookup in all four handlers:\n- `get_project_document_content`\n- `get_project_document_versions`\n- `export_project_document`\n- `delete_project_document`\n\nThe check is placed before the branch-empty check, so a mismatched project returns 404 even if the task has a branch — preventing the git `branch -D` from running on unrelated tasks.\n\n**Tests** (`routes.rs` `#[cfg(test)]` module):\n- `document_endpoints_reject_mismatched_project_id` — all four endpoints return 404 when task belongs to project A but the URL uses project B's ID\n- `document_endpoints_pass_project_id_check_when_matched` — matching project ID passes the guard and proceeds to the git layer\n- `document_endpoints_404_for_nonexistent_project` — nonexistent project/task returns 404\n\nAll 127 tests across the workspace pass.",
+      "timestamp": "2026-03-03T06:12:24Z"
+    }
+  ],
+  "generated_at": "2026-03-03T06:12:47.372186955Z"
 }
