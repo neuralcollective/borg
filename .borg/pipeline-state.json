@@ -1,0 +1,10 @@
+{
+  "task_id": 225,
+  "task_title": "Validate stored_path stays within data directory before copying in stage_project_files",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-225",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T07:05:01.025734749Z"
+}
