@@ -1,0 +1,10 @@
+{
+  "task_id": 287,
+  "task_title": "Restrict unauthenticated API token endpoint to localhost only (auth.rs:72-80)",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-287",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T10:19:26.444385561Z"
+}
