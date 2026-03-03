@@ -436,7 +436,7 @@ impl Config {
     /// Return a new Config with non-sensitive fields overridden from DB values.
     pub fn load_from_db(&self, db: &Db) -> Self {
         let mut c = self.clone();
-        let get = |key: &str| db.get_config(key).ok().flatten();
+        let get = |key: &str| db.get_config_str(key);
         let get_str = |key: &str, cur: &str| get(key).unwrap_or_else(|| cur.to_string());
         let get_bool =
             |key: &str, cur: bool| get(key).map(|v| v == "true" || v == "1").unwrap_or(cur);

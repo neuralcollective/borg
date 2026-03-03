@@ -217,8 +217,8 @@ impl Pipeline {
                 api_keys.insert(provider.to_string(), key);
             }
         }
-        let disallowed_tools = self.db.get_config("pipeline_disallowed_tools")
-            .ok().flatten().unwrap_or_default();
+        let disallowed_tools = self.db.get_config_str("pipeline_disallowed_tools")
+            .unwrap_or_default();
         let knowledge_files = self.db.list_knowledge_files().unwrap_or_default();
         let knowledge_dir = format!("{}/knowledge", self.config.data_dir);
         PhaseContext {
@@ -540,16 +540,12 @@ impl Pipeline {
     fn git_coauthor_settings(&self) -> (bool, String) {
         let claude_coauthor = self
             .db
-            .get_config("git_claude_coauthor")
-            .ok()
-            .flatten()
+            .get_config_str("git_claude_coauthor")
             .map(|v| v == "true")
             .unwrap_or(self.config.git_claude_coauthor);
         let user_coauthor = self
             .db
-            .get_config("git_user_coauthor")
-            .ok()
-            .flatten()
+            .get_config_str("git_user_coauthor")
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| self.config.git_user_coauthor.clone());
         (claude_coauthor, user_coauthor)
@@ -2658,9 +2654,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
         let build_cmd = self
             .db
-            .get_config("build_cmd")
-            .ok()
-            .flatten()
+            .get_config_str("build_cmd")
             .unwrap_or_else(|| self.config.build_cmd.clone());
 
         let binary_path = format!("{}/target/release/borg-server", repo_path);

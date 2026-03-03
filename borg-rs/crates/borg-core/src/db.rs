@@ -1947,6 +1947,10 @@ impl Db {
         Ok(result)
     }
 
+    pub fn get_config_str(&self, key: &str) -> Option<String> {
+        self.get_config(key).ok().flatten()
+    }
+
     pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let updated_at = now_str();
@@ -2101,9 +2105,7 @@ impl Db {
     // ── Timing state (persisted across restarts) ──────────────────────────
 
     pub fn get_ts(&self, key: &str) -> i64 {
-        self.get_config(key)
-            .ok()
-            .flatten()
+        self.get_config_str(key)
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
