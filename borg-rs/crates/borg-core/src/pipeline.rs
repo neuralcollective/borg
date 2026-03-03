@@ -2574,20 +2574,20 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             } else {
                 let git = Git::new(&repo.path);
                 if git.fetch_origin().is_err() {
-                    return;
+                    continue;
                 }
                 git.rev_parse("origin/main").ok()
             };
 
-            let Some(remote) = remote else { return };
+            let Some(remote) = remote else { continue };
 
             let local = match Git::new(&repo.path).rev_parse_head() {
                 Ok(h) => h,
-                Err(_) => return,
+                Err(_) => continue,
             };
 
             if local == remote {
-                return;
+                continue;
             }
 
             info!(
@@ -2597,7 +2597,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 &remote[..8.min(remote.len())]
             );
             self.check_self_update(&repo.path).await;
-            return;
+            continue;
         }
     }
 
