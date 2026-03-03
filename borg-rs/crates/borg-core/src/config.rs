@@ -93,11 +93,8 @@ pub struct Config {
     pub observer_config: String,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+fn parse_dotenv_str(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -116,6 +113,76 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    std::fs::read_to_string(".env")
+        .map(|s| parse_dotenv_str(&s))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_key_value() {
+        let m = parse_dotenv_str("KEY=value");
+        assert_eq!(m["KEY"], "value");
+    }
+
+    #[test]
+    fn double_quoted_value() {
+        let m = parse_dotenv_str(r#"KEY="hello world""#);
+        assert_eq!(m["KEY"], "hello world");
+    }
+
+    #[test]
+    fn single_quoted_value() {
+        let m = parse_dotenv_str("KEY='hello world'");
+        assert_eq!(m["KEY"], "hello world");
+    }
+
+    #[test]
+    fn comment_lines_skipped() {
+        let m = parse_dotenv_str("# this is a comment\nKEY=value");
+        assert!(!m.contains_key("# this is a comment"));
+        assert_eq!(m["KEY"], "value");
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn blank_lines_skipped() {
+        let m = parse_dotenv_str("\n\nKEY=value\n\n");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m["KEY"], "value");
+    }
+
+    #[test]
+    fn empty_value() {
+        let m = parse_dotenv_str("KEY=");
+        assert_eq!(m["KEY"], "");
+    }
+
+    #[test]
+    fn value_containing_equals() {
+        let m = parse_dotenv_str("KEY=a=b=c");
+        assert_eq!(m["KEY"], "a=b=c");
+    }
+
+    #[test]
+    fn env_var_takes_precedence_over_dotenv() {
+        let key = "BORG_TEST_CONFIG_PRECEDENCE_ZZ7X";
+        let mut dotenv = HashMap::new();
+        dotenv.insert(key.to_string(), "dotenv_value".to_string());
+
+        std::env::remove_var(key);
+        assert_eq!(get(key, &dotenv).as_deref(), Some("dotenv_value"));
+
+        std::env::set_var(key, "env_value");
+        assert_eq!(get(key, &dotenv).as_deref(), Some("env_value"));
+        std::env::remove_var(key);
+    }
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
