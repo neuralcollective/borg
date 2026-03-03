@@ -86,6 +86,9 @@ const CHUNK_OVERLAP: usize = 64;
 
 pub fn chunk_text(text: &str) -> Vec<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return vec![];
+    }
     if words.len() <= CHUNK_SIZE {
         return vec![words.join(" ")];
     }
@@ -225,6 +228,93 @@ pub async fn index_task_embeddings(
     }
     if indexed > 0 {
         debug!("indexed {indexed} embeddings for task #{task_id}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_words(n: usize) -> String {
+        (0..n).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn empty_string_returns_empty_vec() {
+        assert!(chunk_text("").is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_returns_empty_vec() {
+        assert!(chunk_text("   \t\n  ").is_empty());
+    }
+
+    #[test]
+    fn short_text_is_single_chunk() {
+        let text = make_words(10);
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn exact_chunk_size_is_single_chunk() {
+        let text = make_words(CHUNK_SIZE);
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].split_whitespace().count(), CHUNK_SIZE);
+    }
+
+    #[test]
+    fn chunk_size_plus_one_produces_two_chunks() {
+        let words: Vec<String> = (0..=CHUNK_SIZE).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 2);
+
+        let c0: Vec<&str> = chunks[0].split_whitespace().collect();
+        let c1: Vec<&str> = chunks[1].split_whitespace().collect();
+
+        assert_eq!(c0.len(), CHUNK_SIZE);
+        // Overlap: last CHUNK_OVERLAP words of c0 == first CHUNK_OVERLAP words of c1
+        assert_eq!(&c0[CHUNK_SIZE - CHUNK_OVERLAP..], &c1[..CHUNK_OVERLAP]);
+    }
+
+    #[test]
+    fn many_words_adjacent_chunks_share_overlap() {
+        let n = CHUNK_SIZE * 2 + 100;
+        let words: Vec<String> = (0..n).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_text(&text);
+
+        assert!(chunks.len() >= 3, "expected at least 3 chunks for {n} words");
+
+        for pair in chunks.windows(2) {
+            let prev: Vec<&str> = pair[0].split_whitespace().collect();
+            let next: Vec<&str> = pair[1].split_whitespace().collect();
+            let overlap_suffix = &prev[prev.len() - CHUNK_OVERLAP..];
+            let overlap_prefix = &next[..CHUNK_OVERLAP];
+            assert_eq!(
+                overlap_suffix, overlap_prefix,
+                "adjacent chunks must share {CHUNK_OVERLAP}-word overlap"
+            );
+        }
+    }
+
+    #[test]
+    fn no_content_is_lost() {
+        // Every word in the original text must appear in at least one chunk.
+        let n = CHUNK_SIZE + CHUNK_OVERLAP + 50;
+        let words: Vec<String> = (0..n).map(|i| format!("word{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_text(&text);
+
+        for w in &words {
+            assert!(
+                chunks.iter().any(|c| c.split_whitespace().any(|t| t == w)),
+                "word '{w}' missing from all chunks"
+            );
+        }
     }
 }
 
