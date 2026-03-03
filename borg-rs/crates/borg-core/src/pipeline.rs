@@ -1007,15 +1007,15 @@ impl Pipeline {
         &self,
         task: &Task,
         phase: &PhaseConfig,
-        _mode: &PipelineMode,
+        mode: &PipelineMode,
     ) -> Result<()> {
         if self.sandbox_mode == SandboxMode::Docker {
             return self.run_rebase_phase_docker(task, phase).await;
         }
 
-        // Non-Docker rebase: just advance (rebase handled by GitHub update-branch API).
+        // Non-Docker rebase: advance (push + enqueue happens in advance_phase).
         info!("task #{} rebase: non-Docker mode, advancing", task.id);
-        self.db.update_task_status(task.id, &phase.next, None)?;
+        self.advance_phase(task, phase, mode)?;
         Ok(())
     }
 
