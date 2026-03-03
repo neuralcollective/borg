@@ -1,10 +1,10 @@
 {
-  "task_id": 243,
-  "task_title": "Bearer token exposed in URL query string via auth.rs fallback path",
+  "task_id": 248,
+  "task_title": "Custom base64 decoder in routes.rs should use the base64 crate",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-243",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-248",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T08:06:31.118333997Z"
+  "generated_at": "2026-03-03T08:17:43.805761333Z"
 }
