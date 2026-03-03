@@ -2495,7 +2495,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             }
         }
         let tail = if stderr.len() > 500 {
-            &stderr[stderr.floor_char_boundary(stderr.len() - 500)..]
+            let n = stderr.len() - 500;
+            let start = (0..=n).rev().find(|&i| stderr.is_char_boundary(i)).unwrap_or(0);
+            &stderr[start..]
         } else {
             stderr
         };

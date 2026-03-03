@@ -240,7 +240,7 @@ fn split_text(text: &str, limit: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = text;
     while remaining.len() > limit {
-        let safe_limit = remaining.floor_char_boundary(limit);
+        let safe_limit = (0..=limit.min(remaining.len())).rev().find(|&i| remaining.is_char_boundary(i)).unwrap_or(0);
         let cut = remaining[..safe_limit].rfind('\n').unwrap_or(safe_limit);
         chunks.push(remaining[..cut].to_string());
         remaining = &remaining[cut..];
