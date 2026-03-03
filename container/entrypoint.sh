@@ -67,7 +67,7 @@ if [ -n "$REPO_URL" ]; then
 
     # Clone to temp dir first, then move into repo dir (which may have mounted volumes)
     CLONE_TMP=$(mktemp -d /workspace/clone.XXXXXX)
-    CLONE_ARGS=(--depth 50 --single-branch)
+    CLONE_ARGS=(--depth 50)
     if [ -n "$MIRROR_PATH" ] && [ -d "$MIRROR_PATH" ]; then
         CLONE_ARGS+=(--reference "$MIRROR_PATH")
     fi
@@ -80,7 +80,12 @@ if [ -n "$REPO_URL" ]; then
     rm -rf "$CLONE_TMP"
     cd "$REPO_DIR"
     if [ -n "$BRANCH" ]; then
-        git checkout -b "$BRANCH" "$BASE"
+        # Try to checkout existing remote branch; fall back to creating new from BASE
+        if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
+            git checkout -b "$BRANCH" "origin/$BRANCH"
+        else
+            git checkout -b "$BRANCH" "$BASE"
+        fi
     fi
 
     CLONE_END=$(date +%s%3N)
