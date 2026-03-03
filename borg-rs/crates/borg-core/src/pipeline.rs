@@ -547,29 +547,26 @@ impl Pipeline {
         let max_agents = self.config.pipeline_max_agents as usize;
         let mut dispatched = 0usize;
 
+        // Hold one lock for the entire dispatch pass so the is_empty() check below
+        // is atomic with the insertions (no task removal can race between them).
+        let mut guard = self.in_flight.lock().await;
         for task in tasks {
-            let mut id_guard = self.in_flight.lock().await;
-            if id_guard.len() >= max_agents {
+            if guard.len() >= max_agents {
                 break;
             }
             if id_guard.contains(&task.id) {
                 continue;
             }
-            let mut repo_guard = self.in_flight_repos.lock().await;
-            if repo_guard.contains(&task.repo_path) {
-                continue;
-            }
-            id_guard.insert(task.id);
-            repo_guard.insert(task.repo_path.clone());
-            drop(repo_guard);
-            drop(id_guard);
-
+            guard.insert(task.id);
             dispatched += 1;
+
             let pipeline = Arc::clone(&self);
             let inner_pipeline = Arc::clone(&self);
             let task_id = task.id;
             let task_repo = task.repo_path.clone();
             let task_for_recovery = task.clone();
+            // tokio::spawn is non-blocking; the future is queued but won't run
+            // until this task yields, so holding the lock here is safe.
             tokio::spawn(async move {
                 // Drop guard ensures in_flight slot is released even if this future is cancelled.
                 struct InFlightGuard {
@@ -627,9 +624,10 @@ impl Pipeline {
                 }
             });
         }
+        let should_seed = dispatched == 0 && guard.is_empty();
+        drop(guard);
 
-        if dispatched == 0
-            && self.in_flight.lock().await.is_empty()
+        if should_seed
             && self
                 .seeding_active
                 .compare_exchange(
