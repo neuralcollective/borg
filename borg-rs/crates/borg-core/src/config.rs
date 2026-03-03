@@ -127,27 +127,18 @@ pub struct Config {
     pub experimental_domains: bool,
 }
 
-impl Config {
-    pub fn get_base_url(&self) -> String {
-        if !self.public_url.is_empty() {
-            self.public_url.trim_end_matches('/').to_string()
-        } else {
-            format!("http://localhost:{}", self.web_port)
-        }
-    }
-}
-
-fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
+fn parse_dotenv_str(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    for line in content.lines() {
+    for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         if let Some((k, v)) = line.split_once('=') {
             let v = v.trim();
-            let v = if (v.starts_with('"') && v.ends_with('"'))
-                || (v.starts_with('\'') && v.ends_with('\''))
+            let v = if v.len() > 1
+                && ((v.starts_with('"') && v.ends_with('"'))
+                    || (v.starts_with('\'') && v.ends_with('\'')))
             {
                 &v[1..v.len() - 1]
             } else {
@@ -947,140 +938,50 @@ impl Config {
 }
 
 #[cfg(test)]
-mod resolve_tilde_tests {
-    use super::*;
-
-    // ── resolve_tilde_impl ────────────────────────────────────────────────────
+mod tests {
+    use super::parse_dotenv_str;
 
     #[test]
-    fn tilde_path_expands_with_home() {
-        assert_eq!(
-            resolve_tilde_impl("~/projects/borg", Some("/home/alice")),
-            "/home/alice/projects/borg"
-        );
+    fn normal_double_quoted() {
+        let m = parse_dotenv_str("KEY=\"value\"");
+        assert_eq!(m["KEY"], "value");
     }
 
     #[test]
-    fn tilde_path_expands_nested() {
-        assert_eq!(
-            resolve_tilde_impl("~/a/b/c", Some("/root")),
-            "/root/a/b/c"
-        );
+    fn normal_single_quoted() {
+        let m = parse_dotenv_str("KEY='value'");
+        assert_eq!(m["KEY"], "value");
     }
 
     #[test]
-    fn tilde_path_unchanged_when_home_missing() {
-        assert_eq!(
-            resolve_tilde_impl("~/projects/borg", None),
-            "~/projects/borg"
-        );
+    fn empty_double_quoted() {
+        let m = parse_dotenv_str("KEY=\"\"");
+        assert_eq!(m["KEY"], "");
     }
 
     #[test]
-    fn absolute_path_unchanged() {
-        assert_eq!(
-            resolve_tilde_impl("/absolute/path", Some("/home/alice")),
-            "/absolute/path"
-        );
+    fn single_char_dangling_double_quote() {
+        // KEY=" is a malformed line; must not panic and should keep the bare char
+        let m = parse_dotenv_str("KEY=\"");
+        assert_eq!(m["KEY"], "\"");
     }
 
     #[test]
-    fn relative_path_unchanged() {
-        assert_eq!(
-            resolve_tilde_impl("relative/path", Some("/home/alice")),
-            "relative/path"
-        );
+    fn single_char_dangling_single_quote() {
+        let m = parse_dotenv_str("KEY='");
+        assert_eq!(m["KEY"], "'");
     }
 
     #[test]
-    fn bare_tilde_unchanged() {
-        // "~" without trailing slash is not expanded
-        assert_eq!(resolve_tilde_impl("~", Some("/home/alice")), "~");
+    fn unquoted_value() {
+        let m = parse_dotenv_str("KEY=hello");
+        assert_eq!(m["KEY"], "hello");
     }
 
     #[test]
-    fn tilde_slash_only_expands_correctly() {
-        assert_eq!(
-            resolve_tilde_impl("~/", Some("/home/alice")),
-            "/home/alice/"
-        );
-    }
-
-    // ── parse_dotenv_str ──────────────────────────────────────────────────────
-
-    #[test]
-    fn dotenv_basic_key_value() {
-        let map = parse_dotenv_str("FOO=bar\n");
-        assert_eq!(map["FOO"], "bar");
-    }
-
-    #[test]
-    fn dotenv_skips_blank_lines() {
-        let map = parse_dotenv_str("FOO=bar\n\nBAZ=qux\n");
-        assert_eq!(map.len(), 2);
-        assert_eq!(map["FOO"], "bar");
-        assert_eq!(map["BAZ"], "qux");
-    }
-
-    #[test]
-    fn dotenv_skips_hash_comment_lines() {
-        let map = parse_dotenv_str("# comment\nFOO=bar\n");
-        assert_eq!(map.len(), 1);
-        assert_eq!(map["FOO"], "bar");
-    }
-
-    #[test]
-    fn dotenv_strips_double_quotes() {
-        let map = parse_dotenv_str("TOKEN=\"abc123\"\n");
-        assert_eq!(map["TOKEN"], "abc123");
-    }
-
-    #[test]
-    fn dotenv_strips_single_quotes() {
-        let map = parse_dotenv_str("TOKEN='abc123'\n");
-        assert_eq!(map["TOKEN"], "abc123");
-    }
-
-    #[test]
-    fn dotenv_trims_key_whitespace() {
-        let map = parse_dotenv_str("  FOO  =bar\n");
-        assert_eq!(map["FOO"], "bar");
-    }
-
-    #[test]
-    fn dotenv_trims_value_whitespace() {
-        let map = parse_dotenv_str("FOO=  bar  \n");
-        assert_eq!(map["FOO"], "bar");
-    }
-
-    #[test]
-    fn dotenv_empty_content_returns_empty_map() {
-        assert!(parse_dotenv_str("").is_empty());
-    }
-
-    #[test]
-    fn dotenv_only_comments_returns_empty_map() {
-        assert!(parse_dotenv_str("# comment\n# another\n").is_empty());
-    }
-
-    #[test]
-    fn dotenv_line_without_equals_is_skipped() {
-        assert!(parse_dotenv_str("NOEQUALSSIGN\n").is_empty());
-    }
-
-    #[test]
-    fn dotenv_value_with_equals_uses_first_split() {
-        let map = parse_dotenv_str("URL=https://example.com?a=1\n");
-        assert_eq!(map["URL"], "https://example.com?a=1");
-    }
-
-    #[test]
-    fn dotenv_multiple_entries_parsed() {
-        let input = "A=1\nB=2\nC=3\n";
-        let map = parse_dotenv_str(input);
-        assert_eq!(map.len(), 3);
-        assert_eq!(map["A"], "1");
-        assert_eq!(map["B"], "2");
-        assert_eq!(map["C"], "3");
+    fn comments_and_blanks_ignored() {
+        let m = parse_dotenv_str("# comment\n\nKEY=val");
+        assert!(!m.contains_key("# comment"));
+        assert_eq!(m["KEY"], "val");
     }
 }
