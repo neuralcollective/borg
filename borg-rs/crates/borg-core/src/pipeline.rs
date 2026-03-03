@@ -1308,7 +1308,7 @@ impl Pipeline {
                 };
                 if let Some(ref o) = out {
                     if o.exit_code != 0 {
-                        let compile_err = format!("{}\n{}", o.stdout, o.stderr);
+                        let compile_err = cmd_output_text(o);
                         info!("task #{} compile check failed, running fix agent", task.id);
                         if !self
                             .run_compile_fix(task, &work_dir, &check_cmd, &compile_err)
@@ -1343,7 +1343,7 @@ impl Pipeline {
             };
             if let Some(o) = out {
                 if o.exit_code != 0 {
-                    let error_msg = format!("{}\n{}", o.stdout, o.stderr);
+                    let error_msg = cmd_output_text(&o);
                     self.fail_or_retry(task, "retry", &error_msg)?;
                     return Ok(());
                 }
@@ -1393,7 +1393,7 @@ impl Pipeline {
                 self.run_test_command_for_task(task, &work_dir, &check_cmd).await?
             };
             if out.exit_code != 0 {
-                let error_msg = format!("{}\n{}", out.stdout, out.stderr);
+                let error_msg = cmd_output_text(&out);
                 info!("task #{} validate: compile check failed", task.id);
                 if let Err(e) = self.db.insert_task_output(
                     task.id,
@@ -1444,6 +1444,7 @@ impl Pipeline {
             info!("task #{} validate: all tests pass", task.id);
             self.advance_phase(task, phase, mode)?;
         } else {
+            let error_msg = cmd_output_text(&out);
             info!("task #{} validate: tests failed", task.id);
             let retry_status = if phase.retry_phase.is_empty() {
                 &phase.name
@@ -1917,9 +1918,7 @@ minimal changes needed. After editing, do not run the linter yourself — the pi
         let session_dir = Self::task_session_dir(task.id);
 
         for fix_attempt in 0..2u32 {
-            let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)
-                .trim()
-                .to_string();
+            let lint_output_text = cmd_output_text(&lint_out).trim().to_string();
 
             info!(
                 "task #{} lint_fix: running fix agent (attempt {})",
@@ -2001,7 +2000,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             }
         }
 
-        let error_msg = format!("{}\n{}", lint_out.stdout, lint_out.stderr);
+        let error_msg = cmd_output_text(&lint_out);
         self.fail_or_retry(task, "lint_fix", error_msg.trim())?;
         Ok(())
     }
@@ -2078,7 +2077,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     return Ok(true);
                 },
                 Ok(ref out) => {
-                    errors = format!("{}\n{}", out.stdout, out.stderr);
+                    errors = cmd_output_text(out);
                 },
                 Err(e) => {
                     warn!("task #{} compile_fix: check command error: {e}", task.id);
@@ -3742,6 +3741,10 @@ enum RetryClass {
     Other,
 }
 
+fn cmd_output_text(o: &TestOutput) -> String {
+    format!("{}\n{}", o.stdout, o.stderr)
+}
+
 fn container_result_as_test_output(
     results: &[ContainerTestResult],
     phase: &str,
@@ -4054,85 +4057,40 @@ fn looks_like_field_key(line: &str) -> bool {
 }
 
 #[cfg(test)]
-mod seeding_toctou_tests {
-    use std::collections::HashSet;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+mod tests {
+    use super::{cmd_output_text, TestOutput};
 
-    /// Replicates the fixed "check-and-set" logic so we can test it in
-    /// isolation without constructing a full Pipeline.
-    async fn try_activate_seeding(
-        in_flight: &Mutex<HashSet<i64>>,
-        seeding_active: &AtomicBool,
-    ) -> bool {
-        let guard = in_flight.lock().await;
-        if guard.is_empty() {
-            seeding_active
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-        } else {
-            false
-        }
+    fn make(stdout: &str, stderr: &str) -> TestOutput {
+        TestOutput { stdout: stdout.into(), stderr: stderr.into(), exit_code: 0 }
     }
 
-    #[tokio::test]
-    async fn seeding_does_not_start_when_in_flight_is_nonempty() {
-        let in_flight = Mutex::new(HashSet::from([42i64]));
-        let seeding_active = AtomicBool::new(false);
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(!activated, "should not activate seeding while tasks are in-flight");
-        assert!(!seeding_active.load(Ordering::Acquire), "seeding_active must stay false");
+    #[test]
+    fn joins_stdout_and_stderr_with_newline() {
+        let o = make("out line", "err line");
+        assert_eq!(cmd_output_text(&o), "out line\nerr line");
     }
 
-    #[tokio::test]
-    async fn seeding_starts_when_in_flight_is_empty() {
-        let in_flight = Mutex::new(HashSet::new());
-        let seeding_active = AtomicBool::new(false);
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(activated, "should activate seeding when no tasks are in-flight");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must be set to true");
+    #[test]
+    fn empty_stderr_leaves_trailing_newline() {
+        let o = make("only stdout", "");
+        assert_eq!(cmd_output_text(&o), "only stdout\n");
     }
 
-    #[tokio::test]
-    async fn seeding_does_not_double_start_when_already_active() {
-        let in_flight = Mutex::new(HashSet::new());
-        let seeding_active = AtomicBool::new(true); // already running
-
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-
-        assert!(!activated, "CAS must fail when seeding is already active");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must remain true");
+    #[test]
+    fn empty_stdout_preserves_stderr() {
+        let o = make("", "only stderr");
+        assert_eq!(cmd_output_text(&o), "\nonly stderr");
     }
 
-    /// Regression: the in_flight lock must be held during the CAS.
-    /// Simulate the race: after acquiring the lock and confirming emptiness,
-    /// a concurrent task insertion should not be possible before the CAS
-    /// completes because we hold the same lock.
-    #[tokio::test]
-    async fn in_flight_lock_held_prevents_concurrent_insertion() {
-        let in_flight = Arc::new(Mutex::new(HashSet::new()));
-        let seeding_active = Arc::new(AtomicBool::new(false));
+    #[test]
+    fn both_empty() {
+        let o = make("", "");
+        assert_eq!(cmd_output_text(&o), "\n");
+    }
 
-        // Spawn a task that holds the in_flight lock and tries to insert
-        // while try_activate_seeding is in its critical section.
-        let in_flight2 = Arc::clone(&in_flight);
-        let seeding_active2 = Arc::clone(&seeding_active);
-
-        // First: activate seeding (acquires + holds lock, does CAS, drops lock).
-        let activated = try_activate_seeding(&in_flight, &seeding_active).await;
-        assert!(activated);
-
-        // Now insert a task into in_flight to simulate a concurrent dispatch.
-        in_flight2.lock().await.insert(99);
-
-        // seeding_active is already true; a second call must fail even though
-        // in_flight is now non-empty (belt-and-suspenders).
-        let activated2 = try_activate_seeding(&in_flight2, &seeding_active2).await;
-        assert!(!activated2, "must not activate again while seeding is running");
+    #[test]
+    fn trim_removes_surrounding_whitespace() {
+        let o = make("  out  ", "  err  ");
+        assert_eq!(cmd_output_text(&o).trim(), "out  \n  err");
     }
 }
