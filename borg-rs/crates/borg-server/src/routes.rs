@@ -346,6 +346,9 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "project_max_bytes",
     "knowledge_max_bytes",
     "cloud_import_max_batch_files",
+    "ingestion_queue_backend",
+    "sqs_queue_url",
+    "sqs_region",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -381,6 +384,9 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("project_max_bytes", "214748364800"),
     ("knowledge_max_bytes", "536870912000"),
     ("cloud_import_max_batch_files", "1000"),
+    ("ingestion_queue_backend", "disabled"),
+    ("sqs_queue_url", ""),
+    ("sqs_region", "us-east-1"),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────
@@ -2063,6 +2069,13 @@ pub(crate) async fn upload_project_files(
             .db
             .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size)
             .map_err(internal)?;
+        if let Err(e) = state
+            .ingestion_queue
+            .enqueue_project_file(id, file_id, &file_name, &stored_path, &mime_type, file_size)
+            .await
+        {
+            tracing::warn!("failed to enqueue project file ingest: {e}");
+        }
         total_bytes += file_size;
 
         let inserted = state
@@ -4165,6 +4178,13 @@ pub(crate) async fn import_cloud_files(
         let mime = guess_mime(&file.name);
         let file_id = state.db.insert_project_file(id, &safe_name, &stored_path, &mime, file_size)
             .map_err(internal)?;
+        if let Err(e) = state
+            .ingestion_queue
+            .enqueue_project_file(id, file_id, &safe_name, &stored_path, &mime, file_size)
+            .await
+        {
+            tracing::warn!("failed to enqueue cloud-imported file ingest: {e}");
+        }
         total_bytes += file_size;
         imported.push(json!({ "id": file_id, "file_name": safe_name, "size_bytes": file_size }));
 

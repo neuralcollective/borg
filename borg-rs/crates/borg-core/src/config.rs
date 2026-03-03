@@ -109,6 +109,11 @@ pub struct Config {
     pub project_max_bytes: i64,
     pub knowledge_max_bytes: i64,
     pub cloud_import_max_batch_files: i64,
+
+    // Ingestion queue backend
+    pub ingestion_queue_backend: String, // "disabled" | "sqs"
+    pub sqs_queue_url: String,
+    pub sqs_region: String,
 }
 
 impl Config {
@@ -654,6 +659,12 @@ impl Config {
                 "cloud_import_max_batch_files",
                 self.cloud_import_max_batch_files.to_string(),
             ),
+            (
+                "ingestion_queue_backend",
+                self.ingestion_queue_backend.clone(),
+            ),
+            ("sqs_queue_url", self.sqs_queue_url.clone()),
+            ("sqs_region", self.sqs_region.clone()),
         ];
         let conn_guard = db.raw_conn();
         let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
@@ -725,6 +736,9 @@ impl Config {
             "cloud_import_max_batch_files",
             c.cloud_import_max_batch_files
         );
+        c.ingestion_queue_backend = get_str("ingestion_queue_backend", &c.ingestion_queue_backend);
+        c.sqs_queue_url = get_str("sqs_queue_url", &c.sqs_queue_url);
+        c.sqs_region = get_str("sqs_region", &c.sqs_region);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
@@ -898,6 +912,9 @@ impl Config {
                 &dotenv,
                 1000,
             ),
+            ingestion_queue_backend: get_str("INGESTION_QUEUE_BACKEND", &dotenv, "disabled"),
+            sqs_queue_url: get_str("SQS_QUEUE_URL", &dotenv, ""),
+            sqs_region: get_str("SQS_REGION", &dotenv, get_str("AWS_REGION", &dotenv, "us-east-1").as_str()),
         })
     }
 }

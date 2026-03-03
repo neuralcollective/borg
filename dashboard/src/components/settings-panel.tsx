@@ -329,6 +329,28 @@ export function SettingsPanel() {
             onChange={(v) => update("cloud_import_max_batch_files", v)}
             min={1}
           />
+          <SelectField
+            label="Ingestion Queue Backend"
+            desc="Background ingestion queue transport"
+            value={effective.ingestion_queue_backend}
+            onChange={(v) => update("ingestion_queue_backend", v)}
+            options={[
+              { value: "disabled", label: "Disabled" },
+              { value: "sqs", label: "AWS SQS" },
+            ]}
+          />
+          <TextField
+            label="SQS Queue URL"
+            desc="Queue URL for ingestion job messages"
+            value={effective.sqs_queue_url}
+            onChange={(v) => update("sqs_queue_url", v)}
+          />
+          <TextField
+            label="SQS Region"
+            desc="AWS region for SQS client"
+            value={effective.sqs_region}
+            onChange={(v) => update("sqs_region", v)}
+          />
         </Section>
 
         {/* Per-Repo Settings */}

@@ -1,4 +1,5 @@
 mod auth;
+mod ingestion;
 mod logging;
 mod routes;
 mod storage;
@@ -56,6 +57,7 @@ pub struct AppState {
     pub triage_running: Arc<std::sync::atomic::AtomicBool>,
     pub embed_client: borg_core::knowledge::EmbeddingClient,
     pub file_storage: Arc<storage::FileStorage>,
+    pub ingestion_queue: Arc<ingestion::IngestionQueue>,
 }
 
 impl AppState {
@@ -165,6 +167,14 @@ async fn main() -> anyhow::Result<()> {
     let db = Arc::new(db);
     let config = Arc::new(config);
     let file_storage = Arc::new(storage::FileStorage::from_config(&config).await?);
+    let ingestion_queue = Arc::new(ingestion::IngestionQueue::from_config(&config).await?);
+
+    match &*ingestion_queue {
+        ingestion::IngestionQueue::Disabled => info!("ingestion queue backend: disabled"),
+        ingestion::IngestionQueue::Sqs { queue_url, .. } => {
+            info!("ingestion queue backend: sqs ({queue_url})");
+        }
+    }
 
     // Detect sandbox backend (bwrap preferred, docker fallback, configurable via SANDBOX_BACKEND)
     let sandbox_mode = Sandbox::detect(&config.sandbox_backend).await;
@@ -691,6 +701,7 @@ async fn main() -> anyhow::Result<()> {
         triage_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         embed_client: borg_core::knowledge::EmbeddingClient::from_env(),
         file_storage: Arc::clone(&file_storage),
+        ingestion_queue: Arc::clone(&ingestion_queue),
     });
 
     let dashboard_dir = config.dashboard_dist_dir.clone();

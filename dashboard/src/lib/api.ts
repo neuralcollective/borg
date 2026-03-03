@@ -209,6 +209,9 @@ export interface Settings {
   project_max_bytes: number;
   knowledge_max_bytes: number;
   cloud_import_max_batch_files: number;
+  ingestion_queue_backend: string;
+  sqs_queue_url: string;
+  sqs_region: string;
 }
 
 export function useSettings() {
