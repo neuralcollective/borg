@@ -66,6 +66,31 @@ fn test_signal_malformed_json_returns_default() {
     assert!(result.is_err());
 }
 
+/// Regression: entrypoint used `echo "---BORG_SIGNAL---$(cat signal.json)"` which
+/// left newlines in the output. The Rust parser reads line-by-line, so only the
+/// first line was captured. Verify that a compact (one-line) JSON string — as
+/// produced by `jq -c .` — parses correctly after stripping the marker prefix,
+/// while a bare first-line fragment (what was captured before the fix) fails.
+#[test]
+fn test_signal_compact_json_parses_after_prefix_strip() {
+    // Simulate pretty-printed signal.json compacted by `jq -c .`
+    let compact = r#"{"status":"blocked","reason":"need more info","question":"which endpoint?"}"#;
+    // After stripping the marker prefix, we get the full compact JSON
+    let signal: AgentSignal = serde_json::from_str(compact).unwrap();
+    assert!(signal.is_blocked());
+    assert_eq!(signal.reason, "need more info");
+}
+
+#[test]
+fn test_signal_first_line_fragment_fails_to_parse() {
+    // Before the fix, only the first line of pretty-printed JSON was captured.
+    // e.g. cat signal.json would produce "{\n  \"status\": ...\n}" but only
+    // the "{" line was captured after marker stripping.
+    let fragment = "{";
+    let result: Result<AgentSignal, _> = serde_json::from_str(fragment);
+    assert!(result.is_err(), "first-line fragment must not parse as a valid signal");
+}
+
 #[test]
 fn test_signal_roundtrip_serialize_deserialize() {
     let original = AgentSignal {

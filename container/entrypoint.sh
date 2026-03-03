@@ -156,7 +156,7 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
 
     SIGNAL_FILE="$REPO_DIR/.borg/signal.json"
     if [ -f "$SIGNAL_FILE" ]; then
-        echo "---BORG_SIGNAL---$(cat "$SIGNAL_FILE")"
+        printf '%s\n' "---BORG_SIGNAL---$(jq -c . "$SIGNAL_FILE")"
     fi
 fi
 
