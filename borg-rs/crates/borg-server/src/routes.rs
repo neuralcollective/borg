@@ -451,6 +451,10 @@ fn stage_project_files(session_dir: &str, files: &[ProjectFileRow]) {
     }
 }
 
+fn truncate_bytes(s: &str, max: usize) -> &str {
+    &s[..s.floor_char_boundary(max.min(s.len()))]
+}
+
 fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session_dir: &str, db: &Db) -> String {
     let tasks = db.list_project_tasks(project.id).unwrap_or_default();
     let completed_tasks: Vec<_> = tasks.iter()
@@ -520,7 +524,7 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
         };
         let preview = preview.replace('\0', "");
         if preview.len() > remaining {
-            context.push_str(&preview[..remaining]);
+            context.push_str(truncate_bytes(&preview, remaining));
             break;
         } else {
             context.push_str(&preview);
@@ -541,7 +545,7 @@ fn build_project_context(project: &ProjectRow, files: &[ProjectFileRow], session
         }
         if let Ok(outputs) = db.get_task_outputs(task.id) {
             if let Some(last) = outputs.last() {
-                let summary = if last.output.len() > 2000 { &last.output[..2000] } else { &last.output };
+                let summary = truncate_bytes(&last.output, 2000);
                 let entry = format!("\n\n## Prior research: {} (Task #{})\n{}", task.title, task.id, summary);
                 if entry.len() > remaining {
                     break;
@@ -3558,6 +3562,52 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_bytes;
+
+    #[test]
+    fn truncate_bytes_ascii() {
+        assert_eq!(truncate_bytes("hello", 3), "hel");
+    }
+
+    #[test]
+    fn truncate_bytes_larger_than_string() {
+        assert_eq!(truncate_bytes("hello", 100), "hello");
+    }
+
+    #[test]
+    fn truncate_bytes_zero() {
+        assert_eq!(truncate_bytes("hello", 0), "");
+    }
+
+    #[test]
+    fn truncate_bytes_mid_multibyte() {
+        // "café": c=1, a=1, f=1, é=2 bytes → 5 bytes total
+        // max=4 lands inside the 2-byte 'é', so floor_char_boundary gives 3 → "caf"
+        assert_eq!(truncate_bytes("café", 4), "caf");
+    }
+
+    #[test]
+    fn truncate_bytes_on_char_boundary() {
+        // "héllo": h=1, é=2 → boundary at 3, so max=3 gives "hé"
+        assert_eq!(truncate_bytes("héllo", 3), "hé");
+    }
+
+    #[test]
+    fn truncate_bytes_unicode_emoji() {
+        // "hi🎉" → h=1, i=1, 🎉=4 bytes → 6 bytes total
+        // max=3 lands inside emoji, floor gives 2 → "hi"
+        assert_eq!(truncate_bytes("hi🎉", 3), "hi");
+    }
+
+    #[test]
+    fn truncate_bytes_exact_string_len() {
+        let s = "café";
+        assert_eq!(truncate_bytes(s, s.len()), s);
     }
 }
 
