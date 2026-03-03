@@ -27,6 +27,10 @@ use crate::{
     },
 };
 
+const MAX_FRESH_SESSION_ATTEMPTS: i64 = 3;
+const RETRY_SUMMARY_OUTPUT_CHARS: usize = 500;
+const COMPILE_FIX_CTX_CHARS: usize = 2000;
+
 pub struct Pipeline {
     pub db: Arc<Db>,
     pub backends: HashMap<String, Arc<dyn AgentBackend>>,
@@ -258,7 +262,7 @@ impl Pipeline {
             self.db.update_task_status(task.id, "failed", Some(error))?;
         } else {
             // After 3 attempts, force a fresh session with a summary of what was tried
-            let error_ctx = if current.attempt >= 3 {
+            let error_ctx = if current.attempt >= MAX_FRESH_SESSION_ATTEMPTS {
                 self.db.update_task_session(task.id, "").ok();
                 info!(
                     "task #{} attempt {} — clearing session for fresh start",
@@ -279,7 +283,7 @@ impl Pipeline {
         let outputs = self.db.get_task_outputs(task_id).unwrap_or_default();
         let mut summary = String::from("FRESH RETRY — previous approaches failed. Summary of attempts:\n");
         for (i, output) in outputs.iter().rev().take(3).enumerate() {
-            let truncated: String = output.output.chars().take(500).collect();
+            let truncated: String = output.output.chars().take(RETRY_SUMMARY_OUTPUT_CHARS).collect();
             summary.push_str(&format!(
                 "\nAttempt {} ({}): {}\n",
                 i + 1,
@@ -289,7 +293,7 @@ impl Pipeline {
         }
         summary.push_str(&format!(
             "\nLatest error:\n{}\n\nTry a fundamentally different approach.",
-            current_error.chars().take(2000).collect::<String>()
+            current_error.chars().take(COMPILE_FIX_CTX_CHARS).collect::<String>()
         ));
         summary
     }
@@ -820,7 +824,7 @@ impl Pipeline {
                         {
                             let msg = format!(
                                 "Compile fix failed after 2 attempts\n\n{}",
-                                compile_err.chars().take(2000).collect::<String>()
+                                compile_err.chars().take(COMPILE_FIX_CTX_CHARS).collect::<String>()
                             );
                             self.fail_or_retry(task, &phase.name, &msg)?;
                             return Ok(());
