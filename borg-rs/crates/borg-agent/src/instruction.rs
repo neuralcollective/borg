@@ -30,6 +30,14 @@ pub fn build_instruction(task: &Task, phase: &PhaseConfig, ctx: &PhaseContext, f
         ));
     }
 
+    if (task.mode == "lawborg" || task.mode == "legal") && !task.task_type.is_empty() {
+        if let Some(skill) = legal_skill_for_task_type(&task.task_type) {
+            s.push_str("## Methodology\n\n");
+            s.push_str(skill);
+            s.push_str("\n\n---\n\n");
+        }
+    }
+
     s.push_str(&phase.instruction);
 
     if let Some(files) = file_listing.filter(|f| !f.is_empty()) {
@@ -152,3 +160,135 @@ fn read_repo_prompt(ctx: &PhaseContext) -> Option<String> {
 
     None
 }
+
+/// Returns a condensed skill/methodology block for a given legal task type.
+/// Based on Anthropic's knowledge-work-plugins legal skills.
+fn legal_skill_for_task_type(task_type: &str) -> Option<&'static str> {
+    match task_type {
+        "contract_analysis" | "contract_review" => Some(SKILL_CONTRACT_REVIEW),
+        "nda_triage" | "nda" => Some(SKILL_NDA_TRIAGE),
+        "compliance" | "regulatory_analysis" => Some(SKILL_COMPLIANCE),
+        "demand_letter" | "motion_brief" => Some(SKILL_RISK_ASSESSMENT),
+        "canned_response" | "template_response" => Some(SKILL_CANNED_RESPONSES),
+        "meeting_briefing" | "briefing" => Some(SKILL_MEETING_BRIEFING),
+        "risk_assessment" => Some(SKILL_RISK_ASSESSMENT),
+        _ => None,
+    }
+}
+
+const SKILL_CONTRACT_REVIEW: &str = "\
+### Contract Review Methodology
+
+Review commercial contracts against the organization's negotiation playbook. For each clause, classify severity:
+
+**GREEN** — Aligns with or better than standard position. No negotiation needed.
+**YELLOW** — Outside standard but within negotiable range. Provide specific redline language + fallback position.
+**RED** — Material risk requiring senior counsel escalation. Include market position, exposure, and escalation path.
+
+**Minimum clause coverage:** Limitation of Liability (caps, carveouts, consequential damages), \
+Indemnification (scope, mutuality, cap, IP/data breach), IP Ownership (pre-existing, developed, work-for-hire, license grants), \
+Data Protection (DPA, processing terms, sub-processors, breach notification, cross-border), \
+Confidentiality (scope, term, carveouts, return/destruction), Representations & Warranties, \
+Term & Termination (renewal, convenience, cause, wind-down), Governing Law & Dispute Resolution, \
+Insurance, Assignment, Force Majeure, Payment Terms.
+
+**Negotiation priority tiers:**
+- Tier 1 (Must-Haves): Deal-breakers requiring resolution before proceeding
+- Tier 2 (Should-Haves): Strong preferences with flexibility
+- Tier 3 (Nice-to-Haves): Improvements that can be strategically conceded
+
+**Redline format:** Clause reference, current language (quoted), proposed alternative, rationale, priority, fallback positions.";
+
+const SKILL_NDA_TRIAGE: &str = "\
+### NDA Triage Methodology
+
+Rapidly triage incoming NDAs against screening criteria. Classify for routing:
+
+**GREEN** (Standard Approval) — All baseline criteria met. Can proceed without counsel review.
+**YELLOW** (Counsel Review) — Minor deviations. Examples: broader definition, longer term, narrow residuals, minor jurisdiction issue.
+**RED** (Significant Issues) — Material deviations. Examples: missing critical carveouts, embedded non-compete/non-solicit, unreasonable term (10+ years), IP assignment.
+
+**10 screening dimensions:** (1) Mutual vs. unilateral structure, (2) Confidential information definition scope, \
+(3) Party obligations, (4) Standard carveouts (public knowledge, prior possession, independent development, legal compulsion), \
+(5) Permitted disclosures, (6) Term duration (standard 1-3 years, 2-5 year survival), \
+(7) Return/destruction provisions, (8) Remedies, (9) Problematic provisions (non-compete → RED, IP assignment → RED, \
+liquidated damages → RED), (10) Governing law.
+
+**Key rule:** If the document contains substantive commercial terms beyond NDA scope, flag RED and recommend full contract review.";
+
+const SKILL_COMPLIANCE: &str = "\
+### Compliance Review Methodology
+
+Navigate privacy regulations (GDPR, CCPA/CPRA, LGPD, POPIA, PIPEDA, PDPA, Privacy Act, PIPL, UK GDPR).
+
+**DPA review checklist:** Required elements, processor obligations, international transfers (SCCs, adequacy decisions, \
+BCRs), sub-processor controls, data breach notification (72h GDPR, reasonable CCPA), audit rights.
+
+**Data subject request handling:**
+- GDPR: 30 days response, free of charge, right to access/erasure/portability/rectification/restriction/objection
+- CCPA/CPRA: 45 days response, right to know/delete/opt-out/correct/limit sensitive data use
+- Track applicable exemptions (legal hold, legal obligation, ongoing litigation)
+
+**Regulatory monitoring:** Track pending regulations, enforcement actions, significant court decisions. \
+Escalation triggers: new enforcement action in relevant jurisdiction, pending regulation with <6 months to effective date, \
+court decision changing compliance obligations.";
+
+const SKILL_RISK_ASSESSMENT: &str = "\
+### Legal Risk Assessment Methodology
+
+Assess and classify legal risks using a severity-by-likelihood matrix:
+
+**Severity (1-5):** 1=Negligible, 2=Minor, 3=Moderate (potential financial exposure 5-15% of value), \
+4=Major (significant exposure 15-25%), 5=Critical (major exposure >25%, significant reputational damage)
+
+**Likelihood (1-5):** 1=Remote (highly unlikely), 2=Unlikely, 3=Possible, 4=Probable, 5=Almost Certain
+
+**Risk Score = Severity × Likelihood:**
+- 1-4 → GREEN (Low): Accept, document, monitor quarterly
+- 5-9 → YELLOW: Mitigate, monitor monthly, assign owner, brief stakeholders
+- 10-15 → ORANGE: Escalate to senior counsel, develop mitigation plan, weekly review
+- 16-25 → RED (Critical): Immediate C-suite escalation, engage outside counsel, preserve evidence, daily monitoring
+
+**Documentation:** Each risk assessment must include: description, background, severity/likelihood analysis, \
+contributing/mitigating factors, mitigation options table, recommended approach, residual risk, \
+monitoring plan with specific next steps and owners.";
+
+const SKILL_CANNED_RESPONSES: &str = "\
+### Template Response Methodology
+
+Generate responses from configured templates for routine legal inquiries. Categories:
+- Data Subject Requests (acknowledgments, verifications, fulfillment, denials)
+- Discovery Holds (initial notices, reminders, modifications, releases)
+- Privacy Inquiries (cookies, policies, data sharing)
+- Vendor Legal Questions (contracts, amendments, compliance, audits)
+- NDA Requests (standard forms, counterparty NDAs, declines, renewals)
+- Subpoena/Legal Process (acknowledgments, objections, extensions)
+- Insurance Notifications (claims, supplemental information)
+
+**Critical escalation triggers (always flag):** Matters involving litigation, regulatory investigations, \
+binding commitments, criminal liability, media attention, or unprecedented situations.
+
+**Customization requirements:** Every response must include correct names, dates, jurisdictional regulations, \
+applicable deadlines, and appropriate signatures. Present draft for review before sending.
+
+**Template lifecycle:** Creation → Review → Publication → Use → Feedback → Update → Retirement.";
+
+const SKILL_MEETING_BRIEFING: &str = "\
+### Meeting Briefing Methodology
+
+Generate contextual briefings. Three modes: daily brief, topic brief, incident brief.
+
+**Briefing structure:** Meeting details, participants table, agenda, background context, key documents, \
+open issues, legal considerations, talking points, questions, decisions needed, red lines, prior follow-ups, preparation gaps.
+
+**Meeting-type guidance:**
+- Deal reviews: Counterparty dynamics, approval requirements, key term positions
+- Board meetings: Risk highlights, regulatory updates, litigation summaries
+- Regulatory meetings: Compliance posture, privilege considerations
+
+**Action item requirements:** Specific (not vague), each with owner, deadline, and priority level. \
+Follow-up cadence: High=daily, Medium=weekly, Low=monthly.
+
+**Incident briefs (urgent):** Speed over completeness. Flag litigation hold and preservation obligations immediately. \
+Note privilege considerations. For data breaches: flag notification deadlines (72h GDPR). \
+Recommend outside counsel for significant matters.";

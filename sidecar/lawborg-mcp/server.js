@@ -13,6 +13,7 @@ const WESTLAW_KEY = process.env.WESTLAW_API_KEY || "";
 const CLIO_KEY = process.env.CLIO_API_KEY || "";
 const IMANAGE_KEY = process.env.IMANAGE_API_KEY || "";
 const NETDOCUMENTS_KEY = process.env.NETDOCUMENTS_API_KEY || "";
+const ONEADVANCED_KEY = process.env.ONEADVANCED_API_KEY || "";
 const CONGRESS_KEY = process.env.CONGRESS_API_KEY || "";
 const OPENSTATES_KEY = process.env.OPENSTATES_API_KEY || "";
 const CANLII_KEY = process.env.CANLII_API_KEY || "";
@@ -43,6 +44,7 @@ const WESTLAW_BASE = process.env.WESTLAW_BASE_URL || "";
 const CLIO_BASE = process.env.CLIO_BASE_URL || "https://app.clio.com/api/v4";
 const IMANAGE_BASE = process.env.IMANAGE_BASE_URL || "";
 const NETDOCS_BASE = process.env.NETDOCUMENTS_BASE_URL || "";
+const ONEADVANCED_BASE = process.env.ONEADVANCED_BASE_URL || "";
 
 // ── Rate limiting ────────────────────────────────────────────────────
 class RateLimiter {
@@ -1271,6 +1273,109 @@ const NETDOCUMENTS_TOOLS = [
   },
 ];
 
+// ── OneAdvanced ALB (BYOK) ───────────────────────────────────────────
+const ALB_TOOLS = [
+  {
+    name: "alb_search_matters",
+    description: "Search matters/cases in OneAdvanced Legal (ALB) practice management system.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+        status: { type: "string", description: "Status filter: open, closed, archived" },
+        fee_earner: { type: "string", description: "Fee earner reference" },
+        client_ref: { type: "string", description: "Client reference" },
+        limit: { type: "number", description: "Max results" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "alb_get_matter",
+    description: "Get full details of a matter in OneAdvanced ALB including parties, fee earners, and key dates.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Matter ID or reference" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "alb_list_clients",
+    description: "Search or list clients in OneAdvanced ALB.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Client name or reference" },
+        type: { type: "string", description: "Client type: individual, organisation" },
+        limit: { type: "number" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "alb_get_client",
+    description: "Get full client details from OneAdvanced ALB including contact info and related matters.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Client ID" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "alb_search_documents",
+    description: "Search documents stored in OneAdvanced ALB document management.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+        matter_id: { type: "string", description: "Filter by matter ID" },
+        doc_type: { type: "string", description: "Document type filter" },
+        limit: { type: "number" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "alb_get_document",
+    description: "Get a document from OneAdvanced ALB by ID including metadata and content.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Document ID" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "alb_list_time_entries",
+    description: "List time entries in OneAdvanced ALB, optionally filtered by matter or fee earner.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string", description: "Filter by matter" },
+        fee_earner: { type: "string", description: "Filter by fee earner reference" },
+        date_from: { type: "string", description: "Start date (YYYY-MM-DD)" },
+        date_to: { type: "string", description: "End date (YYYY-MM-DD)" },
+        limit: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "alb_create_time_entry",
+    description: "Record a time entry in OneAdvanced ALB for billing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string", description: "Matter ID to bill to" },
+        fee_earner: { type: "string", description: "Fee earner reference" },
+        date: { type: "string", description: "Date (YYYY-MM-DD)" },
+        units: { type: "number", description: "Time units (provider-specific, e.g. 6-min units)" },
+        description: { type: "string", description: "Work description" },
+        activity_code: { type: "string", description: "Activity/work type code" },
+      },
+      required: ["matter_id", "date", "units", "description"],
+    },
+  },
+];
+
 // ═══════════════════════════════════════════════════════════════════════
 // TOOL HANDLERS
 // ═══════════════════════════════════════════════════════════════════════
@@ -1282,6 +1387,7 @@ const MUTATION_TOOLS = new Set([
   "imanage_checkout",
   "imanage_checkin",
   "netdocuments_upload",
+  "alb_create_time_entry",
 ]);
 
 async function handleTool(name, args) {
@@ -1968,6 +2074,66 @@ async function handleTool(name, args) {
       });
       break;
 
+    // ── OneAdvanced ALB (BYOK) ──────────────────────────────────────
+    case "alb_search_matters": {
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      const params = { query: args.query };
+      if (args.status) params.status = args.status;
+      if (args.fee_earner) params.feeEarner = args.fee_earner;
+      if (args.client_ref) params.clientRef = args.client_ref;
+      if (args.limit) params.limit = args.limit;
+      result = await authedCall(ONEADVANCED_BASE, `/matters?${qs(params)}`, ONEADVANCED_KEY);
+      break;
+    }
+    case "alb_get_matter":
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      result = await authedCall(ONEADVANCED_BASE, `/matters/${validateId(args.id)}`, ONEADVANCED_KEY);
+      break;
+    case "alb_list_clients": {
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      const params = { query: args.query };
+      if (args.type) params.type = args.type;
+      if (args.limit) params.limit = args.limit;
+      result = await authedCall(ONEADVANCED_BASE, `/clients?${qs(params)}`, ONEADVANCED_KEY);
+      break;
+    }
+    case "alb_get_client":
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      result = await authedCall(ONEADVANCED_BASE, `/clients/${validateId(args.id)}`, ONEADVANCED_KEY);
+      break;
+    case "alb_search_documents": {
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      const params = { query: args.query };
+      if (args.matter_id) params.matterId = args.matter_id;
+      if (args.doc_type) params.docType = args.doc_type;
+      if (args.limit) params.limit = args.limit;
+      result = await authedCall(ONEADVANCED_BASE, `/documents?${qs(params)}`, ONEADVANCED_KEY);
+      break;
+    }
+    case "alb_get_document":
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      result = await authedCall(ONEADVANCED_BASE, `/documents/${validateId(args.id)}`, ONEADVANCED_KEY);
+      break;
+    case "alb_list_time_entries": {
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      const params = {};
+      if (args.matter_id) params.matterId = args.matter_id;
+      if (args.fee_earner) params.feeEarner = args.fee_earner;
+      if (args.date_from) params.dateFrom = args.date_from;
+      if (args.date_to) params.dateTo = args.date_to;
+      if (args.limit) params.limit = args.limit;
+      result = await authedCall(ONEADVANCED_BASE, `/time-entries?${qs(params)}`, ONEADVANCED_KEY);
+      break;
+    }
+    case "alb_create_time_entry":
+      requireKey("OneAdvanced", ONEADVANCED_KEY);
+      result = await authedCall(ONEADVANCED_BASE, "/time-entries", ONEADVANCED_KEY, "POST", {
+        matterId: args.matter_id, feeEarner: args.fee_earner,
+        date: args.date, units: args.units,
+        description: args.description, activityCode: args.activity_code,
+      });
+      break;
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -2003,6 +2169,7 @@ function getAvailableTools() {
   if (CLIO_KEY) tools.push(...CLIO_TOOLS);
   if (IMANAGE_KEY) tools.push(...IMANAGE_TOOLS);
   if (NETDOCUMENTS_KEY) tools.push(...NETDOCUMENTS_TOOLS);
+  if (ONEADVANCED_KEY) tools.push(...ALB_TOOLS);
 
   return tools;
 }

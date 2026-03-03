@@ -233,6 +233,7 @@ PREMIUM (available when configured — use proactively if present):\n\
 - cognitive_* — entity resolution, PII redaction, translation\n\
 - clio_* — Clio practice management\n\
 - imanage_* / netdocuments_* — document management\n\
+- alb_* — OneAdvanced Legal (ALB) practice and case management\n\
 \n\
 CITATION VERIFICATION:\n\
 - courtlistener_citation_lookup confirms a case EXISTS in the database. It does NOT tell you if the case is still good law.\n\
