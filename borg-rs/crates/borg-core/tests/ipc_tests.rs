@@ -434,11 +434,12 @@ fn read_trusted_path_not_found_for_missing() {
 
 #[test]
 fn concurrent_quarantine_same_name_no_panic() {
-    // Simulate two files being quarantined with the same base name in rapid succession.
-    // The implementation must not panic; it may use a counter suffix.
+    // Simulate files being quarantined with the same base name in rapid succession.
+    // Each quarantined file must end up as a distinct entry in errors/ (no overwrites).
     let dir = TempDir::new().unwrap();
+    let n = 3usize;
 
-    for _ in 0..3 {
+    for _ in 0..n {
         // Re-create the symlink each time since the previous call moved it
         let real = dir.path().join("real.txt");
         fs::write(&real, b"x").unwrap();
@@ -449,8 +450,53 @@ fn concurrent_quarantine_same_name_no_panic() {
         let _ = ipc::read_file(&base(&dir), "spec.md");
     }
 
-    // All entries should be in errors/ without panic
-    assert!(errors_entry_count(&dir) >= 1);
+    // Every quarantine must produce a distinct file; none may be silently overwritten.
+    assert_eq!(
+        errors_entry_count(&dir),
+        n,
+        "each quarantine must produce a distinct errors/ entry — got {} instead of {n}",
+        errors_entry_count(&dir),
+    );
+}
+
+#[test]
+fn quarantine_no_silent_overwrite_when_dest_exists() {
+    // Pre-populate errors/ with a file whose name matches the O_EXCL primary candidate,
+    // then trigger a quarantine. The implementation must use a counter suffix rather than
+    // silently overwriting the pre-existing file.
+    let dir = TempDir::new().unwrap();
+
+    // Ensure the errors/ dir exists so we can plant a sentinel.
+    let errors = dir.path().join("errors");
+    fs::create_dir_all(&errors).unwrap();
+
+    // Compute the timestamp the quarantine function will use (same second is sufficient).
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let sentinel_name = format!("spec.md.{ts}");
+    let sentinel_content = b"must not be overwritten";
+    fs::write(errors.join(&sentinel_name), sentinel_content).unwrap();
+
+    // Trigger a quarantine of a symlink named spec.md.
+    let real = dir.path().join("real.txt");
+    fs::write(&real, b"x").unwrap();
+    unix_fs::symlink(&real, dir.path().join("spec.md")).unwrap();
+    let _ = ipc::read_file(&base(&dir), "spec.md");
+
+    // The sentinel must still contain its original content (not overwritten).
+    let actual = fs::read(errors.join(&sentinel_name)).unwrap();
+    assert_eq!(
+        actual, sentinel_content,
+        "pre-existing quarantine file must not be overwritten by a new quarantine"
+    );
+
+    // And there must be a second entry (the newly quarantined file with a counter suffix).
+    assert!(
+        errors_entry_count(&dir) >= 2,
+        "quarantine should have added a second entry with a counter suffix"
+    );
 }
 
 // ── IpcReadResult must implement Debug ───────────────────────────────────────
