@@ -104,6 +104,11 @@ pub struct Config {
     pub s3_access_key: String,
     pub s3_secret_key: String,
     pub s3_prefix: String,
+
+    // Storage quotas
+    pub project_max_bytes: i64,
+    pub knowledge_max_bytes: i64,
+    pub cloud_import_max_batch_files: i64,
 }
 
 impl Config {
@@ -643,6 +648,12 @@ impl Config {
             ("s3_region", self.s3_region.clone()),
             ("s3_endpoint", self.s3_endpoint.clone()),
             ("s3_prefix", self.s3_prefix.clone()),
+            ("project_max_bytes", self.project_max_bytes.to_string()),
+            ("knowledge_max_bytes", self.knowledge_max_bytes.to_string()),
+            (
+                "cloud_import_max_batch_files",
+                self.cloud_import_max_batch_files.to_string(),
+            ),
         ];
         let conn_guard = db.raw_conn();
         let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
@@ -708,6 +719,12 @@ impl Config {
         c.s3_region = get_str("s3_region", &c.s3_region);
         c.s3_endpoint = get_str("s3_endpoint", &c.s3_endpoint);
         c.s3_prefix = get_str("s3_prefix", &c.s3_prefix);
+        load_i64!("project_max_bytes", c.project_max_bytes);
+        load_i64!("knowledge_max_bytes", c.knowledge_max_bytes);
+        load_i64!(
+            "cloud_import_max_batch_files",
+            c.cloud_import_max_batch_files
+        );
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
@@ -870,6 +887,17 @@ impl Config {
             s3_access_key: get_str("AWS_ACCESS_KEY_ID", &dotenv, ""),
             s3_secret_key: get_str("AWS_SECRET_ACCESS_KEY", &dotenv, ""),
             s3_prefix: get_str("S3_PREFIX", &dotenv, "borg/"),
+            project_max_bytes: get_i64("PROJECT_MAX_BYTES", &dotenv, 200 * 1024 * 1024 * 1024),
+            knowledge_max_bytes: get_i64(
+                "KNOWLEDGE_MAX_BYTES",
+                &dotenv,
+                500 * 1024 * 1024 * 1024,
+            ),
+            cloud_import_max_batch_files: get_i64(
+                "CLOUD_IMPORT_MAX_BATCH_FILES",
+                &dotenv,
+                1000,
+            ),
         })
     }
 }

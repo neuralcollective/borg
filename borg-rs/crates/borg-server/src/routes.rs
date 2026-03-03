@@ -343,6 +343,9 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "s3_region",
     "s3_endpoint",
     "s3_prefix",
+    "project_max_bytes",
+    "knowledge_max_bytes",
+    "cloud_import_max_batch_files",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -375,6 +378,9 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("s3_region", "us-east-1"),
     ("s3_endpoint", ""),
     ("s3_prefix", "borg/"),
+    ("project_max_bytes", "214748364800"),
+    ("knowledge_max_bytes", "536870912000"),
+    ("cloud_import_max_batch_files", "1000"),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────
@@ -2015,7 +2021,7 @@ pub(crate) async fn upload_project_files(
     Path(id): Path<i64>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, StatusCode> {
-    const MAX_PROJECT_BYTES: i64 = 100 * 1024 * 1024;
+    let max_project_bytes = state.config.project_max_bytes.max(1);
     if state.db.get_project(id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -2037,7 +2043,7 @@ pub(crate) async fn upload_project_files(
         if file_size == 0 {
             continue;
         }
-        if total_bytes + file_size > MAX_PROJECT_BYTES {
+        if total_bytes + file_size > max_project_bytes {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
 
@@ -2999,6 +3005,9 @@ pub(crate) async fn get_settings(
                 | "pipeline_max_agents"
                 | "pipeline_agent_cooldown_s"
                 | "proposal_promote_threshold"
+                | "project_max_bytes"
+                | "knowledge_max_bytes"
+                | "cloud_import_max_batch_files"
         ) {
             s.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(s))
         } else {
@@ -3539,7 +3548,7 @@ pub(crate) async fn upload_knowledge(
     mut multipart: Multipart,
 ) -> Result<Json<Value>, StatusCode> {
     const MAX_KNOWLEDGE_FILE_BYTES: i64 = 50 * 1024 * 1024;
-    const MAX_KNOWLEDGE_TOTAL_BYTES: i64 = 1024 * 1024 * 1024;
+    let max_knowledge_total_bytes = state.config.knowledge_max_bytes.max(1);
 
     let knowledge_dir = format!("{}/knowledge", state.config.data_dir);
     std::fs::create_dir_all(&knowledge_dir).map_err(internal)?;
@@ -3582,7 +3591,7 @@ pub(crate) async fn upload_knowledge(
     }
 
     let total_bytes = state.db.total_knowledge_file_bytes().map_err(internal)?;
-    if total_bytes + file_size > MAX_KNOWLEDGE_TOTAL_BYTES {
+    if total_bytes + file_size > max_knowledge_total_bytes {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
 
@@ -4106,9 +4115,9 @@ pub(crate) async fn import_cloud_files(
     Path((id, conn_id)): Path<(i64, i64)>,
     Json(body): Json<CloudImportBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    const MAX_IMPORT_BATCH_FILES: usize = 50;
-    const MAX_PROJECT_BYTES: i64 = 100 * 1024 * 1024;
-    if body.files.len() > MAX_IMPORT_BATCH_FILES {
+    let max_import_batch_files = state.config.cloud_import_max_batch_files.max(1) as usize;
+    let max_project_bytes = state.config.project_max_bytes.max(1);
+    if body.files.len() > max_import_batch_files {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let conn = state.db.get_cloud_connection(conn_id).map_err(internal)?
@@ -4127,7 +4136,7 @@ pub(crate) async fn import_cloud_files(
 
     for file in &body.files {
         let estimated = file.size.unwrap_or(0);
-        if total_bytes + estimated > MAX_PROJECT_BYTES {
+        if total_bytes + estimated > max_project_bytes {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
         let bytes = match conn.provider.as_str() {
@@ -4142,7 +4151,7 @@ pub(crate) async fn import_cloud_files(
         };
         if bytes.is_empty() { continue; }
         let file_size = bytes.len() as i64;
-        if total_bytes + file_size > MAX_PROJECT_BYTES {
+        if total_bytes + file_size > max_project_bytes {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
         let safe_name = sanitize_upload_name(&file.name);

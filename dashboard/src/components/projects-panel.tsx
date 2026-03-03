@@ -51,7 +51,7 @@ const CLOUD_PROVIDERS = [
   { id: "google_drive", label: "Google Drive", clientIdKey: "google_client_id", clientSecretKey: "google_client_secret" },
   { id: "onedrive", label: "OneDrive", clientIdKey: "ms_client_id", clientSecretKey: "ms_client_secret" },
 ] as const;
-const MAX_CLOUD_IMPORT_SELECTION = 50;
+const MAX_CLOUD_IMPORT_SELECTION = 1000;
 
 function cloudProviderLabel(provider: string): string {
   return CLOUD_PROVIDERS.find((p) => p.id === provider)?.label ?? provider;
@@ -238,6 +238,10 @@ export function ProjectsPanel() {
       return false;
     }
   }, [publicUrl]);
+  const maxCloudImportSelection = Math.max(
+    1,
+    settings?.cloud_import_max_batch_files ?? MAX_CLOUD_IMPORT_SELECTION
+  );
 
   useEffect(() => {
     if (!selectedProjectId && projects.length > 0) {
@@ -483,8 +487,8 @@ export function ProjectsPanel() {
       .filter((item) => item.type === "file")
       .map((item) => ({ id: item.id, name: item.name, size: item.size }));
     if (filesToImport.length === 0) return;
-    if (filesToImport.length > MAX_CLOUD_IMPORT_SELECTION) {
-      setCloudLoadError(`Please select at most ${MAX_CLOUD_IMPORT_SELECTION} files per import.`);
+    if (filesToImport.length > maxCloudImportSelection) {
+      setCloudLoadError(`Please select at most ${maxCloudImportSelection} files per import.`);
       return;
     }
 

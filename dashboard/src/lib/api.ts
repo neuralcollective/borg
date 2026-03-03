@@ -201,6 +201,14 @@ export interface Settings {
   google_client_secret: string;
   ms_client_id: string;
   ms_client_secret: string;
+  storage_backend: string;
+  s3_bucket: string;
+  s3_region: string;
+  s3_endpoint: string;
+  s3_prefix: string;
+  project_max_bytes: number;
+  knowledge_max_bytes: number;
+  cloud_import_max_batch_files: number;
 }
 
 export function useSettings() {

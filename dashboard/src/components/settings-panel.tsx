@@ -274,6 +274,61 @@ export function SettingsPanel() {
             value={effective.ms_client_secret}
             onChange={(v) => update("ms_client_secret", v)}
           />
+          <SelectField
+            label="File Storage Backend"
+            desc="Where uploaded files are stored"
+            value={effective.storage_backend}
+            onChange={(v) => update("storage_backend", v)}
+            options={[
+              { value: "local", label: "Local Disk" },
+              { value: "s3", label: "AWS S3" },
+            ]}
+          />
+          <TextField
+            label="S3 Bucket"
+            desc="Bucket name for project file storage"
+            value={effective.s3_bucket}
+            onChange={(v) => update("s3_bucket", v)}
+          />
+          <TextField
+            label="S3 Region"
+            desc="AWS region (for example us-east-1)"
+            value={effective.s3_region}
+            onChange={(v) => update("s3_region", v)}
+          />
+          <TextField
+            label="S3 Endpoint"
+            desc="Optional custom endpoint (leave empty for AWS)"
+            value={effective.s3_endpoint}
+            onChange={(v) => update("s3_endpoint", v)}
+          />
+          <TextField
+            label="S3 Prefix"
+            desc="Object key prefix (for example borg/)"
+            value={effective.s3_prefix}
+            onChange={(v) => update("s3_prefix", v)}
+          />
+          <NumberField
+            label="Project Max Bytes"
+            desc="Maximum bytes allowed per project file corpus"
+            value={effective.project_max_bytes}
+            onChange={(v) => update("project_max_bytes", v)}
+            min={1}
+          />
+          <NumberField
+            label="Knowledge Max Bytes"
+            desc="Maximum bytes allowed in global knowledge corpus"
+            value={effective.knowledge_max_bytes}
+            onChange={(v) => update("knowledge_max_bytes", v)}
+            min={1}
+          />
+          <NumberField
+            label="Cloud Import Batch Max"
+            desc="Maximum files per cloud import request"
+            value={effective.cloud_import_max_batch_files}
+            onChange={(v) => update("cloud_import_max_batch_files", v)}
+            min={1}
+          />
         </Section>
 
         {/* Per-Repo Settings */}
