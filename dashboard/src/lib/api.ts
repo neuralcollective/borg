@@ -68,6 +68,12 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+async function apiFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 function normalizeLogEvent(raw: unknown): LogEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
@@ -162,19 +168,15 @@ export function useCustomModes() {
 }
 
 export async function saveCustomMode(mode: PipelineModeFull): Promise<{ ok: boolean }> {
-  const res = await apiFetch("/api/modes/custom", {
+  return apiFetchJson("/api/modes/custom", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(mode),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export async function removeCustomMode(name: string): Promise<{ ok: boolean }> {
-  const res = await apiFetch(`/api/modes/custom/${encodeURIComponent(name)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/modes/custom/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export interface Settings {
@@ -205,13 +207,11 @@ export function useSettings() {
 }
 
 export async function updateSettings(settings: Partial<Settings>): Promise<{ updated: number }> {
-  const res = await apiFetch("/api/settings", {
+  return apiFetchJson("/api/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export function useFocus() {
@@ -237,9 +237,7 @@ export async function clearFocus(): Promise<void> {
 }
 
 export async function approveProposal(id: number): Promise<{ task_id: number }> {
-  const res = await apiFetch(`/api/proposals/${id}/approve`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/proposals/${id}/approve`, { method: "POST" });
 }
 
 export async function dismissProposal(id: number): Promise<void> {
@@ -248,9 +246,7 @@ export async function dismissProposal(id: number): Promise<void> {
 }
 
 export async function triageProposals(): Promise<{ scored: number }> {
-  const res = await apiFetch("/api/proposals/triage", { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson("/api/proposals/triage", { method: "POST" });
 }
 
 export async function reopenProposal(id: number): Promise<void> {
@@ -273,9 +269,7 @@ export async function retryTask(id: number): Promise<void> {
 }
 
 export async function approveTask(id: number): Promise<{ next_phase: string }> {
-  const res = await apiFetch(`/api/tasks/${id}/approve`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/tasks/${id}/approve`, { method: "POST" });
 }
 
 export async function rejectTask(id: number, feedback?: string): Promise<void> {
@@ -288,13 +282,11 @@ export async function rejectTask(id: number, feedback?: string): Promise<void> {
 }
 
 export async function requestRevision(id: number, feedback: string): Promise<{ target_phase: string }> {
-  const res = await apiFetch(`/api/tasks/${id}/request-revision`, {
+  return apiFetchJson(`/api/tasks/${id}/request-revision`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ feedback }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export interface RevisionRound {
@@ -337,9 +329,7 @@ export async function getTaskCitations(id: number): Promise<CitationVerification
 }
 
 export async function verifyTaskCitations(id: number): Promise<{ verified: number; total: number; citations: CitationVerification[] }> {
-  const res = await apiFetch(`/api/tasks/${id}/verify-citations`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/tasks/${id}/verify-citations`, { method: "POST" });
 }
 
 export async function retryAllFailed(): Promise<void> {
@@ -391,13 +381,11 @@ export async function createTask(
   project_id?: number,
   task_type?: string
 ): Promise<{ id: number }> {
-  const res = await apiFetch("/api/tasks/create", {
+  return apiFetchJson("/api/tasks/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, description, mode, repo: repo_path, project_id, task_type }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export function useLogs() {
@@ -516,13 +504,11 @@ export async function createProject(
   mode = "general",
   opts: CreateProjectOptions = {}
 ): Promise<{ id: number; conflicts?: ConflictHit[] }> {
-  const res = await apiFetch("/api/projects", {
+  return apiFetchJson("/api/projects", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, mode, ...opts }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export async function checkConflicts(
@@ -585,11 +571,7 @@ export async function reextractProjectFile(
   projectId: number,
   fileId: number
 ): Promise<{ id: number; extracted_text_chars: number; has_text: boolean }> {
-  const res = await apiFetch(`/api/projects/${projectId}/files/${fileId}/reextract`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/projects/${projectId}/files/${fileId}/reextract`, { method: "POST" });
 }
 
 // ── Deadlines ──────────────────────────────────────────────────────────
@@ -615,13 +597,11 @@ export function useProjectDeadlines(projectId: number | null) {
 }
 
 export async function createDeadline(projectId: number, label: string, dueDate: string, ruleBasis?: string): Promise<{ id: number }> {
-  const res = await apiFetch(`/api/projects/${projectId}/deadlines`, {
+  return apiFetchJson(`/api/projects/${projectId}/deadlines`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, due_date: dueDate, rule_basis: ruleBasis || "" }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export async function updateDeadline(projectId: number, id: number, updates: Partial<{ label: string; due_date: string; rule_basis: string; status: string }>): Promise<void> {
@@ -740,15 +720,11 @@ export function useProjectDetail(projectId: number | null) {
 export function useUpdateProject(projectId: number) {
   const queryClient = useQueryClient();
   return useMutation<Project, Error, Partial<Project>>({
-    mutationFn: async (patch) => {
-      const res = await apiFetch(`/api/projects/${projectId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) throw new Error(`${res.status}`);
-      return res.json();
-    },
+    mutationFn: (patch) => apiFetchJson(`/api/projects/${projectId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
     onSuccess: (data) => {
       queryClient.setQueryData(["project", projectId], data);
       queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -780,13 +756,11 @@ export async function sendProjectChat(
   text: string,
   sender = "web-user"
 ): Promise<{ ok: boolean }> {
-  const res = await apiFetch(`/api/projects/${projectId}/chat`, {
+  return apiFetchJson(`/api/projects/${projectId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, sender }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export function useTaskMessages(taskId: number | null) {
@@ -930,19 +904,15 @@ export async function updateKnowledgeFile(
   id: number,
   patch: { description?: string; inline?: boolean; tags?: string; category?: string; jurisdiction?: string },
 ): Promise<{ ok: boolean }> {
-  const res = await apiFetch(`/api/knowledge/${id}`, {
+  return apiFetchJson(`/api/knowledge/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
 }
 
 export async function deleteKnowledgeFile(id: number): Promise<{ ok: boolean }> {
-  const res = await apiFetch(`/api/knowledge/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/knowledge/${id}`, { method: "DELETE" });
 }
 
 // ── Container & cache ───────────────────────────────────────────────────────
@@ -977,7 +947,5 @@ export function useCacheVolumes() {
 }
 
 export async function deleteCacheVolume(name: string): Promise<{ ok: boolean }> {
-  const res = await apiFetch(`/api/cache/${encodeURIComponent(name)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  return apiFetchJson(`/api/cache/${encodeURIComponent(name)}`, { method: "DELETE" });
 }

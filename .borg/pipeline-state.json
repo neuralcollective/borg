@@ -1,0 +1,10 @@
+{
+  "task_id": 345,
+  "task_title": "Add apiFetchJson helper in api.ts to deduplicate 30+ identical error-check+parse blocks",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-345",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [],
+  "generated_at": "2026-03-03T13:13:48.642766444Z"
+}
