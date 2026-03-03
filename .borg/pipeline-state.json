@@ -1,10 +1,10 @@
 {
-  "task_id": 180,
-  "task_title": "Use `PhaseOutput::failed()` in `OllamaBackend` instead of manual construction",
+  "task_id": 174,
+  "task_title": "Test read_oauth_from_credentials with both JSON layouts",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-180",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-174",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T04:57:46.151917860Z"
+  "generated_at": "2026-03-03T04:31:00.002192998Z"
 }
