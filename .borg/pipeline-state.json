@@ -1,0 +1,17 @@
+{
+  "task_id": 172,
+  "task_title": "Test parse_watched_repos pipe-separated parsing and !manual flag",
+  "phase": "implement",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-172",
+  "pr_url": null,
+  "pending_approvals": [],
+  "phase_history": [
+    {
+      "phase": "implement",
+      "success": true,
+      "output": "All 20 tests pass. Here's what was added to `config.rs` as a `#[cfg(test)]` module (private function access, no test infrastructure needed):\n\n| Test | What it covers |\n|------|---------------|\n| `empty_watched_returns_only_primary` | Empty `watched_raw` → only primary repo with `is_self=true` |\n| `empty_pipeline_repo_and_empty_watched_returns_empty` | Both empty → empty vec |\n| `empty_pipeline_repo_with_watched_entry` | No primary when `pipeline_repo=\"\"` |\n| `single_entry_path_only` | 1-field entry: defaults for all optional fields |\n| `entry_with_two_fields_captures_test_cmd` | 2 fields: path + test_cmd |\n| `entry_with_four_fields_captures_mode` | 4 fields: mode captured, lint_cmd=\"\" |\n| `entry_with_five_fields_captures_lint_cmd` | 5 fields: lint_cmd captured |\n| `entry_with_six_fields_uses_slug_override` | 6th field used as repo_slug |\n| `manual_suffix_sets_auto_merge_false_and_strips_suffix` | `test_cmd!manual` → `auto_merge=false`, suffix stripped |\n| `manual_suffix_alone_strips_to_empty_test_cmd` | `!manual` alone → `test_cmd=\"\"` |\n| `no_manual_suffix_keeps_auto_merge_true` | No flag → `auto_merge=true` |\n| `entry_matching_primary_repo_path_is_skipped` | Duplicate of primary path skipped |\n| `multiple_pipe_separated_entries_all_parsed` | Three `|`-separated entries |\n| `empty_segment_between_pipes_is_skipped` | `||` empty segment skipped |\n| `whitespace_around_pipe_entries_is_trimmed` | Entry-level `trim()` works |\n| `default_mode_is_sweborg_when_field_omitted` | Mode defaults to `\"sweborg\"` |\n| `primary_repo_has_is_self_true_watched_has_false` | `is_self` set correctly |\n| `primary_repo_inherits_pipeline_test_and_lint_cmd` | Primary inherits the two cmd args |\n| `manual_flag_with_six_fields_and_slug_override` | `!manual` + slug_override together |\n| `primary_repo_skipped_in_middle_of_pipe_list` | Skip even when not first in list |",
+      "timestamp": "2026-03-03T04:28:16Z"
+    }
+  ],
+  "generated_at": "2026-03-03T04:28:39.322262676Z"
+}

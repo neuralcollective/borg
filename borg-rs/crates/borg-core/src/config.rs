@@ -334,6 +334,192 @@ fn parse_watched_repos(
     repos
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: call parse_watched_repos with sensible defaults for optional args.
+    fn parse(watched_raw: &str, pipeline_repo: &str) -> Vec<RepoConfig> {
+        parse_watched_repos(watched_raw, pipeline_repo, "cargo test", "cargo clippy", "sweborg")
+    }
+
+    #[test]
+    fn empty_watched_returns_only_primary() {
+        let repos = parse("", "/primary/repo");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, "/primary/repo");
+        assert!(repos[0].is_self);
+        assert!(repos[0].auto_merge);
+        assert_eq!(repos[0].test_cmd, "cargo test");
+        assert_eq!(repos[0].lint_cmd, "cargo clippy");
+        assert_eq!(repos[0].mode, "sweborg");
+    }
+
+    #[test]
+    fn empty_pipeline_repo_and_empty_watched_returns_empty() {
+        let repos = parse("", "");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn empty_pipeline_repo_with_watched_entry() {
+        let repos = parse("/some/repo", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.is_self);
+        assert_eq!(r.path, "/some/repo");
+    }
+
+    #[test]
+    fn single_entry_path_only() {
+        let repos = parse("/watched", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.path, "/watched");
+        assert_eq!(r.test_cmd, "");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "");
+        assert!(r.auto_merge);
+        assert!(!r.is_self);
+    }
+
+    #[test]
+    fn entry_with_two_fields_captures_test_cmd() {
+        let repos = parse("/watched:just test", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+    }
+
+    #[test]
+    fn entry_with_four_fields_captures_mode() {
+        let repos = parse("/watched:just test:.borg/prompt.md:legal", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.prompt_file, ".borg/prompt.md");
+        assert_eq!(r.mode, "legal");
+        assert_eq!(r.lint_cmd, "");
+    }
+
+    #[test]
+    fn entry_with_five_fields_captures_lint_cmd() {
+        let repos = parse("/watched:just test:.borg/prompt.md:legal:cargo clippy", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.lint_cmd, "cargo clippy");
+        assert_eq!(r.repo_slug, "");
+    }
+
+    #[test]
+    fn entry_with_six_fields_uses_slug_override() {
+        let repos = parse("/watched:just test:.borg/prompt.md:sweborg::owner/repo", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.repo_slug, "owner/repo");
+        assert_eq!(r.lint_cmd, "");
+    }
+
+    #[test]
+    fn manual_suffix_sets_auto_merge_false_and_strips_suffix() {
+        let repos = parse("/watched:just test!manual", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+    }
+
+    #[test]
+    fn manual_suffix_alone_strips_to_empty_test_cmd() {
+        let repos = parse("/watched:!manual", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "");
+    }
+
+    #[test]
+    fn no_manual_suffix_keeps_auto_merge_true() {
+        let repos = parse("/watched:just test", "/primary");
+        assert!(repos[1].auto_merge);
+    }
+
+    #[test]
+    fn entry_matching_primary_repo_path_is_skipped() {
+        let repos = parse("/primary", "/primary");
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+    }
+
+    #[test]
+    fn multiple_pipe_separated_entries_all_parsed() {
+        let repos = parse("/repo1|/repo2|/repo3", "/primary");
+        assert_eq!(repos.len(), 4); // primary + 3 watched
+        assert_eq!(repos[1].path, "/repo1");
+        assert_eq!(repos[2].path, "/repo2");
+        assert_eq!(repos[3].path, "/repo3");
+    }
+
+    #[test]
+    fn empty_segment_between_pipes_is_skipped() {
+        let repos = parse("/repo1||/repo2", "/primary");
+        assert_eq!(repos.len(), 3); // primary + 2 (empty skipped)
+    }
+
+    #[test]
+    fn whitespace_around_pipe_entries_is_trimmed() {
+        let repos = parse("  /repo1  |  /repo2  ", "/primary");
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[1].path, "/repo1");
+        assert_eq!(repos[2].path, "/repo2");
+    }
+
+    #[test]
+    fn default_mode_is_sweborg_when_field_omitted() {
+        let repos = parse("/watched:just test:.borg/prompt.md", "/primary");
+        assert_eq!(repos[1].mode, "sweborg");
+    }
+
+    #[test]
+    fn primary_repo_has_is_self_true_watched_has_false() {
+        let repos = parse("/watched", "/primary");
+        assert!(repos[0].is_self);
+        assert!(!repos[1].is_self);
+    }
+
+    #[test]
+    fn primary_repo_inherits_pipeline_test_and_lint_cmd() {
+        let repos = parse_watched_repos("", "/primary", "make test", "make lint", "sweborg");
+        assert_eq!(repos[0].test_cmd, "make test");
+        assert_eq!(repos[0].lint_cmd, "make lint");
+    }
+
+    #[test]
+    fn manual_flag_with_six_fields_and_slug_override() {
+        let repos = parse("/watched:just test!manual:::cargo clippy:owner/repo", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.repo_slug, "owner/repo");
+        assert_eq!(r.lint_cmd, "cargo clippy");
+    }
+
+    #[test]
+    fn primary_repo_skipped_in_middle_of_pipe_list() {
+        let repos = parse("/repo1|/primary|/repo2", "/primary");
+        assert_eq!(repos.len(), 3); // primary + repo1 + repo2 (/primary watched entry skipped)
+        let paths: Vec<&str> = repos.iter().map(|r| r.path.as_str()).collect();
+        assert!(!paths.contains(&"/primary") || repos.iter().filter(|r| r.path == "/primary").count() == 1);
+        assert_eq!(repos[0].path, "/primary");
+        assert_eq!(repos[1].path, "/repo1");
+        assert_eq!(repos[2].path, "/repo2");
+    }
+}
+
 impl Config {
     /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
     pub fn chat_system_prompt(&self) -> String {
