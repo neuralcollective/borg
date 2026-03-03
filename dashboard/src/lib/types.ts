@@ -31,8 +31,6 @@ export interface TaskOutput {
   output: string;
   raw_stream: string;
   exit_code: number;
-  started_at?: string;
-  completed_at?: string;
   created_at: string;
 }
 
@@ -261,7 +259,13 @@ const LEGAL_PHASE_LABELS: Record<string, string> = {
 
 const LEGAL_TASK_TYPE_LABELS: Record<string, Record<string, string>> = {
   contract_analysis: { backlog: "Backlog", implement: "Extract & Analyze", review: "Review", done: "Complete" },
+  contract_review: { backlog: "Backlog", implement: "Review & Redline", review: "Review", done: "Complete" },
+  nda_triage: { backlog: "Backlog", implement: "Screen & Classify", review: "Review", done: "Complete" },
   regulatory_analysis: { backlog: "Backlog", implement: "Monitor & Analyze", review: "Review", done: "Complete" },
+  compliance: { backlog: "Backlog", implement: "Audit & Assess", review: "Review", done: "Complete" },
+  risk_assessment: { backlog: "Backlog", implement: "Assess & Score", review: "Review", done: "Complete" },
+  vendor_check: { backlog: "Backlog", implement: "Search & Compile", review: "Review", done: "Complete" },
+  meeting_briefing: { backlog: "Backlog", implement: "Gather & Brief", review: "Review", done: "Complete" },
   demand_letter: { backlog: "Backlog", implement: "Research & Draft", review: "Review", done: "Complete" },
   motion_brief: { backlog: "Backlog", implement: "Research & Draft", review: "Review", done: "Complete" },
 };

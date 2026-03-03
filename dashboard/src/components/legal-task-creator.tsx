@@ -10,8 +10,14 @@ const TASK_TYPES = [
   { value: "case_brief", label: "Case Brief" },
   { value: "demand_letter", label: "Demand Letter" },
   { value: "contract_analysis", label: "Contract Analysis" },
+  { value: "contract_review", label: "Contract Review" },
+  { value: "nda_triage", label: "NDA Triage" },
   { value: "motion_brief", label: "Motion / Brief" },
   { value: "regulatory_analysis", label: "Regulatory Analysis" },
+  { value: "compliance", label: "Compliance Review" },
+  { value: "risk_assessment", label: "Risk Assessment" },
+  { value: "vendor_check", label: "Vendor Check" },
+  { value: "meeting_briefing", label: "Meeting Briefing" },
 ] as const;
 
 type TaskTypeValue = typeof TASK_TYPES[number]["value"];

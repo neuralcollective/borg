@@ -172,6 +172,7 @@ fn legal_skill_for_task_type(task_type: &str) -> Option<&'static str> {
         "canned_response" | "template_response" => Some(SKILL_CANNED_RESPONSES),
         "meeting_briefing" | "briefing" => Some(SKILL_MEETING_BRIEFING),
         "risk_assessment" => Some(SKILL_RISK_ASSESSMENT),
+        "vendor_check" => Some(SKILL_VENDOR_CHECK),
         _ => None,
     }
 }
@@ -292,3 +293,21 @@ Follow-up cadence: High=daily, Medium=weekly, Low=monthly.
 **Incident briefs (urgent):** Speed over completeness. Flag litigation hold and preservation obligations immediately. \
 Note privilege considerations. For data breaches: flag notification deadlines (72h GDPR). \
 Recommend outside counsel for significant matters.";
+
+const SKILL_VENDOR_CHECK: &str = "\
+### Vendor Agreement Status Methodology
+
+Check the status of existing agreements with a vendor. Provides a consolidated view of the legal relationship.
+
+**Search order (by priority):** CLM/practice management (all contracts — active, expired, in negotiation), \
+CRM (account status, relationship type), email (contract-related, last 6 months), \
+documents (executed agreements, redlines, due diligence), chat (recent mentions, last 3 months).
+
+**For each agreement found:** Agreement type (NDA, MSA, SOW, DPA, SLA, License), status (Active/Expired/In Negotiation/Pending Sig), \
+effective date, expiration date, auto-renewal terms (renewal period, notice period), key terms (liability cap, governing law, termination), amendments.
+
+**Gap analysis:** Check for: NDA, MSA, DPA, SOW(s), SLA, Insurance Certificate. \
+Flag gaps based on relationship type (e.g., MSA present but no DPA and vendor handles personal data).
+
+**Key alerts:** Approaching expirations within 90 days, expired agreements with surviving obligations \
+(confidentiality, indemnification), required agreements not yet in place.";
