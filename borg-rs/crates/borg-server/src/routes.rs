@@ -3322,6 +3322,7 @@ pub(crate) async fn post_chat(
             }
         }
         map.insert(thread.clone(), now);
+        map.retain(|_, last| now.duration_since(*last) < cooldown);
     }
     let sender = body
         .sender
@@ -3692,6 +3693,66 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    fn prune_chat_rate(map: &mut HashMap<String, Instant>, now: Instant, cooldown: Duration) {
+        map.retain(|_, last| now.duration_since(*last) < cooldown);
+    }
+
+    #[test]
+    fn stale_entries_are_pruned() {
+        let cooldown = Duration::from_secs(60);
+        let now = Instant::now();
+        let stale = now - Duration::from_secs(90);
+        let fresh = now - Duration::from_secs(10);
+
+        let mut map = HashMap::new();
+        map.insert("old-thread".to_string(), stale);
+        map.insert("new-thread".to_string(), fresh);
+
+        prune_chat_rate(&mut map, now, cooldown);
+
+        assert!(!map.contains_key("old-thread"), "stale entry should be pruned");
+        assert!(map.contains_key("new-thread"), "fresh entry should be kept");
+    }
+
+    #[test]
+    fn entry_at_cooldown_boundary_is_pruned() {
+        let cooldown = Duration::from_secs(60);
+        let now = Instant::now();
+        // Exactly at cooldown: duration_since == cooldown, not < cooldown → pruned
+        let boundary = now - cooldown;
+
+        let mut map = HashMap::new();
+        map.insert("boundary".to_string(), boundary);
+
+        prune_chat_rate(&mut map, now, cooldown);
+
+        assert!(!map.contains_key("boundary"), "entry at exact cooldown should be pruned");
+    }
+
+    #[test]
+    fn fresh_entry_survives_after_insert_and_prune() {
+        let cooldown = Duration::from_secs(60);
+        let now = Instant::now();
+
+        let mut map = HashMap::new();
+        // Simulate several stale threads
+        for i in 0..100 {
+            map.insert(format!("stale-{i}"), now - Duration::from_secs(120));
+        }
+        // Insert a new entry just like the handler does, then prune
+        map.insert("active".to_string(), now);
+        prune_chat_rate(&mut map, now, cooldown);
+
+        assert_eq!(map.len(), 1, "only the active entry should remain");
+        assert!(map.contains_key("active"));
     }
 }
 
