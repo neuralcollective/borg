@@ -180,7 +180,7 @@ impl ClaudeBackend {
             payload["testCmd"] = serde_json::Value::String(test_cmd.to_string());
         }
 
-        serde_json::to_vec(&payload).unwrap_or_default()
+        serde_json::to_vec(&payload).expect("payload serialization")
     }
 
     /// Parse a `---BORG_TEST_RESULT---{json}` line emitted by the container entrypoint.
