@@ -51,6 +51,7 @@ pub struct Pipeline {
     seed_cooldowns: Mutex<HashMap<(String, String), i64>>,
     last_self_update_secs: std::sync::atomic::AtomicI64,
     last_cache_prune_secs: std::sync::atomic::AtomicI64,
+    last_session_prune_secs: std::sync::atomic::AtomicI64,
     startup_heads: HashMap<String, String>,
     in_flight: Mutex<HashSet<i64>>,
     /// Per-task last agent dispatch timestamp (epoch seconds) for rate limiting.
@@ -131,6 +132,7 @@ impl Pipeline {
             seed_cooldowns: Mutex::new(seed_cooldowns),
             last_self_update_secs: std::sync::atomic::AtomicI64::new(0),
             last_cache_prune_secs: std::sync::atomic::AtomicI64::new(0),
+            last_session_prune_secs: std::sync::atomic::AtomicI64::new(0),
             startup_heads,
             in_flight: Mutex::new(HashSet::new()),
             last_agent_dispatch: Mutex::new(HashMap::new()),
@@ -456,6 +458,7 @@ impl Pipeline {
         self.maybe_apply_self_update();
         self.refresh_mirrors().await;
         self.maybe_prune_cache_volumes().await;
+        self.maybe_prune_session_dirs().await;
 
         // Check if main loop should exit for self-update restart
         if self
@@ -2068,98 +2071,6 @@ and report what went wrong.",
                 duration_secs: None,
                 review_status: None,
                 revision_count: 0,
-            };
-            match self.db.insert_task(&task) {
-                Ok(id) => {
-                    created += 1;
-                    info!("seed github_open_issues created task #{id}: {}", task.title);
-                },
-                Err(e) => warn!("seed github_open_issues insert_task: {e}"),
-            }
-        }
-
-        if created > 0 || skipped_existing > 0 {
-            info!(
-                "seed github_open_issues for {}: created={}, skipped_existing={}",
-                repo.path, created, skipped_existing
-            );
-        }
-        Ok(())
-    }
-
-    fn fetch_open_issues(&self, repo: &RepoConfig) -> Result<Vec<GithubIssue>> {
-        let mut cmd = Command::new("gh");
-        cmd.args([
-            "issue",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "100",
-            "--json",
-            "number,title,body,url,labels",
-        ]);
-        if !repo.repo_slug.is_empty() {
-            cmd.args(["--repo", &repo.repo_slug]);
-        } else if std::path::Path::new(&repo.path).exists() {
-            cmd.current_dir(&repo.path);
-        } else {
-            anyhow::bail!("no repo_slug or local checkout for {}", repo.path);
-        }
-        let output = cmd
-            .output()
-            .with_context(|| format!("failed to execute `gh issue list` for {}", repo.path))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            anyhow::bail!("gh issue list failed for {}: {}", repo.path, stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let issues: Vec<GithubIssue> = serde_json::from_str(&stdout)
-            .with_context(|| format!("failed to parse gh issue list JSON for {}", repo.path))?;
-        Ok(issues)
-    }
-
-    async fn run_seed(
-        &self,
-        repo: &RepoConfig,
-        mode_name: &str,
-        seed_cfg: &crate::types::SeedConfig,
-    ) -> Result<()> {
-        let session_dir = std::fs::canonicalize("store/sessions/seed")
-            .unwrap_or_else(|_| {
-                std::fs::create_dir_all("store/sessions/seed").ok();
-                std::fs::canonicalize("store/sessions/seed")
-                    .unwrap_or_else(|_| std::path::PathBuf::from("store/sessions/seed"))
-            })
-            .to_string_lossy()
-            .to_string();
-        tokio::fs::create_dir_all(&session_dir).await.ok();
-
-        let task = Task {
-            id: 0,
-            title: format!("seed:{}", seed_cfg.name),
-            description: String::new(),
-            repo_path: repo.path.clone(),
-            branch: String::new(),
-            status: "seed".to_string(),
-            attempt: 0,
-            max_attempts: 1,
-            last_error: String::new(),
-            created_by: "seed".to_string(),
-            notify_chat: String::new(),
-            created_at: Utc::now(),
-            session_id: String::new(),
-            mode: mode_name.to_string(),
-            backend: String::new(),
-                project_id: 0,
-                task_type: String::new(),
-                started_at: None,
-                completed_at: None,
-                duration_secs: None,
-                review_status: None,
-                revision_count: 0,
         };
 
         let task_suffix =
@@ -2262,120 +2173,6 @@ and report what went wrong.",
                         session_id: String::new(),
                         mode: mode_name.to_string(),
                         backend: String::new(),
-                project_id: 0,
-                task_type: String::new(),
-                started_at: None,
-                completed_at: None,
-                duration_secs: None,
-                review_status: None,
-                revision_count: 0,
-                    };
-                    match self.db.insert_task(&task) {
-                        Ok(id) => info!("seed created task #{id}: {}", task.title),
-                        Err(e) => warn!("seed insert_task: {e}"),
-                    }
-                }
-            },
-            SeedOutputType::Proposal => {
-                for block in extract_blocks(output, "PROPOSAL_START", "PROPOSAL_END") {
-                    let title = extract_field(&block, "Title:").unwrap_or_default();
-                    let description = extract_field(&block, "Description:").unwrap_or_default();
-                    let rationale = extract_field(&block, "Rationale:").unwrap_or_default();
-                    if title.is_empty() {
-                        continue;
-                    }
-                    let proposal = Proposal {
-                        id: 0,
-                        repo_path: repo_path.to_string(),
-                        title,
-                        description,
-                        rationale,
-                        status: "proposed".to_string(),
-                        created_at: Utc::now(),
-                        triage_score: 0,
-                        triage_impact: 0,
-                        triage_feasibility: 0,
-                        triage_risk: 0,
-                        triage_effort: 0,
-                        triage_reasoning: String::new(),
-                    };
-                    match self.db.insert_proposal(&proposal) {
-                        Ok(id) => info!("seed created proposal #{id}: {}", proposal.title),
-                        Err(e) => warn!("seed insert_proposal: {e}"),
-                    }
-                }
-            },
-        }
-        Ok(())
-    }
-
-    // ── Health monitoring ─────────────────────────────────────────────────
-
-    pub async fn check_health(&self) -> Result<()> {
-        // In Docker mode, repos are not checked out on the host; skip host-side health checks.
-        if self.sandbox_mode == SandboxMode::Docker {
-            return Ok(());
-        }
-
-        const HEALTH_INTERVAL_S: i64 = 1800;
-        let now = chrono::Utc::now().timestamp();
-        if now - self.db.get_ts("last_health_ts") < HEALTH_INTERVAL_S {
-            return Ok(());
-        }
-        self.db.set_ts("last_health_ts", now);
-
-        for repo in &self.config.watched_repos {
-            if !repo.is_self {
-                continue;
-            }
-            // Run tests against the current working tree without pulling.
-            // Pulling here risks overwriting uncommitted local edits.
-            match self.run_test_command(&repo.path, &repo.test_cmd).await {
-                Ok(out) if out.exit_code != 0 => {
-                    warn!("Health: tests failed for {}", repo.path);
-                    self.create_health_task(&repo.path, "tests", &out.stderr)
-                        .await;
-                },
-                Ok(_) => info!("Health: {} OK", repo.path),
-                Err(e) => warn!("Health: test command error for {}: {e}", repo.path),
-            }
-        }
-        Ok(())
-    }
-
-    async fn create_health_task(&self, repo_path: &str, kind: &str, stderr: &str) {
-        // Dedup: skip if a fix task already exists for this repo
-        if let Ok(active) = self.db.list_active_tasks() {
-            if active
-                .iter()
-                .any(|t| t.title.starts_with("Fix failing ") && t.repo_path == repo_path)
-            {
-                return;
-            }
-        }
-        let tail = if stderr.len() > 500 {
-            &stderr[stderr.floor_char_boundary(stderr.len() - 500)..]
-        } else {
-            stderr
-        };
-        let title = format!("Fix failing {kind} on main");
-        let desc = format!("Health check detected {kind} failure on main branch.\n\nError output:\n```\n{tail}\n```");
-        let task = crate::types::Task {
-            id: 0,
-            title: title.clone(),
-            description: desc,
-            repo_path: repo_path.to_string(),
-            branch: String::new(),
-            status: "backlog".into(),
-            attempt: 0,
-            max_attempts: 5,
-            last_error: String::new(),
-            created_by: "health-check".into(),
-            notify_chat: String::new(),
-            created_at: chrono::Utc::now(),
-            session_id: String::new(),
-            mode: "sweborg".into(),
-            backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
                 started_at: None,
@@ -2902,6 +2699,53 @@ and report what went wrong.",
         Sandbox::prune_stale_cache_volumes(7).await;
     }
 
+    async fn maybe_prune_session_dirs(&self) {
+        const PRUNE_INTERVAL_S: i64 = 3600;
+        let now = chrono::Utc::now().timestamp();
+        let last = self.last_session_prune_secs.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last < PRUNE_INTERVAL_S {
+            return;
+        }
+        self.last_session_prune_secs.store(now, std::sync::atomic::Ordering::Relaxed);
+
+        let max_age_secs = self.config.session_max_age_hours * 3600;
+        if max_age_secs <= 0 {
+            return;
+        }
+
+        let sessions_dir = format!("{}/sessions", self.config.data_dir);
+        let in_flight_ids: HashSet<i64> = self
+            .in_flight
+            .try_lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+
+        let to_remove = collect_stale_session_dirs(
+            &sessions_dir,
+            now,
+            max_age_secs,
+            &in_flight_ids,
+            |task_id| {
+                self.db
+                    .get_task(task_id)
+                    .ok()
+                    .flatten()
+                    .map(|t| t.created_at.timestamp())
+            },
+        );
+
+        let mut pruned = 0usize;
+        for path in to_remove {
+            match tokio::fs::remove_dir_all(&path).await {
+                Ok(()) => pruned += 1,
+                Err(e) => warn!("failed to remove session dir {}: {e}", path.display()),
+            }
+        }
+        if pruned > 0 {
+            info!("pruned {pruned} stale session dir(s) from {sessions_dir}");
+        }
+    }
+
     /// Run `claude --print --model <model>` with prompt on stdin, return stdout.
     async fn run_claude_print(&self, model: &str, prompt: &str) -> Result<String> {
         use tokio::io::AsyncWriteExt;
@@ -3034,6 +2878,58 @@ fn parse_triage_item(item: &serde_json::Value) -> Option<(i64, i64, i64, i64, i6
     let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
     let should_dismiss = item.get("dismiss").and_then(|v| v.as_bool()).unwrap_or(false);
     Some((p_id, impact, feasibility, risk, effort, score, reasoning, should_dismiss))
+}
+
+/// Collect session directory paths under `sessions_dir` that are stale and
+/// eligible for removal.
+///
+/// A directory named `task-{N}` is stale when:
+/// - It is not in `skip_ids` (i.e. not currently in-flight), AND
+/// - Its age (seconds since task creation, or since mtime if the task is not
+///   in the DB) is >= `max_age_secs`.
+///
+/// Exposed as a free function so it can be unit-tested without a Pipeline.
+pub fn collect_stale_session_dirs(
+    sessions_dir: &str,
+    now_secs: i64,
+    max_age_secs: i64,
+    skip_ids: &HashSet<i64>,
+    task_created_at: impl Fn(i64) -> Option<i64>,
+) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(sessions_dir) else {
+        return vec![];
+    };
+    let mut stale = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let Some(id_str) = name_str.strip_prefix("task-") else {
+            continue;
+        };
+        let Ok(task_id) = id_str.parse::<i64>() else {
+            continue;
+        };
+        if skip_ids.contains(&task_id) {
+            continue;
+        }
+        let age_secs = match task_created_at(task_id) {
+            Some(created_at) => now_secs.saturating_sub(created_at),
+            None => {
+                // Orphaned dir: fall back to filesystem mtime
+                entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| now_secs.saturating_sub(d.as_secs() as i64))
+                    .unwrap_or(max_age_secs + 1) // unknown age → treat as stale
+            }
+        };
+        if age_secs >= max_age_secs {
+            stale.push(entry.path());
+        }
+    }
+    stale
 }
 
 fn looks_like_field_key(line: &str) -> bool {
