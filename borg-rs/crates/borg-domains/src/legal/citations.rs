@@ -231,4 +231,28 @@ mod tests {
         let cites = extract_citations(text);
         assert_eq!(cites.iter().filter(|c| c.text == "550 U.S. 124").count(), 1);
     }
+
+    #[test]
+    fn test_parse_reporter_parts_standard_case() {
+        let (reporter, volume, page) = parse_reporter_parts("550 U.S. 124");
+        assert_eq!(reporter, "U.S.");
+        assert_eq!(volume, "550");
+        assert_eq!(page, "124");
+    }
+
+    #[test]
+    fn test_parse_reporter_parts_statute_no_panic() {
+        let (reporter, volume, page) = parse_reporter_parts("42 U.S.C. § 1983");
+        assert_eq!(reporter, "");
+        assert_eq!(volume, "");
+        assert_eq!(page, "");
+    }
+
+    #[test]
+    fn test_parse_reporter_parts_uk_bracket_year_no_panic() {
+        let (reporter, volume, page) = parse_reporter_parts("[2021] UKSC 35");
+        assert_eq!(reporter, "");
+        assert_eq!(volume, "");
+        assert_eq!(page, "");
+    }
 }
