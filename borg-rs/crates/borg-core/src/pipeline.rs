@@ -1710,9 +1710,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 warn!("Integration: no repo_slug for {}, skipping", repo.path);
                 continue;
             }
-            info!("Integration: {} branches for {}", queued.len(), repo.path);
+            // Process at most 5 branches per tick to avoid burning API credits
+            let batch_size = 5;
+            let batch: Vec<_> = queued.into_iter().take(batch_size).collect();
+            info!("Integration: processing {} branches for {}", batch.len(), repo.path);
             match self
-                .run_integration(queued, &repo.repo_slug, repo.auto_merge)
+                .run_integration(batch, &repo.repo_slug, repo.auto_merge)
                 .await
             {
                 Ok(merged) => any_merged |= merged,
