@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         let model = std::env::var("LOCAL_MODEL").unwrap_or_else(|_| "llama3.2".into());
         backends.insert(
             "local".into(),
-            Arc::new(OllamaBackend::new(url, model).with_timeout(300)),
+            Arc::new(OllamaBackend::new(url, model)?.with_timeout(300)?),
         );
         info!("local backend registered (Ollama)");
     }

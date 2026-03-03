@@ -20,26 +20,24 @@ pub struct OllamaBackend {
 }
 
 impl OllamaBackend {
-    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let timeout_secs = 300u64;
-        Self {
+        Ok(Self {
             base_url: base_url.into(),
             model: model.into(),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(timeout_secs))
-                .build()
-                .expect("failed to build HTTP client"),
+                .build()?,
             timeout_secs,
-        }
+        })
     }
 
-    pub fn with_timeout(mut self, secs: u64) -> Self {
+    pub fn with_timeout(mut self, secs: u64) -> Result<Self> {
         self.timeout_secs = secs;
         self.http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(secs))
-            .build()
-            .expect("failed to build HTTP client");
-        self
+            .build()?;
+        Ok(self)
     }
 }
 
