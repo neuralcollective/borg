@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
+        IntoResponse,
         Json,
     },
 };
@@ -330,6 +331,13 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "git_user_coauthor",
     "chat_disallowed_tools",
     "pipeline_disallowed_tools",
+    "public_url",
+    "dropbox_client_id",
+    "dropbox_client_secret",
+    "google_client_id",
+    "google_client_secret",
+    "ms_client_id",
+    "ms_client_secret",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -350,6 +358,13 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("git_user_coauthor", ""),
     ("chat_disallowed_tools", ""),
     ("pipeline_disallowed_tools", ""),
+    ("public_url", ""),
+    ("dropbox_client_id", ""),
+    ("dropbox_client_secret", ""),
+    ("google_client_id", ""),
+    ("google_client_secret", ""),
+    ("ms_client_id", ""),
+    ("ms_client_secret", ""),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────
@@ -4400,4 +4415,3 @@ mod tests {
         assert_eq!(entries.len(), 2);
     }
 }
-

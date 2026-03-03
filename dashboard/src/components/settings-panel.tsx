@@ -213,6 +213,52 @@ export function SettingsPanel() {
           />
         </Section>
 
+        {/* Cloud Storage */}
+        <Section title="Cloud Storage">
+          <TextField
+            label="Public URL"
+            desc="Public app URL used for OAuth callbacks (for example: https://app.borg.legal)"
+            value={effective.public_url}
+            onChange={(v) => update("public_url", v)}
+          />
+          <TextField
+            label="Dropbox Client ID"
+            desc="OAuth app client ID for Dropbox"
+            value={effective.dropbox_client_id}
+            onChange={(v) => update("dropbox_client_id", v)}
+          />
+          <TextField
+            label="Dropbox Client Secret"
+            desc="OAuth app client secret for Dropbox"
+            value={effective.dropbox_client_secret}
+            onChange={(v) => update("dropbox_client_secret", v)}
+          />
+          <TextField
+            label="Google Client ID"
+            desc="OAuth app client ID for Google Drive"
+            value={effective.google_client_id}
+            onChange={(v) => update("google_client_id", v)}
+          />
+          <TextField
+            label="Google Client Secret"
+            desc="OAuth app client secret for Google Drive"
+            value={effective.google_client_secret}
+            onChange={(v) => update("google_client_secret", v)}
+          />
+          <TextField
+            label="Microsoft Client ID"
+            desc="OAuth app client ID for OneDrive"
+            value={effective.ms_client_id}
+            onChange={(v) => update("ms_client_id", v)}
+          />
+          <TextField
+            label="Microsoft Client Secret"
+            desc="OAuth app client secret for OneDrive"
+            value={effective.ms_client_secret}
+            onChange={(v) => update("ms_client_secret", v)}
+          />
+        </Section>
+
         {/* Per-Repo Settings */}
         <ReposSection />
 

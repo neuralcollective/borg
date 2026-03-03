@@ -194,6 +194,13 @@ export interface Settings {
   git_user_coauthor: string;
   chat_disallowed_tools: string;
   pipeline_disallowed_tools: string;
+  public_url: string;
+  dropbox_client_id: string;
+  dropbox_client_secret: string;
+  google_client_id: string;
+  google_client_secret: string;
+  ms_client_id: string;
+  ms_client_secret: string;
 }
 
 export function useSettings() {
@@ -569,6 +576,72 @@ export async function uploadProjectFiles(
     method: "POST",
     headers: authHeaders(),
     body: form,
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export interface CloudConnection {
+  id: number;
+  provider: "dropbox" | "google_drive" | "onedrive" | string;
+  account_email: string;
+  connected_at: string;
+}
+
+export interface CloudBrowseItem {
+  id: string;
+  name: string;
+  type: "file" | "folder";
+  size?: number;
+  modified?: string;
+  mime_type?: string;
+}
+
+export interface CloudBrowseResponse {
+  items: CloudBrowseItem[];
+  cursor?: string | null;
+  next_page_token?: string | null;
+  has_more?: boolean;
+  folder_id?: string;
+}
+
+export function useProjectCloudConnections(projectId: number | null) {
+  return useQuery<CloudConnection[]>({
+    queryKey: ["project_cloud_connections", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}/cloud`),
+    enabled: projectId !== null,
+    refetchInterval: REFETCH_PROJECTS,
+  });
+}
+
+export async function deleteProjectCloudConnection(projectId: number, connectionId: number): Promise<void> {
+  const res = await apiFetch(`/api/projects/${projectId}/cloud/${connectionId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function browseProjectCloudFiles(
+  projectId: number,
+  connectionId: number,
+  opts: { folder_id?: string; cursor?: string } = {}
+): Promise<CloudBrowseResponse> {
+  const params = new URLSearchParams();
+  if (opts.folder_id) params.set("folder_id", opts.folder_id);
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  const query = params.toString();
+  return fetchJson(`/api/projects/${projectId}/cloud/${connectionId}/browse${query ? `?${query}` : ""}`);
+}
+
+export async function importProjectCloudFiles(
+  projectId: number,
+  connectionId: number,
+  files: Array<{ id: string; name: string; size?: number }>
+): Promise<{ imported: ProjectFile[] }> {
+  const res = await apiFetch(`/api/projects/${projectId}/cloud/${connectionId}/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files }),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();

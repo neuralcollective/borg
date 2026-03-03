@@ -18,6 +18,7 @@ const CONGRESS_KEY = process.env.CONGRESS_API_KEY || "";
 const OPENSTATES_KEY = process.env.OPENSTATES_API_KEY || "";
 const CANLII_KEY = process.env.CANLII_API_KEY || "";
 const REGULATIONS_KEY = process.env.REGULATIONS_GOV_API_KEY || "";
+const KLDISCOVERY_API_KEY = process.env.KLDISCOVERY_API_KEY || "";
 
 // ── Base URLs ──────────────────────────────────────────────────────────
 const COURTLISTENER = "https://www.courtlistener.com/api/rest/v4";
@@ -45,6 +46,7 @@ const CLIO_BASE = process.env.CLIO_BASE_URL || "https://app.clio.com/api/v4";
 const IMANAGE_BASE = process.env.IMANAGE_BASE_URL || "";
 const NETDOCS_BASE = process.env.NETDOCUMENTS_BASE_URL || "";
 const ONEADVANCED_BASE = process.env.ONEADVANCED_BASE_URL || "";
+const KLDISCOVERY_BASE_URL = process.env.KLDISCOVERY_BASE_URL || "https://api.kldiscovery.com/api/v1";
 
 // ── Rate limiting ────────────────────────────────────────────────────
 class RateLimiter {
@@ -74,6 +76,7 @@ const rateLimiters = [
   { test: url => url.includes("openstates.org"),         limiter: new RateLimiter(600, 3600000),  label: "Open States" },
   { test: url => url.includes("eur-lex.europa.eu"),     limiter: new RateLimiter(60, 60000),     label: "EUR-Lex" },
 ];
+const KLDISCOVERY_LIMITER = new RateLimiter(100, 60000);
 
 function checkRateLimit(url) {
   for (const { test, limiter, label } of rateLimiters) {
@@ -128,6 +131,22 @@ async function authedCall(base, path, key, method = "GET", body = null) {
   const opts = {
     method,
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  return fetchJSON(url, opts);
+}
+
+async function kldRequest(method, path, body = null) {
+  requireKey("KLDiscovery", KLDISCOVERY_API_KEY);
+  KLDISCOVERY_LIMITER.check("KLDiscovery");
+  const url = `${KLDISCOVERY_BASE_URL}${path}`;
+  const opts = {
+    method,
+    headers: {
+      Authorization: `Bearer ${KLDISCOVERY_API_KEY}`,
+      "Content-Type": "application/json",
+      "User-Agent": "LegalMCP/0.2",
+    },
   };
   if (body) opts.body = JSON.stringify(body);
   return fetchJSON(url, opts);
@@ -1376,6 +1395,270 @@ const ALB_TOOLS = [
   },
 ];
 
+// ── KLDiscovery Nebula (BYOK) ────────────────────────────────────────
+const KLDISCOVERY_TOOLS = [
+  {
+    name: "kldiscovery_list_matters",
+    description: "List all eDiscovery matters in KLDiscovery Nebula.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "Filter by status: active|closed|all", default: "active" },
+      },
+    },
+  },
+  {
+    name: "kldiscovery_get_matter",
+    description: "Get details of a KLDiscovery matter.",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+  {
+    name: "kldiscovery_create_matter",
+    description: "Create a new eDiscovery matter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        matter_number: { type: "string" },
+        client_name: { type: "string" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "kldiscovery_list_custodians",
+    description: "List custodians for a matter.",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+  {
+    name: "kldiscovery_add_custodian",
+    description: "Add a custodian to a matter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        name: { type: "string" },
+        email: { type: "string" },
+        title: { type: "string" },
+        department: { type: "string" },
+      },
+      required: ["matter_id", "name", "email"],
+    },
+  },
+  {
+    name: "kldiscovery_list_holds",
+    description: "List legal holds for a matter.",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+  {
+    name: "kldiscovery_create_hold",
+    description: "Create a legal hold notice and send to custodians.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        custodian_ids: { type: "array", items: { type: "string" } },
+      },
+      required: ["matter_id", "name"],
+    },
+  },
+  {
+    name: "kldiscovery_release_hold",
+    description: "Release a legal hold.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        hold_id: { type: "string" },
+      },
+      required: ["matter_id", "hold_id"],
+    },
+  },
+  {
+    name: "kldiscovery_get_hold_acknowledgments",
+    description: "Get acknowledgment status for all custodians on a hold.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        hold_id: { type: "string" },
+      },
+      required: ["matter_id", "hold_id"],
+    },
+  },
+  {
+    name: "kldiscovery_send_hold_reminder",
+    description: "Send reminder to custodians who have not acknowledged a hold.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        hold_id: { type: "string" },
+      },
+      required: ["matter_id", "hold_id"],
+    },
+  },
+  {
+    name: "kldiscovery_list_collections",
+    description: "List data collections for a matter.",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+  {
+    name: "kldiscovery_create_collection",
+    description: "Create a data collection job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        name: { type: "string" },
+        custodian_ids: { type: "array", items: { type: "string" } },
+        date_range_start: { type: "string" },
+        date_range_end: { type: "string" },
+        data_sources: { type: "array", items: { type: "string" } },
+      },
+      required: ["matter_id", "name"],
+    },
+  },
+  {
+    name: "kldiscovery_get_collection_status",
+    description: "Get status and stats of a collection job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        collection_id: { type: "string" },
+      },
+      required: ["matter_id", "collection_id"],
+    },
+  },
+  {
+    name: "kldiscovery_create_processing_job",
+    description: "Submit collected data for processing/culling.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        collection_ids: { type: "array", items: { type: "string" } },
+        dedup: { type: "boolean", default: true },
+        ocr: { type: "boolean", default: true },
+      },
+      required: ["matter_id", "collection_ids"],
+    },
+  },
+  {
+    name: "kldiscovery_get_job_status",
+    description: "Get status of a processing job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        job_id: { type: "string" },
+      },
+      required: ["matter_id", "job_id"],
+    },
+  },
+  {
+    name: "kldiscovery_list_review_sets",
+    description: "List review sets for a matter.",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+  {
+    name: "kldiscovery_create_review_set",
+    description: "Create a review set from processed documents.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        name: { type: "string" },
+        job_id: { type: "string" },
+      },
+      required: ["matter_id", "name", "job_id"],
+    },
+  },
+  {
+    name: "kldiscovery_search_review_set",
+    description: "Search documents within a review set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        review_set_id: { type: "string" },
+        query: { type: "string" },
+        limit: { type: "number", default: 50 },
+      },
+      required: ["matter_id", "review_set_id", "query"],
+    },
+  },
+  {
+    name: "kldiscovery_list_productions",
+    description: "List productions for a matter.",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+  {
+    name: "kldiscovery_create_production",
+    description: "Create a document production package.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        name: { type: "string" },
+        review_set_id: { type: "string" },
+        format: { type: "string", description: "pdf|native|tiff", default: "pdf" },
+        bates_prefix: { type: "string" },
+      },
+      required: ["matter_id", "name", "review_set_id"],
+    },
+  },
+  {
+    name: "kldiscovery_get_production_status",
+    description: "Get status of a production job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        matter_id: { type: "string" },
+        production_id: { type: "string" },
+      },
+      required: ["matter_id", "production_id"],
+    },
+  },
+  {
+    name: "kldiscovery_get_matter_report",
+    description: "Get summary report for a matter (doc counts, hold status, processing stats).",
+    inputSchema: {
+      type: "object",
+      properties: { matter_id: { type: "string" } },
+      required: ["matter_id"],
+    },
+  },
+];
+
 // ═══════════════════════════════════════════════════════════════════════
 // TOOL HANDLERS
 // ═══════════════════════════════════════════════════════════════════════
@@ -1388,6 +1671,15 @@ const MUTATION_TOOLS = new Set([
   "imanage_checkin",
   "netdocuments_upload",
   "alb_create_time_entry",
+  "kldiscovery_create_matter",
+  "kldiscovery_add_custodian",
+  "kldiscovery_create_hold",
+  "kldiscovery_release_hold",
+  "kldiscovery_send_hold_reminder",
+  "kldiscovery_create_collection",
+  "kldiscovery_create_processing_job",
+  "kldiscovery_create_review_set",
+  "kldiscovery_create_production",
 ]);
 
 async function handleTool(name, args) {
@@ -2134,6 +2426,77 @@ async function handleTool(name, args) {
       });
       break;
 
+    // ── KLDiscovery Nebula (BYOK) ───────────────────────────────────
+    case "kldiscovery_list_matters":
+      result = await kldRequest("GET", `/matters?status=${encodeURIComponent(args.status || "active")}`);
+      break;
+    case "kldiscovery_get_matter":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}`);
+      break;
+    case "kldiscovery_create_matter":
+      result = await kldRequest("POST", "/matters", args);
+      break;
+    case "kldiscovery_list_custodians":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/custodians`);
+      break;
+    case "kldiscovery_add_custodian":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/custodians`, args);
+      break;
+    case "kldiscovery_list_holds":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/holds`);
+      break;
+    case "kldiscovery_create_hold":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/holds`, args);
+      break;
+    case "kldiscovery_release_hold":
+      result = await kldRequest("PUT", `/matters/${validateId(args.matter_id)}/holds/${validateId(args.hold_id)}/release`);
+      break;
+    case "kldiscovery_get_hold_acknowledgments":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/holds/${validateId(args.hold_id)}/acknowledgments`);
+      break;
+    case "kldiscovery_send_hold_reminder":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/holds/${validateId(args.hold_id)}/reminder`);
+      break;
+    case "kldiscovery_list_collections":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/collections`);
+      break;
+    case "kldiscovery_create_collection":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/collections`, args);
+      break;
+    case "kldiscovery_get_collection_status":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/collections/${validateId(args.collection_id)}`);
+      break;
+    case "kldiscovery_create_processing_job":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/processing-jobs`, args);
+      break;
+    case "kldiscovery_get_job_status":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/processing-jobs/${validateId(args.job_id)}`);
+      break;
+    case "kldiscovery_list_review_sets":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/review-sets`);
+      break;
+    case "kldiscovery_create_review_set":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/review-sets`, args);
+      break;
+    case "kldiscovery_search_review_set":
+      result = await kldRequest(
+        "GET",
+        `/matters/${validateId(args.matter_id)}/review-sets/${validateId(args.review_set_id)}/search?q=${encodeURIComponent(args.query)}&limit=${encodeURIComponent(args.limit || 50)}`
+      );
+      break;
+    case "kldiscovery_list_productions":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/productions`);
+      break;
+    case "kldiscovery_create_production":
+      result = await kldRequest("POST", `/matters/${validateId(args.matter_id)}/productions`, args);
+      break;
+    case "kldiscovery_get_production_status":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/productions/${validateId(args.production_id)}`);
+      break;
+    case "kldiscovery_get_matter_report":
+      result = await kldRequest("GET", `/matters/${validateId(args.matter_id)}/report`);
+      break;
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -2170,6 +2533,7 @@ function getAvailableTools() {
   if (IMANAGE_KEY) tools.push(...IMANAGE_TOOLS);
   if (NETDOCUMENTS_KEY) tools.push(...NETDOCUMENTS_TOOLS);
   if (ONEADVANCED_KEY) tools.push(...ALB_TOOLS);
+  if (KLDISCOVERY_API_KEY) tools.push(...KLDISCOVERY_TOOLS);
 
   return tools;
 }
