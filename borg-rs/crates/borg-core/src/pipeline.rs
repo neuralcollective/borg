@@ -31,11 +31,13 @@ use crate::{
 /// For `cargo test` commands, returns the same command with `--no-run` appended.
 pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
-    if trimmed.contains("cargo test") {
-        Some(format!("{trimmed} --no-run"))
-    } else {
-        None
+    if !trimmed.contains("cargo test") {
+        return None;
     }
+    if trimmed.contains("--no-run") {
+        return Some(trimmed.to_string());
+    }
+    Some(format!("{trimmed} --no-run"))
 }
 
 pub struct Pipeline {
