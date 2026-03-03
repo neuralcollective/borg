@@ -2965,34 +2965,25 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             },
         };
 
+        macro_rules! req {
+            ($expr:expr) => {
+                match $expr {
+                    Some(v) => v,
+                    None => continue,
+                }
+            };
+        }
+
         let mut scored = 0u32;
         let mut dismissed = 0u32;
         for item in &items {
             let get_i64 = |k: &str| item.get(k).and_then(|v| v.as_i64());
-            let p_id = match get_i64("id") {
-                Some(v) => v,
-                None => continue,
-            };
-            let impact = match get_i64("impact") {
-                Some(v) => v,
-                None => continue,
-            };
-            let feasibility = match get_i64("feasibility") {
-                Some(v) => v,
-                None => continue,
-            };
-            let risk = match get_i64("risk") {
-                Some(v) => v,
-                None => continue,
-            };
-            let effort = match get_i64("effort") {
-                Some(v) => v,
-                None => continue,
-            };
-            let score = match get_i64("score") {
-                Some(v) => v,
-                None => continue,
-            };
+            let p_id = req!(get_i64("id"));
+            let impact = req!(get_i64("impact"));
+            let feasibility = req!(get_i64("feasibility"));
+            let risk = req!(get_i64("risk"));
+            let effort = req!(get_i64("effort"));
+            let score = req!(get_i64("score"));
             let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
             let should_dismiss = item
                 .get("dismiss")
