@@ -91,6 +91,17 @@ pub(crate) struct SearchQuery {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct PatchTaskBody {
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SearchQuery {
+    pub q: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct DocQuery {
     pub path: Option<String>,
     pub ref_name: Option<String>,
@@ -953,18 +964,6 @@ pub(crate) async fn get_project(
     Ok(Json(json!(ProjectJson::from(project))))
 }
 
-pub(crate) async fn get_project(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Result<Json<Value>, StatusCode> {
-    let project = state
-        .db
-        .get_project(id)
-        .map_err(internal)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(json!(ProjectJson::from(project))))
-}
-
 pub(crate) async fn update_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
@@ -1042,6 +1041,19 @@ pub(crate) async fn delete_project(
         let _ = tokio::fs::remove_dir_all(&project.repo_path).await;
     }
     let _ = state.db.log_event_full(None, None, Some(id), "api", "matter.deleted", &json!({ "name": project.name }));
+    state.db.delete_project(id).map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn delete_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    let project = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    // Clean up dedicated repo if it exists
+    if !project.repo_path.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&project.repo_path).await;
+    }
     state.db.delete_project(id).map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
