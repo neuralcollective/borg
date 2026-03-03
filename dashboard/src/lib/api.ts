@@ -272,6 +272,31 @@ export async function retryTask(id: number): Promise<void> {
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+export async function approveTask(id: number): Promise<{ next_phase: string }> {
+  const res = await apiFetch(`/api/tasks/${id}/approve`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function rejectTask(id: number, feedback?: string): Promise<void> {
+  const res = await apiFetch(`/api/tasks/${id}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ feedback }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function requestRevision(id: number, feedback: string): Promise<{ target_phase: string }> {
+  const res = await apiFetch(`/api/tasks/${id}/request-revision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ feedback }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 export async function retryAllFailed(): Promise<void> {
   const res = await apiFetch("/api/tasks/retry-all-failed", { method: "POST" });
   if (!res.ok) throw new Error(`${res.status}`);
@@ -527,9 +552,9 @@ export function useProjectDeadlines(projectId: number | null) {
 }
 
 export async function createDeadline(projectId: number, label: string, dueDate: string, ruleBasis?: string): Promise<{ id: number }> {
-  const res = await fetch(apiUrl(`/api/projects/${projectId}/deadlines`), {
+  const res = await apiFetch(`/api/projects/${projectId}/deadlines`, {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, due_date: dueDate, rule_basis: ruleBasis || "" }),
   });
   if (!res.ok) throw new Error(`${res.status}`);
@@ -537,18 +562,17 @@ export async function createDeadline(projectId: number, label: string, dueDate: 
 }
 
 export async function updateDeadline(projectId: number, id: number, updates: Partial<{ label: string; due_date: string; rule_basis: string; status: string }>): Promise<void> {
-  const res = await fetch(apiUrl(`/api/projects/${projectId}/deadlines/${id}`), {
+  const res = await apiFetch(`/api/projects/${projectId}/deadlines/${id}`, {
     method: "PUT",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
 export async function deleteDeadline(projectId: number, id: number): Promise<void> {
-  const res = await fetch(apiUrl(`/api/projects/${projectId}/deadlines/${id}`), {
+  const res = await apiFetch(`/api/projects/${projectId}/deadlines/${id}`, {
     method: "DELETE",
-    headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`${res.status}`);
 }

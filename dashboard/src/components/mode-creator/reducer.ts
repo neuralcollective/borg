@@ -44,6 +44,7 @@ export const DEFAULT_PHASE: PhaseConfigFull = {
   next: "done",
   fresh_session: false,
   fix_instruction: "",
+  retry_phase: "",
 };
 
 export const DEFAULT_SEED: SeedConfigFull = {

@@ -37,6 +37,8 @@ pub enum PhaseType {
     Rebase,
     /// Runs a lint command; spawns an agent to fix errors if any.
     LintFix,
+    /// Halts the pipeline until a human approves, rejects, or requests revision.
+    HumanReview,
 }
 
 impl Default for PhaseType {
@@ -103,6 +105,10 @@ pub struct Task {
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_status: Option<String>,
+    #[serde(default)]
+    pub revision_count: i64,
 }
 
 /// A user-facing proposal that can be promoted to a Task.

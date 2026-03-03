@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS pipeline_tasks (
   project_id INTEGER REFERENCES projects(id),
   task_type TEXT NOT NULL DEFAULT '',
   structured_data TEXT NOT NULL DEFAULT '',
+  review_status TEXT,
+  revision_count INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
   completed_at TEXT,
   duration_secs INTEGER,

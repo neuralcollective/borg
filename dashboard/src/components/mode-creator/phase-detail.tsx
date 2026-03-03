@@ -24,6 +24,7 @@ export function PhaseDetail({
   }, [phase.name, phase.error_instruction, phase.fix_instruction]);
 
   const isAgent = phase.phase_type === "agent" || phase.phase_type === "rebase";
+  const isHumanReview = phase.phase_type === "human_review";
 
   return (
     <div className="space-y-4 overflow-y-auto">
@@ -55,8 +56,10 @@ export function PhaseDetail({
             >
               <option value="setup">Setup</option>
               <option value="agent">Agent</option>
+              <option value="validate">Validate</option>
               <option value="rebase">Rebase</option>
               <option value="lint_fix">Lint Fix</option>
+              <option value="human_review">Human Review</option>
             </select>
           </Field>
           <Field label="Next" className="w-28">
@@ -74,6 +77,25 @@ export function PhaseDetail({
           </Field>
         </div>
       </Section>
+
+      {/* Human Review info */}
+      {isHumanReview && (
+        <Section title="Human Review">
+          <div className="mb-2 rounded bg-emerald-500/5 border border-emerald-500/20 px-3 py-2 text-[11px] text-emerald-400/80">
+            This phase pauses the pipeline until a human approves, rejects, or requests revision.
+            The task will sit in this status until acted on from the dashboard.
+          </div>
+          <Field label="Reviewer Guidance (shown in dashboard)">
+            <AutoTextarea
+              value={phase.instruction}
+              onChange={(v) => onChange({ instruction: v })}
+              disabled={readOnly}
+              placeholder="Instructions for the human reviewer (e.g. check citations, verify formatting)..."
+              minRows={3}
+            />
+          </Field>
+        </Section>
+      )}
 
       {/* Agent Configuration */}
       {isAgent && (
@@ -131,16 +153,18 @@ export function PhaseDetail({
       )}
 
       {/* Tools */}
-      <Section title="Allowed Tools">
-        <ToolChips
-          value={phase.allowed_tools}
-          onChange={(v) => onChange({ allowed_tools: v })}
-          disabled={readOnly}
-        />
-      </Section>
+      {!isHumanReview && (
+        <Section title="Allowed Tools">
+          <ToolChips
+            value={phase.allowed_tools}
+            onChange={(v) => onChange({ allowed_tools: v })}
+            disabled={readOnly}
+          />
+        </Section>
+      )}
 
       {/* Behavior Flags */}
-      <Section title="Behavior">
+      {!isHumanReview && <Section title="Behavior">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           <FlagToggle label="Use Docker" checked={phase.use_docker} disabled={readOnly}
             onChange={(v) => onChange({ use_docker: v })} />
@@ -157,7 +181,7 @@ export function PhaseDetail({
           <FlagToggle label="Fresh Session" checked={phase.fresh_session} disabled={readOnly}
             onChange={(v) => onChange({ fresh_session: v })} />
         </div>
-      </Section>
+      </Section>}
 
       {/* Commit & Artifact */}
       {phase.commits && (

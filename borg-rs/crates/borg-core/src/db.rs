@@ -231,7 +231,8 @@ fn normalize_party_name(name: &str) -> String {
 
 const TASK_COLS: &str = "id, title, description, repo_path, branch, status, attempt, \
     max_attempts, last_error, created_by, notify_chat, created_at, \
-    session_id, mode, backend, project_id, task_type, started_at, completed_at, duration_secs";
+    session_id, mode, backend, project_id, task_type, started_at, completed_at, duration_secs, \
+    review_status, revision_count";
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let created_at_str: String = row.get(11)?;
@@ -258,6 +259,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         started_at: started_at.map(|s| parse_ts(&s)),
         completed_at: completed_at.map(|s| parse_ts(&s)),
         duration_secs: row.get(19)?,
+        review_status: row.get(20)?,
+        revision_count: row.get::<_, Option<i64>>(21)?.unwrap_or(0),
     })
 }
 
@@ -445,6 +448,8 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN started_at TEXT",
             "ALTER TABLE pipeline_tasks ADD COLUMN completed_at TEXT",
             "ALTER TABLE pipeline_tasks ADD COLUMN duration_secs INTEGER",
+            "ALTER TABLE pipeline_tasks ADD COLUMN review_status TEXT",
+            "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -619,6 +624,36 @@ impl Db {
         )
         .context("mark_task_completed")?;
         Ok(())
+    }
+
+    pub fn set_review_status(&self, id: i64, status: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipeline_tasks SET review_status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, now_str(), id],
+        )
+        .context("set_review_status")?;
+        Ok(())
+    }
+
+    pub fn increment_revision_count(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "UPDATE pipeline_tasks SET revision_count = revision_count + 1, updated_at = ?1 WHERE id = ?2",
+            params![now_str(), id],
+        )
+        .context("increment_revision_count")?;
+        Ok(())
+    }
+
+    pub fn get_task_revision_count(&self, id: i64) -> i64 {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT revision_count FROM pipeline_tasks WHERE id = ?1",
+            params![id],
+            |r: &rusqlite::Row| r.get(0),
+        )
+        .unwrap_or(0)
     }
 
     pub fn update_task_branch(&self, id: i64, branch: &str) -> Result<()> {

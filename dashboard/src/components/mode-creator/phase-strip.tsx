@@ -5,8 +5,10 @@ import { cn } from "@/lib/utils";
 const TYPE_COLORS: Record<PhaseType, string> = {
   setup: "bg-zinc-700/50 text-zinc-400",
   agent: "bg-blue-500/15 text-blue-400",
+  validate: "bg-teal-500/15 text-teal-400",
   rebase: "bg-amber-500/15 text-amber-400",
   lint_fix: "bg-violet-500/15 text-violet-400",
+  human_review: "bg-emerald-500/15 text-emerald-400",
 };
 
 const LOOP_COLORS = [
@@ -136,7 +138,7 @@ export function PhaseStrip({
                       {phase.name}
                     </div>
                     <span className={cn("mt-0.5 inline-block rounded px-1 py-px text-[9px]", TYPE_COLORS[phase.phase_type])}>
-                      {phase.phase_type}
+                      {phase.phase_type === "human_review" ? "\u{1F464} review" : phase.phase_type}
                     </span>
                   </button>
                 </div>

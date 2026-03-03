@@ -40,6 +40,8 @@ fn make_task(db: &Db) -> i64 {
         started_at: None,
         completed_at: None,
         duration_secs: None,
+        review_status: None,
+        revision_count: 0,
     };
     db.insert_task(&task).expect("insert_task")
 }

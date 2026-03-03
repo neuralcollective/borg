@@ -1,4 +1,4 @@
-import { useTaskDetail, useTaskStream, useTaskContainer, retryTask, setTaskBackend } from "@/lib/api";
+import { useTaskDetail, useTaskStream, useTaskContainer, useFullModes, retryTask, setTaskBackend, approveTask, rejectTask, requestRevision } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
@@ -23,8 +23,11 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const { data: container } = useTaskContainer(taskId, isActive);
   const { mode: uiMode } = useUIMode();
   const isMinimal = uiMode === "minimal";
+  const { data: fullModes = [] } = useFullModes();
   const queryClient = useQueryClient();
   const [retrying, setRetrying] = useState(false);
+  const [showRevision, setShowRevision] = useState(false);
+  const [revisionFeedback, setRevisionFeedback] = useState("");
 
   if (isLoading || !task) {
     return (
@@ -80,6 +83,70 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         </div>
 
         <PhaseTracker status={task.status} mode={task.mode} />
+
+        {/* Human review gate */}
+        {fullModes.some((m) => m.name === task.mode && m.phases.some((p) => p.name === task.status && p.phase_type === "human_review")) && (() => {
+          const phaseInstruction = fullModes.find((m) => m.name === task.mode)
+            ?.phases.find((p) => p.name === task.status)?.instruction;
+          const invalidate = () => {
+            queryClient.invalidateQueries({ queryKey: ["tasks"] });
+            queryClient.invalidateQueries({ queryKey: ["task", task.id] });
+          };
+          return (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] p-3 space-y-2">
+              {phaseInstruction && (
+                <div className="text-[11px] text-emerald-400/70 leading-relaxed">{phaseInstruction}</div>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => { await approveTask(task.id); invalidate(); }}
+                  className="rounded-md bg-emerald-500/15 px-3 py-1.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                >Approve</button>
+                <button
+                  onClick={() => setShowRevision(!showRevision)}
+                  className="rounded-md bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                >Request Revision</button>
+                <button
+                  onClick={async () => {
+                    if (confirm("Reject this task? It will be marked as failed.")) {
+                      await rejectTask(task.id, "Rejected by reviewer");
+                      invalidate();
+                    }
+                  }}
+                  className="rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+                >Reject</button>
+              </div>
+              {showRevision && (
+                <div className="space-y-1.5">
+                  <textarea
+                    value={revisionFeedback}
+                    onChange={(e) => setRevisionFeedback(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-md border border-amber-500/20 bg-black/30 px-2.5 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-amber-500/40 resize-y placeholder:text-zinc-600"
+                    placeholder="Describe what needs to change..."
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={async () => {
+                        if (!revisionFeedback.trim()) return;
+                        await requestRevision(task.id, revisionFeedback.trim());
+                        setRevisionFeedback("");
+                        setShowRevision(false);
+                        invalidate();
+                      }}
+                      disabled={!revisionFeedback.trim()}
+                      className="rounded-md bg-amber-500/15 px-3 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/25 disabled:opacity-40 transition-colors"
+                    >Send Revision Request</button>
+                    <button
+                      onClick={() => { setShowRevision(false); setRevisionFeedback(""); }}
+                      className="text-[11px] text-zinc-600 hover:text-zinc-400"
+                    >Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
           {task.repo_path && (

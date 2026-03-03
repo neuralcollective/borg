@@ -346,6 +346,8 @@ async fn main() -> anyhow::Result<()> {
                                     started_at: None,
                                     completed_at: None,
                                     duration_secs: None,
+                                    review_status: None,
+                                    revision_count: 0,
                                 };
                                 let task_title = task.title.clone();
                                 let tg2 = Arc::clone(&tg);
@@ -691,6 +693,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks", get(routes::list_tasks))
         .route("/api/tasks/create", post(routes::create_task))
         .route("/api/tasks/:id", get(routes::get_task).patch(routes::patch_task))
+        .route("/api/tasks/:id/approve", post(routes::approve_task))
+        .route("/api/tasks/:id/reject", post(routes::reject_task))
+        .route("/api/tasks/:id/request-revision", post(routes::request_revision))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
         .route("/api/tasks/:id/unblock", post(routes::unblock_task))
         .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))

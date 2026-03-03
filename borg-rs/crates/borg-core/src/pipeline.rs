@@ -517,6 +517,11 @@ impl Pipeline {
             PhaseType::Validate => self.run_validate_phase(&task, &phase, &mode).await?,
             PhaseType::Rebase => self.run_rebase_phase(&task, &phase, &mode).await?,
             PhaseType::LintFix => self.run_lint_fix_phase(&task, &phase, &mode).await?,
+            PhaseType::HumanReview => {
+                // Task sits in this status until a human acts via the API.
+                // Do not dispatch to any backend — just return.
+                return Ok(());
+            }
         }
 
         // Async embedding indexing for completed tasks
@@ -2168,6 +2173,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
+                review_status: None,
+                revision_count: 0,
             };
             match self.db.insert_task(&task) {
                 Ok(id) => {
@@ -2258,6 +2265,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
+                review_status: None,
+                revision_count: 0,
         };
 
         let task_suffix =
@@ -2365,6 +2374,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
+                review_status: None,
+                revision_count: 0,
                     };
                     match self.db.insert_task(&task) {
                         Ok(id) => info!("seed created task #{id}: {}", task.title),
@@ -2477,6 +2488,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
+                review_status: None,
+                revision_count: 0,
         };
         match self.db.insert_task(&task) {
             Ok(id) => {
@@ -2848,6 +2861,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
+                review_status: None,
+                revision_count: 0,
             };
             match self.db.insert_task(&task) {
                 Ok(id) => {

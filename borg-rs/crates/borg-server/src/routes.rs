@@ -13,7 +13,7 @@ use borg_core::{
     db::{Db, LegacyEvent, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
     modes::all_modes,
     pipeline::PipelineEvent,
-    types::{PhaseConfig, PhaseContext, PipelineMode, RepoConfig, Task},
+    types::{PhaseConfig, PhaseContext, PhaseType, PipelineMode, RepoConfig, Task},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -1812,6 +1812,8 @@ pub(crate) async fn create_task(
         started_at: None,
         completed_at: None,
         duration_secs: None,
+                    review_status: None,
+                    revision_count: 0,
     };
     let id = state.db.insert_task(&task).map_err(internal)?;
     let _ = state.db.log_event_full(Some(id), None, Some(task.project_id).filter(|&p| p > 0), "api", "task.created", &json!({ "title": task.title }));
@@ -1828,6 +1830,90 @@ pub(crate) async fn patch_task(
     let desc = body.description.as_deref().unwrap_or(&task.description);
     state.db.update_task_description(id, title, desc).map_err(internal)?;
     Ok(StatusCode::OK)
+}
+
+// ── Human review actions ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct ReviewAction {
+    #[serde(default)]
+    feedback: Option<String>,
+}
+
+pub(crate) async fn approve_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    // Resolve the mode and find the current phase to advance
+    let mode = borg_core::modes::get_mode(&task.mode)
+        .or_else(|| {
+            state.db.get_config("custom_modes").ok().flatten()
+                .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
+                .and_then(|modes| modes.into_iter().find(|m| m.name == task.mode))
+        })
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let phase = mode.get_phase(&task.status).ok_or(StatusCode::BAD_REQUEST)?;
+    if phase.phase_type != PhaseType::HumanReview {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let next = phase.next.clone();
+    state.db.set_review_status(id, "approved").map_err(internal)?;
+    state.db.update_task_status(id, &next, None).map_err(internal)?;
+    let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
+    let _ = state.db.log_event_full(Some(id), None, pid, "reviewer", "task.approved", &json!({}));
+    Ok(Json(json!({ "ok": true, "next_phase": next })))
+}
+
+pub(crate) async fn reject_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<ReviewAction>,
+) -> Result<Json<Value>, StatusCode> {
+    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let reason = body.feedback.unwrap_or_else(|| "Rejected by reviewer".into());
+    state.db.set_review_status(id, "rejected").map_err(internal)?;
+    state.db.update_task_status(id, "failed", Some(&reason)).map_err(internal)?;
+    let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
+    let _ = state.db.log_event_full(Some(id), None, pid, "reviewer", "task.rejected", &json!({ "reason": reason }));
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub(crate) async fn request_revision(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<ReviewAction>,
+) -> Result<Json<Value>, StatusCode> {
+    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let feedback = body.feedback.unwrap_or_else(|| "Revision requested".into());
+
+    // Find the previous agent phase by walking backwards through the mode's phases
+    let mode = borg_core::modes::get_mode(&task.mode)
+        .or_else(|| {
+            state.db.get_config("custom_modes").ok().flatten()
+                .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
+                .and_then(|modes| modes.into_iter().find(|m| m.name == task.mode))
+        })
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Find the last agent phase before the current review phase
+    let mut target_phase = "implement".to_string(); // default fallback
+    for p in &mode.phases {
+        if p.name == task.status {
+            break;
+        }
+        if p.phase_type == PhaseType::Agent {
+            target_phase = p.name.clone();
+        }
+    }
+
+    state.db.set_review_status(id, "revision_requested").map_err(internal)?;
+    state.db.increment_revision_count(id).map_err(internal)?;
+    state.db.insert_task_message(id, "user", &feedback).map_err(internal)?;
+    state.db.update_task_status(id, &target_phase, None).map_err(internal)?;
+    let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
+    let _ = state.db.log_event_full(Some(id), None, pid, "reviewer", "task.revision_requested", &json!({ "feedback": feedback }));
+    Ok(Json(json!({ "ok": true, "target_phase": target_phase })))
 }
 
 pub(crate) async fn retry_task(
@@ -1884,7 +1970,7 @@ pub(crate) async fn unblock_task(
             let next_phase = borg_core::modes::get_mode(&task.mode)
                 .map(|m| {
                     m.phases.iter()
-                        .find(|p| p.phase_type == borg_core::types::PhaseType::Agent)
+                        .find(|p| p.phase_type == PhaseType::Agent)
                         .map(|p| p.name.clone())
                         .unwrap_or_else(|| "implement".to_string())
                 })
@@ -2064,6 +2150,8 @@ pub(crate) async fn approve_proposal(
         started_at: None,
         completed_at: None,
         duration_secs: None,
+                    review_status: None,
+                    revision_count: 0,
     };
     let task_id = state.db.insert_task(&task).map_err(internal)?;
     Ok(Json(json!({ "task_id": task_id })))
@@ -2160,6 +2248,8 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 started_at: None,
                 completed_at: None,
                 duration_secs: None,
+                    review_status: None,
+                    revision_count: 0,
             };
 
             let phase = PhaseConfig {

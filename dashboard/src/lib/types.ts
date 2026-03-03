@@ -15,6 +15,8 @@ export interface Task {
   started_at?: string;
   completed_at?: string;
   duration_secs?: number;
+  review_status?: string;
+  revision_count?: number;
 }
 
 export interface TaskDetail extends Task {
@@ -125,8 +127,8 @@ export interface PipelineMode {
   phases: PhaseInfo[];
 }
 
-export type PhaseType = "setup" | "agent" | "rebase" | "lint_fix";
-export type IntegrationType = "git_pr" | "none";
+export type PhaseType = "setup" | "agent" | "rebase" | "lint_fix" | "human_review" | "validate";
+export type IntegrationType = "git_pr" | "git_branch" | "none";
 export type SeedOutputType = "task" | "proposal";
 
 export interface PhaseConfigFull {
@@ -148,6 +150,7 @@ export interface PhaseConfigFull {
   next: string;
   fresh_session: boolean;
   fix_instruction: string;
+  retry_phase: string;
 }
 
 export interface SeedConfigFull {
@@ -202,6 +205,8 @@ export interface ProjectTask {
   started_at?: string;
   completed_at?: string;
   duration_secs?: number;
+  review_status?: string;
+  revision_count?: number;
 }
 
 export interface ProjectDocument {

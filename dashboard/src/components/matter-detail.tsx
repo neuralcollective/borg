@@ -18,7 +18,7 @@ import {
   sseUrl,
   tokenReady,
 } from "@/lib/api";
-import type { ConflictHit, Deadline, AuditEvent } from "@/lib/api";
+import type { ConflictHit, Deadline } from "@/lib/api";
 import type { Project, ProjectTask, ProjectDocument } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { PhaseTracker } from "./phase-tracker";
@@ -26,7 +26,7 @@ import { BorgingIndicator } from "./borging";
 import { ChatMarkdown } from "./chat-markdown";
 import { useDictation } from "@/lib/dictation";
 import { cn } from "@/lib/utils";
-import { retryTask, patchTask } from "@/lib/api";
+import { retryTask, patchTask, approveTask, rejectTask, requestRevision, useFullModes } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronUp, Edit2, Check, X, FileText, RotateCcw, Mic, MicOff, Trash2 } from "lucide-react";
 
@@ -765,12 +765,15 @@ const ACTIVE_STATUSES = new Set(["implement", "review", "validate", "lint_fix", 
 
 function TasksTab({ projectId }: { projectId: number }) {
   const { data: tasks = [], isLoading } = useProjectTasks(projectId);
+  const { data: fullModes = [] } = useFullModes();
   const queryClient = useQueryClient();
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [expandedStream, setExpandedStream] = useState<number | null>(null);
   const [expandedResults, setExpandedResults] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [reviewingId, setReviewingId] = useState<number | null>(null);
+  const [revisionFeedback, setRevisionFeedback] = useState("");
   const [editDesc, setEditDesc] = useState("");
 
   if (isLoading) {
@@ -797,18 +800,39 @@ function TasksTab({ projectId }: { projectId: number }) {
       )}
       {tasks.map((task) => {
         const isActive = ACTIVE_STATUSES.has(task.status);
+        const isHumanReview = fullModes.some((m) =>
+          m.name === task.mode &&
+          m.phases.some((p) => p.name === task.status && p.phase_type === "human_review")
+        );
+        const reviewPhaseInstruction = isHumanReview
+          ? fullModes.find((m) => m.name === task.mode)
+              ?.phases.find((p) => p.name === task.status)?.instruction
+          : undefined;
         return (
           <div
             key={task.id}
-            className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3"
+            className={cn(
+              "rounded-lg border p-3",
+              isHumanReview
+                ? "border-emerald-500/20 bg-emerald-500/[0.03]"
+                : "border-white/[0.06] bg-white/[0.02]"
+            )}
           >
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-[10px] text-zinc-600">#{task.id}</span>
                   <StatusBadge status={task.status} />
-                  {isActive && (
+                  {isHumanReview && (
+                    <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-400">
+                      awaiting review
+                    </span>
+                  )}
+                  {isActive && !isHumanReview && (
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" title="Running" />
+                  )}
+                  {task.revision_count != null && task.revision_count > 0 && (
+                    <span className="text-[9px] text-amber-500/80">rev {task.revision_count}</span>
                   )}
                   {task.mode && task.mode !== "lawborg" && task.mode !== "legal" && (
                     <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
@@ -892,6 +916,76 @@ function TasksTab({ projectId }: { projectId: number }) {
                   className="w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-300 outline-none focus:border-amber-500/40 resize-y"
                   placeholder="Description / instructions"
                 />
+              </div>
+            )}
+            {/* Human review panel */}
+            {isHumanReview && (
+              <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] p-3 space-y-2">
+                {reviewPhaseInstruction && (
+                  <div className="text-[11px] text-emerald-400/70 leading-relaxed">
+                    {reviewPhaseInstruction}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      await approveTask(task.id);
+                      queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
+                    }}
+                    className="rounded-md bg-emerald-500/15 px-3 py-1.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => setReviewingId(reviewingId === task.id ? null : task.id)}
+                    className="rounded-md bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                  >
+                    Request Revision
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (confirm("Reject this task? It will be marked as failed.")) {
+                        await rejectTask(task.id, "Rejected by reviewer");
+                        queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
+                      }
+                    }}
+                    className="rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+                  >
+                    Reject
+                  </button>
+                </div>
+                {reviewingId === task.id && (
+                  <div className="space-y-1.5">
+                    <textarea
+                      value={revisionFeedback}
+                      onChange={(e) => setRevisionFeedback(e.target.value)}
+                      rows={3}
+                      className="w-full rounded-md border border-amber-500/20 bg-black/30 px-2.5 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-amber-500/40 resize-y placeholder:text-zinc-600"
+                      placeholder="Describe what needs to change..."
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={async () => {
+                          if (!revisionFeedback.trim()) return;
+                          await requestRevision(task.id, revisionFeedback.trim());
+                          setRevisionFeedback("");
+                          setReviewingId(null);
+                          queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
+                        }}
+                        disabled={!revisionFeedback.trim()}
+                        className="rounded-md bg-amber-500/15 px-3 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/25 disabled:opacity-40 transition-colors"
+                      >
+                        Send Revision Request
+                      </button>
+                      <button
+                        onClick={() => { setReviewingId(null); setRevisionFeedback(""); }}
+                        className="text-[11px] text-zinc-600 hover:text-zinc-400"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <div className="mt-2">
