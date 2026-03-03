@@ -121,8 +121,8 @@ fi
 if [ "$exitcode" -eq 0 ]; then
     log_event "{\"type\":\"container_event\",\"event\":\"agent_complete\"}"
 else
-    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | tr '\n' ' ' | sed 's/"/\\"/g')
-    log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":\"${STDERR_TAIL}\"}"
+    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | bun -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(s)));")
+    log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":${STDERR_TAIL}}"
 fi
 
 # Run test/lint/compile checks before committing (only when a repo was cloned)
