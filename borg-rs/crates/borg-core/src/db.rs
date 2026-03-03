@@ -1438,6 +1438,9 @@ impl Db {
         Ok(n)
     }
 
+    // Maximum rows fetched in a single search scan to prevent unbounded memory use.
+    pub const SEARCH_SCAN_LIMIT: usize = 10_000;
+
     pub fn search_embeddings(
         &self,
         query_embedding: &[f32],
@@ -1445,14 +1448,15 @@ impl Db {
         project_id: Option<i64>,
     ) -> Result<Vec<crate::knowledge::EmbeddingSearchResult>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let scan_cap = Self::SEARCH_SCAN_LIMIT as i64;
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project_id {
             Some(pid) => (
-                "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1".to_string(),
-                vec![Box::new(pid) as Box<dyn rusqlite::types::ToSql>],
+                "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1 LIMIT ?2".to_string(),
+                vec![Box::new(pid) as Box<dyn rusqlite::types::ToSql>, Box::new(scan_cap)],
             ),
             None => (
-                "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings".to_string(),
-                vec![],
+                "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings LIMIT ?1".to_string(),
+                vec![Box::new(scan_cap) as Box<dyn rusqlite::types::ToSql>],
             ),
         };
         let mut stmt = conn.prepare(&sql)?;
