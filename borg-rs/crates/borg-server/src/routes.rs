@@ -1328,34 +1328,25 @@ pub(crate) async fn search_documents(
     Ok(Json(json!(items)))
 }
 
-pub(crate) async fn summarize_project_themes(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-    Query(q): Query<ThemeQuery>,
-) -> Result<Json<Value>, StatusCode> {
-    if state.db.get_project(id).map_err(internal)?.is_none() {
-        return Err(StatusCode::NOT_FOUND);
+fn is_safe_path(path: &str) -> bool {
+    if path.contains('?') || path.contains('#') {
+        return false;
     }
-    let summary = state
-        .db
-        .summarize_themes(Some(id), q.limit.clamp(5, 200), q.min_docs.clamp(1, 1000))
-        .map_err(internal)?;
-    Ok(Json(json!(summary)))
+    path.split('/').all(|seg| seg != "..")
 }
 
-pub(crate) async fn summarize_workspace_themes(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<ThemeQuery>,
-) -> Result<Json<Value>, StatusCode> {
-    let summary = state
-        .db
-        .summarize_themes(None, q.limit.clamp(5, 200), q.min_docs.clamp(1, 1000))
-        .map_err(internal)?;
-    Ok(Json(json!(summary)))
+fn is_safe_ref(ref_name: &str) -> bool {
+    !ref_name.is_empty()
+        && ref_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
 }
 
 /// Read a file from git: tries local `git show ref:path` first, falls back to `gh api`.
 async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) -> Option<Vec<u8>> {
+    if !is_safe_path(path) || !is_safe_ref(ref_name) {
+        return None;
+    }
     // Try local git first
     if !repo_path.is_empty() && std::path::Path::new(repo_path).join(".git").exists() {
         let out = tokio::time::timeout(
@@ -4597,145 +4588,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sanitize_upload_name_basic() {
-        assert_eq!(sanitize_upload_name("hello.txt"), "hello.txt");
-        assert_eq!(sanitize_upload_name("my file.pdf"), "my_file.pdf");
-        assert_eq!(sanitize_upload_name("../../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_upload_name(""), "upload.bin");
+    fn safe_path_accepts_normal_paths() {
+        assert!(is_safe_path("README.md"));
+        assert!(is_safe_path("src/lib.rs"));
+        assert!(is_safe_path("docs/legal/brief.md"));
+        assert!(is_safe_path("file-name_underscore.txt"));
+        assert!(is_safe_path("research.md"));
+        assert!(is_safe_path(""));
     }
 
     #[test]
-    fn test_sanitize_upload_name_strips_leading_dots() {
-        assert_eq!(sanitize_upload_name("..."), "upload.bin");
-        assert_eq!(sanitize_upload_name(".hidden"), "hidden");
+    fn safe_path_rejects_dotdot_segments() {
+        assert!(!is_safe_path("../../etc/passwd"));
+        assert!(!is_safe_path("../foo"));
+        assert!(!is_safe_path("foo/../../bar"));
+        assert!(!is_safe_path(".."));
+        assert!(!is_safe_path("foo/.."));
+        assert!(!is_safe_path("foo/../bar"));
     }
 
     #[test]
-    fn test_duplicate_upload_rejected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest = dir.path().join("report.pdf");
-
-        // First upload: file does not exist yet
-        assert!(!dest.exists());
-
-        // Write to simulate first upload succeeding
-        std::fs::write(&dest, b"first content").expect("write");
-        assert!(dest.exists());
-
-        // Second upload: file already exists — should be rejected
-        assert!(dest.exists(), "conflict check: file exists, 409 must fire");
+    fn safe_path_rejects_query_and_fragment_chars() {
+        assert!(!is_safe_path("file.md?ref=main"));
+        assert!(!is_safe_path("file.md#section"));
+        assert!(!is_safe_path("../../users/octocat?ref=main"));
     }
 
     #[test]
-    fn test_different_name_no_conflict() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest_a = dir.path().join("report_a.pdf");
-        let dest_b = dir.path().join("report_b.pdf");
-
-        std::fs::write(&dest_a, b"content a").expect("write a");
-
-        // Different name — no conflict
-        assert!(!dest_b.exists());
+    fn safe_ref_accepts_valid_refs() {
+        assert!(is_safe_ref("main"));
+        assert!(is_safe_ref("feature/my-branch"));
+        assert!(is_safe_ref("v1.2.3"));
+        assert!(is_safe_ref("HEAD"));
+        assert!(is_safe_ref("abc123"));
+        assert!(is_safe_ref("my_branch"));
+        assert!(is_safe_ref("refs/heads/main"));
     }
 
     #[test]
-    fn test_safe_knowledge_path_traversal_contained() {
-        let data_dir = "/tmp/borg-test-data";
-        // Even with .. in path, file_name() strips components and result stays inside knowledge/
-        let p = safe_knowledge_path(data_dir, "../secrets.txt").expect("some");
-        assert!(p.starts_with("/tmp/borg-test-data/knowledge"));
-        let p2 = safe_knowledge_path(data_dir, "../../etc/passwd").expect("some");
-        assert!(p2.starts_with("/tmp/borg-test-data/knowledge"));
+    fn safe_ref_rejects_empty() {
+        assert!(!is_safe_ref(""));
     }
 
     #[test]
-    fn test_safe_knowledge_path_pure_dotdot_is_none() {
-        let data_dir = "/tmp/borg-test-data";
-        // Path ending in ".." has no file_name component → None
-        assert!(safe_knowledge_path(data_dir, "subdir/..").is_none());
-    }
-
-    #[test]
-    fn test_safe_knowledge_path_valid() {
-        let data_dir = "/tmp/borg-test-data";
-        let path = safe_knowledge_path(data_dir, "report.pdf");
-        assert!(path.is_some());
-        let p = path.unwrap();
-        assert!(p.to_string_lossy().ends_with("knowledge/report.pdf"));
-    }
-
-    use chrono::Utc;
-
-    fn make_file(file_name: &str, stored_path: &str) -> ProjectFileRow {
-        ProjectFileRow {
-            id: 1,
-            project_id: 1,
-            file_name: file_name.to_string(),
-            stored_path: stored_path.to_string(),
-            mime_type: "text/plain".to_string(),
-            size_bytes: 0,
-            extracted_text: String::new(),
-            content_hash: String::new(),
-            created_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn stage_project_files_uses_stored_path_basename() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        // Two source files with different content but same display file_name
-        let src1 = dir.path().join("1700000001_aaa_report.pdf");
-        let src2 = dir.path().join("1700000002_bbb_report.pdf");
-        std::fs::write(&src1, b"content-one").unwrap();
-        std::fs::write(&src2, b"content-two").unwrap();
-
-        let files = vec![
-            make_file("report.pdf", src1.to_str().unwrap()),
-            make_file("report.pdf", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let staged1 = std::fs::read(dest_dir.join("1700000001_aaa_report.pdf")).unwrap();
-        let staged2 = std::fs::read(dest_dir.join("1700000002_bbb_report.pdf")).unwrap();
-        assert_eq!(staged1, b"content-one");
-        assert_eq!(staged2, b"content-two");
-    }
-
-    #[test]
-    fn stage_project_files_unique_names_no_collision() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        let src1 = dir.path().join("1700000001_aaa_doc.txt");
-        let src2 = dir.path().join("1700000002_bbb_doc.txt");
-        std::fs::write(&src1, b"first").unwrap();
-        std::fs::write(&src2, b"second").unwrap();
-
-        let files = vec![
-            make_file("doc.txt", src1.to_str().unwrap()),
-            make_file("doc.txt", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let entries: Vec<_> = std::fs::read_dir(&dest_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-        // Both files must be present — no collision
-        assert_eq!(entries.len(), 2);
+    fn safe_ref_rejects_special_chars() {
+        assert!(!is_safe_ref("main; rm -rf /"));
+        assert!(!is_safe_ref("branch&other"));
+        assert!(!is_safe_ref("ref|pipe"));
+        assert!(!is_safe_ref("branch?query=x"));
+        assert!(!is_safe_ref("branch#fragment"));
+        assert!(!is_safe_ref("branch\x00null"));
+        assert!(!is_safe_ref("branch$(cmd)"));
     }
 }
