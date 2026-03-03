@@ -34,24 +34,9 @@ pub(crate) fn internal(e: impl std::fmt::Display) -> StatusCode {
 }
 
 fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
-    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
-    let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut buf = 0u32;
-    let mut bits = 0u32;
-    for c in clean.bytes() {
-        if c == b'=' { break; }
-        let val = table.iter().position(|&t| t == c)
-            .ok_or_else(|| anyhow::anyhow!("invalid base64 char"))? as u32;
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Ok(out)
+    STANDARD.decode(&clean).map_err(|e| anyhow::anyhow!("base64 decode error: {e}"))
 }
 
 // ── Request body types ────────────────────────────────────────────────────
@@ -3561,3 +3546,50 @@ pub(crate) async fn get_task_container(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base64_decode_basic() {
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn test_base64_decode_no_padding() {
+        // "Man" encodes to "TWFu" (no padding needed)
+        assert_eq!(base64_decode("TWFu").unwrap(), b"Man");
+    }
+
+    #[test]
+    fn test_base64_decode_strips_whitespace() {
+        let b64_with_newlines = "aGVs\nbG8=";
+        assert_eq!(base64_decode(b64_with_newlines).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn test_base64_decode_empty() {
+        assert_eq!(base64_decode("").unwrap(), b"");
+    }
+
+    #[test]
+    fn test_base64_decode_invalid_char() {
+        assert!(base64_decode("aGVs!G8=").is_err());
+    }
+
+    #[test]
+    fn test_base64_decode_roundtrip() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let original = b"hello world, this is a test of the base64 decoder";
+        let encoded = STANDARD.encode(original);
+        assert_eq!(base64_decode(&encoded).unwrap(), original);
+    }
+
+    #[test]
+    fn test_base64_decode_binary_data() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let data: Vec<u8> = (0u8..=255).collect();
+        let encoded = STANDARD.encode(&data);
+        assert_eq!(base64_decode(&encoded).unwrap(), data);
+    }
+}
