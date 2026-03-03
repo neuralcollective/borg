@@ -228,6 +228,46 @@ pub async fn index_task_embeddings(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{bytes_to_embedding, embedding_to_bytes};
+
+    #[test]
+    fn single_f32_round_trips_exactly() {
+        let val = 1.234_567_8_f32;
+        let bytes = embedding_to_bytes(&[val]);
+        let back = bytes_to_embedding(&bytes);
+        assert_eq!(back, vec![val]);
+    }
+
+    #[test]
+    fn multi_element_vector_round_trips_exactly() {
+        let vec = vec![0.0_f32, 1.0, -1.0, f32::MAX, f32::MIN_POSITIVE, f32::NAN];
+        let bytes = embedding_to_bytes(&vec);
+        let back = bytes_to_embedding(&bytes);
+        assert_eq!(back.len(), vec.len());
+        for (a, b) in vec.iter().zip(back.iter()) {
+            // NaN != NaN so compare bits directly
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+    }
+
+    #[test]
+    fn byte_count_is_four_times_length() {
+        let vec = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0];
+        let bytes = embedding_to_bytes(&vec);
+        assert_eq!(bytes.len(), 4 * vec.len());
+    }
+
+    #[test]
+    fn non_multiple_of_four_truncates_cleanly() {
+        // 9 bytes → only the first 8 (two f32s) are decoded; no panic
+        let bytes = vec![0u8; 9];
+        let back = bytes_to_embedding(&bytes);
+        assert_eq!(back.len(), 2);
+    }
+}
+
 pub async fn get_prior_research(
     db: &Db,
     embed_client: &EmbeddingClient,
