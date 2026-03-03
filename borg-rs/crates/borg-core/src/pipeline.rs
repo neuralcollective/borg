@@ -560,6 +560,14 @@ impl Pipeline {
             crate::knowledge::index_task_embeddings(&db, embed, task.id, pid, &task.repo_path).await;
         }
 
+        // Async embedding indexing for completed tasks
+        if phase.next == "done" && !task.repo_path.is_empty() {
+            let db = Arc::clone(&self.db);
+            let embed = &self.embed_client;
+            let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
+            crate::knowledge::index_task_embeddings(&db, embed, task.id, pid, &task.repo_path).await;
+        }
+
         Ok(())
     }
 
