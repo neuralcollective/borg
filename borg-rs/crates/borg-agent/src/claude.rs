@@ -428,6 +428,12 @@ impl AgentBackend for ClaudeBackend {
             None
         };
 
+        let real_home = std::env::var("HOME").unwrap_or_default();
+        let rustup_home = std::env::var("RUSTUP_HOME")
+            .unwrap_or_else(|_| format!("{real_home}/.rustup"));
+        let cargo_home = std::env::var("CARGO_HOME")
+            .unwrap_or_else(|_| format!("{real_home}/.cargo"));
+
         let mut child = match effective_mode {
             SandboxMode::Bwrap => {
                 // Worktree .git file points to main repo's .git/worktrees/<name> — make
@@ -438,6 +444,8 @@ impl AgentBackend for ClaudeBackend {
                 Sandbox::bwrap_command(&writable, &ctx.worktree_path, &full_cmd)
                     .kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
+                    .env("RUSTUP_HOME", &rustup_home)
+                    .env("CARGO_HOME", &cargo_home)
                     .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -489,11 +497,14 @@ impl AgentBackend for ClaudeBackend {
                     (node_vol, "/workspace/repo/node_modules".to_string()),
                     (format!("borg-cache-{repo_name}-bun-cache"), "/home/bun/.bun/install/cache".to_string()),
                     (format!("borg-cache-{repo_name}-cargo-registry"), "/home/bun/.cargo/registry".to_string()),
+                    ("borg-cache-rustup".to_string(), "/home/bun/.rustup".to_string()),
                 ];
 
                 let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
                 let mut env_kv: Vec<(String, String)> = vec![
                     ("HOME".to_string(), ctx.session_dir.clone()),
+                    ("RUSTUP_HOME".to_string(), "/home/bun/.rustup".to_string()),
+                    ("CARGO_HOME".to_string(), "/home/bun/.cargo".to_string()),
                     ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), oauth_token.clone()),
                 ];
                 if !gh_token.is_empty() {
@@ -552,15 +563,16 @@ impl AgentBackend for ClaudeBackend {
             SandboxMode::Direct => {
                 let path = std::env::var("PATH")
                     .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
-                let home = std::env::var("HOME").unwrap_or_default();
                 let augmented_path = format!(
-                    "{path}:{home}/.local/bin:/usr/local/bin"
+                    "{path}:{real_home}/.local/bin:/usr/local/bin"
                 );
                 Command::new(&self.claude_bin)
                     .args(&full_cmd[1..])
                     .kill_on_drop(true)
                     .current_dir(&ctx.worktree_path)
                     .env("HOME", &ctx.session_dir)
+                    .env("RUSTUP_HOME", &rustup_home)
+                    .env("CARGO_HOME", &cargo_home)
                     .env("PATH", &augmented_path)
                     .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
                     .stdout(Stdio::piped())
