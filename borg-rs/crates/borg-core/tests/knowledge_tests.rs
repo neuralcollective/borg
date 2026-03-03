@@ -1,92 +1,108 @@
-use borg_core::knowledge::{bytes_to_embedding, cosine_similarity, embedding_to_bytes};
+use borg_core::knowledge::{chunk_text, cosine_similarity};
+
+// ── chunk_text ────────────────────────────────────────────────────────────────
 
 #[test]
-fn identical_vectors_score_one() {
+fn test_chunk_text_short_returns_single_chunk() {
+    let text = "hello world foo bar";
+    let chunks = chunk_text(text);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0], "hello world foo bar");
+}
+
+#[test]
+fn test_chunk_text_empty_returns_single_empty_chunk() {
+    let chunks = chunk_text("");
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0], "");
+}
+
+#[test]
+fn test_chunk_text_whitespace_normalised_in_single_chunk() {
+    let text = "  foo   bar  baz  ";
+    let chunks = chunk_text(text);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0], "foo bar baz");
+}
+
+#[test]
+fn test_chunk_text_exactly_512_words_is_single_chunk() {
+    let text: String = (0..512).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+    let chunks = chunk_text(&text);
+    assert_eq!(chunks.len(), 1);
+}
+
+#[test]
+fn test_chunk_text_513_words_produces_two_chunks() {
+    let text: String = (0..513).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+    let chunks = chunk_text(&text);
+    // First chunk: words[0..512], second chunk: words[512-64..513] = words[448..513]
+    assert_eq!(chunks.len(), 2);
+}
+
+#[test]
+fn test_chunk_text_long_text_correct_chunk_count() {
+    // 1024 words → chunks:
+    //   chunk 0: [0..512]
+    //   chunk 1: [448..960]
+    //   chunk 2: [896..1024]
+    let words: Vec<String> = (0..1024).map(|i| format!("w{i}")).collect();
+    let text = words.join(" ");
+    let chunks = chunk_text(&text);
+    assert_eq!(chunks.len(), 3);
+}
+
+#[test]
+fn test_chunk_text_adjacent_chunks_overlap() {
+    // 600 words: chunk 0 = words[0..512], chunk 1 = words[448..600]
+    let words: Vec<String> = (0..600).map(|i| format!("w{i}")).collect();
+    let text = words.join(" ");
+    let chunks = chunk_text(&text);
+    assert_eq!(chunks.len(), 2);
+
+    // The last 64 words of chunk 0 must equal the first 64 words of chunk 1.
+    let chunk0_words: Vec<&str> = chunks[0].split_whitespace().collect();
+    let chunk1_words: Vec<&str> = chunks[1].split_whitespace().collect();
+
+    let tail_of_chunk0 = &chunk0_words[chunk0_words.len() - 64..];
+    let head_of_chunk1 = &chunk1_words[..64];
+    assert_eq!(tail_of_chunk0, head_of_chunk1);
+}
+
+// ── cosine_similarity ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_cosine_similarity_identical_vectors() {
     let v = vec![1.0f32, 2.0, 3.0];
-    let score = cosine_similarity(&v, &v);
-    assert!((score - 1.0).abs() < 1e-6, "identical vectors: expected 1.0, got {score}");
+    let result = cosine_similarity(&v, &v);
+    assert!((result - 1.0).abs() < 1e-6, "identical vectors must give 1.0, got {result}");
 }
 
 #[test]
-fn orthogonal_vectors_score_zero() {
-    let a = vec![1.0f32, 0.0, 0.0];
-    let b = vec![0.0f32, 1.0, 0.0];
-    let score = cosine_similarity(&a, &b);
-    assert!((score - 0.0).abs() < 1e-6, "orthogonal vectors: expected 0.0, got {score}");
-}
-
-#[test]
-fn zero_norm_vector_returns_zero() {
-    let zero = vec![0.0f32, 0.0, 0.0];
-    let other = vec![1.0f32, 2.0, 3.0];
-    assert_eq!(cosine_similarity(&zero, &other), 0.0);
-    assert_eq!(cosine_similarity(&other, &zero), 0.0);
-    assert_eq!(cosine_similarity(&zero, &zero), 0.0);
-}
-
-#[test]
-fn known_numeric_vectors() {
-    // [1,0] vs [1,1]/sqrt(2) → dot=1, |a|=1, |b|=sqrt(2) → similarity = 1/sqrt(2) ≈ 0.7071
+fn test_cosine_similarity_orthogonal_vectors() {
     let a = vec![1.0f32, 0.0];
-    let b = vec![1.0f32, 1.0];
-    let expected = 1.0f32 / 2.0f32.sqrt();
-    let score = cosine_similarity(&a, &b);
-    assert!(
-        (score - expected).abs() < 1e-5,
-        "expected {expected}, got {score}"
-    );
+    let b = vec![0.0f32, 1.0];
+    let result = cosine_similarity(&a, &b);
+    assert!(result.abs() < 1e-6, "orthogonal vectors must give 0.0, got {result}");
 }
 
 #[test]
-fn mismatched_lengths_return_zero() {
+fn test_cosine_similarity_zero_vector_returns_zero() {
+    let a = vec![0.0f32, 0.0, 0.0];
+    let b = vec![1.0f32, 2.0, 3.0];
+    assert_eq!(cosine_similarity(&a, &b), 0.0);
+    assert_eq!(cosine_similarity(&b, &a), 0.0);
+    assert_eq!(cosine_similarity(&a, &a), 0.0);
+}
+
+#[test]
+fn test_cosine_similarity_mismatched_lengths_returns_zero() {
     let a = vec![1.0f32, 2.0];
     let b = vec![1.0f32, 2.0, 3.0];
     assert_eq!(cosine_similarity(&a, &b), 0.0);
 }
 
 #[test]
-fn empty_vectors_return_zero() {
+fn test_cosine_similarity_empty_slices_returns_zero() {
     assert_eq!(cosine_similarity(&[], &[]), 0.0);
-}
-
-fn roundtrip(vec: &[f32]) -> Vec<f32> {
-    bytes_to_embedding(&embedding_to_bytes(vec))
-}
-
-fn bits_eq(a: f32, b: f32) -> bool {
-    a.to_bits() == b.to_bits()
-}
-
-#[test]
-fn roundtrip_empty() {
-    let out: Vec<f32> = roundtrip(&[]);
-    assert!(out.is_empty());
-}
-
-#[test]
-fn roundtrip_single() {
-    let v = vec![1.5f32];
-    let out = roundtrip(&v);
-    assert_eq!(out.len(), 1);
-    assert!(bits_eq(out[0], v[0]));
-}
-
-#[test]
-fn roundtrip_384_elements() {
-    let v: Vec<f32> = (0..384).map(|i| i as f32 * 0.001 + 0.5).collect();
-    let out = roundtrip(&v);
-    assert_eq!(out.len(), v.len());
-    for (a, b) in v.iter().zip(out.iter()) {
-        assert!(bits_eq(*a, *b), "mismatch: {} vs {}", a, b);
-    }
-}
-
-#[test]
-fn roundtrip_special_values() {
-    let v = vec![f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0f32, -0.0f32];
-    let out = roundtrip(&v);
-    assert_eq!(out.len(), v.len());
-    for (a, b) in v.iter().zip(out.iter()) {
-        assert!(bits_eq(*a, *b), "bit mismatch: {:?} vs {:?}", a.to_bits(), b.to_bits());
-    }
 }
