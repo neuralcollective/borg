@@ -80,22 +80,10 @@ if [ -n "$REPO_URL" ]; then
     if [ -n "$MIRROR_PATH" ] && [ -d "$MIRROR_PATH" ]; then
         CLONE_ARGS+=(--reference "$MIRROR_PATH")
     fi
-    git clone "${CLONE_ARGS[@]}" "$REPO_URL" "$CLONE_TMP/src"
-    # Move cloned contents into repo dir (preserves mounted volumes like target/)
-    find "$REPO_DIR" -mindepth 1 -maxdepth 1 ! -name target ! -name node_modules -exec rm -rf {} + 2>/dev/null || true
-    shopt -s dotglob
-    mv "$CLONE_TMP/src"/* "$CLONE_TMP/src"/.* "$REPO_DIR/" 2>/dev/null || true
-    shopt -u dotglob
-    rm -rf "$CLONE_TMP"
+    git clone "${CLONE_ARGS[@]}" -- "$REPO_URL" "$REPO_DIR"
     cd "$REPO_DIR"
     if [ -n "$BRANCH" ]; then
-        # Fetch the task branch if it exists on remote
-        git fetch --depth 50 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
-        if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-            git checkout -b -- "$BRANCH" "origin/$BRANCH"
-        else
-            git checkout -b -- "$BRANCH" "$BASE"
-        fi
+        git checkout -b "$BRANCH" -- "$BASE"
     fi
 
     CLONE_END=$(date +%s%3N)
