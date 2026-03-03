@@ -2,6 +2,7 @@ use borg_core::{
     db::KnowledgeFile,
     types::{PhaseConfig, PhaseContext, Task},
 };
+use tracing::warn;
 
 /// Build the instruction string passed to any agent backend.
 ///
@@ -96,7 +97,10 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
     for file in files {
         if file.inline {
             let path = format!("{}/{}", knowledge_dir, file.file_name);
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                warn!("cannot read knowledge file {path}: {e}");
+                String::new()
+            });
             let content = content.trim();
             if content.is_empty() {
                 s.push_str(&format!("- **{}**", file.file_name));
@@ -122,6 +126,49 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use borg_core::db::KnowledgeFile;
+
+    fn make_file(file_name: &str, description: &str, inline: bool) -> KnowledgeFile {
+        KnowledgeFile {
+            id: 1,
+            file_name: file_name.to_string(),
+            description: description.to_string(),
+            size_bytes: 0,
+            inline,
+            created_at: String::new(),
+            tags: String::new(),
+            category: String::new(),
+            jurisdiction: String::new(),
+            project_id: None,
+        }
+    }
+
+    #[test]
+    fn missing_inline_file_falls_back_to_empty_and_warns() {
+        // A directory that does not exist — read_to_string must fail.
+        let dir = "/tmp/borg_test_nonexistent_dir_12345";
+        let file = make_file("missing.md", "some doc", true);
+        // Should not panic; falls back to the non-inline listing branch.
+        let result = build_knowledge_section(&[file], dir);
+        assert!(result.contains("missing.md"), "file name must appear in output: {result}");
+    }
+
+    #[test]
+    fn existing_inline_file_includes_content() {
+        let dir = std::env::temp_dir();
+        let dir_str = dir.to_str().unwrap();
+        let path = dir.join("borg_test_knowledge_file.md");
+        std::fs::write(&path, "hello world").unwrap();
+        let file = make_file("borg_test_knowledge_file.md", "", true);
+        let result = build_knowledge_section(&[file], dir_str);
+        std::fs::remove_file(&path).ok();
+        assert!(result.contains("hello world"), "inline content missing: {result}");
+    }
 }
 
 /// Read the per-repo prompt from the explicit prompt_file config, or by
