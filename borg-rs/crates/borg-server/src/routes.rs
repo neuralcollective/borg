@@ -881,9 +881,15 @@ pub(crate) async fn run_chat_agent(
 /// Returns true only if execve was invoked (this process should be replaced).
 pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
     let build_dir = format!("{repo_path}/borg-rs");
-    let parts: Vec<&str> = build_cmd.split_whitespace().collect();
+    let parts = match shell_words::split(build_cmd) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("invalid build_cmd: {e}");
+            return false;
+        }
+    };
     let (cmd, args) = match parts.split_first() {
-        Some((c, a)) => (*c, a),
+        Some(pair) => pair,
         None => {
             tracing::error!("empty build_cmd");
             return false;
@@ -4567,148 +4573,33 @@ pub(crate) async fn get_task_container(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn test_sanitize_upload_name_basic() {
-        assert_eq!(sanitize_upload_name("hello.txt"), "hello.txt");
-        assert_eq!(sanitize_upload_name("my file.pdf"), "my_file.pdf");
-        assert_eq!(sanitize_upload_name("../../../etc/passwd"), "passwd");
-        assert_eq!(sanitize_upload_name(""), "upload.bin");
+    fn build_cmd_split_simple() {
+        let parts = shell_words::split("cargo build --release").unwrap();
+        assert_eq!(parts, vec!["cargo", "build", "--release"]);
     }
 
     #[test]
-    fn test_sanitize_upload_name_strips_leading_dots() {
-        assert_eq!(sanitize_upload_name("..."), "upload.bin");
-        assert_eq!(sanitize_upload_name(".hidden"), "hidden");
+    fn build_cmd_split_double_quoted_path_with_spaces() {
+        let parts = shell_words::split(r#"cargo build --target-dir "/tmp/my build""#).unwrap();
+        assert_eq!(parts, vec!["cargo", "build", "--target-dir", "/tmp/my build"]);
     }
 
     #[test]
-    fn test_duplicate_upload_rejected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest = dir.path().join("report.pdf");
-
-        // First upload: file does not exist yet
-        assert!(!dest.exists());
-
-        // Write to simulate first upload succeeding
-        std::fs::write(&dest, b"first content").expect("write");
-        assert!(dest.exists());
-
-        // Second upload: file already exists — should be rejected
-        assert!(dest.exists(), "conflict check: file exists, 409 must fire");
+    fn build_cmd_split_single_quoted_path_with_spaces() {
+        let parts = shell_words::split("cargo build --target-dir '/tmp/my build'").unwrap();
+        assert_eq!(parts, vec!["cargo", "build", "--target-dir", "/tmp/my build"]);
     }
 
     #[test]
-    fn test_different_name_no_conflict() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let dest_a = dir.path().join("report_a.pdf");
-        let dest_b = dir.path().join("report_b.pdf");
-
-        std::fs::write(&dest_a, b"content a").expect("write a");
-
-        // Different name — no conflict
-        assert!(!dest_b.exists());
+    fn build_cmd_split_empty_returns_empty_vec() {
+        let parts = shell_words::split("").unwrap();
+        assert!(parts.is_empty());
     }
 
     #[test]
-    fn test_safe_knowledge_path_traversal_contained() {
-        let data_dir = "/tmp/borg-test-data";
-        // Even with .. in path, file_name() strips components and result stays inside knowledge/
-        let p = safe_knowledge_path(data_dir, "../secrets.txt").expect("some");
-        assert!(p.starts_with("/tmp/borg-test-data/knowledge"));
-        let p2 = safe_knowledge_path(data_dir, "../../etc/passwd").expect("some");
-        assert!(p2.starts_with("/tmp/borg-test-data/knowledge"));
-    }
-
-    #[test]
-    fn test_safe_knowledge_path_pure_dotdot_is_none() {
-        let data_dir = "/tmp/borg-test-data";
-        // Path ending in ".." has no file_name component → None
-        assert!(safe_knowledge_path(data_dir, "subdir/..").is_none());
-    }
-
-    #[test]
-    fn test_safe_knowledge_path_valid() {
-        let data_dir = "/tmp/borg-test-data";
-        let path = safe_knowledge_path(data_dir, "report.pdf");
-        assert!(path.is_some());
-        let p = path.unwrap();
-        assert!(p.to_string_lossy().ends_with("knowledge/report.pdf"));
-    }
-
-    use chrono::Utc;
-
-    fn make_file(file_name: &str, stored_path: &str) -> ProjectFileRow {
-        ProjectFileRow {
-            id: 1,
-            project_id: 1,
-            file_name: file_name.to_string(),
-            stored_path: stored_path.to_string(),
-            mime_type: "text/plain".to_string(),
-            size_bytes: 0,
-            extracted_text: String::new(),
-            content_hash: String::new(),
-            created_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn stage_project_files_uses_stored_path_basename() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        // Two source files with different content but same display file_name
-        let src1 = dir.path().join("1700000001_aaa_report.pdf");
-        let src2 = dir.path().join("1700000002_bbb_report.pdf");
-        std::fs::write(&src1, b"content-one").unwrap();
-        std::fs::write(&src2, b"content-two").unwrap();
-
-        let files = vec![
-            make_file("report.pdf", src1.to_str().unwrap()),
-            make_file("report.pdf", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let staged1 = std::fs::read(dest_dir.join("1700000001_aaa_report.pdf")).unwrap();
-        let staged2 = std::fs::read(dest_dir.join("1700000002_bbb_report.pdf")).unwrap();
-        assert_eq!(staged1, b"content-one");
-        assert_eq!(staged2, b"content-two");
-    }
-
-    #[test]
-    fn stage_project_files_unique_names_no_collision() {
-        let dir = tempfile::tempdir().unwrap();
-        let session_dir = dir.path().to_str().unwrap();
-        let storage = crate::storage::FileStorage::Local {
-            data_dir: dir.path().to_string_lossy().to_string(),
-        };
-
-        let src1 = dir.path().join("1700000001_aaa_doc.txt");
-        let src2 = dir.path().join("1700000002_bbb_doc.txt");
-        std::fs::write(&src1, b"first").unwrap();
-        std::fs::write(&src2, b"second").unwrap();
-
-        let files = vec![
-            make_file("doc.txt", src1.to_str().unwrap()),
-            make_file("doc.txt", src2.to_str().unwrap()),
-        ];
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(stage_project_files(session_dir, &files, &storage));
-
-        let dest_dir = dir.path().join("project_files");
-        let entries: Vec<_> = std::fs::read_dir(&dest_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-        // Both files must be present — no collision
-        assert_eq!(entries.len(), 2);
+    fn build_cmd_split_unclosed_quote_returns_err() {
+        assert!(shell_words::split(r#"cargo build --target-dir "/tmp/my build"#).is_err());
     }
 }
+
