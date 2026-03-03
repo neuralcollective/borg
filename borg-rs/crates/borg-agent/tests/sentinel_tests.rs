@@ -1,3 +1,49 @@
+// Tests for cidfile RAII cleanup (NamedTempFile pattern used in ClaudeBackend).
+
+#[test]
+fn test_cidfile_raii_cleans_up_docker_written_file() {
+    // Simulate the pattern: create NamedTempFile for unique path, remove the
+    // empty pre-created file so Docker can write to the path, then verify the
+    // handle cleans up the Docker-written file when dropped.
+    let tf = tempfile::Builder::new()
+        .prefix("borg-cid-test-")
+        .suffix(".txt")
+        .tempfile()
+        .expect("failed to create tempfile");
+    let path = tf.path().to_path_buf();
+
+    // Remove empty file so Docker can create it fresh
+    std::fs::remove_file(&path).expect("failed to remove initial file");
+    assert!(!path.exists());
+
+    // Simulate Docker writing the container ID
+    std::fs::write(&path, "abc123containerid\n").expect("failed to write mock cid");
+    assert!(path.exists());
+
+    // Drop simulates end of run_phase
+    drop(tf);
+    assert!(!path.exists(), "cidfile must be cleaned up by NamedTempFile drop");
+}
+
+#[test]
+fn test_cidfile_raii_no_panic_when_docker_never_writes_file() {
+    // Simulate early-exit: Docker never creates the cidfile.
+    // NamedTempFile drop must not panic when file doesn't exist.
+    let tf = tempfile::Builder::new()
+        .prefix("borg-cid-test-")
+        .suffix(".txt")
+        .tempfile()
+        .expect("failed to create tempfile");
+    let path = tf.path().to_path_buf();
+
+    std::fs::remove_file(&path).ok();
+    assert!(!path.exists());
+
+    // Drop with no file present — must not panic
+    drop(tf);
+    assert!(!path.exists());
+}
+
 // Tests for AC9: `extract_phase_result` in `borg_agent::claude`.
 //
 // These tests FAIL initially (fail to compile) because `extract_phase_result`
