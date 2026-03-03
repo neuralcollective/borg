@@ -219,7 +219,17 @@ async fn analyze(
     .map_err(|_| anyhow::anyhow!("observer analyze timed out"))??;
 
     let text = resp["content"][0]["text"].as_str().unwrap_or("{}");
-    let inner: Value = serde_json::from_str(strip_fences(text)).unwrap_or(Value::Null);
+    parse_llm_response(&entry.name, text)
+}
+
+fn parse_llm_response(entry_name: &str, text: &str) -> Result<AnalysisResult> {
+    let inner: Value = serde_json::from_str(strip_fences(text)).map_err(|e| {
+        warn!(
+            "Observer [{}]: failed to parse LLM response: {} (raw: {:?})",
+            entry_name, e, text
+        );
+        anyhow::anyhow!("LLM response parse failed: {}", e)
+    })?;
 
     let triggered = inner["triggered"].as_bool().unwrap_or(false);
     if !triggered {
@@ -533,5 +543,48 @@ mod tests {
         let entries = load_entries(tmp.path().to_str().unwrap());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "t");
+    }
+
+    #[test]
+    fn parse_llm_response_invalid_json_is_error() {
+        let result = parse_llm_response("my-entry", "not valid json at all");
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("LLM response parse failed"));
+    }
+
+    #[test]
+    fn parse_llm_response_empty_string_is_error() {
+        let result = parse_llm_response("my-entry", "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_llm_response_not_triggered() {
+        let result = parse_llm_response("my-entry", r#"{"triggered":false}"#).unwrap();
+        assert!(!result.triggered);
+    }
+
+    #[test]
+    fn parse_llm_response_triggered() {
+        let json = r#"{"triggered":true,"severity":"high","summary":"disk full","recommendation":"clear logs"}"#;
+        let result = parse_llm_response("my-entry", json).unwrap();
+        assert!(result.triggered);
+        assert_eq!(result.severity, Severity::High);
+        assert_eq!(result.summary, "disk full");
+        assert_eq!(result.recommendation, "clear logs");
+    }
+
+    #[test]
+    fn parse_llm_response_fenced_json() {
+        let text = "```json\n{\"triggered\":true,\"severity\":\"low\",\"summary\":\"minor\",\"recommendation\":\"ok\"}\n```";
+        let result = parse_llm_response("my-entry", text).unwrap();
+        assert!(result.triggered);
+        assert_eq!(result.severity, Severity::Low);
+    }
+
+    #[test]
+    fn parse_llm_response_truncated_json_is_error() {
+        let result = parse_llm_response("my-entry", r#"{"triggered":tru"#);
+        assert!(result.is_err());
     }
 }
