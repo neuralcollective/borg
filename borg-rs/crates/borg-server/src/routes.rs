@@ -1174,17 +1174,20 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
         Ok(p) => p,
         Err(e) => {
             tracing::error!("list_untriaged_proposals: {e}");
+            state.triage_running.store(false, std::sync::atomic::Ordering::SeqCst);
             return Json(json!({ "scored": 0 }));
         },
     };
     let count = proposals.len();
     if count == 0 {
+        state.triage_running.store(false, std::sync::atomic::Ordering::SeqCst);
         return Json(json!({ "scored": 0 }));
     }
 
     let db = Arc::clone(&state.db);
     let Some(backend) = state.default_backend("claude") else {
         tracing::error!("triage_proposals: no backends configured");
+        state.triage_running.store(false, std::sync::atomic::Ordering::SeqCst);
         return Json(json!({ "scored": 0 }));
     };
     let model = db
@@ -2073,6 +2076,186 @@ pub(crate) async fn get_task_container(
             Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
         },
         None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::{atomic::AtomicBool, Arc},
+        time::Instant,
+    };
+
+    use axum::extract::State;
+    use borg_core::{
+        config::Config,
+        db::Db,
+        pipeline::PipelineEvent,
+        stream::TaskStreamManager,
+        types::Proposal,
+    };
+    use tokio::sync::{broadcast, Mutex as TokioMutex};
+
+    use crate::AppState;
+
+    fn test_config() -> Config {
+        Config {
+            telegram_token: String::new(),
+            oauth_token: String::new(),
+            assistant_name: String::new(),
+            trigger_pattern: String::new(),
+            data_dir: String::new(),
+            container_image: String::new(),
+            model: String::new(),
+            credentials_path: String::new(),
+            session_max_age_hours: 0,
+            max_consecutive_errors: 0,
+            pipeline_repo: String::new(),
+            pipeline_test_cmd: String::new(),
+            pipeline_lint_cmd: String::new(),
+            backend: String::new(),
+            pipeline_admin_chat: String::new(),
+            release_interval_mins: 0,
+            continuous_mode: false,
+            chat_collection_window_ms: 0,
+            chat_cooldown_ms: 0,
+            agent_timeout_s: 0,
+            max_chat_agents: 0,
+            chat_rate_limit: 0,
+            pipeline_max_agents: 0,
+            web_bind: String::new(),
+            web_port: 0,
+            dashboard_dist_dir: String::new(),
+            container_setup: String::new(),
+            container_memory_mb: 0,
+            container_cpus: 0.0,
+            sandbox_backend: String::new(),
+            pipeline_max_backlog: 0,
+            pipeline_seed_cooldown_s: 0,
+            proposal_promote_threshold: 0,
+            pipeline_tick_s: 0,
+            remote_check_interval_s: 0,
+            mirror_refresh_interval_s: 0,
+            pipeline_agent_cooldown_s: 0,
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            git_committer_name: String::new(),
+            git_committer_email: String::new(),
+            git_via_borg: false,
+            git_claude_coauthor: false,
+            git_user_coauthor: String::new(),
+            watched_repos: Vec::new(),
+            build_cmd: String::new(),
+            self_update_enabled: false,
+            codex_api_key: String::new(),
+            codex_credentials_path: String::new(),
+            discord_token: String::new(),
+            wa_auth_dir: String::new(),
+            wa_disabled: false,
+            observer_config: String::new(),
+        }
+    }
+
+    fn make_state(db: Db, backends: HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>) -> Arc<AppState> {
+        let (log_tx, _) = broadcast::channel::<String>(4);
+        let (pipeline_event_tx, _) = broadcast::channel::<PipelineEvent>(4);
+        let (chat_event_tx, _) = broadcast::channel::<String>(4);
+        Arc::new(AppState {
+            db: Arc::new(db),
+            config: Arc::new(test_config()),
+            api_token: "test".into(),
+            start_time: Instant::now(),
+            log_tx,
+            log_ring: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+            pipeline_event_tx,
+            stream_manager: TaskStreamManager::new(),
+            chat_event_tx,
+            web_sessions: Arc::new(TokioMutex::new(HashMap::new())),
+            backends,
+            force_restart: Arc::new(AtomicBool::new(false)),
+            chat_rate: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            triage_running: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    fn migrated_db() -> Db {
+        let mut db = Db::open(":memory:").unwrap();
+        db.migrate().unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn triage_flag_cleared_on_empty_proposals() {
+        let state = make_state(migrated_db(), HashMap::new());
+        // flag starts false; the function sets it then must clear it on the empty-list path
+        let _ = super::triage_proposals(State(Arc::clone(&state))).await;
+
+        assert!(
+            !state.triage_running.load(std::sync::atomic::Ordering::SeqCst),
+            "triage_running should be false after empty proposal list"
+        );
+    }
+
+    #[tokio::test]
+    async fn triage_flag_cleared_on_no_backend() {
+        let db = migrated_db();
+        let proposal = Proposal {
+            id: 0,
+            repo_path: "test".into(),
+            title: "Test".into(),
+            description: "desc".into(),
+            rationale: "rationale".into(),
+            status: "proposed".into(),
+            created_at: chrono::Utc::now(),
+            triage_score: 0,
+            triage_impact: 0,
+            triage_feasibility: 0,
+            triage_risk: 0,
+            triage_effort: 0,
+            triage_reasoning: String::new(),
+        };
+        db.insert_proposal(&proposal).unwrap();
+
+        let state = make_state(db, HashMap::new());
+        // flag starts false; the function sets it then must clear it on the no-backend path
+        let _ = super::triage_proposals(State(Arc::clone(&state))).await;
+
+        assert!(
+            !state.triage_running.load(std::sync::atomic::Ordering::SeqCst),
+            "triage_running should be false when no backend is configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn triage_flag_cleared_on_db_error() {
+        // Unmigrated DB has no proposals table — list_untriaged_proposals returns Err.
+        let db = Db::open(":memory:").unwrap();
+        let state = make_state(db, HashMap::new());
+        // flag starts false; the function sets it then must clear it on the DB-error path
+        let _ = super::triage_proposals(State(Arc::clone(&state))).await;
+
+        assert!(
+            !state.triage_running.load(std::sync::atomic::Ordering::SeqCst),
+            "triage_running should be false after DB error"
+        );
+    }
+
+    #[tokio::test]
+    async fn triage_guard_rejects_concurrent_calls() {
+        let state = make_state(migrated_db(), HashMap::new());
+        // Simulate flag already set (triage in progress)
+        state.triage_running.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let result = super::triage_proposals(State(Arc::clone(&state))).await;
+
+        let body = result.0;
+        assert_eq!(body["error"], "triage already running");
+        // Flag remains true (we didn't start a new run, so we don't touch the flag)
+        assert!(
+            state.triage_running.load(std::sync::atomic::Ordering::SeqCst),
+            "triage_running should stay true when rejecting a concurrent call"
+        );
     }
 }
 
