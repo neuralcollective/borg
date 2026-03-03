@@ -122,11 +122,22 @@ pub fn legal_mode() -> PipelineMode {
             SeedConfig {
                 name: "regulatory_monitor".into(),
                 label: "Regulatory Monitor".into(),
-                output_type: SeedOutputType::Task,
-                prompt: "Check for recent legislative or regulatory changes that may affect matters \
-                    in this repository. Use federal_register_search for federal rules, \
-                    congress_search_bills for pending legislation, openstates_search_bills for \
-                    state-level changes. Create a task for each change that requires action.".into(),
+                output_type: SeedOutputType::Proposal,
+                prompt: "Scan for recent regulatory, legislative, and case-law developments that \
+                    could materially affect the legal matters in this repository. Check multiple \
+                    sources: use federal_register_search for new federal rules and proposed \
+                    rulemakings, congress_search_bills for pending US legislation, \
+                    openstates_search_bills for relevant state-level bills, \
+                    courtlistener_search_opinions for significant recent decisions in the \
+                    relevant area of law, eurlex_search for EU directives or CJEU rulings, \
+                    and uk_legislation_search for UK statutory instruments or amendments. \
+                    Limit your search to developments from the past 90 days. \
+                    Only generate a proposal if a development is both recent and genuinely \
+                    impactful — meaning it directly alters an applicable legal standard, \
+                    creates a new compliance obligation, or overturns a relied-upon authority. \
+                    Do NOT flag developments that are speculative, tangential, or already \
+                    reflected in the documents. Generate at most 3 proposals total; \
+                    if nothing material is found, generate none.".into(),
                 allowed_tools: String::new(),
                 target_primary_repo: false,
             },
