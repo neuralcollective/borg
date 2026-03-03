@@ -183,6 +183,14 @@ impl Pipeline {
             })
     }
 
+    fn session_dir_for_task(id: i64) -> String {
+        let rel = format!("store/sessions/task-{id}");
+        std::fs::canonicalize(&rel)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&rel))
+            .to_string_lossy()
+            .to_string()
+    }
+
     /// Build a PhaseContext for a task phase.
     fn make_context(
         &self,
@@ -1038,11 +1046,7 @@ minimal changes needed. After editing, do not run the linter yourself — the pi
             return Ok(());
         }
 
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        let session_dir = Self::session_dir_for_task(task.id);
 
         for fix_attempt in 0..2u32 {
             let lint_output_text = format!("{}\n{}", lint_out.stdout, lint_out.stderr)
@@ -1141,11 +1145,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         check_cmd: &str,
         initial_errors: &str,
     ) -> Result<bool> {
-        let session_dir_rel = format!("store/sessions/task-{}", task.id);
-        let session_dir = std::fs::canonicalize(&session_dir_rel)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&session_dir_rel))
-            .to_string_lossy()
-            .to_string();
+        let session_dir = Self::session_dir_for_task(task.id);
 
         let mut errors = initial_errors.to_string();
 
