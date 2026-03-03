@@ -3089,4 +3089,32 @@ mod tests {
         let result = Pipeline::with_user_coauthor("fix: some bug", "Name <email>");
         assert_eq!(result, "fix: some bug\n\nCo-Authored-By: Name <email>");
     }
+
+    #[test]
+    fn derive_compile_check_cargo_test_appends_no_run() {
+        let result = Pipeline::derive_compile_check("cargo test");
+        assert_eq!(result, Some("cargo test --no-run".to_string()));
+    }
+
+    #[test]
+    fn derive_compile_check_just_test_returns_none() {
+        assert_eq!(Pipeline::derive_compile_check("just test"), None);
+    }
+
+    #[test]
+    fn derive_compile_check_bun_test_returns_none() {
+        assert_eq!(Pipeline::derive_compile_check("bun test"), None);
+    }
+
+    #[test]
+    fn derive_compile_check_cargo_test_release_preserves_full_command() {
+        let result = Pipeline::derive_compile_check("cargo test --release");
+        assert_eq!(result, Some("cargo test --release --no-run".to_string()));
+    }
+
+    #[test]
+    fn derive_compile_check_trims_whitespace() {
+        let result = Pipeline::derive_compile_check("  cargo test  ");
+        assert_eq!(result, Some("cargo test --no-run".to_string()));
+    }
 }
