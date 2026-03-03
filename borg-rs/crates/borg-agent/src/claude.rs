@@ -140,6 +140,15 @@ impl ClaudeBackend {
         let branch = format!("task-{}", task.id);
         let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
 
+        // Docker containers need a GitHub URL, not a local path
+        let repo_url = if !ctx.repo_config.repo_slug.is_empty() && !gh_token.is_empty() {
+            format!("https://x-access-token:{gh_token}@github.com/{}.git", ctx.repo_config.repo_slug)
+        } else if !ctx.repo_config.repo_slug.is_empty() {
+            format!("https://github.com/{}.git", ctx.repo_config.repo_slug)
+        } else {
+            task.repo_path.clone()
+        };
+
         let author_name = &self.git_author_name;
         let author_email = &self.git_author_email;
 
@@ -149,7 +158,7 @@ impl ClaudeBackend {
             "systemPrompt": system_prompt,
             "allowedTools": phase.allowed_tools,
             "maxTurns": 200,
-            "repoUrl": task.repo_path,
+            "repoUrl": repo_url,
             "mirrorPath": format!("/mirrors/{repo_name}.git"),
             "branch": branch,
             "base": "origin/main",
