@@ -182,6 +182,52 @@ pub fn codex_has_credentials(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::resolve_tilde;
+    use std::sync::Mutex;
+
+    // Serialize tests that read/write env vars to avoid data races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn tilde_prefix_expands_to_home() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("HOME", "/home/testuser") };
+        assert_eq!(resolve_tilde("~/projects/borg"), "/home/testuser/projects/borg");
+    }
+
+    #[test]
+    fn no_tilde_returns_unchanged() {
+        // No env mutation needed; works regardless of HOME.
+        assert_eq!(resolve_tilde("/absolute/path"), "/absolute/path");
+        assert_eq!(resolve_tilde("relative/path"), "relative/path");
+    }
+
+    #[test]
+    fn tilde_without_slash_not_expanded() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("HOME", "/home/testuser") };
+        assert_eq!(resolve_tilde("~foo/bar"), "~foo/bar");
+        assert_eq!(resolve_tilde("~"), "~");
+    }
+
+    #[test]
+    fn tilde_slash_only_gives_home_with_trailing_slash() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("HOME", "/home/testuser") };
+        // strip_prefix("~/") on "~/" returns "" so result is "$HOME/"
+        assert_eq!(resolve_tilde("~/"), "/home/testuser/");
+    }
+
+    #[test]
+    fn no_home_leaves_tilde_path_unchanged() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var("HOME") };
+        assert_eq!(resolve_tilde("~/projects/borg"), "~/projects/borg");
+    }
+}
+
 pub fn read_oauth_from_credentials(path: &str) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
