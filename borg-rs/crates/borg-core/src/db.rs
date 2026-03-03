@@ -231,10 +231,12 @@ fn normalize_party_name(name: &str) -> String {
 
 const TASK_COLS: &str = "id, title, description, repo_path, branch, status, attempt, \
     max_attempts, last_error, created_by, notify_chat, created_at, \
-    session_id, mode, backend, project_id, task_type";
+    session_id, mode, backend, project_id, task_type, started_at, completed_at, duration_secs";
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let created_at_str: String = row.get(11)?;
+    let started_at: Option<String> = row.get(17)?;
+    let completed_at: Option<String> = row.get(18)?;
     Ok(Task {
         id: row.get(0)?,
         title: row.get(1)?,
@@ -253,6 +255,9 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         backend: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
         project_id: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
         task_type: row.get::<_, Option<String>>(16)?.unwrap_or_default(),
+        started_at: started_at.map(|s| parse_ts(&s)),
+        completed_at: completed_at.map(|s| parse_ts(&s)),
+        duration_secs: row.get(19)?,
     })
 }
 
@@ -437,6 +442,9 @@ impl Db {
             "ALTER TABLE knowledge_files ADD COLUMN category TEXT NOT NULL DEFAULT 'general'",
             "ALTER TABLE knowledge_files ADD COLUMN jurisdiction TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE knowledge_files ADD COLUMN project_id INTEGER",
+            "ALTER TABLE pipeline_tasks ADD COLUMN started_at TEXT",
+            "ALTER TABLE pipeline_tasks ADD COLUMN completed_at TEXT",
+            "ALTER TABLE pipeline_tasks ADD COLUMN duration_secs INTEGER",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -568,11 +576,7 @@ impl Db {
                     Some(task.backend.as_str())
                 },
                 project_id,
-                if task.task_type.is_empty() {
-                    None
-                } else {
-                    Some(task.task_type.as_str())
-                },
+                task.task_type.as_str(),
             ],
         )
         .context("insert_task")?;
@@ -588,6 +592,32 @@ impl Db {
             params![status, error, updated_at, id],
         )
         .context("update_task_status")?;
+        Ok(())
+    }
+
+    pub fn mark_task_started(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_str();
+        conn.execute(
+            "UPDATE pipeline_tasks SET started_at = COALESCE(started_at, ?1) WHERE id = ?2",
+            params![now, id],
+        )
+        .context("mark_task_started")?;
+        Ok(())
+    }
+
+    pub fn mark_task_completed(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_str();
+        conn.execute(
+            "UPDATE pipeline_tasks SET completed_at = ?1, \
+             duration_secs = CASE WHEN started_at IS NOT NULL \
+               THEN CAST((julianday(?1) - julianday(started_at)) * 86400 AS INTEGER) \
+               ELSE NULL END \
+             WHERE id = ?2",
+            params![now, id],
+        )
+        .context("mark_task_completed")?;
         Ok(())
     }
 

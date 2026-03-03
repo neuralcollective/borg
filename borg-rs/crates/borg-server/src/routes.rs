@@ -1786,6 +1786,9 @@ pub(crate) async fn create_task(
         backend: String::new(),
         project_id: body.project_id.unwrap_or(0),
         task_type: body.task_type.unwrap_or_default(),
+        started_at: None,
+        completed_at: None,
+        duration_secs: None,
     };
     let id = state.db.insert_task(&task).map_err(internal)?;
     let _ = state.db.log_event_full(Some(id), None, Some(task.project_id).filter(|&p| p > 0), "api", "task.created", &json!({ "title": task.title }));
@@ -2035,6 +2038,9 @@ pub(crate) async fn approve_proposal(
         backend: String::new(),
         project_id: 0,
         task_type: String::new(),
+        started_at: None,
+        completed_at: None,
+        duration_secs: None,
     };
     let task_id = state.db.insert_task(&task).map_err(internal)?;
     Ok(Json(json!({ "task_id": task_id })))
@@ -2128,6 +2134,9 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
+                started_at: None,
+                completed_at: None,
+                duration_secs: None,
             };
 
             let phase = PhaseConfig {

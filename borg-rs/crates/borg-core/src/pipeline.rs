@@ -503,6 +503,10 @@ impl Pipeline {
             task.id, task.status, task.repo_path, task.title
         );
 
+        if phase.phase_type == PhaseType::Agent {
+            let _ = self.db.mark_task_started(task.id);
+        }
+
         match phase.phase_type {
             PhaseType::Setup => self.setup_branch(&task, &mode).await?,
             PhaseType::Agent => self.run_agent_phase(&task, &phase, &mode).await?,
@@ -1191,6 +1195,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             self.read_task_deadlines(task);
             self.index_task_documents(task);
             self.db.update_task_status(task.id, "done", None)?;
+            let _ = self.db.mark_task_completed(task.id);
             let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
             let _ = self.db.log_event_full(Some(task.id), None, pid, "pipeline", "task.completed", &serde_json::json!({ "title": task.title }));
             match mode.integration {
@@ -2136,6 +2141,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
+                started_at: None,
+                completed_at: None,
+                duration_secs: None,
             };
             match self.db.insert_task(&task) {
                 Ok(id) => {
@@ -2223,6 +2231,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
+                started_at: None,
+                completed_at: None,
+                duration_secs: None,
         };
 
         let task_suffix =
@@ -2327,6 +2338,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
+                started_at: None,
+                completed_at: None,
+                duration_secs: None,
                     };
                     match self.db.insert_task(&task) {
                         Ok(id) => info!("seed created task #{id}: {}", task.title),
@@ -2436,6 +2450,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
+                started_at: None,
+                completed_at: None,
+                duration_secs: None,
         };
         match self.db.insert_task(&task) {
             Ok(id) => {
@@ -2804,6 +2821,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 backend: String::new(),
                 project_id: 0,
                 task_type: String::new(),
+                started_at: None,
+                completed_at: None,
+                duration_secs: None,
             };
             match self.db.insert_task(&task) {
                 Ok(id) => {

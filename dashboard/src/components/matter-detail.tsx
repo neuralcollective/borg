@@ -197,6 +197,15 @@ function fmtDateTime(ts: string): string {
   }
 }
 
+function formatDuration(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+}
+
 // ── Matter header ─────────────────────────────────────────────────────────────
 
 function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () => void }) {
@@ -776,8 +785,16 @@ function TasksTab({ projectId }: { projectId: number }) {
     );
   }
 
+  const totalSecs = tasks.reduce((sum, t) => sum + (t.duration_secs ?? 0), 0);
+
   return (
     <div className="space-y-2 p-4">
+      {totalSecs > 0 && (
+        <div className="text-[11px] text-zinc-500 pb-1">
+          Total time: <span className="text-zinc-300">{formatDuration(totalSecs)}</span>
+          {" · "}{tasks.filter(t => t.duration_secs != null).length} tracked
+        </div>
+      )}
       {tasks.map((task) => {
         const isActive = ACTIVE_STATUSES.has(task.status);
         return (
@@ -883,6 +900,7 @@ function TasksTab({ projectId }: { projectId: number }) {
             <div className="mt-1.5 text-[10px] text-zinc-600">
               created {fmtDateTime(task.created_at)}
               {task.attempt > 0 && ` · attempt ${task.attempt}/${task.max_attempts}`}
+              {task.duration_secs != null && ` · ${formatDuration(task.duration_secs)}`}
             </div>
             {(isActive && expandedStream === task.id) && (
               <TaskStreamMini taskId={task.id} />

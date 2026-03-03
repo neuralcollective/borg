@@ -12,6 +12,9 @@ export interface Task {
   last_error?: string;
   mode?: string;
   backend?: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_secs?: number;
 }
 
 export interface TaskDetail extends Task {
@@ -196,6 +199,9 @@ export interface ProjectTask {
   created_at: string;
   attempt: number;
   max_attempts: number;
+  started_at?: string;
+  completed_at?: string;
+  duration_secs?: number;
 }
 
 export interface ProjectDocument {

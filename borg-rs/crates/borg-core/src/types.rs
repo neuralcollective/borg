@@ -97,6 +97,12 @@ pub struct Task {
     /// Legal task type (research_memo, contract_analysis, etc.). Empty = unspecified.
     #[serde(default)]
     pub task_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<i64>,
 }
 
 /// A user-facing proposal that can be promoted to a Task.
