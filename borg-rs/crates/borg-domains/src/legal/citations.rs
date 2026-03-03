@@ -231,4 +231,47 @@ mod tests {
         let cites = extract_citations(text);
         assert_eq!(cites.iter().filter(|c| c.text == "550 U.S. 124").count(), 1);
     }
+
+    #[test]
+    fn test_company_name_not_a_citation() {
+        // "123 U.S. Inc." has no digit after "U.S." so must not match the reporter pattern
+        let text = "The defendant 123 U.S. Inc. operates nationwide.";
+        let cites = extract_citations(text);
+        assert!(
+            !cites.iter().any(|c| c.reporter == "U.S."),
+            "company suffix should not trigger U.S. reporter match"
+        );
+    }
+
+    #[test]
+    fn test_parse_reporter_parts_triple() {
+        let (reporter, volume, page) = super::parse_reporter_parts("550 U.S. 124");
+        assert_eq!(volume, "550");
+        assert_eq!(reporter, "U.S.");
+        assert_eq!(page, "124");
+    }
+
+    #[test]
+    fn test_statute_section_symbol() {
+        let text = "See 42 U.S.C. § 1983 for the civil rights claim.";
+        let cites = extract_citations(text);
+        let statute = cites.iter().find(|c| c.citation_type == "statute").expect("statute not found");
+        assert!(statute.text.contains('§'));
+        assert!(statute.text.contains("1983"));
+    }
+
+    #[test]
+    fn test_canlii_requires_jurisdiction_parens() {
+        let cites = extract_citations("See 2021 CanLII 12345 (ON) for the ruling.");
+        assert!(
+            cites.iter().any(|c| c.text.contains("2021 CanLII 12345")),
+            "CanLII with jurisdiction should match"
+        );
+
+        let cites = extract_citations("See 2021 CanLII 12345 for the ruling.");
+        assert!(
+            !cites.iter().any(|c| c.text.contains("CanLII")),
+            "CanLII without jurisdiction parens should not match"
+        );
+    }
 }
