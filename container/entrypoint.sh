@@ -163,8 +163,12 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
 
     if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
         git add -A
-        git commit -m "$COMMIT_MSG" || true
-        log_event "{\"type\":\"container_event\",\"event\":\"commit_complete\",\"message\":\"${COMMIT_MSG}\"}"
+        if git commit -m "$COMMIT_MSG"; then
+            log_event "{\"type\":\"container_event\",\"event\":\"commit_complete\",\"message\":\"${COMMIT_MSG}\"}"
+        else
+            log_event "{\"type\":\"container_event\",\"event\":\"commit_failed\",\"message\":\"${COMMIT_MSG}\"}"
+            exit 1
+        fi
     else
         log_event "{\"type\":\"container_event\",\"event\":\"commit_skipped\"}"
     fi
