@@ -1870,7 +1870,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .await?;
 
             if create_out.exit_code != 0 {
-                let err = &create_out.stderr[..create_out.stderr.len().min(300)];
+                let err = truncate_str(&create_out.stderr, 300);
                 if err.contains("No commits between") {
                     info!(
                         "Task #{} {}: no commits vs main, marking merged",
@@ -2003,7 +2003,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         self.db.update_queue_status(entry.id, "queued")?;
                     }
                     Ok(out) if out.exit_code != 0 => {
-                        let err = &out.stderr[..out.stderr.len().min(200)];
+                        let err = truncate_str(&out.stderr, 200);
                         warn!("gh pr merge {}: {}", entry.branch, err);
                         if err.contains("not mergeable")
                             || err.contains("cannot be cleanly created")
@@ -2713,7 +2713,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 warn!(
                     "Self-update: build failed: {}",
-                    &stderr[..stderr.len().min(500)]
+                    truncate_str(&stderr, 500)
                 );
                 self.notify(
                     &self.config.pipeline_admin_chat,
@@ -3184,5 +3184,14 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+/// Truncates `s` to at most `max_chars` Unicode scalar values, returning a
+/// valid UTF-8 slice without panicking on multi-byte characters.
+pub fn truncate_str(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
     }
 }
