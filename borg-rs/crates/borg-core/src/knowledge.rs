@@ -86,6 +86,9 @@ const CHUNK_OVERLAP: usize = 64;
 
 pub fn chunk_text(text: &str) -> Vec<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return vec![];
+    }
     if words.len() <= CHUNK_SIZE {
         return vec![words.join(" ")];
     }
@@ -225,6 +228,60 @@ pub async fn index_task_embeddings(
     }
     if indexed > 0 {
         debug!("indexed {indexed} embeddings for task #{task_id}");
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_words(n: usize) -> String {
+        (0..n).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn empty_string_returns_empty_vec() {
+        assert_eq!(chunk_text(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn fewer_than_512_words_is_single_chunk() {
+        let text = make_words(100);
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn exactly_512_words_is_single_chunk() {
+        let words: Vec<String> = (0..512).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn exactly_513_words_produces_two_chunks_with_correct_boundaries() {
+        let words: Vec<String> = (0..513).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 2);
+        // first chunk: words 0..512
+        assert_eq!(chunks[0], words[..512].join(" "));
+        // second chunk: starts at word 448 (the 449th word), ends at 512
+        assert_eq!(chunks[1], words[448..].join(" "));
+        assert!(chunks[1].starts_with("w448 "));
+    }
+
+    #[test]
+    fn no_whitespace_is_single_chunk() {
+        let text = "abcdefghijklmnopqrstuvwxyz".repeat(50);
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
     }
 }
 
