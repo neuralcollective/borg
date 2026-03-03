@@ -6,8 +6,11 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
+    time::{timeout, Duration},
 };
 use tracing::{info, warn};
+
+const STDIN_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {
@@ -73,6 +76,7 @@ impl Sidecar {
                     &wa_auth_dir,
                     wa_disabled,
                     event_tx2.clone(),
+                    STDIN_WRITE_TIMEOUT,
                 )
                 .await
                 {
@@ -149,6 +153,7 @@ async fn spawn_once(
     wa_auth_dir: &str,
     wa_disabled: bool,
     event_tx: mpsc::UnboundedSender<SidecarEvent>,
+    write_timeout: Duration,
 ) -> Result<(
     mpsc::UnboundedSender<String>,
     tokio::sync::oneshot::Receiver<()>,
@@ -174,6 +179,7 @@ async fn spawn_once(
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
     let (died_tx, died_rx) = tokio::sync::oneshot::channel::<()>();
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
 
     // Stdout reader → events
     tokio::spawn(async move {
@@ -207,22 +213,35 @@ async fn spawn_once(
         }
     });
 
-    // Stdin writer ← commands
+    // Stdin writer ← commands; kills sidecar if a write blocks beyond write_timeout
     tokio::spawn(async move {
         let mut stdin = stdin;
         while let Some(line) = cmd_rx.recv().await {
             let payload = format!("{line}\n");
-            if let Err(e) = stdin.write_all(payload.as_bytes()).await {
-                warn!("Sidecar stdin write error: {}", e);
-                break;
+            match timeout(write_timeout, stdin.write_all(payload.as_bytes())).await {
+                Ok(Ok(_)) => { let _ = stdin.flush().await; },
+                Ok(Err(e)) => {
+                    warn!("Sidecar stdin write error: {}", e);
+                    break;
+                },
+                Err(_) => {
+                    warn!(
+                        "Sidecar stdin write timed out after {}s, restarting sidecar",
+                        write_timeout.as_secs()
+                    );
+                    let _ = kill_tx.send(());
+                    break;
+                },
             }
-            let _ = stdin.flush().await;
         }
     });
 
-    // Monitor process exit; fire died_tx when done
+    // Monitor process exit; fire died_tx when done (or immediately kill on signal)
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        tokio::select! {
+            _ = child.wait() => {},
+            Ok(()) = kill_rx => { let _ = child.kill().await; },
+        }
         let _ = died_tx.send(());
     });
 
@@ -355,6 +374,45 @@ mod tests {
     fn parse_unknown_source_returns_none() {
         let line = r#"{"source":"signal","event":"message","text":"hi"}"#;
         assert!(parse_event(line).is_none());
+    }
+
+    /// Verify that a blocked stdin write times out and causes the monitored process to be killed.
+    /// Uses a `sleep` subprocess (which never reads stdin) and a short write timeout.
+    #[tokio::test]
+    async fn stdin_write_timeout_kills_stalled_process() {
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.args(["60"]);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        let mut child = cmd.spawn().expect("sleep must be available");
+        let mut stdin = child.stdin.take().unwrap();
+
+        let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
+        let (died_tx, died_rx) = tokio::sync::oneshot::channel::<()>();
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = child.wait() => {},
+                Ok(()) = kill_rx => { let _ = child.kill().await; },
+            }
+            let _ = died_tx.send(());
+        });
+
+        let short_timeout = Duration::from_millis(100);
+        tokio::spawn(async move {
+            // Send more than the OS pipe buffer (typically 64 KB) to force write_all to block
+            let payload = vec![b'x'; 128 * 1024];
+            match timeout(short_timeout, stdin.write_all(&payload)).await {
+                Ok(Ok(_)) => {},
+                Ok(Err(_)) | Err(_) => { let _ = kill_tx.send(()); },
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), died_rx)
+            .await
+            .expect("process should be killed within 2s after write timeout")
+            .expect("died_rx channel dropped unexpectedly");
     }
 
 }
