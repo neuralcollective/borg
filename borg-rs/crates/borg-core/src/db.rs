@@ -133,6 +133,7 @@ pub struct ProjectFileRow {
 pub struct KnowledgeFile {
     pub id: i64,
     pub file_name: String,
+    pub stored_path: String,
     pub description: String,
     pub size_bytes: i64,
     pub inline: bool,
@@ -355,10 +356,16 @@ impl Db {
             "ALTER TABLE projects ADD COLUMN deadline TEXT",
             "ALTER TABLE projects ADD COLUMN privilege_level TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+            "ALTER TABLE knowledge_files ADD COLUMN stored_path TEXT NOT NULL DEFAULT ''",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
         }
+        // Back-fill stored_path for rows created before this column existed.
+        let _ = conn.execute(
+            "UPDATE knowledge_files SET stored_path = file_name WHERE stored_path = ''",
+            [],
+        );
         Ok(())
     }
 
@@ -868,18 +875,19 @@ impl Db {
     pub fn list_knowledge_files(&self) -> Result<Vec<KnowledgeFile>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, file_name, description, size_bytes, inline, created_at \
+            "SELECT id, file_name, stored_path, description, size_bytes, inline, created_at \
              FROM knowledge_files ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
-            let inline_int: i64 = row.get(4)?;
+            let inline_int: i64 = row.get(5)?;
             Ok(KnowledgeFile {
                 id: row.get(0)?,
                 file_name: row.get(1)?,
-                description: row.get(2)?,
-                size_bytes: row.get(3)?,
+                stored_path: row.get(2)?,
+                description: row.get(3)?,
+                size_bytes: row.get(4)?,
                 inline: inline_int != 0,
-                created_at: row.get(5)?,
+                created_at: row.get(6)?,
             })
         })?;
         let mut out = Vec::new();
@@ -892,18 +900,19 @@ impl Db {
     pub fn get_knowledge_file(&self, id: i64) -> Result<Option<KnowledgeFile>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
-            "SELECT id, file_name, description, size_bytes, inline, created_at \
+            "SELECT id, file_name, stored_path, description, size_bytes, inline, created_at \
              FROM knowledge_files WHERE id=?1",
             params![id],
             |row| {
-                let inline_int: i64 = row.get(4)?;
+                let inline_int: i64 = row.get(5)?;
                 Ok(KnowledgeFile {
                     id: row.get(0)?,
                     file_name: row.get(1)?,
-                    description: row.get(2)?,
-                    size_bytes: row.get(3)?,
+                    stored_path: row.get(2)?,
+                    description: row.get(3)?,
+                    size_bytes: row.get(4)?,
                     inline: inline_int != 0,
-                    created_at: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             },
         )
@@ -914,15 +923,16 @@ impl Db {
     pub fn insert_knowledge_file(
         &self,
         file_name: &str,
+        stored_path: &str,
         description: &str,
         size_bytes: i64,
         inline: bool,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
-            "INSERT INTO knowledge_files (file_name, description, size_bytes, inline) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![file_name, description, size_bytes, inline as i64],
+            "INSERT INTO knowledge_files (file_name, stored_path, description, size_bytes, inline) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![file_name, stored_path, description, size_bytes, inline as i64],
         )?;
         Ok(conn.last_insert_rowid())
     }

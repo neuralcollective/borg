@@ -248,6 +248,7 @@ CREATE INDEX IF NOT EXISTS idx_events_category ON events(category, ts);
 CREATE TABLE IF NOT EXISTS knowledge_files (
   id INTEGER PRIMARY KEY,
   file_name TEXT NOT NULL,
+  stored_path TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   size_bytes INTEGER NOT NULL DEFAULT 0,
   inline BOOLEAN NOT NULL DEFAULT 0,

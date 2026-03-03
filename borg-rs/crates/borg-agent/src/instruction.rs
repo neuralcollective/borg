@@ -62,8 +62,9 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
         "## Knowledge Base\nYou have access to the following knowledge files at /knowledge/:\n",
     );
     for file in files {
+        let stored = if file.stored_path.is_empty() { &file.file_name } else { &file.stored_path };
         if file.inline {
-            let path = format!("{}/{}", knowledge_dir, file.file_name);
+            let path = format!("{}/{}", knowledge_dir, stored);
             let content = std::fs::read_to_string(&path).unwrap_or_default();
             let content = content.trim();
             if content.is_empty() {
@@ -82,7 +83,7 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
                 s.push_str("\n```\n");
             }
         } else {
-            s.push_str(&format!("- `/knowledge/{}`", file.file_name));
+            s.push_str(&format!("- `/knowledge/{}`", stored));
             if !file.description.is_empty() {
                 s.push_str(&format!(": {}", file.description));
             }

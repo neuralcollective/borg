@@ -2656,12 +2656,18 @@ pub(crate) async fn upload_knowledge(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let dest = format!("{knowledge_dir}/{file_name}");
+    let unique_name = format!(
+        "{}_{}_{}",
+        Utc::now().timestamp_millis(),
+        rand_suffix(),
+        file_name
+    );
+    let dest = format!("{knowledge_dir}/{unique_name}");
     std::fs::write(&dest, &file_bytes).map_err(internal)?;
 
     let id = state
         .db
-        .insert_knowledge_file(&file_name, &description, file_bytes.len() as i64, inline)
+        .insert_knowledge_file(&file_name, &unique_name, &description, file_bytes.len() as i64, inline)
         .map_err(internal)?;
 
     Ok(Json(json!({ "id": id, "file_name": file_name })))
@@ -2684,7 +2690,8 @@ pub(crate) async fn delete_knowledge(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
     if let Ok(Some(file)) = state.db.get_knowledge_file(id) {
-        if let Some(safe_path) = safe_knowledge_path(&state.config.data_dir, &file.file_name) {
+        let name = if file.stored_path.is_empty() { &file.file_name } else { &file.stored_path };
+        if let Some(safe_path) = safe_knowledge_path(&state.config.data_dir, name) {
             let _ = std::fs::remove_file(&safe_path);
         }
     }
@@ -2702,7 +2709,8 @@ pub(crate) async fn get_knowledge_content(
         .get_knowledge_file(id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let path = safe_knowledge_path(&state.config.data_dir, &file.file_name)
+    let name = if file.stored_path.is_empty() { &file.file_name } else { &file.stored_path };
+    let path = safe_knowledge_path(&state.config.data_dir, name)
         .ok_or(StatusCode::BAD_REQUEST)?;
     let bytes = std::fs::read(&path).map_err(|_| StatusCode::NOT_FOUND)?;
     let disp = format!(
