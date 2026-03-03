@@ -1483,17 +1483,13 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let host_mirror = format!("{}/mirrors/{repo_name}.git", self.config.data_dir);
         let container_mirror = format!("/mirrors/{repo_name}.git");
 
-        // Shallow clone — test containers only need the branch tip.
-        // Wrap a value in single quotes with internal single quotes escaped.
-        fn sq(s: &str) -> String {
-            format!("'{}'", s.replace('\'', "'\\''"))
-        }
         let repo_url_q = sq(&task.repo_path);
         let branch_q = sq(&branch);
         let cmd_q = sq(cmd);
+        let container_mirror_q = sq(&container_mirror);
         let clone_cmd = if std::path::Path::new(&host_mirror).exists() {
             format!(
-                "git clone --depth 1 --single-branch --reference {container_mirror} {repo_url_q} /workspace/repo"
+                "git clone --depth 1 --single-branch --reference {container_mirror_q} {repo_url_q} /workspace/repo"
             )
         } else {
             format!(
@@ -3156,6 +3152,11 @@ fn extract_field(block: &str, field: &str) -> Option<String> {
     None
 }
 
+/// Wrap a value in single quotes with internal single quotes escaped (POSIX sh).
+fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 fn looks_like_field_key(line: &str) -> bool {
     let trimmed = line.trim();
     if let Some(colon) = trimmed.find(':') {
@@ -3165,5 +3166,41 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sq;
+
+    #[test]
+    fn sq_plain() {
+        assert_eq!(sq("hello"), "'hello'");
+    }
+
+    #[test]
+    fn sq_with_spaces() {
+        assert_eq!(sq("my repo"), "'my repo'");
+    }
+
+    #[test]
+    fn sq_with_single_quote() {
+        assert_eq!(sq("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn sq_mirror_path_with_spaces() {
+        // repo name containing a space must be safely quoted in the clone command
+        let mirror = "/mirrors/my project.git";
+        let q = sq(mirror);
+        assert_eq!(q, "'/mirrors/my project.git'");
+        assert!(q.starts_with('\'') && q.ends_with('\''));
+    }
+
+    #[test]
+    fn sq_mirror_path_with_glob_chars() {
+        let mirror = "/mirrors/repo[1].git";
+        let q = sq(mirror);
+        assert_eq!(q, "'/mirrors/repo[1].git'");
     }
 }
