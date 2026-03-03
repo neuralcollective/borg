@@ -1,17 +1,10 @@
 {
-  "task_id": 175,
-  "task_title": "Test build_instruction error substitution and section ordering",
+  "task_id": 181,
+  "task_title": "Extract shared HTTP client builder in `OllamaBackend`",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-175",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-181",
   "pr_url": null,
   "pending_approvals": [],
-  "phase_history": [
-    {
-      "phase": "implement",
-      "success": true,
-      "output": "22 tests written and passing. Here's what they cover:\n\n- **Phase instruction**: always present in output\n- **Task context**: included when `include_task_context` is true, absent otherwise\n- **File listing**: included for non-empty `Some`, absent for `None` or `Some(\"\")`\n- **`{ERROR}` substitution**: placeholder replaced with `task.last_error`; multiple placeholders all replaced; section absent when either `last_error` or `error_instruction` is empty\n- **Pending messages**: formatted as `[role]: content`; header text present; section absent when empty\n- **Section separators**: `---` between task context and instruction; before file listing\n- **Knowledge section**: present/absent based on `knowledge_files`; appears first; separator present after it\n- **Repo prompt**: absent when no `.borg/prompt.md` exists; present when file exists (uses real temp dir)\n- **Full ordering**: all six sections appear in the documented order: KB → repo prompt → task context → instruction → file listing → error → pending messages",
-      "timestamp": "2026-03-03T04:41:41Z"
-    }
-  ],
-  "generated_at": "2026-03-03T04:42:10.918352713Z"
+  "phase_history": [],
+  "generated_at": "2026-03-03T04:57:46.151845514Z"
 }
