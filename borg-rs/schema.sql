@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS task_outputs (
   output TEXT NOT NULL,
   raw_stream TEXT DEFAULT '',    -- full NDJSON agent stream
   exit_code INTEGER DEFAULT 0,
+  started_at TEXT,
+  completed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_task_outputs_task ON task_outputs(task_id);

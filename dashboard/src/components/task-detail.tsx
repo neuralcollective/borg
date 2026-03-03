@@ -462,6 +462,15 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
         )}>
           {selected.exit_code === 0 ? "passed" : `exit ${selected.exit_code}`}
         </span>
+        {selected.started_at && selected.completed_at && (() => {
+          const secs = Math.round((new Date(selected.completed_at).getTime() - new Date(selected.started_at).getTime()) / 1000);
+          const label = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+          return (
+            <span className="text-[10px] text-zinc-600" title={`${selected.started_at} → ${selected.completed_at}`}>
+              {label}
+            </span>
+          );
+        })()}
         {!isDiff && (
           <div className="ml-auto flex items-center gap-2">
             <div className="flex rounded-md border border-white/[0.08]">

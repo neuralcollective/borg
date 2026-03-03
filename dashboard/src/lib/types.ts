@@ -31,6 +31,8 @@ export interface TaskOutput {
   output: string;
   raw_stream: string;
   exit_code: number;
+  started_at?: string;
+  completed_at?: string;
   created_at: string;
 }
 

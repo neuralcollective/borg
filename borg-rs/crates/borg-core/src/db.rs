@@ -23,6 +23,8 @@ pub struct TaskOutput {
     pub output: String,
     pub raw_stream: String,
     pub exit_code: i64,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -313,6 +315,8 @@ fn row_to_queue_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
 
 fn row_to_task_output(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutput> {
     let created_at_str: String = row.get(6)?;
+    let started_at: Option<String> = row.get(7)?;
+    let completed_at: Option<String> = row.get(8)?;
     Ok(TaskOutput {
         id: row.get(0)?,
         task_id: row.get(1)?,
@@ -321,6 +325,8 @@ fn row_to_task_output(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutput> {
         raw_stream: row.get(4)?,
         exit_code: row.get(5)?,
         created_at: parse_ts(&created_at_str),
+        started_at: started_at.as_deref().filter(|s| !s.is_empty()).map(parse_ts),
+        completed_at: completed_at.as_deref().filter(|s| !s.is_empty()).map(parse_ts),
     })
 }
 
@@ -469,6 +475,8 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN default_template_id INTEGER",
+            "ALTER TABLE task_outputs ADD COLUMN started_at TEXT",
+            "ALTER TABLE task_outputs ADD COLUMN completed_at TEXT",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -1732,13 +1740,18 @@ impl Db {
         output: &str,
         raw_stream: &str,
         exit_code: i64,
+        started_at: &str,
+        completed_at: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
+        let started_at_opt: Option<&str> = if started_at.is_empty() { None } else { Some(started_at) };
+        let completed_at_opt: Option<&str> = if completed_at.is_empty() { None } else { Some(completed_at) };
         conn.execute(
-            "INSERT INTO task_outputs (task_id, phase, output, raw_stream, exit_code, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![task_id, phase, output, raw_stream, exit_code, created_at],
+            "INSERT INTO task_outputs \
+             (task_id, phase, output, raw_stream, exit_code, started_at, completed_at, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![task_id, phase, output, raw_stream, exit_code, started_at_opt, completed_at_opt, created_at],
         )
         .context("insert_task_output")?;
         Ok(conn.last_insert_rowid())
@@ -1747,7 +1760,7 @@ impl Db {
     pub fn get_task_outputs(&self, task_id: i64) -> Result<Vec<TaskOutput>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, task_id, phase, output, raw_stream, exit_code, created_at \
+            "SELECT id, task_id, phase, output, raw_stream, exit_code, created_at, started_at, completed_at \
              FROM task_outputs WHERE task_id = ?1 ORDER BY id ASC",
         )?;
         let outputs = stmt

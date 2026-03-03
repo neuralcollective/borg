@@ -191,6 +191,8 @@ pub(crate) struct TaskOutputJson {
     pub phase: String,
     pub output: String,
     pub exit_code: i64,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
     pub created_at: String,
 }
 
@@ -202,6 +204,8 @@ impl From<TaskOutput> for TaskOutputJson {
             phase: o.phase,
             output: o.output,
             exit_code: o.exit_code,
+            started_at: o.started_at.map(|t| t.to_rfc3339()),
+            completed_at: o.completed_at.map(|t| t.to_rfc3339()),
             created_at: o.created_at.to_rfc3339(),
         }
     }
