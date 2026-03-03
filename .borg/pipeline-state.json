@@ -5,6 +5,13 @@
   "worktree_path": "/home/shulgin/borg/.worktrees/task-174",
   "pr_url": null,
   "pending_approvals": [],
-  "phase_history": [],
-  "generated_at": "2026-03-03T04:31:00.002192998Z"
+  "phase_history": [
+    {
+      "phase": "implement",
+      "success": true,
+      "output": "All 6 tests pass and committed. Here's what was added in `borg-rs/crates/borg-core/tests/config_tests.rs`:\n\n| Test | Scenario |\n|---|---|\n| `test_primary_path_returns_token` | `claudeAiOauth.accessToken` present and non-empty → returns it |\n| `test_fallback_path_returns_token` | Only `oauthToken` at root → returns it |\n| `test_primary_wins_when_both_present` | Both fields present → `claudeAiOauth.accessToken` wins |\n| `test_neither_present_returns_none` | Neither key in JSON → `None` |\n| `test_malformed_json_returns_none` | Invalid JSON → `None` |\n| `test_missing_file_returns_none` | File doesn't exist → `None` |",
+      "timestamp": "2026-03-03T04:32:32Z"
+    }
+  ],
+  "generated_at": "2026-03-03T04:33:00.050304381Z"
 }
