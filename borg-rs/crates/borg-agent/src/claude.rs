@@ -138,7 +138,7 @@ impl ClaudeBackend {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let branch = format!("task-{}", task.id);
-        let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
+        let gh_token = Self::resolve_gh_token();
 
         // Docker containers need a GitHub URL, not a local path
         let repo_url = if !ctx.repo_config.repo_slug.is_empty() && !gh_token.is_empty() {
@@ -193,6 +193,20 @@ impl ClaudeBackend {
             exit_code: v["exitCode"].as_i64().unwrap_or(1) as i32,
             output: v["output"].as_str().unwrap_or("").to_string(),
         })
+    }
+
+    fn resolve_gh_token() -> String {
+        std::env::var("GH_TOKEN")
+            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+            .unwrap_or_else(|_| {
+                std::process::Command::new("gh")
+                    .args(["auth", "token"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_default()
+            })
     }
 
     fn host_mirror_path(task: &Task, data_dir: &str) -> String {
@@ -508,7 +522,7 @@ impl AgentBackend for ClaudeBackend {
                     ("borg-cache-rustup".to_string(), "/home/bun/.rustup".to_string()),
                 ];
 
-                let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
+                let gh_token = Self::resolve_gh_token();
                 let mut env_kv: Vec<(String, String)> = vec![
                     ("HOME".to_string(), ctx.session_dir.clone()),
                     ("RUSTUP_HOME".to_string(), "/home/bun/.rustup".to_string()),
