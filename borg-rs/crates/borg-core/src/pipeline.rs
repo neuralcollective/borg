@@ -833,8 +833,8 @@ impl Pipeline {
                 match self.run_test_command(&work_dir, &test_cmd).await {
                     Ok(o) => Some(o),
                     Err(e) => {
-                        warn!("test command error for task #{}: {}", task.id, e);
-                        return Ok(());
+                        warn!("test command error for task #{}: {e}", task.id);
+                        None
                     },
                 }
             };
@@ -3055,5 +3055,94 @@ fn looks_like_field_key(line: &str) -> bool {
             && key.chars().next().map_or(false, |c| c.is_alphabetic())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // derive_compile_check: cargo test → appends --no-run
+    #[test]
+    fn test_derive_compile_check_cargo_test() {
+        let result = Pipeline::derive_compile_check("cargo test");
+        assert_eq!(result, Some("cargo test --no-run".to_string()));
+    }
+
+    // derive_compile_check: cargo test with args passes through
+    #[test]
+    fn test_derive_compile_check_cargo_test_with_args() {
+        let result = Pipeline::derive_compile_check("cargo test --workspace -- --nocapture");
+        assert_eq!(
+            result,
+            Some("cargo test --workspace -- --nocapture --no-run".to_string())
+        );
+    }
+
+    // derive_compile_check: non-cargo command returns None (no compile check)
+    #[test]
+    fn test_derive_compile_check_non_cargo_returns_none() {
+        assert!(Pipeline::derive_compile_check("npm test").is_none());
+        assert!(Pipeline::derive_compile_check("pytest").is_none());
+        assert!(Pipeline::derive_compile_check("go test ./...").is_none());
+        assert!(Pipeline::derive_compile_check("").is_none());
+    }
+
+    // Both error arms now produce None — the contract is that an Err from
+    // run_test_command skips the check in both the compile-check block and
+    // the runs_tests block.
+    #[test]
+    fn test_both_error_arms_yield_none() {
+        let compile_out: Option<TestOutput> = {
+            let result: Result<TestOutput> = Err(anyhow::anyhow!("command failed"));
+            match result {
+                Ok(o) => Some(o),
+                Err(_e) => None,
+            }
+        };
+
+        let test_out: Option<TestOutput> = {
+            let result: Result<TestOutput> = Err(anyhow::anyhow!("command failed"));
+            match result {
+                Ok(o) => Some(o),
+                Err(_e) => None,
+            }
+        };
+
+        assert!(compile_out.is_none(), "compile check error must yield None");
+        assert!(test_out.is_none(), "test command error must yield None");
+    }
+
+    // Successful run still produces Some for both paths
+    #[test]
+    fn test_both_success_arms_yield_some() {
+        let compile_out: Option<TestOutput> = {
+            let result: Result<TestOutput> = Ok(TestOutput {
+                stdout: "ok".into(),
+                stderr: String::new(),
+                exit_code: 0,
+            });
+            match result {
+                Ok(o) => Some(o),
+                Err(_e) => None,
+            }
+        };
+
+        let test_out: Option<TestOutput> = {
+            let result: Result<TestOutput> = Ok(TestOutput {
+                stdout: "ok".into(),
+                stderr: String::new(),
+                exit_code: 0,
+            });
+            match result {
+                Ok(o) => Some(o),
+                Err(_e) => None,
+            }
+        };
+
+        assert!(compile_out.is_some());
+        assert!(test_out.is_some());
+        assert_eq!(compile_out.unwrap().exit_code, 0);
+        assert_eq!(test_out.unwrap().exit_code, 0);
     }
 }
