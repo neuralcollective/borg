@@ -93,11 +93,8 @@ pub struct Config {
     pub observer_config: String,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+fn parse_dotenv_str(contents: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -105,8 +102,9 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
         if let Some((k, v)) = line.split_once('=') {
             let v = v.trim();
-            let v = if (v.starts_with('"') && v.ends_with('"'))
-                || (v.starts_with('\'') && v.ends_with('\''))
+            let v = if v.len() > 1
+                && ((v.starts_with('"') && v.ends_with('"'))
+                    || (v.starts_with('\'') && v.ends_with('\'')))
             {
                 &v[1..v.len() - 1]
             } else {
@@ -116,6 +114,13 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    let Ok(contents) = std::fs::read_to_string(".env") else {
+        return HashMap::new();
+    };
+    parse_dotenv_str(&contents)
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -635,5 +640,54 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_dotenv_str;
+
+    #[test]
+    fn normal_double_quoted() {
+        let m = parse_dotenv_str("KEY=\"value\"");
+        assert_eq!(m["KEY"], "value");
+    }
+
+    #[test]
+    fn normal_single_quoted() {
+        let m = parse_dotenv_str("KEY='value'");
+        assert_eq!(m["KEY"], "value");
+    }
+
+    #[test]
+    fn empty_double_quoted() {
+        let m = parse_dotenv_str("KEY=\"\"");
+        assert_eq!(m["KEY"], "");
+    }
+
+    #[test]
+    fn single_char_dangling_double_quote() {
+        // KEY=" is a malformed line; must not panic and should keep the bare char
+        let m = parse_dotenv_str("KEY=\"");
+        assert_eq!(m["KEY"], "\"");
+    }
+
+    #[test]
+    fn single_char_dangling_single_quote() {
+        let m = parse_dotenv_str("KEY='");
+        assert_eq!(m["KEY"], "'");
+    }
+
+    #[test]
+    fn unquoted_value() {
+        let m = parse_dotenv_str("KEY=hello");
+        assert_eq!(m["KEY"], "hello");
+    }
+
+    #[test]
+    fn comments_and_blanks_ignored() {
+        let m = parse_dotenv_str("# comment\n\nKEY=val");
+        assert!(!m.contains_key("# comment"));
+        assert_eq!(m["KEY"], "val");
     }
 }
