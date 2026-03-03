@@ -1731,6 +1731,8 @@ pub(crate) async fn post_chat(
     {
         let mut map = state.chat_rate.lock().unwrap();
         let now = std::time::Instant::now();
+        // Prune entries older than cooldown to prevent unbounded growth
+        map.retain(|_, last| now.duration_since(*last) < cooldown);
         if let Some(last) = map.get(&thread) {
             if now.duration_since(*last) < cooldown {
                 return Err(StatusCode::TOO_MANY_REQUESTS);
@@ -2076,3 +2078,81 @@ pub(crate) async fn get_task_container(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    fn prune(map: &mut HashMap<String, Instant>, now: Instant, cooldown: Duration) {
+        map.retain(|_, last| now.duration_since(*last) < cooldown);
+    }
+
+    #[test]
+    fn chat_rate_prune_removes_stale_entries() {
+        let cooldown = Duration::from_secs(5);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+
+        let old = Instant::now() - Duration::from_secs(10);
+        map.insert("old-thread".to_string(), old);
+        map.insert("another-old".to_string(), old);
+
+        let now = Instant::now();
+        prune(&mut map, now, cooldown);
+
+        assert!(map.is_empty(), "stale entries should be pruned");
+    }
+
+    #[test]
+    fn chat_rate_prune_retains_fresh_entries() {
+        let cooldown = Duration::from_secs(60);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+
+        let recent = Instant::now() - Duration::from_secs(1);
+        map.insert("active-thread".to_string(), recent);
+
+        let now = Instant::now();
+        prune(&mut map, now, cooldown);
+
+        assert!(map.contains_key("active-thread"), "fresh entries should be retained");
+    }
+
+    #[test]
+    fn chat_rate_prune_mixed_entries() {
+        let cooldown = Duration::from_secs(5);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+
+        let old = Instant::now() - Duration::from_secs(10);
+        let recent = Instant::now() - Duration::from_secs(1);
+        map.insert("stale".to_string(), old);
+        map.insert("fresh".to_string(), recent);
+
+        let now = Instant::now();
+        prune(&mut map, now, cooldown);
+
+        assert!(!map.contains_key("stale"), "stale entry should be removed");
+        assert!(map.contains_key("fresh"), "fresh entry should be kept");
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn chat_rate_map_stays_bounded_after_many_threads() {
+        let cooldown = Duration::from_secs(5);
+        let mut map: HashMap<String, Instant> = HashMap::new();
+
+        // Simulate 1000 distinct threads, all stale
+        let old = Instant::now() - Duration::from_secs(10);
+        for i in 0..1000 {
+            map.insert(format!("thread-{i}"), old);
+        }
+
+        // After pruning, map is empty regardless of how many unique threads were seen
+        let now = Instant::now();
+        prune(&mut map, now, cooldown);
+        assert!(map.is_empty());
+
+        // Only active threads occupy memory
+        map.insert("active".to_string(), now);
+        prune(&mut map, Instant::now(), cooldown);
+        assert_eq!(map.len(), 1);
+    }
+}
