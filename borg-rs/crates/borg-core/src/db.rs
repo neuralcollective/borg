@@ -479,7 +479,15 @@ impl Db {
             "ALTER TABLE task_outputs ADD COLUMN completed_at TEXT",
         ];
         for sql in alters {
-            let _ = conn.execute(sql, []);
+            if let Err(e) = conn.execute(sql, []) {
+                let is_duplicate = matches!(
+                    &e,
+                    rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("duplicate column name")
+                );
+                if !is_duplicate {
+                    tracing::warn!("schema migration ALTER TABLE failed: {e}");
+                }
+            }
         }
 
         // Indexes on columns added via ALTER TABLE (can't be in SCHEMA_SQL because
