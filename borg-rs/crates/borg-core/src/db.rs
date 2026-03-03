@@ -1587,8 +1587,6 @@ impl Db {
         Ok(())
     }
 
-
-
     pub fn get_top_scored_proposals(&self, threshold: i64, limit: i64) -> Result<Vec<Proposal>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
