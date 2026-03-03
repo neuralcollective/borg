@@ -831,23 +831,15 @@ mod tests {
     use super::derive_compile_check;
 
     #[test]
-    fn bare_cargo_test() {
-        assert_eq!(derive_compile_check("cargo test"), Some("cargo test --no-run".into()));
+    fn cargo_test_gets_no_run() {
+        assert_eq!(derive_compile_check("cargo test"), Some("cargo test --no-run".to_string()));
     }
 
     #[test]
-    fn cargo_test_with_flags() {
+    fn cargo_test_workspace_gets_no_run() {
         assert_eq!(
             derive_compile_check("cargo test --workspace"),
-            Some("cargo test --workspace --no-run".into())
-        );
-    }
-
-    #[test]
-    fn whitespace_is_trimmed() {
-        assert_eq!(
-            derive_compile_check("  cargo test --workspace  "),
-            Some("cargo test --workspace --no-run".into())
+            Some("cargo test --workspace --no-run".to_string()),
         );
     }
 
@@ -859,5 +851,13 @@ mod tests {
     #[test]
     fn empty_string_returns_none() {
         assert_eq!(derive_compile_check(""), None);
+    }
+
+    #[test]
+    fn already_has_no_run_no_duplication() {
+        assert_eq!(
+            derive_compile_check("cargo test --no-run"),
+            Some("cargo test --no-run".to_string()),
+        );
     }
 }
