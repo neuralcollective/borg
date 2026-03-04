@@ -26,9 +26,21 @@ Dashboard at `http://127.0.0.1:3131`.
 
 ## Pipelines
 
-Borg ships with pipeline presets for software engineering, legal, medical writing, healthcare admin, construction, sales, data analysis, frontend, and more. Each preset defines its own phases, system prompts, tool access, and autonomous scanning rules.
+Borg is focused on two first-class workforce modes:
+- `sweborg` / `swe` (software engineering)
+- `lawborg` / `legal` (legal work)
+
+Additional presets exist, but are experimental templates and not active product investment targets. They can be used as references for custom mode design.
 
 Create custom pipelines via the mode creator in the dashboard or the API. Presets are starting points — everything is configurable.
+
+### Success Gates (Legal + SWE)
+
+Work should prioritize these measurable outcomes before expanding non-core domains:
+
+- Legal quality: citation verification pass rate, first-pass human review acceptance, turnaround time, and revision rate.
+- SWE reliability: task-to-merge success rate, retry/failure rate, CI pass rate, and cycle time.
+- Operational stability: active task throughput, blocked-task aging, and stream/log observability coverage.
 
 ### How It Works
 

@@ -31,6 +31,7 @@ export function TaskCreator() {
         groups.push({ category: cat, modes: [m] });
       }
     }
+    groups.sort((a, b) => a.category.localeCompare(b.category));
     return groups;
   }, [modes]);
 
@@ -107,7 +108,9 @@ export function TaskCreator() {
                   ? groupedModes.map((g) => (
                       <optgroup key={g.category} label={g.category}>
                         {g.modes.map((m) => (
-                          <option key={m.name} value={m.name}>{m.label}</option>
+                          <option key={m.name} value={m.name}>
+                            {m.experimental ? `${m.label} (experimental)` : m.label}
+                          </option>
                         ))}
                       </optgroup>
                     ))

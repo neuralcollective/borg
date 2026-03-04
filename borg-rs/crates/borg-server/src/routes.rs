@@ -120,22 +120,6 @@ pub(crate) struct FocusBody {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct CreatePlanTodoBody {
-    pub title: String,
-    pub details: Option<String>,
-    pub status: Option<String>,
-    pub priority: Option<i64>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct PatchPlanTodoBody {
-    pub title: Option<String>,
-    pub details: Option<String>,
-    pub status: Option<String>,
-    pub priority: Option<i64>,
-}
-
-#[derive(Deserialize)]
 pub(crate) struct RepoQuery {
     pub repo: Option<String>,
 }
@@ -2797,98 +2781,6 @@ pub(crate) async fn list_queue(
     Ok(Json(json!(entries)))
 }
 
-fn normalize_plan_todo_status(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_lowercase().as_str() {
-        "todo" => Some("todo"),
-        "doing" => Some("doing"),
-        "blocked" => Some("blocked"),
-        "done" => Some("done"),
-        _ => None,
-    }
-}
-
-pub(crate) async fn list_plan_todos(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, StatusCode> {
-    let rows = state.db.list_plan_todos().map_err(internal)?;
-    Ok(Json(json!({ "items": rows })))
-}
-
-pub(crate) async fn seed_prod_plan_todos(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, StatusCode> {
-    state.db.seed_prod_plan_todos().map_err(internal)?;
-    let rows = state.db.list_plan_todos().map_err(internal)?;
-    Ok(Json(json!({ "seeded": true, "items": rows })))
-}
-
-pub(crate) async fn create_plan_todo(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<CreatePlanTodoBody>,
-) -> Result<(StatusCode, Json<Value>), StatusCode> {
-    let title = body.title.trim();
-    if title.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let details = body.details.unwrap_or_default();
-    let status = body
-        .status
-        .as_deref()
-        .and_then(normalize_plan_todo_status)
-        .unwrap_or("todo");
-    let priority = body.priority.unwrap_or(100).max(1);
-    let id = state
-        .db
-        .insert_plan_todo(title, details.trim(), status, priority)
-        .map_err(internal)?;
-    let row = state
-        .db
-        .get_plan_todo(id)
-        .map_err(internal)?
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok((StatusCode::CREATED, Json(json!(row))))
-}
-
-pub(crate) async fn patch_plan_todo(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-    Json(body): Json<PatchPlanTodoBody>,
-) -> Result<Json<Value>, StatusCode> {
-    let current = state
-        .db
-        .get_plan_todo(id)
-        .map_err(internal)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let title = body.title.unwrap_or(current.title).trim().to_string();
-    if title.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let details = body.details.unwrap_or(current.details);
-    let status = match body.status {
-        Some(s) => normalize_plan_todo_status(&s).ok_or(StatusCode::BAD_REQUEST)?,
-        None => current.status.as_str(),
-    };
-    let priority = body.priority.unwrap_or(current.priority).max(1);
-    state
-        .db
-        .update_plan_todo(id, &title, details.trim(), status, priority)
-        .map_err(internal)?;
-    let updated = state
-        .db
-        .get_plan_todo(id)
-        .map_err(internal)?
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(json!(updated)))
-}
-
-pub(crate) async fn delete_plan_todo(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Result<StatusCode, StatusCode> {
-    state.db.delete_plan_todo(id).map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 pub(crate) async fn get_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
@@ -3188,6 +3080,10 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
 
 // Modes
 
+fn is_experimental_mode(name: &str) -> bool {
+    !matches!(name, "sweborg" | "swe" | "lawborg" | "legal")
+}
+
 pub(crate) async fn get_modes(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut merged_modes = all_modes();
     merged_modes.extend(get_custom_modes(&state.db));
@@ -3204,6 +3100,7 @@ pub(crate) async fn get_modes(State(state): State<Arc<AppState>>) -> Json<Value>
                 "label": m.label,
                 "category": m.category,
                 "phases": phases,
+                "experimental": is_experimental_mode(&m.name),
             })
         })
         .collect();

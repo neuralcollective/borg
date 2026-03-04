@@ -2,6 +2,8 @@
 
 Autonomous AI agent orchestrator written in Rust. Chat messages trigger Claude Code subprocesses. The engineering pipeline runs agents in Docker containers with git worktree isolation.
 
+Primary product scope is legal + SWE autonomous execution (`lawborg` and `sweborg`). Other domain modes are treated as experimental templates.
+
 ## Project Structure
 
 ```

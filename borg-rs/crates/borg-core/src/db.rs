@@ -214,17 +214,6 @@ pub struct CloudConnection {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, serde::Serialize, Clone)]
-pub struct PlanTodo {
-    pub id: i64,
-    pub title: String,
-    pub details: String,
-    pub status: String,
-    pub priority: i64,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 // ── Timestamp helpers ─────────────────────────────────────────────────────
 
 fn parse_ts(s: &str) -> DateTime<Utc> {
@@ -279,20 +268,6 @@ fn row_to_cloud_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudCon
         account_email: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
         account_id: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
         created_at: row.get::<_, String>(8).map(|s| parse_ts(&s))?,
-    })
-}
-
-fn row_to_plan_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanTodo> {
-    let created_at_str: String = row.get(5)?;
-    let updated_at_str: String = row.get(6)?;
-    Ok(PlanTodo {
-        id: row.get(0)?,
-        title: row.get(1)?,
-        details: row.get(2)?,
-        status: row.get(3)?,
-        priority: row.get(4)?,
-        created_at: parse_ts(&created_at_str),
-        updated_at: parse_ts(&updated_at_str),
     })
 }
 
@@ -534,15 +509,6 @@ impl Db {
               account_id TEXT NOT NULL DEFAULT '', \
               created_at TEXT NOT NULL DEFAULT (datetime('now')))",
             "CREATE INDEX IF NOT EXISTS idx_cloud_connections_project ON cloud_connections(project_id)",
-            "CREATE TABLE IF NOT EXISTS plan_todos (\
-              id INTEGER PRIMARY KEY AUTOINCREMENT, \
-              title TEXT NOT NULL UNIQUE, \
-              details TEXT NOT NULL DEFAULT '', \
-              status TEXT NOT NULL DEFAULT 'todo', \
-              priority INTEGER NOT NULL DEFAULT 100, \
-              created_at TEXT NOT NULL DEFAULT (datetime('now')), \
-              updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
-            "CREATE INDEX IF NOT EXISTS idx_plan_todos_status_priority ON plan_todos(status, priority, id)",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -1472,135 +1438,6 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM cloud_connections WHERE id=?1", params![id])
             .context("delete_cloud_connection")?;
-        Ok(())
-    }
-
-    // ── Plan todo list ───────────────────────────────────────────────────
-
-    pub fn list_plan_todos(&self) -> Result<Vec<PlanTodo>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT id, title, details, status, priority, created_at, updated_at \
-             FROM plan_todos ORDER BY \
-               CASE status WHEN 'doing' THEN 0 WHEN 'todo' THEN 1 WHEN 'blocked' THEN 2 ELSE 3 END, \
-               priority ASC, id ASC",
-        )?;
-        let rows = stmt.query_map([], row_to_plan_todo)?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    pub fn get_plan_todo(&self, id: i64) -> Result<Option<PlanTodo>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.query_row(
-            "SELECT id, title, details, status, priority, created_at, updated_at \
-             FROM plan_todos WHERE id=?1",
-            params![id],
-            row_to_plan_todo,
-        )
-        .optional()
-        .context("get_plan_todo")
-    }
-
-    pub fn insert_plan_todo(
-        &self,
-        title: &str,
-        details: &str,
-        status: &str,
-        priority: i64,
-    ) -> Result<i64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let ts = now_str();
-        conn.execute(
-            "INSERT INTO plan_todos (title, details, status, priority, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![title, details, status, priority, ts],
-        )
-        .context("insert_plan_todo")?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    pub fn update_plan_todo(
-        &self,
-        id: i64,
-        title: &str,
-        details: &str,
-        status: &str,
-        priority: i64,
-    ) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "UPDATE plan_todos SET title=?1, details=?2, status=?3, priority=?4, updated_at=?5 WHERE id=?6",
-            params![title, details, status, priority, now_str(), id],
-        )
-        .context("update_plan_todo")?;
-        Ok(())
-    }
-
-    pub fn delete_plan_todo(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute("DELETE FROM plan_todos WHERE id=?1", params![id])
-            .context("delete_plan_todo")?;
-        Ok(())
-    }
-
-    pub fn seed_prod_plan_todos(&self) -> Result<()> {
-        const PROD_ITEMS: &[(&str, &str, i64)] = &[
-            (
-                "Provision AWS S3 bucket for project and workspace files",
-                "Create bucket with lifecycle policy (tiering/expiry), SSE, and least-privilege IAM for server and workers.",
-                10,
-            ),
-            (
-                "Configure ingestion queue and worker autoscaling",
-                "Enable SQS backend, set queue alarms (depth/age), and run worker replicas so ingestion keeps up with burst uploads.",
-                20,
-            ),
-            (
-                "Enable OpenSearch for large-scale keyword and concept search",
-                "Configure index templates, shard/replica sizing, and auth so search remains fast at 100k+ documents.",
-                30,
-            ),
-            (
-                "Backfill existing files into search index",
-                "Run one-time reindex across existing project/global files and verify indexed count matches source-of-truth counts.",
-                40,
-            ),
-            (
-                "Add concept/theme extraction pipeline",
-                "Implement async NLP pass to extract keywords, entities, and thematic clusters over extracted text for cross-document analysis.",
-                50,
-            ),
-            (
-                "Add cost controls and retention defaults",
-                "Set storage class transitions, delete markers, and budget alerts for S3/OpenSearch/SQS to keep predictable monthly spend.",
-                60,
-            ),
-            (
-                "Define production runbooks and SLOs",
-                "Document ingestion/search failure handling, queue replay, reindex steps, and target latency/error budgets.",
-                70,
-            ),
-            (
-                "Load test at 100k-file scale before launch",
-                "Execute staged upload/import tests with realistic document mixes and verify throughput, search latency, and memory headroom.",
-                80,
-            ),
-        ];
-
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let ts = now_str();
-        for (title, details, priority) in PROD_ITEMS {
-            conn.execute(
-                "INSERT OR IGNORE INTO plan_todos (title, details, status, priority, created_at, updated_at) \
-                 VALUES (?1, ?2, 'todo', ?3, ?4, ?4)",
-                params![title, details, priority, ts],
-            )
-            .context("seed_prod_plan_todos")?;
-        }
         Ok(())
     }
 

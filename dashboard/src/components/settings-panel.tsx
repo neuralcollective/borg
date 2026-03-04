@@ -7,11 +7,7 @@ import {
   setRepoBackend,
   useCacheVolumes,
   deleteCacheVolume,
-  usePlanTodos,
-  patchPlanTodo,
-  seedProdPlanTodos,
   type Settings,
-  type PlanTodo,
 } from "@/lib/api";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
 import { useQueryClient } from "@tanstack/react-query";
@@ -40,7 +36,6 @@ function isValidHttpUrl(url: string): boolean {
 export function SettingsPanel() {
   const { data: settings, isLoading } = useSettings();
   const { data: status } = useStatus();
-  const { data: planTodos } = usePlanTodos();
   const { mode: uiMode, setMode: setUIMode } = useUIMode();
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
@@ -395,32 +390,6 @@ export function SettingsPanel() {
           />
         </Section>
 
-        <Section title="Production Plan">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Label>Scale Rollout Checklist</Label>
-              <Desc>Track production hardening items for high-volume discovery workloads.</Desc>
-            </div>
-            <button
-              onClick={async () => {
-                await seedProdPlanTodos();
-                queryClient.invalidateQueries({ queryKey: ["plan_todos"] });
-              }}
-              className="rounded-md border border-white/[0.1] bg-zinc-900 px-3 py-1.5 text-[11px] text-zinc-200 hover:bg-zinc-800"
-            >
-              Seed Checklist
-            </button>
-          </div>
-          <div className="space-y-2">
-            {(planTodos?.items ?? []).map((todo) => (
-              <PlanTodoRow key={todo.id} todo={todo} />
-            ))}
-            {(!planTodos || planTodos.items.length === 0) && (
-              <div className="text-[11px] text-zinc-500">No plan items yet.</div>
-            )}
-          </div>
-        </Section>
-
         {/* Per-Repo Settings */}
         <ReposSection />
 
@@ -459,34 +428,6 @@ export function SettingsPanel() {
             )}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function PlanTodoRow({ todo }: { todo: PlanTodo }) {
-  const queryClient = useQueryClient();
-
-  return (
-    <div className="rounded-md border border-white/[0.08] bg-zinc-900/50 px-3 py-2">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[12px] font-medium text-zinc-100">{todo.title}</div>
-          {!!todo.details && <div className="mt-1 text-[11px] text-zinc-400">{todo.details}</div>}
-        </div>
-        <select
-          value={todo.status}
-          onChange={async (e) => {
-            await patchPlanTodo(todo.id, { status: e.target.value as PlanTodo["status"] });
-            queryClient.invalidateQueries({ queryKey: ["plan_todos"] });
-          }}
-          className="rounded-md border border-white/[0.08] bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
-        >
-          <option value="todo">todo</option>
-          <option value="doing">doing</option>
-          <option value="blocked">blocked</option>
-          <option value="done">done</option>
-        </select>
       </div>
     </div>
   );

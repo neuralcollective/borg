@@ -185,19 +185,6 @@ CREATE TABLE IF NOT EXISTS project_files (
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
 
--- ── Plan todo list ───────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS plan_todos (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL UNIQUE,
-  details TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'todo', -- todo | doing | blocked | done
-  priority INTEGER NOT NULL DEFAULT 100,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_plan_todos_status_priority ON plan_todos(status, priority, id);
-
 -- ── Parties (conflict checking) ──────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS parties (

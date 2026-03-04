@@ -125,6 +125,7 @@ export interface PipelineMode {
   label: string;
   category?: string;
   phases: PhaseInfo[];
+  experimental?: boolean;
 }
 
 export type PhaseType = "setup" | "agent" | "rebase" | "lint_fix" | "human_review" | "validate";

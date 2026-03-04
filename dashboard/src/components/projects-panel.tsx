@@ -592,7 +592,9 @@ export function ProjectsPanel() {
             <option value="general">general</option>
             {modes.map((mode) => (
               <option key={mode.name} value={mode.name}>
-                {mode.name}
+                {mode.experimental
+                  ? `${mode.label ?? mode.name} (experimental)`
+                  : (mode.label ?? mode.name)}
               </option>
             ))}
           </select>

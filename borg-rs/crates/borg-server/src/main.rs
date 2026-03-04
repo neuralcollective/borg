@@ -14,7 +14,7 @@ use std::{
 use axum::{
     extract::DefaultBodyLimit,
     middleware,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use borg_agent::{claude::ClaudeBackend, codex::CodexBackend, ollama::OllamaBackend};
@@ -115,9 +115,6 @@ async fn main() -> anyhow::Result<()> {
     let db_path = format!("{}/borg.db", env_config.data_dir);
     let mut db = Db::open(&db_path)?;
     db.migrate()?;
-    if let Err(e) = db.seed_prod_plan_todos() {
-        tracing::warn!("failed to seed production plan todos: {e}");
-    }
 
     // Seed DB from env on first run, then load DB values (DB wins over env)
     env_config.seed_db(&db)?;
@@ -763,10 +760,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/:id/messages", post(routes::post_task_message))
         // Queue
         .route("/api/queue", get(routes::list_queue))
-        // Plan todo list
-        .route("/api/plan/todos", get(routes::list_plan_todos).post(routes::create_plan_todo))
-        .route("/api/plan/todos/seed-prod", post(routes::seed_prod_plan_todos))
-        .route("/api/plan/todos/:id", patch(routes::patch_plan_todo).delete(routes::delete_plan_todo))
         // Status
         .route("/api/status", get(routes::get_status))
         // Proposals
