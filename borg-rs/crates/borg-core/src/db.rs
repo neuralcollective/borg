@@ -141,6 +141,7 @@ pub struct ProjectFileRow {
     pub mime_type: String,
     pub size_bytes: i64,
     pub extracted_text: String,
+    pub content_hash: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -533,7 +534,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
 }
 
 fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileRow> {
-    let created_at_str: String = row.get(7)?;
+    let created_at_str: String = row.get(8)?;
     Ok(ProjectFileRow {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -542,6 +543,7 @@ fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileR
         mime_type: row.get(4)?,
         size_bytes: row.get(5)?,
         extracted_text: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+        content_hash: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
         created_at: parse_ts(&created_at_str),
     })
 }
@@ -598,6 +600,7 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN review_status TEXT",
             "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE project_files ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE projects ADD COLUMN default_template_id INTEGER",
             "CREATE TABLE IF NOT EXISTS cloud_connections (\
               id INTEGER PRIMARY KEY AUTOINCREMENT, \
@@ -621,6 +624,7 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_tasks(project_id)",
             "CREATE INDEX IF NOT EXISTS idx_pipeline_repo_status ON pipeline_tasks(repo_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_pipeline_events_project ON pipeline_events(project_id)",
+            "CREATE INDEX IF NOT EXISTS idx_project_files_hash ON project_files(project_id, content_hash)",
         ];
         for sql in post_alter_indexes {
             let _ = conn.execute(sql, []);
@@ -1409,7 +1413,7 @@ impl Db {
     pub fn list_project_files(&self, project_id: i64) -> Result<Vec<ProjectFileRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, created_at \
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at \
              FROM project_files WHERE project_id=?1 ORDER BY id ASC",
         )?;
         let files = stmt
@@ -1426,7 +1430,7 @@ impl Db {
     ) -> Result<Option<ProjectFileRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, created_at \
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at \
              FROM project_files WHERE id=?1 AND project_id=?2",
             params![file_id, project_id],
             row_to_project_file,
@@ -1442,24 +1446,45 @@ impl Db {
         stored_path: &str,
         mime_type: &str,
         size_bytes: i64,
+        content_hash: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = now_str();
         conn.execute(
             "INSERT INTO project_files \
-             (project_id, file_name, stored_path, mime_type, size_bytes, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (project_id, file_name, stored_path, mime_type, size_bytes, content_hash, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 project_id,
                 file_name,
                 stored_path,
                 mime_type,
                 size_bytes,
+                content_hash,
                 created_at
             ],
         )
         .context("insert_project_file")?;
         Ok(conn.last_insert_rowid())
+    }
+
+    pub fn find_project_file_by_hash(
+        &self,
+        project_id: i64,
+        content_hash: &str,
+    ) -> Result<Option<ProjectFileRow>> {
+        if content_hash.trim().is_empty() {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.query_row(
+            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at \
+             FROM project_files WHERE project_id=?1 AND content_hash=?2 ORDER BY id ASC LIMIT 1",
+            params![project_id, content_hash],
+            row_to_project_file,
+        )
+        .optional()
+        .context("find_project_file_by_hash")
     }
 
     pub fn update_project_file_text(&self, file_id: i64, text: &str) -> Result<()> {

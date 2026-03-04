@@ -18,6 +18,7 @@ use borg_core::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, Mutex as TokioMutex};
 use tokio_stream::{
@@ -72,6 +73,32 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+fn sha256_hex_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+async fn sha256_hex_file(path: &str) -> anyhow::Result<String> {
+    let p = path.to_string();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let mut file = std::fs::File::open(&p)?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            use std::io::Read;
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("sha256 task failed: {e}"))?
 }
 
 // ── Request body types ────────────────────────────────────────────────────
@@ -2262,6 +2289,10 @@ async fn process_uploaded_single_file(
     mime_type: &str,
     assembled_path: &str,
 ) -> anyhow::Result<String> {
+    let content_hash = sha256_hex_file(assembled_path).await?;
+    if let Some(existing) = state.db.find_project_file_by_hash(project_id, &content_hash)? {
+        return Ok(existing.stored_path);
+    }
     let unique_name = format!("{}_{}_{}", Utc::now().timestamp_millis(), rand_suffix(), sanitize_upload_name(file_name));
     let stored_path = state
         .file_storage
@@ -2270,7 +2301,7 @@ async fn process_uploaded_single_file(
     let size_bytes = tokio::fs::metadata(assembled_path).await?.len() as i64;
     let file_id = state
         .db
-        .insert_project_file(project_id, file_name, &stored_path, mime_type, size_bytes)?;
+        .insert_project_file(project_id, file_name, &stored_path, mime_type, size_bytes, &content_hash)?;
     if let Err(e) = state
         .ingestion_queue
         .enqueue_project_file(project_id, file_id, file_name, &stored_path, mime_type, size_bytes)
@@ -2321,6 +2352,7 @@ async fn process_uploaded_zip(
 
     let mut dir = tokio::fs::read_dir(&extract_dir).await?;
     let mut imported = 0i64;
+    let mut deduped = 0i64;
     while let Some(entry) = dir.next_entry().await? {
         let path = entry.path();
         if !path.is_file() {
@@ -2334,6 +2366,15 @@ async fn process_uploaded_zip(
             .split_once("__")
             .map(|(_, name)| name.to_string())
             .unwrap_or_else(|| stem.to_string());
+        let content_hash = sha256_hex_file(path.to_string_lossy().as_ref()).await?;
+        if state
+            .db
+            .find_project_file_by_hash(project_id, &content_hash)?
+            .is_some()
+        {
+            deduped += 1;
+            continue;
+        }
         let unique_name = format!("{}_{}_{}", Utc::now().timestamp_millis(), rand_suffix(), sanitize_upload_name(&file_name));
         let stored_path = state
             .file_storage
@@ -2343,7 +2384,7 @@ async fn process_uploaded_zip(
         let mime_type = guess_mime_from_name(&file_name);
         let file_id = state
             .db
-            .insert_project_file(project_id, &file_name, &stored_path, &mime_type, size_bytes)?;
+            .insert_project_file(project_id, &file_name, &stored_path, &mime_type, size_bytes, &content_hash)?;
         if let Err(e) = state
             .ingestion_queue
             .enqueue_project_file(project_id, file_id, &file_name, &stored_path, &mime_type, size_bytes)
@@ -2354,7 +2395,9 @@ async fn process_uploaded_zip(
         imported += 1;
     }
     let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-    Ok(format!("zip://session/{session_id}/imported/{imported}"))
+    Ok(format!(
+        "zip://session/{session_id}/imported/{imported}/deduped/{deduped}"
+    ))
 }
 
 pub(crate) async fn complete_upload_session(
@@ -2421,6 +2464,7 @@ pub(crate) async fn upload_project_files(
 
     let mut total_bytes = state.db.total_project_file_bytes(id).map_err(internal)?;
     let mut uploaded: Vec<ProjectFileJson> = Vec::new();
+    let mut deduped = 0i64;
     while let Some(field) = multipart.next_field().await.map_err(internal)? {
         let raw_name = field
             .file_name()
@@ -2434,6 +2478,16 @@ pub(crate) async fn upload_project_files(
         let bytes = field.bytes().await.map_err(internal)?;
         let file_size = bytes.len() as i64;
         if file_size == 0 {
+            continue;
+        }
+        let content_hash = sha256_hex_bytes(&bytes);
+        if state
+            .db
+            .find_project_file_by_hash(id, &content_hash)
+            .map_err(internal)?
+            .is_some()
+        {
+            deduped += 1;
             continue;
         }
         if total_bytes + file_size > max_project_bytes {
@@ -2454,7 +2508,7 @@ pub(crate) async fn upload_project_files(
 
         let file_id = state
             .db
-            .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size)
+            .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size, &content_hash)
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue
@@ -2512,7 +2566,7 @@ pub(crate) async fn upload_project_files(
         });
     }
 
-    Ok(Json(json!({ "uploaded": uploaded })))
+    Ok(Json(json!({ "uploaded": uploaded, "deduped": deduped })))
 }
 
 async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String, StatusCode> {
@@ -4090,7 +4144,9 @@ pub(crate) async fn import_cloud_files(
             .map_err(internal)?;
 
         let mime = guess_mime(&file.name);
-        let file_id = state.db.insert_project_file(id, &safe_name, &stored_path, &mime, file_size)
+        let file_id = state
+            .db
+            .insert_project_file(id, &safe_name, &stored_path, &mime, file_size, "")
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue
@@ -4396,6 +4452,7 @@ mod tests {
             mime_type: "text/plain".to_string(),
             size_bytes: 0,
             extracted_text: String::new(),
+            content_hash: String::new(),
             created_at: Utc::now(),
         }
     }

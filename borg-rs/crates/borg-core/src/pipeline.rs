@@ -872,12 +872,39 @@ impl Pipeline {
         } else {
             report.push_str("\nResult: FINDINGS\n\n");
             for f in &findings {
-                report.push_str(&format!("- {f}\n"));
+                report.push_str(&format!("- [{}] {} ({})\n", f.severity, f.issue, f.check_id));
             }
             report.push_str("\nRecommended remediation: add a `Regulatory Considerations` section with source links and an as-of date.\n");
         }
 
-        let success = findings.is_empty() || enforcement != "block";
+        let compliance_json = serde_json::json!({
+            "phase": phase.name,
+            "profile": profile,
+            "enforcement": enforcement,
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "passed": findings.is_empty(),
+            "findings": findings.iter().map(|f| serde_json::json!({
+                "check_id": f.check_id,
+                "severity": f.severity,
+                "issue": f.issue,
+                "source_url": f.source_url,
+                "as_of": f.as_of,
+            })).collect::<Vec<_>>(),
+        });
+        if let Ok(existing_raw) = self.db.get_task_structured_data(task.id) {
+            let mut base = serde_json::from_str::<serde_json::Value>(&existing_raw)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            if !base.is_object() {
+                base = serde_json::json!({});
+            }
+            base["compliance_check"] = compliance_json;
+            if let Ok(serialized) = serde_json::to_string(&base) {
+                let _ = self.db.update_task_structured_data(task.id, &serialized);
+            }
+        }
+
+        let blocked = compliance_should_block(enforcement, &findings);
+        let success = !blocked;
         let exit_code = if success { 0 } else { 1 };
         if let Err(e) =
             self.db
@@ -891,7 +918,7 @@ impl Pipeline {
             return Ok(());
         }
 
-        if enforcement == "block" {
+        if blocked {
             self.db
                 .update_task_status(task.id, "pending_review", Some(&report))?;
             self.emit(PipelineEvent::Phase {
@@ -1438,7 +1465,7 @@ impl Pipeline {
         }
 
         let rebase = tokio::process::Command::new("git")
-            .args(["rebase", "origin/main"])
+            .args(["rebase", "-X", "theirs", "origin/main"])
             .current_dir(&work_dir_s)
             .output()
             .await
@@ -1457,6 +1484,36 @@ impl Pipeline {
                 self.fail_or_retry(task, "rebase", &format!("compile check failed: {err}"))?;
                 return Ok(());
             }
+        }
+
+        // Ensure push targets GitHub branch (not local checkout path remote).
+        let gh_token = std::env::var("GH_TOKEN")
+            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+            .ok()
+            .or_else(|| {
+                Command::new("gh")
+                    .args(["auth", "token"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            })
+            .unwrap_or_default();
+        let origin_url = if !gh_token.is_empty() {
+            format!("https://x-access-token:{gh_token}@github.com/{slug}.git")
+        } else {
+            format!("https://github.com/{slug}.git")
+        };
+        let set_url = tokio::process::Command::new("git")
+            .args(["remote", "set-url", "origin", &origin_url])
+            .current_dir(&work_dir_s)
+            .output()
+            .await
+            .context("git remote set-url origin")?;
+        if !set_url.status.success() {
+            let err = String::from_utf8_lossy(&set_url.stderr).to_string();
+            self.fail_or_retry(task, "rebase", &format!("set-url failed: {err}"))?;
+            return Ok(());
         }
 
         let push = tokio::process::Command::new("git")
@@ -1755,7 +1812,30 @@ and report what went wrong.",
                 let data = String::from_utf8_lossy(&output.stdout);
                 let trimmed = data.trim();
                 if !trimmed.is_empty() {
-                    if let Err(e) = self.db.update_task_structured_data(task.id, trimmed) {
+                    let merged = match self.db.get_task_structured_data(task.id) {
+                        Ok(existing_raw) => {
+                            let mut existing = serde_json::from_str::<serde_json::Value>(&existing_raw)
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                            let fresh = serde_json::from_str::<serde_json::Value>(trimmed)
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                            if existing.is_object() && fresh.is_object() {
+                                if let (Some(existing_obj), Some(fresh_obj)) =
+                                    (existing.as_object_mut(), fresh.as_object())
+                                {
+                                    for (k, v) in fresh_obj {
+                                        existing_obj.insert(k.clone(), v.clone());
+                                    }
+                                    serde_json::to_string(&existing).unwrap_or_else(|_| trimmed.to_string())
+                                } else {
+                                    trimmed.to_string()
+                                }
+                            } else {
+                                trimmed.to_string()
+                            }
+                        }
+                        Err(_) => trimmed.to_string(),
+                    };
+                    if let Err(e) = self.db.update_task_structured_data(task.id, &merged) {
                         tracing::warn!("task #{}: failed to save structured data: {e}", task.id);
                     } else {
                         tracing::info!("task #{}: saved structured output ({} bytes)", task.id, trimmed.len());
@@ -3279,28 +3359,68 @@ fn extract_blocks(text: &str, start_marker: &str, end_marker: &str) -> Vec<Strin
     blocks
 }
 
-fn run_compliance_pack(profile: &str, text: &str) -> Vec<String> {
+#[derive(Debug, Clone)]
+struct ComplianceFinding {
+    check_id: String,
+    severity: &'static str,
+    issue: String,
+    source_url: String,
+    as_of: String,
+}
+
+fn run_compliance_pack(profile: &str, text: &str) -> Vec<ComplianceFinding> {
+    let as_of = chrono::Utc::now().format("%Y-%m-%d").to_string();
     if text.trim().is_empty() {
-        return vec!["No prior phase output found to evaluate.".to_string()];
+        return vec![ComplianceFinding {
+            check_id: "output_present".into(),
+            severity: "high",
+            issue: "No prior phase output found to evaluate.".into(),
+            source_url: "".into(),
+            as_of,
+        }];
     }
 
     let lower = text.to_lowercase();
     let mut findings = Vec::new();
 
     if !lower.contains("regulatory considerations") {
-        findings.push("Missing `Regulatory Considerations` section.".to_string());
+        findings.push(ComplianceFinding {
+            check_id: "regulatory_section".into(),
+            severity: "medium",
+            issue: "Missing `Regulatory Considerations` section.".into(),
+            source_url: "".into(),
+            as_of: as_of.clone(),
+        });
     }
     if !(lower.contains("as of ") || lower.contains("as-of")) {
-        findings.push("Missing an explicit as-of date for regulatory statements.".to_string());
+        findings.push(ComplianceFinding {
+            check_id: "as_of_date".into(),
+            severity: "medium",
+            issue: "Missing an explicit as-of date for regulatory statements.".into(),
+            source_url: "".into(),
+            as_of: as_of.clone(),
+        });
     }
     if !(lower.contains("http://") || lower.contains("https://")) {
-        findings.push("Missing source URLs for regulatory references.".to_string());
+        findings.push(ComplianceFinding {
+            check_id: "source_links".into(),
+            severity: "high",
+            issue: "Missing source URLs for regulatory references.".into(),
+            source_url: "".into(),
+            as_of: as_of.clone(),
+        });
     }
 
     match profile {
         "uk_sra" => {
             if !(lower.contains("sra") || lower.contains("solicitors regulation authority")) {
-                findings.push("UK profile selected but no SRA reference found.".to_string());
+                findings.push(ComplianceFinding {
+                    check_id: "uk_sra_reference".into(),
+                    severity: "high",
+                    issue: "UK profile selected but no SRA reference found.".into(),
+                    source_url: "https://www.sra.org.uk/solicitors/standards-regulations/".into(),
+                    as_of: as_of.clone(),
+                });
             }
         }
         "us_prof_resp" => {
@@ -3308,20 +3428,33 @@ fn run_compliance_pack(profile: &str, text: &str) -> Vec<String> {
                 || lower.contains("professional conduct")
                 || lower.contains("state bar"))
             {
-                findings.push(
-                    "US profile selected but no Model Rules/state professional-conduct reference found."
-                        .to_string(),
-                );
+                findings.push(ComplianceFinding {
+                    check_id: "us_model_rules_reference".into(),
+                    severity: "high",
+                    issue: "US profile selected but no Model Rules/state professional-conduct reference found.".into(),
+                    source_url: "https://www.americanbar.org/groups/professional_responsibility/publications/model_rules_of_professional_conduct/".into(),
+                    as_of: as_of.clone(),
+                });
             }
         }
         _ => {
-            findings.push(format!(
-                "Unknown compliance profile `{profile}` (supported: uk_sra, us_prof_resp)."
-            ));
+            findings.push(ComplianceFinding {
+                check_id: "profile_supported".into(),
+                severity: "high",
+                issue: format!(
+                    "Unknown compliance profile `{profile}` (supported: uk_sra, us_prof_resp)."
+                ),
+                source_url: "".into(),
+                as_of,
+            });
         }
     }
 
     findings
+}
+
+fn compliance_should_block(enforcement: &str, findings: &[ComplianceFinding]) -> bool {
+    !findings.is_empty() && enforcement == "block"
 }
 
 fn extract_field(block: &str, field: &str) -> Option<String> {
@@ -3557,5 +3690,20 @@ mod tests {
         assert!(clone_cmd.contains("'/mirrors/my repo.git'"));
         // Sanity-check the unquoted form is NOT present (would be split by bash).
         assert!(!clone_cmd.contains(" /mirrors/my repo.git "));
+    }
+
+    #[test]
+    fn compliance_pack_unknown_profile_returns_supported_error() {
+        let findings = run_compliance_pack("unknown_pack", "Regulatory Considerations\nas of 2026-01-01\nhttps://example.com");
+        assert!(!findings.is_empty());
+        assert!(findings.iter().any(|f| f.check_id == "profile_supported"));
+    }
+
+    #[test]
+    fn compliance_should_block_only_when_enforcement_is_block() {
+        let findings = run_compliance_pack("uk_sra", "short output");
+        assert!(compliance_should_block("block", &findings));
+        assert!(!compliance_should_block("warn", &findings));
+        assert!(!compliance_should_block("block", &[]));
     }
 }
