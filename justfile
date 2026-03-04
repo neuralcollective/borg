@@ -65,6 +65,10 @@ s: t b install-service restart
 
 ship: dash s
 
+# Full remote bootstrap + deploy (requires BORG_HOST env var).
+agent-deploy:
+    deploy/agent-deploy.sh
+
 # Install/update the service file (systemd on Linux, launchd on macOS)
 install-service:
     #!/usr/bin/env bash

@@ -2,6 +2,21 @@
 
 Hetzner VPS + Cloudflare Tunnel + Cloudflare Access (SSO).
 
+For AWS-only vs low-cost hybrid decision guidance, see [DEPLOYMENT_PROFILES.md](./DEPLOYMENT_PROFILES.md).
+Before cutover, run:
+
+```bash
+deploy/preflight.sh http://127.0.0.1:3131
+```
+
+For agent-driven one-command deploys (bootstrap + build + restart + settings apply + preflight), use:
+
+```bash
+BORG_HOST=root@<server-ip> \
+BORG_SETTINGS_FILE=$(pwd)/deploy/settings.production.example.json \
+deploy/agent-deploy.sh
+```
+
 ## Architecture
 
 ```
