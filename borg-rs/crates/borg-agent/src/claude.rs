@@ -453,17 +453,23 @@ impl AgentBackend for ClaudeBackend {
             }
         }
 
-        let cidfile_path = if is_docker {
-            let ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let p = format!("/tmp/borg-cid-{}-{}.txt", task.id, ms);
-            let _ = std::fs::remove_file(&p);
-            Some(p)
+        // RAII handle: unconditionally deleted when dropped (even on early exit or panic).
+        // Docker's --cidfile requires the path to not exist, so we remove the empty file
+        // created by NamedTempFile before spawning Docker; the handle still cleans up
+        // the Docker-written file on drop.
+        let cid_tempfile: Option<tempfile::NamedTempFile> = if is_docker {
+            let tf = tempfile::Builder::new()
+                .prefix(&format!("borg-cid-{}-", task.id))
+                .suffix(".txt")
+                .tempfile()
+                .context("failed to create cid tempfile")?;
+            let _ = std::fs::remove_file(tf.path());
+            Some(tf)
         } else {
             None
         };
+        let cidfile_path: Option<std::path::PathBuf> =
+            cid_tempfile.as_ref().map(|f| f.path().to_path_buf());
 
         let real_home = std::env::var("HOME").unwrap_or_default();
         let rustup_home = std::env::var("RUSTUP_HOME")
