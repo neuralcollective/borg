@@ -42,6 +42,19 @@ Work should prioritize these measurable outcomes before expanding non-core domai
 - SWE reliability: task-to-merge success rate, retry/failure rate, CI pass rate, and cycle time.
 - Operational stability: active task throughput, blocked-task aging, and stream/log observability coverage.
 
+### Regulated Workflows
+
+For jurisdiction-sensitive legal pipelines, add a `compliance_check` phase in Mode Creator.
+
+- Profiles:
+- `uk_sra` (UK SRA / Law Society oriented checks)
+- `us_prof_resp` (US professional-responsibility checks)
+- Enforcement:
+- `warn`: record findings and continue
+- `block`: move task to `pending_review` until reviewer requests revision
+- Recommended placement:
+- after drafting/review agent phases, before terminal `done`
+
 ### How It Works
 
 Tasks move through configurable phases. Each task gets its own git branch. Agents run in Docker containers (preferred), bubblewrap sandboxes, or direct mode — controlled by `SANDBOX_BACKEND`. Sessions persist across retries.

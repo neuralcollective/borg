@@ -1552,6 +1552,69 @@ impl Db {
         .context("get_upload_session")
     }
 
+    pub fn list_upload_sessions(
+        &self,
+        project_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<UploadSession>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let lim = limit.clamp(1, 500);
+        let sql = if project_id.is_some() {
+            "SELECT id, project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, \
+                    is_zip, status, stored_path, error, created_at, updated_at \
+             FROM upload_sessions WHERE project_id=?1 ORDER BY id DESC LIMIT ?2"
+        } else {
+            "SELECT id, project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, \
+                    is_zip, status, stored_path, error, created_at, updated_at \
+             FROM upload_sessions ORDER BY id DESC LIMIT ?1"
+        };
+        let mut stmt = conn.prepare(sql).context("list_upload_sessions prepare")?;
+        let out = if let Some(pid) = project_id {
+            stmt.query_map(params![pid, lim], row_to_upload_session)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .context("list_upload_sessions map")?
+        } else {
+            stmt.query_map(params![lim], row_to_upload_session)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .context("list_upload_sessions map")?
+        };
+        Ok(out)
+    }
+
+    pub fn count_upload_sessions_by_status(
+        &self,
+        project_id: Option<i64>,
+    ) -> Result<HashMap<String, i64>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let sql = if project_id.is_some() {
+            "SELECT status, COUNT(*) FROM upload_sessions WHERE project_id=?1 GROUP BY status"
+        } else {
+            "SELECT status, COUNT(*) FROM upload_sessions GROUP BY status"
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .context("count_upload_sessions_by_status prepare")?;
+        let mut out = HashMap::new();
+        if let Some(pid) = project_id {
+            let rows = stmt.query_map(params![pid], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (status, count) = row?;
+                out.insert(status, count);
+            }
+        } else {
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (status, count) = row?;
+                out.insert(status, count);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn list_uploaded_chunks(&self, session_id: i64) -> Result<Vec<i64>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
@@ -1799,7 +1862,7 @@ impl Db {
     pub fn list_knowledge_files(&self) -> Result<Vec<KnowledgeFile>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, file_name, description, size_bytes, inline, created_at, \
+            "SELECT id, file_name, description, size_bytes, \"inline\", created_at, \
                     tags, category, jurisdiction, project_id \
              FROM knowledge_files ORDER BY created_at",
         )?;
@@ -1812,7 +1875,7 @@ impl Db {
     pub fn get_knowledge_file(&self, id: i64) -> Result<Option<KnowledgeFile>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
-            "SELECT id, file_name, description, size_bytes, inline, created_at, \
+            "SELECT id, file_name, description, size_bytes, \"inline\", created_at, \
                     tags, category, jurisdiction, project_id \
              FROM knowledge_files WHERE id=?1",
             params![id],
@@ -1825,7 +1888,7 @@ impl Db {
     pub fn list_templates(&self, category: Option<&str>, jurisdiction: Option<&str>) -> Result<Vec<KnowledgeFile>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT id, file_name, description, size_bytes, inline, created_at, \
+            "SELECT id, file_name, description, size_bytes, \"inline\", created_at, \
                     tags, category, jurisdiction, project_id \
              FROM knowledge_files \
              WHERE (?1 IS NULL OR category = ?1) AND (?2 IS NULL OR jurisdiction = ?2 OR jurisdiction = '') \
@@ -1846,7 +1909,7 @@ impl Db {
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
-            "INSERT INTO knowledge_files (file_name, description, size_bytes, inline) \
+            "INSERT INTO knowledge_files (file_name, description, size_bytes, \"inline\") \
              VALUES (?1, ?2, ?3, ?4)",
             params![file_name, description, size_bytes, inline as i64],
         )?;
@@ -1870,7 +1933,7 @@ impl Db {
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(d) = description { conn.execute("UPDATE knowledge_files SET description=?1 WHERE id=?2", params![d, id])?; }
-        if let Some(i) = inline { conn.execute("UPDATE knowledge_files SET inline=?1 WHERE id=?2", params![i as i64, id])?; }
+        if let Some(i) = inline { conn.execute("UPDATE knowledge_files SET \"inline\"=?1 WHERE id=?2", params![i as i64, id])?; }
         if let Some(t) = tags { conn.execute("UPDATE knowledge_files SET tags=?1 WHERE id=?2", params![t, id])?; }
         if let Some(c) = category { conn.execute("UPDATE knowledge_files SET category=?1 WHERE id=?2", params![c, id])?; }
         if let Some(j) = jurisdiction { conn.execute("UPDATE knowledge_files SET jurisdiction=?1 WHERE id=?2", params![j, id])?; }

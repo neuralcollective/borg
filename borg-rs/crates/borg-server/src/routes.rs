@@ -2097,6 +2097,16 @@ pub(crate) struct CreateUploadSessionBody {
     pub is_zip: bool,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct UploadSessionsQuery {
+    #[serde(default = "default_upload_session_limit")]
+    pub limit: i64,
+}
+
+fn default_upload_session_limit() -> i64 {
+    100
+}
+
 fn upload_chunks_dir(data_dir: &str, session_id: i64) -> String {
     format!("{data_dir}/uploads/sessions/{session_id}/chunks")
 }
@@ -2130,6 +2140,29 @@ fn guess_mime_from_name(file_name: &str) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+fn compute_missing_chunk_ranges(
+    total_chunks: i64,
+    uploaded_set: &HashSet<i64>,
+    max_ranges: usize,
+) -> Vec<(i64, i64)> {
+    let mut ranges = Vec::new();
+    let mut idx = 0i64;
+    while idx < total_chunks && ranges.len() < max_ranges {
+        if uploaded_set.contains(&idx) {
+            idx += 1;
+            continue;
+        }
+        let start = idx;
+        idx += 1;
+        while idx < total_chunks && !uploaded_set.contains(&idx) {
+            idx += 1;
+        }
+        let end = idx - 1;
+        ranges.push((start, end));
+    }
+    ranges
 }
 
 pub(crate) async fn create_upload_session(
@@ -2173,6 +2206,46 @@ pub(crate) async fn create_upload_session(
         "file_name": file_name,
         "total_chunks": body.total_chunks,
         "chunk_size": body.chunk_size,
+    })))
+}
+
+pub(crate) async fn list_project_upload_sessions(
+    State(state): State<Arc<AppState>>,
+    Path(project_id): Path<i64>,
+    Query(q): Query<UploadSessionsQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.db.get_project(project_id).map_err(internal)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let sessions = state
+        .db
+        .list_upload_sessions(Some(project_id), q.limit)
+        .map_err(internal)?;
+    let counts = state
+        .db
+        .count_upload_sessions_by_status(Some(project_id))
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "sessions": sessions,
+        "counts": counts,
+    })))
+}
+
+pub(crate) async fn get_upload_overview(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<UploadSessionsQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let sessions = state
+        .db
+        .list_upload_sessions(None, q.limit)
+        .map_err(internal)?;
+    let counts = state
+        .db
+        .count_upload_sessions_by_status(None)
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "sessions": sessions,
+        "counts": counts,
     })))
 }
 
@@ -2245,12 +2318,14 @@ pub(crate) async fn get_upload_session_status(
             break;
         }
     }
+    let missing_ranges = compute_missing_chunk_ranges(session.total_chunks, &uploaded_set, 128);
     Ok(Json(json!({
         "session": session,
         "uploaded_chunks": uploaded_count,
         "total_chunks": session.total_chunks,
         "missing_chunks": (session.total_chunks - uploaded_count).max(0),
         "next_missing_chunk": next_missing,
+        "missing_ranges": missing_ranges,
     })))
 }
 
@@ -2269,16 +2344,63 @@ async fn process_completed_upload_session(state: Arc<AppState>, project_id: i64,
             let _ = state
                 .db
                 .set_upload_session_state(session_id, "done", Some(&stored_path), Some(""));
+            let _ = tokio::fs::remove_file(&assembled_path).await;
+            let chunks_dir = upload_chunks_dir(&state.config.data_dir, session_id);
+            let _ = tokio::fs::remove_dir_all(chunks_dir).await;
         }
         Err(e) => {
             let _ = state
                 .db
-                .set_upload_session_state(session_id, "failed", None, Some(&e.to_string()));
+                .set_upload_session_state(session_id, "failed", Some(&assembled_path), Some(&e.to_string()));
         }
     }
-    let _ = tokio::fs::remove_file(&assembled_path).await;
-    let chunks_dir = upload_chunks_dir(&state.config.data_dir, session_id);
-    let _ = tokio::fs::remove_dir_all(chunks_dir).await;
+}
+
+pub(crate) async fn retry_upload_session(
+    State(state): State<Arc<AppState>>,
+    Path((project_id, session_id)): Path<(i64, i64)>,
+) -> Result<Json<Value>, StatusCode> {
+    let session = state
+        .db
+        .get_upload_session(session_id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if session.project_id != project_id {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if session.status != "failed" {
+        return Err(StatusCode::CONFLICT);
+    }
+    if session.stored_path.trim().is_empty() {
+        return Err(StatusCode::CONFLICT);
+    }
+    state
+        .db
+        .set_upload_session_state(session_id, "processing", Some(&session.stored_path), Some(""))
+        .map_err(internal)?;
+
+    let state_cloned = state.clone();
+    let sem = Arc::clone(&state.upload_processing_sem);
+    let assembled_path = session.stored_path.clone();
+    tokio::spawn(async move {
+        let permit = sem.acquire_owned().await;
+        if permit.is_err() {
+            let _ = state_cloned.db.set_upload_session_state(
+                session_id,
+                "failed",
+                Some(&assembled_path),
+                Some("upload processing semaphore unavailable"),
+            );
+            return;
+        }
+        let _permit = permit.unwrap();
+        process_completed_upload_session(state_cloned, project_id, session_id, assembled_path).await;
+    });
+
+    Ok(Json(json!({
+        "session_id": session_id,
+        "status": "processing",
+    })))
 }
 
 async fn process_uploaded_single_file(
@@ -2442,7 +2564,19 @@ pub(crate) async fn complete_upload_session(
         .map_err(internal)?;
 
     let state_cloned = state.clone();
+    let sem = Arc::clone(&state.upload_processing_sem);
     tokio::spawn(async move {
+        let permit = sem.acquire_owned().await;
+        if permit.is_err() {
+            let _ = state_cloned.db.set_upload_session_state(
+                session_id,
+                "failed",
+                None,
+                Some("upload processing semaphore unavailable"),
+            );
+            return;
+        }
+        let _permit = permit.unwrap();
         process_completed_upload_session(state_cloned, project_id, session_id, assembled_path).await;
     });
 

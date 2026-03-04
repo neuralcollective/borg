@@ -101,7 +101,7 @@ stateDiagram-v2
     implement --> failed : max attempts exhausted
 ```
 
-Phase statuses: `backlog`, `implement`, `validate`, `lint_fix`, `rebase`, `done`, `merged`, `blocked`, `failed`.
+Phase statuses: `backlog`, `implement`, `validate`, `lint_fix`, `rebase`, `compliance_check`, `done`, `merged`, `blocked`, `failed`.
 
 ### Pipeline Phases
 

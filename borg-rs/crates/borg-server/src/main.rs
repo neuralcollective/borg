@@ -32,7 +32,7 @@ use borg_core::{
 };
 use chrono::Utc;
 use serde_json::json;
-use tokio::sync::{broadcast, Mutex as TokioMutex};
+use tokio::sync::{broadcast, Mutex as TokioMutex, Semaphore};
 use axum::http::HeaderValue;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -61,6 +61,7 @@ pub struct AppState {
     pub file_storage: Arc<storage::FileStorage>,
     pub ingestion_queue: Arc<ingestion::IngestionQueue>,
     pub opensearch: Option<Arc<opensearch::OpenSearchClient>>,
+    pub upload_processing_sem: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -714,6 +715,7 @@ async fn main() -> anyhow::Result<()> {
         file_storage: Arc::clone(&file_storage),
         ingestion_queue: Arc::clone(&ingestion_queue),
         opensearch: opensearch.clone(),
+        upload_processing_sem: Arc::new(Semaphore::new(2)),
     });
 
     {
@@ -793,11 +795,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/projects/:id/uploads/sessions",
-            post(routes::create_upload_session),
+            post(routes::create_upload_session).get(routes::list_project_upload_sessions),
         )
         .route(
             "/api/projects/:id/uploads/sessions/:session_id",
             get(routes::get_upload_session_status),
+        )
+        .route(
+            "/api/projects/:id/uploads/sessions/:session_id/retry",
+            post(routes::retry_upload_session),
         )
         .route(
             "/api/projects/:id/uploads/sessions/:session_id/complete",
@@ -807,6 +813,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/projects/:id/uploads/sessions/:session_id/chunks/:chunk_index",
             put(routes::upload_session_chunk),
         )
+        .route("/api/uploads/overview", get(routes::get_upload_overview))
         .route(
             "/api/projects/:id/chat/messages",
             get(routes::get_project_chat_messages),
