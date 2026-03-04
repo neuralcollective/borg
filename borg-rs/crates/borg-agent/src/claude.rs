@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use borg_core::{
     agent::AgentBackend,
-    pipeline::derive_compile_check,
     sandbox::{Sandbox, SandboxMode},
     types::{ContainerTestResult, PhaseConfig, PhaseContext, PhaseOutput, Task},
 };

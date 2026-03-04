@@ -6,9 +6,7 @@ import {
   fetchProjectFileText,
   getProjectChatMessages,
   importProjectCloudFiles,
-  listProjectUploadSessions,
   reextractProjectFile,
-  summarizeProjectThemes,
   sendProjectChat,
   uploadProjectFiles,
   useProjectCloudConnections,
@@ -18,7 +16,7 @@ import {
   useProjects,
   searchDocuments,
 } from "@/lib/api";
-import type { CloudBrowseItem, CloudConnection, FtsSearchResult, ThemeSummary, UploadSession } from "@/lib/api";
+import type { CloudBrowseItem, CloudConnection, FtsSearchResult } from "@/lib/api";
 import { Eye, FileText, Mic, MicOff, ArrowLeft, Search, RotateCw, Folder } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
@@ -53,6 +51,11 @@ const CLOUD_PROVIDERS = [
   { id: "onedrive", label: "OneDrive", clientIdKey: "ms_client_id", clientSecretKey: "ms_client_secret" },
 ] as const;
 const MAX_CLOUD_IMPORT_SELECTION = 1000;
+const CHAT_SUGGESTED_PROMPTS = [
+  "Summarize key themes across all uploaded documents.",
+  "List recurring terms and explain why they matter for this matter.",
+  "Identify common patterns, contradictions, and missing evidence.",
+] as const;
 
 function cloudProviderLabel(provider: string): string {
   return CLOUD_PROVIDERS.find((p) => p.id === provider)?.label ?? provider;
@@ -799,6 +802,18 @@ export function ProjectsPanel() {
               </div>
 
               <div className="border-t border-white/[0.06] p-3">
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {CHAT_SUGGESTED_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => setMessageInput(prompt)}
+                      disabled={sending}
+                      className="rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex gap-2">
                   <textarea
                     value={messageInput}
