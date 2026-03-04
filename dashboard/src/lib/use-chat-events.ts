@@ -18,10 +18,13 @@ export function useChatEvents<T extends ChatEventBase>(
   useEffect(() => {
     if (!thread) return;
     retriesRef.current = 0;
+    let cancelled = false;
 
     function connect() {
+      if (cancelled) return;
       if (esRef.current) esRef.current.close();
       tokenReady.then(() => {
+        if (cancelled) return;
         const es = new AuthEventSource("/api/chat/events");
         esRef.current = es;
 
@@ -54,6 +57,7 @@ export function useChatEvents<T extends ChatEventBase>(
 
     connect();
     return () => {
+      cancelled = true;
       esRef.current?.close();
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
