@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useProjectDetail,
   useProjectTasks,
@@ -15,8 +15,6 @@ import {
   createDeadline,
   updateDeadline,
   deleteDeadline,
-  AuthEventSource,
-  tokenReady,
 } from "@/lib/api";
 import type { ConflictHit, Deadline } from "@/lib/api";
 import type { Project, ProjectTask, ProjectDocument } from "@/lib/types";
@@ -1337,7 +1335,6 @@ function ChatTab({ projectId }: { projectId: number }) {
   const [messageInput, setMessageInput] = useState("");
   const [sending, setSending] = useState(false);
   const dictation = useDictation(messageInput, setMessageInput);
-  const esRef = useRef<AuthEventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadKey = `project:${projectId}`;
 
@@ -1347,47 +1344,10 @@ function ChatTab({ projectId }: { projectId: number }) {
       .catch(() => setMessages([]));
   }, [projectId]);
 
-  useEffect(() => {
-    sseRetriesRef.current = 0;
-
-    function connectSSE() {
-      if (esRef.current) esRef.current.close();
-      tokenReady.then(() => {
-        const es = new AuthEventSource("/api/chat/events");
-        esRef.current = es;
-
-        es.onopen = () => { sseRetriesRef.current = 0; };
-
-        es.onmessage = (e) => {
-          try {
-            const msg: ChatMessage = JSON.parse(e.data);
-            if ((msg.thread ?? "") !== threadKey) return;
-            setMessages((prev) => [...prev, msg]);
-            if (msg.role === "assistant") setSending(false);
-          } catch {
-            // ignore malformed events
-          }
-        };
-
-        es.onerror = () => {
-          es.close();
-          esRef.current = null;
-          setSending(false);
-          if (sseRetriesRef.current < 5) {
-            const delay = Math.min(1000 * Math.pow(2, sseRetriesRef.current), 30000);
-            sseRetriesRef.current++;
-            sseRetryTimerRef.current = setTimeout(connectSSE, delay);
-          }
-        };
-      });
-    }
-
-    connectSSE();
-    return () => {
-      esRef.current?.close();
-      if (sseRetryTimerRef.current) clearTimeout(sseRetryTimerRef.current);
-    };
-  }, [projectId, threadKey]);
+  useChatEvents<ChatMessage>(threadKey, (msg) => {
+    setMessages((prev) => [...prev, msg]);
+    if (msg.role === "assistant") setSending(false);
+  }, () => setSending(false));
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });

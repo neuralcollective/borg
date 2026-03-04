@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { sseUrl, tokenReady } from "./api";
+import { AuthEventSource, tokenReady } from "./api";
 
 type ChatEventBase = {
   thread?: string;
@@ -11,7 +11,7 @@ export function useChatEvents<T extends ChatEventBase>(
   onDisconnect?: () => void,
   maxRetries = 5,
 ) {
-  const esRef = useRef<EventSource | null>(null);
+  const esRef = useRef<AuthEventSource | null>(null);
   const retriesRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -22,7 +22,7 @@ export function useChatEvents<T extends ChatEventBase>(
     function connect() {
       if (esRef.current) esRef.current.close();
       tokenReady.then(() => {
-        const es = new EventSource(sseUrl("/api/chat/events"));
+        const es = new AuthEventSource("/api/chat/events");
         esRef.current = es;
 
         es.onopen = () => {

@@ -20,8 +20,6 @@ import {
   useProjectFiles,
   useProjects,
   searchDocuments,
-  AuthEventSource,
-  tokenReady,
 } from "@/lib/api";
 import type { CloudBrowseItem, CloudConnection, FtsSearchResult } from "@/lib/api";
 import type { UploadSession } from "@/lib/api";
@@ -66,6 +64,7 @@ const CHAT_SUGGESTED_PROMPTS = [
 ] as const;
 const RESUMABLE_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 const RESUMABLE_UPLOAD_PARALLEL_CHUNKS = 4;
+const RESUMABLE_UPLOAD_CHUNK_RETRIES = 3;
 const UPLOAD_SESSION_KEY_PREFIX = "borg-upload-session";
 
 type FileUploadProgress = {
@@ -247,7 +246,6 @@ export function ProjectsPanel() {
   const [messageInput, setMessageInput] = useState("");
   const [sending, setSending] = useState(false);
   const dictation = useDictation(messageInput, setMessageInput);
-  const esRef = useRef<AuthEventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const totalBytes = useMemo(
@@ -306,40 +304,6 @@ export function ProjectsPanel() {
 
   useEffect(() => {
     if (!activeProjectId) return;
-    const threadKey = `project:${activeProjectId}`;
-    sseRetriesRef.current = 0;
-
-    function connectSSE() {
-      if (esRef.current) esRef.current.close();
-      tokenReady.then(() => {
-        const es = new AuthEventSource("/api/chat/events");
-        esRef.current = es;
-
-        es.onopen = () => { sseRetriesRef.current = 0; };
-
-        es.onmessage = (e) => {
-          try {
-            const msg: ChatMessage = JSON.parse(e.data);
-            if ((msg.thread ?? "") !== threadKey) return;
-            setMessages((prev) => [...prev, msg]);
-            if (msg.role === "assistant") setSending(false);
-          } catch {
-            // ignore malformed event
-          }
-        };
-
-        es.onerror = () => {
-          es.close();
-          esRef.current = null;
-          setSending(false);
-          if (sseRetriesRef.current < 5) {
-            const delay = Math.min(1000 * Math.pow(2, sseRetriesRef.current), 30000);
-            sseRetriesRef.current++;
-            sseRetryTimerRef.current = setTimeout(connectSSE, delay);
-          }
-        };
-      });
-    }
     let cancelled = false;
     const load = async () => {
       setUploadSessionsLoading(true);
@@ -466,35 +430,56 @@ export function ProjectsPanel() {
     return queue;
   }
 
-  async function uploadChunkQueue(
-    projectId: number,
-    sessionId: number,
-    file: File,
+async function uploadChunkQueue(
+  projectId: number,
+  sessionId: number,
+  file: File,
     chunkSize: number,
     queue: number[],
     onChunkUploaded: (bytes: number) => void,
   ) {
     const workerCount = Math.min(RESUMABLE_UPLOAD_PARALLEL_CHUNKS, queue.length);
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        while (true) {
-          const chunkIndex = queue.shift();
-          if (chunkIndex === undefined) return;
-          const start = chunkIndex * chunkSize;
-          const end = Math.min(start + chunkSize, file.size);
-          const blob = file.slice(start, end);
-          await uploadProjectUploadChunk(projectId, sessionId, chunkIndex, blob);
-          onChunkUploaded(blob.size);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const chunkIndex = queue.shift();
+        if (chunkIndex === undefined) return;
+        const start = chunkIndex * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const blob = file.slice(start, end);
+        let uploaded = false;
+        let lastErr: unknown = null;
+        for (let attempt = 1; attempt <= RESUMABLE_UPLOAD_CHUNK_RETRIES; attempt += 1) {
+          try {
+            await uploadProjectUploadChunk(projectId, sessionId, chunkIndex, blob);
+            uploaded = true;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < RESUMABLE_UPLOAD_CHUNK_RETRIES) {
+              await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+            }
+          }
         }
-      }),
-    );
-  }
+        if (!uploaded) {
+          throw lastErr instanceof Error ? lastErr : new Error("chunk upload failed");
+        }
+        onChunkUploaded(blob.size);
+      }
+    }),
+  );
+}
 
   async function handleUpload(filesToUpload: FileList | File[]) {
     if (!activeProjectId || uploading) return;
     setUploading(true);
     setUploadError(null);
-    const files = Array.from(filesToUpload);
+    const files = Array.from(filesToUpload).filter((file) => file.size > 0);
+    if (files.length === 0) {
+      setUploadError("No non-empty files selected.");
+      setUploading(false);
+      return;
+    }
     const startingProgress: FileUploadProgress[] = files.map((file, idx) => ({
       id: `${Date.now()}-${idx}-${file.name}`,
       fileName: file.name,
@@ -503,88 +488,108 @@ export function ProjectsPanel() {
       status: "starting",
     }));
     setUploadProgress(startingProgress);
+    const fileFailures: Array<{ fileName: string; error: string }> = [];
     try {
       for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
         const file = files[fileIndex];
         const progressId = startingProgress[fileIndex]?.id ?? `${Date.now()}-${fileIndex}-${file.name}`;
-        const chunkSize = RESUMABLE_UPLOAD_CHUNK_SIZE;
-        const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
-        const sessionKey = uploadSessionStorageKey(activeProjectId, file);
-        let sessionId = Number(localStorage.getItem(sessionKey) || "");
-        let status = null as Awaited<ReturnType<typeof getProjectUploadSessionStatus>> | null;
-
         try {
-          if (Number.isFinite(sessionId) && sessionId > 0) {
-            status = await getProjectUploadSessionStatus(activeProjectId, sessionId);
-            if (status.session.status !== "uploading") {
+          const chunkSize = RESUMABLE_UPLOAD_CHUNK_SIZE;
+          const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+          const sessionKey = uploadSessionStorageKey(activeProjectId, file);
+          let sessionId = Number(localStorage.getItem(sessionKey) || "");
+          let status = null as Awaited<ReturnType<typeof getProjectUploadSessionStatus>> | null;
+
+          if (!(Number.isFinite(sessionId) && sessionId > 0)) {
+            sessionId = 0;
+          } else {
+            try {
+              status = await getProjectUploadSessionStatus(activeProjectId, sessionId);
+              if (status.session.status !== "uploading") {
+                localStorage.removeItem(sessionKey);
+              }
+            } catch {
+              sessionId = 0;
+              status = null;
               localStorage.removeItem(sessionKey);
             }
-          } else {
-            sessionId = 0;
           }
-        } catch {
-          sessionId = 0;
-          status = null;
-          localStorage.removeItem(sessionKey);
-        }
 
-        if (!status) {
-          const created = await createProjectUploadSession(activeProjectId, {
-            file_name: file.name,
-            mime_type: file.type || "application/octet-stream",
-            file_size: file.size,
-            chunk_size: chunkSize,
-            total_chunks: totalChunks,
-            is_zip: file.name.toLowerCase().endsWith(".zip"),
+          if (!status) {
+            const created = await createProjectUploadSession(activeProjectId, {
+              file_name: file.name,
+              mime_type: file.type || "application/octet-stream",
+              file_size: file.size,
+              chunk_size: chunkSize,
+              total_chunks: totalChunks,
+              is_zip: file.name.toLowerCase().endsWith(".zip"),
+            });
+            sessionId = created.session_id;
+            localStorage.setItem(sessionKey, String(sessionId));
+            status = await getProjectUploadSessionStatus(activeProjectId, sessionId);
+          }
+
+          updateUploadProgress(progressId, {
+            sessionId,
+            uploadedBytes: status.session.uploaded_bytes,
+            status: status.session.status === "uploading" ? "uploading" : status.session.status,
           });
-          sessionId = created.session_id;
-          localStorage.setItem(sessionKey, String(sessionId));
-          status = await getProjectUploadSessionStatus(activeProjectId, sessionId);
-        }
 
-        updateUploadProgress(progressId, {
-          sessionId,
-          uploadedBytes: status.session.uploaded_bytes,
-          status: status.session.status === "uploading" ? "uploading" : status.session.status,
-        });
-
-        if (status.session.status === "uploading") {
-          const queue = buildChunkQueueFromRanges(status.missing_ranges, status.total_chunks);
-          await uploadChunkQueue(activeProjectId, sessionId, file, status.session.chunk_size, queue, (bytes) => {
+          if (status.session.status === "uploading") {
+            const queue = buildChunkQueueFromRanges(status.missing_ranges, status.total_chunks);
+            await uploadChunkQueue(activeProjectId, sessionId, file, status.session.chunk_size, queue, (bytes) => {
+              setUploadProgress((prev) =>
+                prev.map((entry) =>
+                  entry.id === progressId
+                    ? { ...entry, uploadedBytes: Math.min(entry.uploadedBytes + bytes, entry.totalBytes), status: "uploading" }
+                    : entry
+                ),
+              );
+            });
+            await completeProjectUploadSession(activeProjectId, sessionId);
+            localStorage.removeItem(sessionKey);
+            updateUploadProgress(progressId, {
+              uploadedBytes: file.size,
+              status: "processing",
+            });
+          } else if (status.session.status === "done") {
+            localStorage.removeItem(sessionKey);
+            updateUploadProgress(progressId, {
+              uploadedBytes: file.size,
+              status: "done",
+            });
+          } else if (status.session.status === "failed") {
             setUploadProgress((prev) =>
               prev.map((entry) =>
                 entry.id === progressId
-                  ? { ...entry, uploadedBytes: Math.min(entry.uploadedBytes + bytes, entry.totalBytes), status: "uploading" }
+                  ? { ...entry, status: "failed", error: status.session.error || "upload processing failed" }
                   : entry
               ),
             );
-          });
-          await completeProjectUploadSession(activeProjectId, sessionId);
-          localStorage.removeItem(sessionKey);
-          updateUploadProgress(progressId, {
-            uploadedBytes: file.size,
-            status: "processing",
-          });
-        } else if (status.session.status === "done") {
-          localStorage.removeItem(sessionKey);
-          updateUploadProgress(progressId, {
-            uploadedBytes: file.size,
-            status: "done",
-          });
-        } else if (status.session.status === "failed") {
+          } else {
+            updateUploadProgress(progressId, {
+              uploadedBytes: file.size,
+              status: "processing",
+            });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "upload failed";
+          fileFailures.push({ fileName: file.name, error: msg });
           updateUploadProgress(progressId, {
             status: "failed",
-            error: status.session.error || "upload processing failed",
-          });
-        } else {
-          updateUploadProgress(progressId, {
-            uploadedBytes: file.size,
-            status: "processing",
+            error: msg,
           });
         }
       }
       await refetchFiles();
       await refreshUploadSessions();
+      if (fileFailures.length > 0) {
+        const sample = fileFailures[0];
+        const summary = fileFailures.length === 1
+          ? `Upload failed for ${sample.fileName}: ${sample.error}`
+          : `${fileFailures.length} files failed (first: ${sample.fileName}: ${sample.error})`;
+        setUploadError(summary);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "upload failed";
       setUploadError(msg === "413" ? "Upload exceeds project byte limit." : `Upload failed (${msg})`);

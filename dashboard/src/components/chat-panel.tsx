@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { BorgingIndicator } from "./borging";
 import { ChatMarkdown } from "./chat-markdown";
-import { authHeaders, AuthEventSource, tokenReady } from "@/lib/api";
+import { authHeaders, tokenReady } from "@/lib/api";
+import { useChatEvents } from "@/lib/use-chat-events";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -34,7 +35,6 @@ export function ChatPanel() {
   const [showThreads, setShowThreads] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const esRef = useRef<AuthEventSource | null>(null);
   const lastTsRef = useRef<number>(0);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -75,59 +75,19 @@ export function ChatPanel() {
     fetchThreads();
   }, [thread, fetchMessages, fetchThreads]);
 
-  // SSE for real-time updates
-  const sseRetriesRef = useRef(0);
-  const connect = useCallback(() => {
-    if (esRef.current) esRef.current.close();
-    tokenReady.then(() => {
-      const es = new AuthEventSource("/api/chat/events");
-      esRef.current = es;
-
-      es.onopen = () => { sseRetriesRef.current = 0; };
-
-      es.onmessage = (e) => {
-        try {
-          const msg: ChatMessage = JSON.parse(e.data);
-          const msgThread = msg.thread || "web:dashboard";
-          if (msgThread !== thread) return;
-          if (msg.role === "user") return;
-          setMessages((prev) => [...prev, msg]);
-          lastTsRef.current = Math.max(lastTsRef.current, Number(msg.ts) || 0);
-          if (msg.role === "assistant") {
-            setSending(false);
-            if (sendingTimeoutRef.current) {
-              clearTimeout(sendingTimeoutRef.current);
-              sendingTimeoutRef.current = null;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      };
-
-      es.onerror = () => {
-        es.close();
-        esRef.current = null;
-        if (sseRetriesRef.current < 5) {
-          const delay = Math.min(1000 * Math.pow(2, sseRetriesRef.current), 30000);
-          sseRetriesRef.current++;
-          retryTimerRef.current = setTimeout(() => connectRef.current(), delay);
-        }
-      };
-    });
-  }, [thread]);
-
-  useEffect(() => {
-    connectRef.current = connect;
-  }, [connect]);
-
-  useEffect(() => {
-    if (retryTimerRef.current) {
-      clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = null;
+  const handleSseMessage = useCallback((msg: ChatMessage) => {
+    if (msg.role === "user") return;
+    setMessages((prev) => [...prev, msg]);
+    lastTsRef.current = Math.max(lastTsRef.current, Number(msg.ts) || 0);
+    if (msg.role === "assistant") {
+      setSending(false);
+      if (sendingTimeoutRef.current) {
+        clearTimeout(sendingTimeoutRef.current);
+        sendingTimeoutRef.current = null;
+      }
     }
   }, []);
-  useChatEvents<ChatMessage>(thread, handleSseMessage);
+  useChatEvents<ChatMessage>(thread, handleSseMessage, () => setSending(false));
 
   useEffect(() => {
     return () => {
