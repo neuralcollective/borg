@@ -232,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(
                 CodexBackend::new(config.codex_api_key.clone(), codex_model)
                     .with_reasoning_effort(codex_reasoning_effort)
+                    .with_timeout(config.agent_timeout_s as u64)
                     .with_git_identity(
                         &config.git_author_name,
                         &config.git_author_email,
