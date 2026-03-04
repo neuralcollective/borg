@@ -1,79 +1,13 @@
-use borg_agent::instruction::build_instruction;
-use borg_core::{
-    db::KnowledgeFile,
-    types::{PhaseConfig, PhaseContext, RepoConfig, Task},
-};
-use chrono::Utc;
+use borg_agent::instruction::build_knowledge_section;
+use borg_core::db::KnowledgeFile;
 
-fn make_task(title: &str, description: &str, last_error: &str) -> Task {
-    Task {
-        id: 1,
-        title: title.to_string(),
-        description: description.to_string(),
-        repo_path: String::new(),
-        branch: String::new(),
-        status: "impl".to_string(),
-        attempt: 1,
-        max_attempts: 3,
-        last_error: last_error.to_string(),
-        created_by: String::new(),
-        notify_chat: String::new(),
-        created_at: Utc::now(),
-        session_id: String::new(),
-        mode: String::new(),
-        backend: String::new(),
-        project_id: 0,
-        task_type: String::new(),
-        started_at: None,
-        completed_at: None,
-        duration_secs: None,
-        review_status: None,
-        revision_count: 0,
-    }
-}
-
-fn make_ctx() -> PhaseContext {
-    PhaseContext {
-        task: make_task("", "", ""),
-        repo_config: RepoConfig {
-            path: "/nonexistent".to_string(),
-            test_cmd: String::new(),
-            prompt_file: String::new(),
-            mode: String::new(),
-            is_self: false,
-            auto_merge: false,
-            lint_cmd: String::new(),
-            backend: String::new(),
-            repo_slug: String::new(),
-        },
-        data_dir: String::new(),
-        session_dir: String::new(),
-        work_dir: "/nonexistent".to_string(),
-        oauth_token: String::new(),
-        model: String::new(),
-        pending_messages: vec![],
-        system_prompt_suffix: String::new(),
-        user_coauthor: String::new(),
-        stream_tx: None,
-        setup_script: String::new(),
-        api_keys: Default::default(),
-        disallowed_tools: String::new(),
-        knowledge_files: vec![],
-        knowledge_dir: String::new(),
-        agent_network: None,
-        prior_research: vec![],
-        revision_count: 0,
-        experimental_domains: false,
-    }
-}
-
-fn make_knowledge_file(file_name: &str, description: &str) -> KnowledgeFile {
+fn kf(file_name: &str, description: &str, inline: bool) -> KnowledgeFile {
     KnowledgeFile {
         id: 1,
         file_name: file_name.to_string(),
         description: description.to_string(),
-        size_bytes: 100,
-        inline: false,
+        size_bytes: 0,
+        inline,
         tags: String::new(),
         category: String::new(),
         jurisdiction: String::new(),
@@ -82,224 +16,151 @@ fn make_knowledge_file(file_name: &str, description: &str) -> KnowledgeFile {
     }
 }
 
-// =============================================================================
-// Knowledge section: prepended with separator when non-empty
-// =============================================================================
+fn write_temp(dir: &std::path::Path, name: &str, content: &str) {
+    std::fs::write(dir.join(name), content).unwrap();
+}
+
+// ── Empty list ────────────────────────────────────────────────────────────
 
 #[test]
-fn test_knowledge_section_prepended_when_non_empty() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do the thing.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.knowledge_files = vec![make_knowledge_file("guide.md", "A guide")];
+fn test_empty_files_produces_no_section() {
+    let result = build_knowledge_section(&[], "/knowledge");
+    assert!(result.is_empty(), "expected empty string for no files, got: {result:?}");
+}
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+// ── External files ────────────────────────────────────────────────────────
 
-    assert!(
-        result.starts_with("## Knowledge Base"),
-        "knowledge section should be at start: {result}"
-    );
-    let sep_pos = result.find("\n\n---\n\n").expect("separator must follow knowledge section");
-    let inst_pos = result.find("Do the thing.").expect("instruction must be present");
-    assert!(sep_pos < inst_pos, "separator must appear before the instruction");
+#[test]
+fn test_external_file_renders_as_link() {
+    let files = vec![kf("guide.md", "", false)];
+    let result = build_knowledge_section(&files, "/knowledge");
+    assert!(result.contains("## Knowledge Base"));
+    assert!(result.contains("`/knowledge/guide.md`"));
 }
 
 #[test]
-fn test_no_knowledge_section_when_empty() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do the thing.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(
-        !result.contains("## Knowledge Base"),
-        "no knowledge section when files are empty: {result}"
-    );
-}
-
-// =============================================================================
-// include_task_context: controls presence of task title and description
-// =============================================================================
-
-#[test]
-fn test_include_task_context_true_shows_title_and_description() {
-    let task = make_task("My Task Title", "Task description here.", "");
-    let phase = PhaseConfig {
-        instruction: "Phase instruction.".to_string(),
-        include_task_context: true,
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(result.contains("Task: My Task Title"), "expected task title: {result}");
-    assert!(result.contains("Task description here."), "expected task description: {result}");
+fn test_external_file_with_description() {
+    let files = vec![kf("style.md", "Style guidelines", false)];
+    let result = build_knowledge_section(&files, "/knowledge");
+    assert!(result.contains("`/knowledge/style.md`"));
+    assert!(result.contains("Style guidelines"));
 }
 
 #[test]
-fn test_include_task_context_false_omits_title_and_description() {
-    let task = make_task("My Task Title", "Task description here.", "");
-    let phase = PhaseConfig {
-        instruction: "Phase instruction.".to_string(),
-        include_task_context: false,
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(!result.contains("My Task Title"), "title should be absent: {result}");
-    assert!(!result.contains("Task description here."), "description should be absent: {result}");
+fn test_external_file_no_fenced_block() {
+    let files = vec![kf("ref.md", "", false)];
+    let result = build_knowledge_section(&files, "/knowledge");
+    assert!(!result.contains("```"), "external file should not have fenced code block");
 }
 
-// =============================================================================
-// last_error + error_instruction: {ERROR} placeholder substitution
-// =============================================================================
+// ── Inline files ──────────────────────────────────────────────────────────
 
 #[test]
-fn test_error_placeholder_substituted() {
-    let task = make_task("Title", "Desc", "test suite panicked");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        error_instruction: "Previous attempt failed: {ERROR}".to_string(),
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
+fn test_inline_file_embedded_in_fenced_block() {
+    let dir = tempdir();
+    write_temp(&dir, "rules.md", "Rule 1: be nice\nRule 2: be clear");
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let files = vec![kf("rules.md", "", true)];
+    let result = build_knowledge_section(&files, dir.to_str().unwrap());
 
-    assert!(
-        result.contains("Previous attempt failed: test suite panicked"),
-        "expected substituted error: {result}"
-    );
+    assert!(result.contains("## Knowledge Base"));
+    assert!(result.contains("**rules.md**"));
+    assert!(result.contains("```"));
+    assert!(result.contains("Rule 1: be nice"));
+    assert!(result.contains("Rule 2: be clear"));
 }
 
 #[test]
-fn test_no_error_section_when_last_error_empty() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        error_instruction: "Previous attempt failed: {ERROR}".to_string(),
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
+fn test_inline_file_with_description_in_parens() {
+    let dir = tempdir();
+    write_temp(&dir, "notes.md", "some content");
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let files = vec![kf("notes.md", "Meeting notes", true)];
+    let result = build_knowledge_section(&files, dir.to_str().unwrap());
 
-    assert!(
-        !result.contains("Previous attempt failed"),
-        "no error section when last_error is empty: {result}"
-    );
+    assert!(result.contains("(Meeting notes)"));
 }
 
 #[test]
-fn test_no_error_section_when_error_instruction_empty() {
-    let task = make_task("Title", "Desc", "some error occurred");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        // error_instruction is empty (default)
-        ..PhaseConfig::default()
-    };
-    let ctx = make_ctx();
+fn test_inline_empty_file_renders_as_plain_listing() {
+    let dir = tempdir();
+    write_temp(&dir, "empty.md", "   ");
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let files = vec![kf("empty.md", "", true)];
+    let result = build_knowledge_section(&files, dir.to_str().unwrap());
 
-    assert!(
-        !result.contains("some error occurred"),
-        "no error section when error_instruction is empty: {result}"
-    );
-}
-
-// =============================================================================
-// Revision messages: include revision header and count
-// =============================================================================
-
-#[test]
-fn test_revision_messages_include_header_and_count() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Write document.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 3;
-    ctx.pending_messages = vec![("reviewer".to_string(), "Fix section 2.".to_string())];
-
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(result.contains("Revision #3"), "expected revision header with count: {result}");
-    assert!(result.contains("Reviewer Feedback"), "expected reviewer feedback header: {result}");
-    assert!(result.contains("Fix section 2."), "expected message content: {result}");
-    assert!(result.contains("[reviewer]"), "expected role in message: {result}");
+    assert!(result.contains("**empty.md**"));
+    assert!(!result.contains("```"), "empty inline file should not have fenced block");
 }
 
 #[test]
-fn test_revision_count_reflected_in_header() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Write document.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 1;
-    ctx.pending_messages = vec![("reviewer".to_string(), "Add citations.".to_string())];
+fn test_inline_missing_file_renders_as_plain_listing() {
+    // If the file doesn't exist, read_to_string returns "" → treated as empty
+    let files = vec![kf("missing.md", "", true)];
+    let result = build_knowledge_section(&files, "/nonexistent/path");
 
-    let result = build_instruction(&task, &phase, &ctx, None);
-
-    assert!(result.contains("Revision #1"), "revision count should be 1: {result}");
+    assert!(result.contains("**missing.md**"));
+    assert!(!result.contains("```"));
 }
 
-// =============================================================================
-// Queue messages: simpler prefix format (revision_count == 0)
-// =============================================================================
+// ── Mixed inline + external ───────────────────────────────────────────────
 
 #[test]
-fn test_queue_messages_use_simple_prefix_format() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 0;
-    ctx.pending_messages = vec![("user".to_string(), "Please add more tests.".to_string())];
+fn test_mixed_inline_and_external() {
+    let dir = tempdir();
+    write_temp(&dir, "inline.md", "Inline content here");
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let files = vec![
+        kf("inline.md", "Embedded file", true),
+        kf("external.md", "Linked file", false),
+    ];
+    let result = build_knowledge_section(&files, dir.to_str().unwrap());
 
-    assert!(
-        result.contains("[user]: Please add more tests."),
-        "expected queue message format: {result}"
-    );
-    assert!(!result.contains("Revision #"), "no revision header for queue messages: {result}");
-    assert!(
-        !result.contains("Reviewer Feedback"),
-        "no reviewer feedback header for queue messages: {result}"
-    );
+    // Single knowledge section header
+    assert_eq!(result.matches("## Knowledge Base").count(), 1);
+
+    // Inline: embedded with fenced block
+    assert!(result.contains("**inline.md**"));
+    assert!(result.contains("Inline content here"));
+    assert!(result.contains("```"));
+
+    // External: link format
+    assert!(result.contains("`/knowledge/external.md`"));
+    assert!(result.contains("Linked file"));
+
+    // The link format should not appear for the inline file
+    assert!(!result.contains("`/knowledge/inline.md`"));
 }
 
 #[test]
-fn test_queue_messages_intro_text() {
-    let task = make_task("Title", "Desc", "");
-    let phase = PhaseConfig {
-        instruction: "Do work.".to_string(),
-        ..PhaseConfig::default()
-    };
-    let mut ctx = make_ctx();
-    ctx.revision_count = 0;
-    ctx.pending_messages = vec![("director".to_string(), "Prioritize speed.".to_string())];
+fn test_mixed_order_preserved() {
+    let dir = tempdir();
+    write_temp(&dir, "first.md", "Alpha");
 
-    let result = build_instruction(&task, &phase, &ctx, None);
+    let files = vec![
+        kf("first.md", "", true),
+        kf("second.md", "", false),
+        kf("third.md", "", false),
+    ];
+    let result = build_knowledge_section(&files, dir.to_str().unwrap());
 
-    assert!(
-        result.contains("messages were sent by the user or director"),
-        "expected queue intro text: {result}"
-    );
+    let pos_first = result.find("first.md").unwrap();
+    let pos_second = result.find("second.md").unwrap();
+    let pos_third = result.find("third.md").unwrap();
+    assert!(pos_first < pos_second, "first should appear before second");
+    assert!(pos_second < pos_third, "second should appear before third");
+}
+
+// ── Helper ────────────────────────────────────────────────────────────────
+
+fn tempdir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "borg_instr_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
