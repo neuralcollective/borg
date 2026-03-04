@@ -39,6 +39,27 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
     last_content
 }
 
+fn derive_compile_check(test_cmd: &str) -> Option<String> {
+    let trimmed = test_cmd.trim();
+    if trimmed.contains("cargo test") {
+        Some(format!("{trimmed} --no-run"))
+    } else {
+        None
+    }
+}
+
+/// Parse a `---BORG_TEST_RESULT---{json}` line emitted by the container entrypoint.
+pub fn parse_test_result(line: &str) -> Option<ContainerTestResult> {
+    let json_str = line.strip_prefix(BORG_TEST_RESULT_MARKER)?;
+    let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    Some(ContainerTestResult {
+        phase: v["phase"].as_str().unwrap_or("").to_string(),
+        passed: v["passed"].as_bool().unwrap_or(false),
+        exit_code: v["exitCode"].as_i64().unwrap_or(1) as i32,
+        output: v["output"].as_str().unwrap_or("").to_string(),
+    })
+}
+
 /// Runs Claude Code as a subprocess, with configurable sandbox isolation.
 pub struct ClaudeBackend {
     /// Path to the `claude` CLI binary.
@@ -165,32 +186,6 @@ impl ClaudeBackend {
         }
 
         serde_json::to_vec(&payload).unwrap_or_default()
-    }
-
-    /// Parse a `---BORG_TEST_RESULT---{json}` line emitted by the container entrypoint.
-    fn parse_test_result(line: &str) -> Option<ContainerTestResult> {
-        let json_str = line.strip_prefix(BORG_TEST_RESULT_MARKER)?;
-        let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
-        Some(ContainerTestResult {
-            phase: v["phase"].as_str().unwrap_or("").to_string(),
-            passed: v["passed"].as_bool().unwrap_or(false),
-            exit_code: v["exitCode"].as_i64().unwrap_or(1) as i32,
-            output: v["output"].as_str().unwrap_or("").to_string(),
-        })
-    }
-
-    fn resolve_gh_token() -> String {
-        std::env::var("GH_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
-            .unwrap_or_else(|_| {
-                std::process::Command::new("gh")
-                    .args(["auth", "token"])
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .unwrap_or_default()
-            })
     }
 
     fn host_mirror_path(task: &Task, data_dir: &str) -> String {
@@ -697,7 +692,7 @@ impl AgentBackend for ClaudeBackend {
                             Some(l) => {
                                 if let Some(sig) = l.strip_prefix(BORG_SIGNAL_MARKER) {
                                     signal_json = Some(sig.to_string());
-                                } else if let Some(r) = Self::parse_test_result(&l) {
+                                } else if let Some(r) = parse_test_result(&l) {
                                     container_test_results.push(r);
                                 } else {
                                     if let Some(tx) = &stream_tx {

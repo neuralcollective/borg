@@ -1,5 +1,6 @@
 pub mod claude;
 pub use claude::extract_phase_result;
+pub use claude::parse_test_result;
 pub mod codex;
 pub mod event;
 pub mod instruction;
