@@ -44,3 +44,11 @@ Run preflight:
 ```bash
 deploy/preflight.sh http://127.0.0.1:3131
 ```
+
+Agent automation commands:
+
+```bash
+just infra-plan
+just infra-apply
+just infra-ship
+```

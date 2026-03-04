@@ -8,11 +8,13 @@ set -euo pipefail
 #   BORG_REMOTE_DIR=/opt/borg
 #   BORG_SETTINGS_FILE=/abs/path/to/settings.json
 #   BORG_SERVICE_NAME=borg
+#   CF_TUNNEL_TOKEN=<cloudflare tunnel token>
 
 HOST="${BORG_HOST:?BORG_HOST is required (example: root@1.2.3.4)}"
 REMOTE_DIR="${BORG_REMOTE_DIR:-/opt/borg}"
 SERVICE_NAME="${BORG_SERVICE_NAME:-borg}"
 SETTINGS_FILE="${BORG_SETTINGS_FILE:-}"
+CF_TUNNEL_TOKEN="${CF_TUNNEL_TOKEN:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -43,7 +45,7 @@ if command -v apt-get >/dev/null 2>&1; then
   apt-get install -y \
     ca-certificates curl git rsync jq unzip \
     build-essential pkg-config libssl-dev \
-    docker.io sqlite3
+    docker.io sqlite3 cloudflared
 else
   echo "only apt-based hosts are currently supported by agent-deploy.sh" >&2
   exit 1
@@ -89,6 +91,12 @@ cp deploy/borg.service /etc/systemd/system/${SERVICE_NAME}.service
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}
 systemctl restart ${SERVICE_NAME}
+
+if [[ -n "${CF_TUNNEL_TOKEN}" ]]; then
+  cloudflared service install "${CF_TUNNEL_TOKEN}" || true
+  systemctl enable cloudflared >/dev/null 2>&1 || true
+  systemctl restart cloudflared >/dev/null 2>&1 || true
+fi
 REMOTE_BUILD
 
 if [[ -n "${SETTINGS_FILE}" ]]; then

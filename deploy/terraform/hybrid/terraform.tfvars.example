@@ -1,0 +1,19 @@
+hcloud_token           = "replace-me"
+cloudflare_api_token   = "replace-me"
+cloudflare_account_id  = "replace-me"
+cloudflare_zone_id     = "replace-me"
+
+domain        = "borg.legal"
+app_subdomain = "app"
+server_name   = "borg"
+server_type   = "cax21"
+server_image  = "ubuntu-24.04"
+server_location = "nbg1"
+
+ssh_public_key = "ssh-ed25519 AAAA... you@example"
+
+create_tunnel = true
+cloudflare_access_emails = ["you@example.com"]
+
+create_r2_bucket = true
+r2_bucket_name   = "borg-prod-files"

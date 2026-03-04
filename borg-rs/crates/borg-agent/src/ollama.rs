@@ -19,13 +19,6 @@ pub struct OllamaBackend {
     http: reqwest::Client,
 }
 
-fn build_client(timeout_secs: u64) -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .expect("failed to build HTTP client")
-}
-
 impl OllamaBackend {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let timeout_secs = 300u64;

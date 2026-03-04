@@ -17,6 +17,24 @@ BORG_SETTINGS_FILE=$(pwd)/deploy/settings.production.example.json \
 deploy/agent-deploy.sh
 ```
 
+For full infra + app automation (Terraform provision + deploy), use:
+
+```bash
+cp deploy/terraform/hybrid/terraform.tfvars.example deploy/terraform/hybrid/terraform.tfvars
+# edit secrets/IDs/SSH key in tfvars
+
+deploy/provision-hybrid.sh apply
+# then run the printed BORG_HOST=... deploy/agent-deploy.sh command
+```
+
+Or run full end-to-end in one command:
+
+```bash
+TFVARS_FILE=$(pwd)/deploy/terraform/hybrid/terraform.tfvars \
+BORG_SETTINGS_FILE=$(pwd)/deploy/settings.production.example.json \
+deploy/provision-and-deploy.sh
+```
+
 ## Architecture
 
 ```
