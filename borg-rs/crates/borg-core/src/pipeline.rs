@@ -229,6 +229,20 @@ impl Pipeline {
         self.config.backend.clone()
     }
 
+    fn repo_lint_cmd(&self, repo_path: &str, _worktree_path: &str) -> Option<String> {
+        let repo = self
+            .config
+            .watched_repos
+            .iter()
+            .find(|r| r.path == repo_path)?;
+        let lint_cmd = repo.lint_cmd.trim();
+        if lint_cmd.is_empty() {
+            None
+        } else {
+            Some(lint_cmd.to_string())
+        }
+    }
+
     /// Build a PhaseContext for a task phase.
     fn make_context(
         &self,
@@ -3670,14 +3684,6 @@ pub fn collect_stale_session_dirs(
         }
     }
     stale
-}
-
-async fn make_session_dir(rel: &str) -> Result<String> {
-    tokio::fs::create_dir_all(rel)
-        .await
-        .with_context(|| format!("failed to create session dir {rel}"))?;
-    let abs = std::fs::canonicalize(rel).unwrap_or_else(|_| std::path::PathBuf::from(rel));
-    Ok(abs.to_string_lossy().to_string())
 }
 
 fn looks_like_field_key(line: &str) -> bool {
