@@ -12,8 +12,7 @@ use axum::{
 use borg_core::{
     config::{refresh_oauth_token, Config},
     db::{Db, LegacyEvent, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
-    modes::all_modes,
-    types::{PhaseConfig, PhaseContext, PipelineMode, RepoConfig, Task},
+    types::{PhaseConfig, PhaseContext, RepoConfig, Task},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -28,6 +27,9 @@ use crate::{ingestion::IngestionQueue, storage::FileStorage, AppState};
 
 pub(crate) mod tasks;
 pub(crate) use tasks::*;
+pub(crate) use crate::routes_modes::{
+    delete_custom_mode, get_full_modes, get_modes, list_custom_modes, upsert_custom_mode,
+};
 
 // ── Error helper ──────────────────────────────────────────────────────────
 
@@ -328,6 +330,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "opensearch_url",
     "opensearch_index",
     "opensearch_username",
+    "experimental_domains",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -370,6 +373,7 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("opensearch_url", ""),
     ("opensearch_index", "borg-project-files"),
     ("opensearch_username", ""),
+    ("experimental_domains", "false"),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────
@@ -437,28 +441,6 @@ fn rand_suffix() -> u64 {
         .unwrap_or_default()
         .as_nanos() as u64);
     h.finish()
-}
-
-fn get_custom_modes(db: &Db) -> Vec<PipelineMode> {
-    let raw = match db.get_config("custom_modes") {
-        Ok(Some(v)) => v,
-        _ => return Vec::new(),
-    };
-    serde_json::from_str::<Vec<PipelineMode>>(&raw).unwrap_or_default()
-}
-
-fn save_custom_modes(db: &Db, modes: &[PipelineMode]) -> Result<(), StatusCode> {
-    let serialized = serde_json::to_string(modes).map_err(internal)?;
-    db.set_config("custom_modes", &serialized)
-        .map_err(internal)?;
-    Ok(())
-}
-
-fn valid_mode_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 fn parse_project_chat_key(chat_key: &str) -> Option<i64> {
@@ -2522,6 +2504,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 agent_network: None,
                 prior_research: Vec::new(),
                 revision_count: 0,
+                experimental_domains: state.config.experimental_domains,
             };
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
@@ -2567,84 +2550,6 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
     Json(json!({ "scored": count }))
 }
 
-// Modes
-
-fn is_experimental_mode(name: &str) -> bool {
-    !matches!(name, "sweborg" | "swe" | "lawborg" | "legal")
-}
-
-pub(crate) async fn get_modes(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let mut merged_modes = all_modes();
-    merged_modes.extend(get_custom_modes(&state.db));
-    let modes: Vec<Value> = merged_modes
-        .into_iter()
-        .map(|m| {
-            let phases: Vec<Value> = m
-                .phases
-                .iter()
-                .map(|p| json!({ "name": p.name, "label": p.label }))
-                .collect();
-            json!({
-                "name": m.name,
-                "label": m.label,
-                "category": m.category,
-                "phases": phases,
-                "experimental": is_experimental_mode(&m.name),
-            })
-        })
-        .collect();
-    Json(json!(modes))
-}
-
-pub(crate) async fn get_full_modes(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let mut merged_modes = all_modes();
-    merged_modes.extend(get_custom_modes(&state.db));
-    Json(json!(merged_modes))
-}
-
-pub(crate) async fn list_custom_modes(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!(get_custom_modes(&state.db)))
-}
-
-pub(crate) async fn upsert_custom_mode(
-    State(state): State<Arc<AppState>>,
-    Json(mode): Json<PipelineMode>,
-) -> Result<Json<Value>, StatusCode> {
-    let name = mode.name.trim();
-    if !valid_mode_name(name) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    if all_modes().iter().any(|m| m.name == name) {
-        return Err(StatusCode::CONFLICT);
-    }
-    if mode.phases.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let mut custom = get_custom_modes(&state.db);
-    custom.retain(|m| m.name != name);
-    custom.push(mode);
-    save_custom_modes(&state.db, &custom)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-pub(crate) async fn delete_custom_mode(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    if all_modes().iter().any(|m| m.name == name) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let mut custom = get_custom_modes(&state.db);
-    let before = custom.len();
-    custom.retain(|m| m.name != name);
-    if before == custom.len() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    save_custom_modes(&state.db, &custom)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
 // Settings
 
 pub(crate) async fn get_settings(
@@ -2659,7 +2564,10 @@ pub(crate) async fn get_settings(
             .map(|(_, v)| *v)
             .unwrap_or("");
         let s = val.as_deref().unwrap_or(default);
-        let json_val = if matches!(*key, "continuous_mode" | "git_claude_coauthor") {
+        let json_val = if matches!(
+            *key,
+            "continuous_mode" | "git_claude_coauthor" | "experimental_domains"
+        ) {
             json!(s == "true")
         } else if matches!(
             *key,

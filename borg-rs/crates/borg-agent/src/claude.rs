@@ -266,9 +266,11 @@ impl AgentBackend for ClaudeBackend {
                 .join("../../../sidecar");
             let mut mcp_servers = serde_json::Map::new();
             let mode = ctx.task.mode.as_str();
+            let allow_experimental = ctx.experimental_domains;
 
-            // lawborg + healthborg share the legal research MCP (CourtListener, EDGAR, etc.)
-            if matches!(mode, "lawborg" | "healthborg") {
+            // lawborg always gets legal research MCP.
+            // healthborg only gets it when experimental domains are enabled.
+            if mode == "lawborg" || (allow_experimental && mode == "healthborg") {
                 let legal_mcp_path = if let Ok(p) = std::env::var("LAWBORG_MCP_SERVER") {
                     std::path::PathBuf::from(p)
                 } else {
@@ -306,8 +308,8 @@ impl AgentBackend for ClaudeBackend {
                 }
             }
 
-            // buildborg gets the Shovels permits/contractors MCP
-            if mode == "buildborg" {
+            // buildborg gets Shovels only when experimental domains are enabled.
+            if allow_experimental && mode == "buildborg" {
                 let shovels_path = sidecar_base.join("shovels-mcp/server.js");
                 match shovels_path.canonicalize() {
                     Ok(p) => {
@@ -327,8 +329,11 @@ impl AgentBackend for ClaudeBackend {
                 }
             }
 
-            // Plaid banking MCP — available when plaid keys are configured
-            if let (Some(client_id), Some(secret)) = (ctx.api_keys.get("plaid_client_id"), ctx.api_keys.get("plaid_secret")) {
+            // Plaid banking MCP is experimental and disabled unless explicitly enabled.
+            if allow_experimental {
+                if let (Some(client_id), Some(secret)) =
+                    (ctx.api_keys.get("plaid_client_id"), ctx.api_keys.get("plaid_secret"))
+                {
                 let plaid_path = sidecar_base.join("plaid-mcp/server.js");
                 if let Ok(p) = plaid_path.canonicalize() {
                     let mut env_vars = serde_json::Map::new();
@@ -343,10 +348,13 @@ impl AgentBackend for ClaudeBackend {
                         "env": env_vars,
                     }));
                 }
+                }
             }
 
-            // kreuzberg OCR — available to document-heavy modes when installed
-            if matches!(mode, "lawborg" | "healthborg" | "buildborg") {
+            // OCR is always available for lawborg; experimental modes are gated by flag.
+            if mode == "lawborg"
+                || (allow_experimental && matches!(mode, "healthborg" | "buildborg"))
+            {
                 let has_kreuzberg = tokio::task::spawn_blocking(|| {
                     std::process::Command::new("kreuzberg")
                         .arg("--version")

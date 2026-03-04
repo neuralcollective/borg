@@ -109,6 +109,12 @@ export function SettingsPanel() {
             value={effective.continuous_mode}
             onChange={(v) => update("continuous_mode", v)}
           />
+          <ToggleField
+            label="Experimental Domains"
+            desc="Enable non-core mode presets and runtime integrations."
+            value={effective.experimental_domains}
+            onChange={(v) => update("experimental_domains", v)}
+          />
           <NumberField
             label="Max Backlog"
             desc="Maximum concurrent pipeline tasks"

@@ -443,6 +443,8 @@ pub struct PhaseContext {
     pub prior_research: Vec<String>,
     /// How many revision rounds this task has been through. 0 = first draft.
     pub revision_count: i64,
+    /// Whether non-core experimental domains are enabled for runtime behavior.
+    pub experimental_domains: bool,
 }
 
 /// A single in-container test/lint/compile result emitted by the entrypoint.

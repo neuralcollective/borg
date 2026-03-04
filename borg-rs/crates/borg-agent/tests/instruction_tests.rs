@@ -71,6 +71,7 @@ fn make_ctx() -> PhaseContext {
         agent_network: None,
         prior_research: Vec::new(),
         revision_count: 0,
+        experimental_domains: false,
     }
 }
 

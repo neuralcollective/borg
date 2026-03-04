@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 export function ModeSidebar({
   builtIn,
   custom,
+  allowExperimental,
   activeName,
   onSelect,
   onNew,
@@ -12,6 +13,7 @@ export function ModeSidebar({
 }: {
   builtIn: PipelineModeFull[];
   custom: PipelineModeFull[];
+  allowExperimental: boolean;
   activeName: string;
   onSelect: (mode: PipelineModeFull, readOnly: boolean) => void;
   onNew: () => void;
@@ -172,6 +174,11 @@ export function ModeSidebar({
         >
           + New Mode
         </button>
+        {!allowExperimental && (
+          <div className="mt-1 text-[10px] text-zinc-600">
+            Experimental mode names are disabled by settings.
+          </div>
+        )}
       </div>
     </div>
   );

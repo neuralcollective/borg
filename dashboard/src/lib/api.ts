@@ -252,6 +252,7 @@ export interface Settings {
   opensearch_url: string;
   opensearch_index: string;
   opensearch_username: string;
+  experimental_domains: boolean;
 }
 
 export function useSettings() {

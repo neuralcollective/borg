@@ -3,6 +3,7 @@ mod ingestion;
 mod logging;
 mod opensearch;
 mod routes;
+mod routes_modes;
 mod storage;
 
 use std::{
