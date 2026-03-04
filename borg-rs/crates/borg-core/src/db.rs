@@ -2230,6 +2230,31 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn list_task_events(&self, task_id: i64, limit: i64) -> Result<Vec<AuditEvent>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, project_id, actor, kind, payload, created_at \
+             FROM pipeline_events WHERE task_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![task_id, limit], |r| {
+                let ts: String = r.get(6)?;
+                Ok(AuditEvent {
+                    id: r.get(0)?,
+                    task_id: r.get::<_, Option<i64>>(1)?,
+                    project_id: r.get::<_, Option<i64>>(2)?,
+                    actor: r.get(3)?,
+                    kind: r.get(4)?,
+                    payload: r.get(5)?,
+                    created_at: parse_ts(&ts),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_task_events")?;
+        Ok(rows)
+    }
+
     // ── Config ────────────────────────────────────────────────────────────
 
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {

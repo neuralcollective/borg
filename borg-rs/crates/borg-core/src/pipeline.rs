@@ -61,6 +61,8 @@ pub struct Pipeline {
     last_agent_dispatch: Mutex<HashMap<i64, i64>>,
     /// Prevents overlapping seed runs (seeding is spawned in background).
     seeding_active: std::sync::atomic::AtomicBool,
+    /// Tracks repeated phase-failure signatures per task to detect stuck loops.
+    failure_signatures: std::sync::Mutex<HashMap<(i64, String), (String, u32)>>,
     /// Whether the borg-agent-net Docker bridge network was successfully created at startup.
     pub agent_network_available: bool,
     pub embed_client: EmbeddingClient,
@@ -141,6 +143,7 @@ impl Pipeline {
             in_flight_repos: Mutex::new(HashSet::new()),
             last_agent_dispatch: Mutex::new(HashMap::new()),
             seeding_active: std::sync::atomic::AtomicBool::new(false),
+            failure_signatures: std::sync::Mutex::new(HashMap::new()),
             agent_network_available,
             embed_client: EmbeddingClient::from_env(),
         };
@@ -269,6 +272,15 @@ impl Pipeline {
     /// After 3 failed attempts, clears the session ID to force a fresh start and
     /// builds a summary of previous attempts so the new session has context.
     fn fail_or_retry(&self, task: &Task, retry_status: &str, error: &str) -> Result<()> {
+        let repeat_count = self.note_failure_signature(task.id, retry_status, error);
+        if repeat_count >= 3 {
+            let reason = format!(
+                "stuck loop detected in phase '{retry_status}' (same failure signature repeated {repeat_count}x): {error}"
+            );
+            self.db.update_task_status(task.id, "blocked", Some(&reason))?;
+            return Ok(());
+        }
+
         self.db.increment_attempt(task.id)?;
         let current = self.db.get_task(task.id)?.unwrap_or_else(|| {
             // Fallback: use stale snapshot but with incremented attempt so check is correct
@@ -294,6 +306,65 @@ impl Pipeline {
                 .update_task_status(task.id, retry_status, Some(&error_ctx))?;
         }
         Ok(())
+    }
+
+    fn normalize_error_signature(error: &str) -> String {
+        let mut out = String::with_capacity(256);
+        let mut prev_space = false;
+        for ch in error.chars().flat_map(|c| c.to_lowercase()) {
+            let mapped = if ch.is_ascii_digit() {
+                '#'
+            } else if ch.is_ascii_alphanumeric() {
+                ch
+            } else {
+                ' '
+            };
+            if mapped == ' ' {
+                if !prev_space {
+                    out.push(' ');
+                    prev_space = true;
+                }
+            } else {
+                out.push(mapped);
+                prev_space = false;
+            }
+            if out.len() >= 220 {
+                break;
+            }
+        }
+        out.trim().to_string()
+    }
+
+    fn note_failure_signature(&self, task_id: i64, phase: &str, error: &str) -> u32 {
+        let sig = Self::normalize_error_signature(error);
+        let mut map = self
+            .failure_signatures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let key = (task_id, phase.to_string());
+        match map.get_mut(&key) {
+            Some((prev_sig, count)) if *prev_sig == sig => {
+                *count += 1;
+                *count
+            }
+            Some((prev_sig, count)) => {
+                *prev_sig = sig;
+                *count = 1;
+                1
+            }
+            None => {
+                map.insert(key, (sig, 1));
+                1
+            }
+        }
+    }
+
+    fn clear_failure_signatures(&self, task_id: i64) {
+        let mut map = self
+            .failure_signatures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.retain(|(id, _), _| *id != task_id);
     }
 
     /// Build a summary of previous failed attempts for fresh-session retries.
@@ -499,6 +570,16 @@ impl Pipeline {
 
     /// Process a single task through its current phase.
     async fn process_task(self: Arc<Self>, task: Task) -> Result<()> {
+        if let Some(latest) = self.db.get_task(task.id)? {
+            if latest.status != task.status {
+                info!(
+                    "task #{} status changed from '{}' to '{}' before dispatch; skipping stale snapshot",
+                    task.id, task.status, latest.status
+                );
+                return Ok(());
+            }
+        }
+
         let mode = self
             .resolve_mode(&task.mode)
             .ok_or_else(|| anyhow::anyhow!("no pipeline mode found for task #{}", task.id))?;
@@ -569,6 +650,8 @@ impl Pipeline {
             let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
             crate::knowledge::index_task_embeddings(&db, embed, task.id, pid, &task.repo_path).await;
         }
+
+        self.clear_failure_signatures(task.id);
 
         Ok(())
     }

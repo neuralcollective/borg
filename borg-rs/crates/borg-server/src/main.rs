@@ -750,6 +750,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/:id/verify-citations", post(routes::verify_task_citations))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
         .route("/api/tasks/:id/unblock", post(routes::unblock_task))
+        .route("/api/tasks/:id/diagnostics", get(routes::get_task_diagnostics))
         .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))
         .route(
             "/api/tasks/:id/outputs",

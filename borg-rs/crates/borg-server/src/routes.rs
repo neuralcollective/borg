@@ -146,6 +146,11 @@ pub(crate) struct TasksQuery {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct TaskDiagnosticsQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct EventsQuery {
     pub category: Option<String>,
     pub level: Option<String>,
@@ -2306,6 +2311,92 @@ pub(crate) async fn get_task(
             Ok(Json(v))
         },
     }
+}
+
+fn normalize_failure_signature(text: &str) -> String {
+    let mut out = String::with_capacity(256);
+    let mut prev_space = false;
+    for ch in text.chars().flat_map(|c| c.to_lowercase()) {
+        let mapped = if ch.is_ascii_digit() {
+            '#'
+        } else if ch.is_ascii_alphanumeric() {
+            ch
+        } else {
+            ' '
+        };
+        if mapped == ' ' {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(mapped);
+            prev_space = false;
+        }
+        if out.len() >= 220 {
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
+pub(crate) async fn get_task_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Query(q): Query<TaskDiagnosticsQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let limit = q.limit.unwrap_or(40).clamp(10, 200);
+    let outputs = state.db.get_task_outputs(id).map_err(internal)?;
+    let queue_entries = state
+        .db
+        .get_queue_entries_for_task(id)
+        .map_err(internal)?;
+    let events = state.db.list_task_events(id, limit).map_err(internal)?;
+
+    let mut same_failure_streak = 0u32;
+    if outputs.len() >= 3 {
+        let mut iter = outputs
+            .iter()
+            .rev()
+            .filter(|o| o.exit_code != 0)
+            .take(3)
+            .map(|o| (o.phase.as_str(), normalize_failure_signature(&o.output)));
+        if let Some((phase0, sig0)) = iter.next() {
+            same_failure_streak = 1;
+            for (phase, sig) in iter {
+                if phase == phase0 && sig == sig0 {
+                    same_failure_streak += 1;
+                }
+            }
+        }
+    }
+
+    let recent_outputs: Vec<TaskOutputJson> = outputs
+        .into_iter()
+        .rev()
+        .take(limit as usize)
+        .map(TaskOutputJson::from)
+        .collect();
+
+    Ok(Json(json!({
+        "task": task,
+        "summary": {
+            "attempt": task.attempt,
+            "max_attempts": task.max_attempts,
+            "status": task.status,
+            "review_status": task.review_status,
+            "started_at": task.started_at.map(|ts| ts.to_rfc3339()),
+            "completed_at": task.completed_at.map(|ts| ts.to_rfc3339()),
+            "duration_secs": task.duration_secs,
+            "stuck_suspected": same_failure_streak >= 3,
+            "same_failure_streak": same_failure_streak,
+            "has_queue_entry": !queue_entries.is_empty(),
+        },
+        "queue_entries": queue_entries,
+        "recent_outputs": recent_outputs,
+        "recent_events": events,
+    })))
 }
 
 pub(crate) async fn create_task(
