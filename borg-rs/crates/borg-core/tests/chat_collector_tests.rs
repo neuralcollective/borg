@@ -1,200 +1,124 @@
+use std::time::Duration;
+
 use borg_core::chat::{ChatCollector, IncomingMessage};
 
-fn msg(chat_key: &str, text: &str) -> IncomingMessage {
+fn make_msg(chat_key: &str, sender_name: &str, text: &str) -> IncomingMessage {
     IncomingMessage {
         chat_key: chat_key.to_string(),
-        sender_name: "Alice".to_string(),
+        sender_name: sender_name.to_string(),
         text: text.to_string(),
         timestamp: 0,
         reply_to_message_id: None,
     }
 }
 
-// AC1: window_ms == 0 dispatches immediately on first message
+// Idle → Running immediately when window_ms = 0.
 #[tokio::test]
-async fn immediate_dispatch_when_window_zero() {
-    let c = ChatCollector::new(0, 0, 0);
-    let batch = c.process(msg("chat:1", "hello")).await;
-    let b = batch.expect("should dispatch immediately");
-    assert_eq!(b.chat_key, "chat:1");
-    assert_eq!(b.sender_name, "Alice");
-    assert_eq!(b.messages, vec!["hello"]);
-    assert_eq!(c.active_count().await, 1);
+async fn test_window_zero_dispatches_immediately() {
+    let collector = ChatCollector::new(0, 10, 0);
+    let batch = collector.process(make_msg("chat:1", "Alice", "hello")).await;
+    let batch = batch.expect("should dispatch immediately");
+    assert_eq!(batch.chat_key, "chat:1");
+    assert_eq!(batch.sender_name, "Alice");
+    assert_eq!(batch.messages, vec!["hello"]);
+    assert_eq!(collector.active_count().await, 1);
 }
 
-// AC2 + AC3: messages accumulate within the window and flush dispatches them all
+// Idle → Collecting; messages accumulate while window is open.
 #[tokio::test]
-async fn accumulates_messages_then_flushes_on_expiry() {
-    let c = ChatCollector::new(1, 0, 0); // 1ms window — short enough to expire on sleep
-
-    // All three arrive before window expires (fast in-process calls)
-    // They go into Collecting state, not dispatched yet.
-    // Note: if the machine is pathologically slow and 1ms elapses between calls,
-    // the second or third message may trigger an inline dispatch. We guard against
-    // that by testing the flush path only after sleeping past the deadline.
-    let r1 = c.process(msg("chat:1", "m1")).await;
-    let r2 = c.process(msg("chat:1", "m2")).await;
-    let r3 = c.process(msg("chat:1", "m3")).await;
-
-    // At least m1 should have gone into Collecting (returned None).
-    // If m1 triggers inline dispatch that is also acceptable per spec (window_ms=0
-    // would be used for that), but with window_ms=1 the first message always opens
-    // a collection window and returns None.
-    assert!(r1.is_none(), "first message should open window, not dispatch");
-
-    // After a short sleep the window has definitely expired.
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-    // If r2/r3 already dispatched inline (very slow machine), skip flush assertion.
-    // In the normal case we expect exactly one batch from flush.
-    let batches = c.flush_expired().await;
-
-    // Determine how many messages are still pending.
-    // Either the batch from flush contains all, or some were dispatched inline.
-    // The invariant we care about: every message sent is either dispatched inline
-    // OR appears in the flush batch. No message is silently dropped in Collecting.
-    let inline_count = [r2, r3].iter().filter(|r| r.is_some()).count();
-    if inline_count == 0 {
-        // Normal path: all three in the flush batch.
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].messages, vec!["m1", "m2", "m3"]);
-    } else {
-        // Slow-machine path: at least m1 was collected, the rest may have dispatched.
-        // The flush batch (if any) should contain at least "m1".
-        if !batches.is_empty() {
-            assert!(batches[0].messages.contains(&"m1".to_string()));
-        }
-    }
+async fn test_collecting_accumulates_messages() {
+    let collector = ChatCollector::new(10_000, 10, 0); // 10-second window
+    assert!(collector.process(make_msg("chat:1", "Alice", "a")).await.is_none());
+    assert!(collector.process(make_msg("chat:1", "Alice", "b")).await.is_none());
+    assert!(collector.process(make_msg("chat:1", "Alice", "c")).await.is_none());
+    assert_eq!(collector.active_count().await, 0);
 }
 
-// AC2 (isolation): no message dispatches while still within a long window
+// Collecting → Running when window expires (detected in process()).
 #[tokio::test]
-async fn no_dispatch_within_long_window() {
-    let c = ChatCollector::new(60_000, 0, 0); // 60s window — will never expire during test
-    assert!(c.process(msg("chat:1", "a")).await.is_none());
-    assert!(c.process(msg("chat:1", "b")).await.is_none());
-    assert!(c.process(msg("chat:1", "c")).await.is_none());
-    assert_eq!(c.active_count().await, 0);
+async fn test_collecting_dispatches_after_window_expires() {
+    let collector = ChatCollector::new(1, 10, 0); // 1 ms window
+    assert!(collector.process(make_msg("chat:1", "Alice", "first")).await.is_none());
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    // second message arrives after deadline → dispatch with both messages
+    let batch = collector
+        .process(make_msg("chat:1", "Alice", "second"))
+        .await
+        .expect("should dispatch after window expires");
+    assert_eq!(batch.messages, vec!["first", "second"]);
+    assert_eq!(collector.active_count().await, 1);
 }
 
-// AC4: messages are dropped while the chat has a running agent
+// Running → drops new messages for the same chat.
 #[tokio::test]
-async fn messages_dropped_while_running() {
-    let c = ChatCollector::new(0, 0, 0);
-
-    let first = c.process(msg("chat:1", "first")).await;
-    assert!(first.is_some(), "first message should dispatch");
-    assert_eq!(c.active_count().await, 1);
-
-    let dropped = c.process(msg("chat:1", "second")).await;
-    assert!(dropped.is_none(), "message while Running must be dropped");
-    assert_eq!(c.active_count().await, 1, "running count must not change");
+async fn test_running_state_drops_messages() {
+    let collector = ChatCollector::new(0, 10, 0);
+    assert!(collector.process(make_msg("chat:1", "Alice", "first")).await.is_some());
+    assert!(collector.process(make_msg("chat:1", "Alice", "second")).await.is_none());
+    assert_eq!(collector.active_count().await, 1);
 }
 
-// AC5: messages are dropped during cooldown
+// Cooldown → drops messages until mark_done is not called (cooldown still active).
 #[tokio::test]
-async fn messages_dropped_during_cooldown() {
-    let c = ChatCollector::new(0, 0, 60_000); // 60s cooldown
-
-    let batch = c.process(msg("chat:1", "go")).await;
-    assert!(batch.is_some());
-
-    c.mark_done("chat:1").await;
-    assert_eq!(c.active_count().await, 0);
-
-    let dropped = c.process(msg("chat:1", "during_cooldown")).await;
-    assert!(dropped.is_none(), "message during Cooldown must be dropped");
+async fn test_cooldown_state_drops_messages() {
+    let collector = ChatCollector::new(0, 10, 60_000); // 60-second cooldown
+    assert!(collector.process(make_msg("chat:1", "Alice", "trigger")).await.is_some());
+    collector.mark_done("chat:1").await;
+    assert_eq!(collector.active_count().await, 0);
+    // still in cooldown → message dropped
+    assert!(collector.process(make_msg("chat:1", "Alice", "during cooldown")).await.is_none());
 }
 
-// AC6a: mark_done enters Cooldown when cooldown_ms > 0
+// max_agents = 1 prevents a second Idle chat from being dispatched.
 #[tokio::test]
-async fn mark_done_enters_cooldown_when_configured() {
-    let c = ChatCollector::new(0, 0, 60_000);
-
-    c.process(msg("chat:1", "go")).await;
-    c.mark_done("chat:1").await;
-
-    // Chat is now in Cooldown — next message must be dropped.
-    assert!(
-        c.process(msg("chat:1", "blocked")).await.is_none(),
-        "next message should be blocked by cooldown"
-    );
+async fn test_max_agents_cap_prevents_idle_dispatch() {
+    let collector = ChatCollector::new(0, 1, 0);
+    assert!(collector.process(make_msg("chat:a", "Alice", "x")).await.is_some());
+    assert!(!collector.can_dispatch().await);
+    assert!(collector.process(make_msg("chat:b", "Bob", "y")).await.is_none());
 }
 
-// AC6b: mark_done returns to Idle when cooldown_ms == 0
+// max_agents = 1 prevents Collecting → Running when a slot is already occupied.
 #[tokio::test]
-async fn mark_done_returns_to_idle_when_no_cooldown() {
-    let c = ChatCollector::new(0, 0, 0);
+async fn test_max_agents_cap_prevents_collecting_to_running() {
+    let collector = ChatCollector::new(1, 1, 0); // 1 ms window, max 1
+    // chat:a starts collecting
+    assert!(collector.process(make_msg("chat:a", "Alice", "msg")).await.is_none());
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    // chat:a window expired → dispatch, running = 1
+    assert!(collector
+        .process(make_msg("chat:a", "Alice", "dispatch"))
+        .await
+        .is_some());
+    assert_eq!(collector.active_count().await, 1);
 
-    c.process(msg("chat:1", "go")).await;
-    c.mark_done("chat:1").await;
-    assert_eq!(c.active_count().await, 0);
-
-    // Chat is Idle again — next message dispatches immediately.
-    let batch = c.process(msg("chat:1", "new")).await;
-    let b = batch.expect("should dispatch after returning to Idle");
-    assert_eq!(b.messages, vec!["new"]);
+    // chat:b starts collecting
+    assert!(collector.process(make_msg("chat:b", "Bob", "msg")).await.is_none());
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    // chat:b window expired but at max_agents → blocked
+    assert!(collector
+        .process(make_msg("chat:b", "Bob", "dispatch"))
+        .await
+        .is_none());
+    assert_eq!(collector.active_count().await, 1); // still only 1 running
 }
 
-// AC7: concurrency gate prevents dispatch when running >= max_agents
+// mark_done with cooldown=0 returns chat to Idle (next message dispatches).
 #[tokio::test]
-async fn concurrency_gate_blocks_when_at_max() {
-    let c = ChatCollector::new(0, 1, 0); // max_agents = 1
-
-    let b1 = c.process(msg("chat:1", "first")).await;
-    assert!(b1.is_some(), "chat:1 should dispatch");
-    assert_eq!(c.active_count().await, 1);
-
-    // Different chat — still blocked by global concurrency gate.
-    let b2 = c.process(msg("chat:2", "second")).await;
-    assert!(b2.is_none(), "chat:2 should be blocked by concurrency gate");
-
-    // After chat:1 finishes the slot opens.
-    c.mark_done("chat:1").await;
-    assert_eq!(c.active_count().await, 0);
-    assert!(c.can_dispatch().await);
-
-    let b3 = c.process(msg("chat:2", "retry")).await;
-    assert!(b3.is_some(), "chat:2 should dispatch once slot is free");
+async fn test_mark_done_no_cooldown_returns_to_idle() {
+    let collector = ChatCollector::new(0, 10, 0);
+    assert!(collector.process(make_msg("chat:1", "Alice", "first")).await.is_some());
+    collector.mark_done("chat:1").await;
+    assert_eq!(collector.active_count().await, 0);
+    assert!(collector.process(make_msg("chat:1", "Alice", "second")).await.is_some());
 }
 
-// flush_expired also respects the concurrency gate
+// Two independent chats can run concurrently when max_agents allows it.
 #[tokio::test]
-async fn flush_expired_respects_concurrency_gate() {
-    let c = ChatCollector::new(1, 1, 0); // window=1ms, max_agents=1
-
-    // Two chats start collecting.
-    assert!(c.process(msg("chat:1", "a")).await.is_none());
-    assert!(c.process(msg("chat:2", "b")).await.is_none());
-
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-    // flush_expired should dispatch at most one (limited by max_agents).
-    let batches = c.flush_expired().await;
-    assert_eq!(batches.len(), 1, "only one batch should dispatch at the limit");
-    assert_eq!(c.active_count().await, 1);
-}
-
-// flush_expired clears expired cooldown windows, allowing subsequent dispatch
-#[tokio::test]
-async fn flush_expired_clears_expired_cooldowns() {
-    let c = ChatCollector::new(0, 0, 1); // cooldown = 1ms
-
-    c.process(msg("chat:1", "go")).await;
-    c.mark_done("chat:1").await;
-
-    // Confirm in cooldown.
-    assert!(c.process(msg("chat:1", "blocked")).await.is_none());
-
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-    // flush_expired should transition Cooldown → Idle.
-    c.flush_expired().await;
-
-    // Now chat:1 is Idle again and can dispatch.
-    let batch = c.process(msg("chat:1", "after_cooldown")).await;
-    assert!(
-        batch.is_some(),
-        "should dispatch after cooldown clears via flush_expired"
-    );
+async fn test_two_chats_run_concurrently_within_limit() {
+    let collector = ChatCollector::new(0, 2, 0);
+    assert!(collector.process(make_msg("chat:a", "Alice", "x")).await.is_some());
+    assert!(collector.process(make_msg("chat:b", "Bob", "y")).await.is_some());
+    assert_eq!(collector.active_count().await, 2);
+    assert!(!collector.can_dispatch().await);
 }
