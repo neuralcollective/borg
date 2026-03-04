@@ -639,6 +639,12 @@ impl Pipeline {
 
     /// Process a single task through its current phase.
     async fn process_task(self: Arc<Self>, task: Task) -> Result<()> {
+        // Freshly requeued tasks should not inherit in-memory loop signatures
+        // from previous failed runs.
+        if task.attempt == 0 || task.status == "backlog" {
+            self.clear_failure_signatures(task.id);
+        }
+
         if let Some(latest) = self.db.get_task(task.id)? {
             if latest.status != task.status {
                 info!(
