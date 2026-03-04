@@ -267,6 +267,7 @@ export function ProjectsPanel() {
     1,
     settings?.cloud_import_max_batch_files ?? MAX_CLOUD_IMPORT_SELECTION
   );
+  const projectMaxBytes = Math.max(1, settings?.project_max_bytes ?? 100 * 1024 * 1024);
 
   const updateUploadProgress = useCallback((id: string, patch: Partial<FileUploadProgress>) => {
     setUploadProgress((prev) =>
@@ -592,7 +593,7 @@ async function uploadChunkQueue(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "upload failed";
-      setUploadError(msg === "413" ? "Upload exceeds project byte limit." : `Upload failed (${msg})`);
+      setUploadError(msg === "413" ? `Upload exceeds project limit (${formatBytes(projectMaxBytes)}).` : `Upload failed (${msg})`);
       setUploadProgress((prev) =>
         prev.map((entry) => (entry.status === "done" ? entry : { ...entry, status: "failed", error: msg })),
       );
@@ -862,7 +863,7 @@ async function uploadChunkQueue(
             <div className="border-b border-white/[0.06] p-3">
               <div className="text-[13px] font-semibold text-zinc-200">{selectedProject.name}</div>
               <div className="mt-1 text-[11px] text-zinc-500">
-                Files {files.length} · {formatBytes(totalBytes)} / 100 MB
+                Files {files.length} · {formatBytes(totalBytes)} / {formatBytes(projectMaxBytes)}
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <input
