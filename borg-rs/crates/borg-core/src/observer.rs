@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde_json::Value;
 use tracing::{info, warn};
 
-const HAIKU: &str = "claude-haiku-4-5-20251001"; // TODO: make configurable via OBSERVER_MODEL env
+const HAIKU: &str = "claude-haiku-4-5-20251001";
 const MAX_LOG_BYTES: usize = 50_000;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -73,6 +73,7 @@ pub struct Observer {
     entries: Vec<Entry>,
     api_key: String,
     telegram_token: String,
+    model: String,
     client: Client,
 }
 
@@ -91,6 +92,7 @@ impl Observer {
             entries,
             api_key: api_key.to_string(),
             telegram_token: telegram_token.to_string(),
+            model: std::env::var("OBSERVER_MODEL").unwrap_or_else(|_| HAIKU.to_string()),
             client: Client::new(),
         }
     }
@@ -98,6 +100,7 @@ impl Observer {
     pub async fn run(mut self) {
         let api_key = self.api_key.clone();
         let telegram_token = self.telegram_token.clone();
+        let model = self.model.clone();
         let client = self.client.clone();
 
         loop {
@@ -113,6 +116,7 @@ impl Observer {
                     entry,
                     &api_key,
                     &telegram_token,
+                    &model,
                     now,
                     last_triggered,
                 )
@@ -136,6 +140,7 @@ async fn run_entry(
     entry: &Entry,
     api_key: &str,
     telegram_token: &str,
+    model: &str,
     now: i64,
     last_triggered: i64,
 ) -> Result<bool> {
@@ -144,7 +149,7 @@ async fn run_entry(
         return Ok(false);
     }
 
-    let result = analyze(client, entry, &logs, api_key).await?;
+    let result = analyze(client, entry, &logs, api_key, model).await?;
     if !result.triggered {
         return Ok(false);
     }
@@ -175,6 +180,7 @@ async fn analyze(
     entry: &Entry,
     logs: &str,
     api_key: &str,
+    model: &str,
 ) -> Result<AnalysisResult> {
     let log_slice = if logs.len() > MAX_LOG_BYTES {
         let mut start = logs.len() - MAX_LOG_BYTES;
@@ -195,7 +201,7 @@ async fn analyze(
     );
 
     let body = serde_json::json!({
-        "model": HAIKU,
+        "model": model,
         "max_tokens": 256,
         "messages": [{"role": "user", "content": user_content}]
     });
@@ -456,6 +462,8 @@ fn parse_entry(v: &Value) -> Result<Entry> {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn severity_ordering() {
         assert!(Severity::Low < Severity::Medium);
@@ -533,5 +541,22 @@ mod tests {
         let entries = load_entries(tmp.path().to_str().unwrap());
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "t");
+    }
+
+    #[test]
+    fn observer_load_default_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("OBSERVER_MODEL");
+        let obs = Observer::load("/nonexistent/observer.json", "key", "token");
+        assert_eq!(obs.model, HAIKU);
+    }
+
+    #[test]
+    fn observer_load_model_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("OBSERVER_MODEL", "claude-sonnet-4-6");
+        let obs = Observer::load("/nonexistent/observer.json", "key", "token");
+        std::env::remove_var("OBSERVER_MODEL");
+        assert_eq!(obs.model, "claude-sonnet-4-6");
     }
 }
