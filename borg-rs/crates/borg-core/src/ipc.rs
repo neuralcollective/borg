@@ -17,6 +17,9 @@ pub enum IpcReadResult {
     NotFound,
     /// File was rejected and moved to the errors/ quarantine dir.
     Quarantined(String),
+    /// File was rejected but could not be moved or deleted; it remains at its
+    /// original location.  Callers must treat this as a hard error.
+    QuarantineFailed(String),
 }
 
 /// Verify that `name` contains no path-traversal segments.
@@ -203,7 +206,9 @@ fn open_nofollow(path: &str) -> std::io::Result<std::fs::File> {
 /// Move `full_path` to `<quarantine_dir>/<basename>.<unix_ts>[.<counter>]`.
 ///
 /// Guards against `quarantine_dir` itself being a symlink; falls back to
-/// `remove_file` when rename fails (e.g. cross-device).
+/// `remove_file` when rename fails (e.g. cross-device).  Returns
+/// `QuarantineFailed` if both rename and remove_file fail, so callers are
+/// never misled into thinking the file was disposed of.
 fn do_quarantine(
     full_path: &str,
     basename: &str,
@@ -214,21 +219,18 @@ fn do_quarantine(
     match std::fs::symlink_metadata(quarantine_dir) {
         Ok(m) if m.file_type().is_symlink() => {
             warn!("ipc: quarantine dir {quarantine_dir:?} is a symlink — skipping move for {full_path} ({reason})");
-            let _ = std::fs::remove_file(full_path);
-            return IpcReadResult::Quarantined(reason.to_string());
+            return remove_or_quarantine_failed(full_path, reason);
         },
         Ok(_) => {}, // real directory (or other non-symlink entry)
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if let Err(ce) = std::fs::create_dir_all(quarantine_dir) {
                 warn!("ipc: could not create quarantine dir {quarantine_dir}: {ce}");
-                let _ = std::fs::remove_file(full_path);
-                return IpcReadResult::Quarantined(reason.to_string());
+                return remove_or_quarantine_failed(full_path, reason);
             }
         },
         Err(e) => {
             warn!("ipc: stat quarantine dir {quarantine_dir}: {e}");
-            let _ = std::fs::remove_file(full_path);
-            return IpcReadResult::Quarantined(reason.to_string());
+            return remove_or_quarantine_failed(full_path, reason);
         },
     }
 
@@ -255,10 +257,20 @@ fn do_quarantine(
 
     if let Err(e) = std::fs::rename(full_path, &dest) {
         warn!("ipc: rename {full_path:?} → {dest:?}: {e} — attempting remove");
-        if let Err(re) = std::fs::remove_file(full_path) {
-            warn!("ipc: remove {full_path:?}: {re}");
-        }
+        return remove_or_quarantine_failed(full_path, reason);
     }
 
     IpcReadResult::Quarantined(reason.to_string())
+}
+
+/// Try to delete `full_path`.  Returns `Quarantined` on success or
+/// `QuarantineFailed` (with a descriptive message) if the deletion also fails,
+/// so callers always know whether the suspicious file was actually removed.
+fn remove_or_quarantine_failed(full_path: &str, reason: &str) -> IpcReadResult {
+    if let Err(re) = std::fs::remove_file(full_path) {
+        warn!("ipc: remove {full_path:?}: {re} — file remains at original location");
+        IpcReadResult::QuarantineFailed(format!("{reason}: remove also failed: {re}"))
+    } else {
+        IpcReadResult::Quarantined(reason.to_string())
+    }
 }

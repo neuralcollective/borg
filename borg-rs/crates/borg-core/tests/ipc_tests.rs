@@ -501,6 +501,86 @@ fn ipc_read_result_implements_debug() {
     let _ok: IpcReadResult = IpcReadResult::Ok("x".to_string());
     let _nf: IpcReadResult = IpcReadResult::NotFound;
     let _q: IpcReadResult = IpcReadResult::Quarantined("reason".to_string());
+    let _qf: IpcReadResult = IpcReadResult::QuarantineFailed("reason".to_string());
     // If IpcReadResult doesn't derive Debug this file won't compile
     println!("{:?}", IpcReadResult::NotFound);
+}
+
+// ── QuarantineFailed: rename and remove both fail ─────────────────────────────
+
+/// When the parent directory is not writable, both `rename` and `remove_file`
+/// will fail with EACCES.  The function must return `QuarantineFailed` instead
+/// of `Quarantined` so callers are not misled into believing the file is gone.
+#[cfg(unix)]
+#[test]
+fn quarantine_failed_when_rename_and_remove_both_fail() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Root bypasses DAC permission checks, so this test is meaningless as root.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+
+    // Place a symlink at the artifact path so quarantine is triggered.
+    let real = dir.path().join("real.txt");
+    fs::write(&real, b"data").unwrap();
+    let link = dir.path().join("spec.md");
+    unix_fs::symlink(&real, &link).unwrap();
+
+    // Save original permissions and make the base dir read-only.
+    let original_perms = fs::metadata(dir.path()).unwrap().permissions();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = ipc::read_file(&base(&dir), "spec.md");
+
+    // Restore permissions so TempDir cleanup can succeed.
+    fs::set_permissions(dir.path(), original_perms).unwrap();
+
+    assert!(
+        matches!(result, IpcReadResult::QuarantineFailed(_)),
+        "expected QuarantineFailed when both rename and remove_file fail, got {:?}",
+        result
+    );
+
+    // The symlink must still be at its original path — it was not removed.
+    assert!(
+        link.symlink_metadata().is_ok(),
+        "symlink should remain at original location when quarantine fails"
+    );
+}
+
+/// When the quarantine directory itself cannot be created (parent is
+/// read-only) and the subsequent `remove_file` also fails, the result must
+/// be `QuarantineFailed`, not `Quarantined`.
+#[cfg(unix)]
+#[test]
+fn quarantine_failed_when_create_dir_and_remove_both_fail() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+
+    let real = dir.path().join("real.txt");
+    fs::write(&real, b"data").unwrap();
+    let link = dir.path().join("art.md");
+    unix_fs::symlink(&real, &link).unwrap();
+
+    // Make base dir read-only so errors/ cannot be created and remove_file fails.
+    let original_perms = fs::metadata(dir.path()).unwrap().permissions();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = ipc::read_file(&base(&dir), "art.md");
+
+    fs::set_permissions(dir.path(), original_perms).unwrap();
+
+    assert!(
+        matches!(result, IpcReadResult::QuarantineFailed(_)),
+        "expected QuarantineFailed, got {:?}",
+        result
+    );
 }
