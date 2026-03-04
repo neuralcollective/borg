@@ -2136,6 +2136,10 @@ fn default_upload_session_limit() -> i64 {
     100
 }
 
+const MIN_UPLOAD_CHUNK_SIZE: i64 = 256 * 1024; // 256 KiB
+const MAX_UPLOAD_CHUNK_SIZE: i64 = 64 * 1024 * 1024; // 64 MiB
+const MAX_ACTIVE_UPLOAD_SESSIONS_PER_PROJECT: i64 = 24;
+
 fn upload_chunks_dir(data_dir: &str, session_id: i64) -> String {
     format!("{data_dir}/uploads/sessions/{session_id}/chunks")
 }
@@ -2202,12 +2206,28 @@ pub(crate) async fn create_upload_session(
     if state.db.get_project(project_id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
+    let active_sessions = state
+        .db
+        .count_active_upload_sessions(project_id)
+        .map_err(internal)?;
+    if active_sessions >= MAX_ACTIVE_UPLOAD_SESSIONS_PER_PROJECT {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
     if body.file_size <= 0
-        || body.chunk_size <= 0
+        || body.chunk_size < MIN_UPLOAD_CHUNK_SIZE
+        || body.chunk_size > MAX_UPLOAD_CHUNK_SIZE
         || body.total_chunks <= 0
         || body.total_chunks > 1_000_000
     {
         return Err(StatusCode::BAD_REQUEST);
+    }
+    let expected_chunks = (body.file_size + body.chunk_size - 1) / body.chunk_size;
+    if body.total_chunks != expected_chunks {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let current_bytes = state.db.total_project_file_bytes(project_id).map_err(internal)?;
+    if current_bytes + body.file_size > state.config.project_max_bytes.max(1) {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let file_name = sanitize_upload_name(&body.file_name);
     if file_name.is_empty() {
@@ -2298,6 +2318,15 @@ pub(crate) async fn upload_session_chunk(
         return Err(StatusCode::BAD_REQUEST);
     }
     if bytes.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let expected_size = if chunk_index == session.total_chunks - 1 {
+        let rem = session.file_size - (session.chunk_size * (session.total_chunks - 1));
+        rem.max(1)
+    } else {
+        session.chunk_size
+    };
+    if bytes.len() as i64 != expected_size {
         return Err(StatusCode::BAD_REQUEST);
     }
     let chunks_dir = upload_chunks_dir(&state.config.data_dir, session_id);

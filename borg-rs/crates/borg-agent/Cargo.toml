@@ -6,9 +6,6 @@ edition = "2021"
 [lints]
 workspace = true
 
-[dev-dependencies]
-chrono = { workspace = true }
-
 [dependencies]
 borg-core = { path = "../borg-core" }
 tokio = { workspace = true }

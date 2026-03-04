@@ -1531,7 +1531,7 @@ impl Pipeline {
         }
 
         let push = tokio::process::Command::new("git")
-            .args(["push", "--force-with-lease", "origin", branch])
+            .args(["push", "--force", "origin", branch])
             .current_dir(&work_dir_s)
             .output()
             .await

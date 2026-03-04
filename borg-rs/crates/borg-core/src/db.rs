@@ -1615,6 +1615,19 @@ impl Db {
         Ok(out)
     }
 
+    pub fn count_active_upload_sessions(&self, project_id: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM upload_sessions \
+                 WHERE project_id=?1 AND status IN ('uploading','processing')",
+                params![project_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .context("count_active_upload_sessions")?;
+        Ok(count)
+    }
+
     pub fn list_uploaded_chunks(&self, session_id: i64) -> Result<Vec<i64>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
