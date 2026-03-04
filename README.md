@@ -69,6 +69,7 @@ Mention the bot in a registered Telegram, Discord, or WhatsApp group. The agent 
 | `CONTINUOUS_MODE` | `false` | Auto-seed tasks when idle |
 | `MODEL` | `claude-sonnet-4-6` | Model for all agents |
 | `PIPELINE_MAX_AGENTS` | `2` | Max concurrent pipeline agents |
+| `EXPERIMENTAL_DOMAINS` | `false` | Enable non-core domain presets (health/web/crew/sales/data/chef/build/medwrite) |
 | `MAX_CHAT_AGENTS` | `4` | Max concurrent chat agents |
 | `WEB_PORT` | `3131` | Dashboard port |
 | `SANDBOX_BACKEND` | `auto` | `auto`, `docker`, `bwrap`, or `none` |

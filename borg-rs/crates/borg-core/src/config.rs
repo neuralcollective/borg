@@ -121,6 +121,10 @@ pub struct Config {
     pub opensearch_index: String,
     pub opensearch_username: String,
     pub opensearch_password: String,
+
+    // Product focus
+    /// Enable non-core domain modes (health/web/crew/sales/data/chef/build/medwrite).
+    pub experimental_domains: bool,
 }
 
 impl Config {
@@ -676,6 +680,7 @@ impl Config {
             ("opensearch_url", self.opensearch_url.clone()),
             ("opensearch_index", self.opensearch_index.clone()),
             ("opensearch_username", self.opensearch_username.clone()),
+            ("experimental_domains", self.experimental_domains.to_string()),
         ];
         let conn_guard = db.raw_conn();
         let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
@@ -754,6 +759,7 @@ impl Config {
         c.opensearch_url = get_str("opensearch_url", &c.opensearch_url);
         c.opensearch_index = get_str("opensearch_index", &c.opensearch_index);
         c.opensearch_username = get_str("opensearch_username", &c.opensearch_username);
+        c.experimental_domains = get_bool("experimental_domains", c.experimental_domains);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
@@ -935,6 +941,7 @@ impl Config {
             opensearch_index: get_str("OPENSEARCH_INDEX", &dotenv, "borg-project-files"),
             opensearch_username: get_str("OPENSEARCH_USERNAME", &dotenv, ""),
             opensearch_password: get_str("OPENSEARCH_PASSWORD", &dotenv, ""),
+            experimental_domains: get_bool("EXPERIMENTAL_DOMAINS", &dotenv, false),
         })
     }
 }

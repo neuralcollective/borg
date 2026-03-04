@@ -88,7 +88,7 @@ function detectDefaultMode(domain: { defaultMode: "minimal" | "advanced" }, repo
 function detectDefaultView(domain: { defaultView: "tasks" | "projects" }, repos?: { mode: string; is_self: boolean }[]): View {
   if (!repos || repos.length === 0) return domain.defaultView;
   const primary = repos.find((r) => r.is_self) ?? repos[0];
-  if (["lawborg", "legal", "databorg", "salesborg"].includes(primary.mode)) {
+  if (["lawborg", "legal"].includes(primary.mode)) {
     return "projects";
   }
   return domain.defaultView;

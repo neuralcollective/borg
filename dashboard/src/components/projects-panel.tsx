@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   browseProjectCloudFiles,
   createProject,
@@ -15,8 +15,6 @@ import {
   useProjectFiles,
   useProjects,
   searchDocuments,
-  sseUrl,
-  tokenReady,
 } from "@/lib/api";
 import type { CloudBrowseItem, CloudConnection, FtsSearchResult } from "@/lib/api";
 import { Eye, FileText, Mic, MicOff, ArrowLeft, Search, RotateCw, Folder } from "lucide-react";
@@ -29,8 +27,9 @@ import { ChatMarkdown } from "./chat-markdown";
 import { MatterDetail } from "./matter-detail";
 import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
 import { RedlineViewer } from "./viewers/redline-viewer";
-import { LegalTaskCreator } from "./legal-task-creator";
+import { TaskCreator } from "./task-creator";
 import { useProjectDocumentVersions } from "@/lib/api";
+import { useChatEvents } from "@/lib/use-chat-events";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -218,10 +217,7 @@ export function ProjectsPanel() {
   const [messageInput, setMessageInput] = useState("");
   const [sending, setSending] = useState(false);
   const dictation = useDictation(messageInput, setMessageInput);
-  const esRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const sseRetriesRef = useRef(0);
-  const sseRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const totalBytes = useMemo(
     () => files.reduce((sum, f) => sum + f.size_bytes, 0),
@@ -264,49 +260,12 @@ export function ProjectsPanel() {
       .catch(() => setMessages([]));
   }, [activeProjectId]);
 
-  useEffect(() => {
-    if (!activeProjectId) return;
-    const threadKey = `project:${activeProjectId}`;
-    sseRetriesRef.current = 0;
-
-    function connectSSE() {
-      if (esRef.current) esRef.current.close();
-      tokenReady.then(() => {
-        const es = new EventSource(sseUrl("/api/chat/events"));
-        esRef.current = es;
-
-        es.onopen = () => { sseRetriesRef.current = 0; };
-
-        es.onmessage = (e) => {
-          try {
-            const msg: ChatMessage = JSON.parse(e.data);
-            if ((msg.thread ?? "") !== threadKey) return;
-            setMessages((prev) => [...prev, msg]);
-            if (msg.role === "assistant") setSending(false);
-          } catch {
-            // ignore malformed event
-          }
-        };
-
-        es.onerror = () => {
-          es.close();
-          esRef.current = null;
-          setSending(false);
-          if (sseRetriesRef.current < 5) {
-            const delay = Math.min(1000 * Math.pow(2, sseRetriesRef.current), 30000);
-            sseRetriesRef.current++;
-            sseRetryTimerRef.current = setTimeout(connectSSE, delay);
-          }
-        };
-      });
-    }
-
-    connectSSE();
-    return () => {
-      esRef.current?.close();
-      if (sseRetryTimerRef.current) clearTimeout(sseRetryTimerRef.current);
-    };
-  }, [activeProjectId]);
+  const projectThread = activeProjectId ? `project:${activeProjectId}` : null;
+  const handleProjectChatEvent = useCallback((msg: ChatMessage) => {
+    setMessages((prev) => [...prev, msg]);
+    if (msg.role === "assistant") setSending(false);
+  }, []);
+  useChatEvents<ChatMessage>(projectThread, handleProjectChatEvent, () => setSending(false));
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
@@ -643,7 +602,7 @@ export function ProjectsPanel() {
           ) : (
             <div className="flex h-full flex-col">
               <div className="flex shrink-0 items-center justify-end border-b border-white/[0.06] px-4 py-2">
-                <LegalTaskCreator />
+                <TaskCreator defaultMode="lawborg" hideModePicker projectId={selectedProject.id} />
               </div>
               <div className="min-h-0 flex-1">
                 <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} onDelete={() => setSelectedProjectId(null)} />

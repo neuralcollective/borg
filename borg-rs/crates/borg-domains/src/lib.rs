@@ -11,11 +11,12 @@ pub mod web;
 
 use borg_core::types::{PhaseConfig, PhaseType, PipelineMode};
 
-/// Return all built-in pipeline modes from every domain.
-pub fn all_modes() -> Vec<PipelineMode> {
+pub fn core_modes() -> Vec<PipelineMode> {
+    vec![swe::swe_mode(), legal::legal_mode()]
+}
+
+pub fn experimental_modes() -> Vec<PipelineMode> {
     vec![
-        swe::swe_mode(),
-        legal::legal_mode(),
         health::health_mode(),
         web::web_mode(),
         crew::crew_mode(),
@@ -27,17 +28,17 @@ pub fn all_modes() -> Vec<PipelineMode> {
     ]
 }
 
-/// Look up a built-in mode by name (with backward-compat aliases).
-pub fn get_mode(name: &str) -> Option<PipelineMode> {
-    match name {
-        "swe" => get_mode("sweborg"),
-        "legal" => get_mode("lawborg"),
-        "health" => get_mode("healthborg"),
-        "chef" => get_mode("chefborg"),
-        "construction" => get_mode("buildborg"),
-        "medwrite" => get_mode("medborg"),
-        _ => all_modes().into_iter().find(|m| m.name == name),
+pub fn modes_for_focus(include_experimental: bool) -> Vec<PipelineMode> {
+    let mut modes = core_modes();
+    if include_experimental {
+        modes.extend(experimental_modes());
     }
+    modes
+}
+
+/// Return all built-in pipeline modes from every domain.
+pub fn all_modes() -> Vec<PipelineMode> {
+    modes_for_focus(true)
 }
 
 // ── Shared phase builders ────────────────────────────────────────────────
