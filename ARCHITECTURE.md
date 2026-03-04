@@ -2,6 +2,8 @@
 
 Autonomous AI agent orchestrator written in Rust. Chat messages trigger Claude Code subprocesses. The engineering pipeline runs agents in Docker containers with git worktree isolation.
 
+Primary product scope is legal + SWE autonomous execution (`lawborg` and `sweborg`). Other domain modes are treated as experimental templates.
+
 ## Project Structure
 
 ```
@@ -99,7 +101,7 @@ stateDiagram-v2
     implement --> failed : max attempts exhausted
 ```
 
-Phase statuses: `backlog`, `implement`, `validate`, `lint_fix`, `rebase`, `done`, `merged`, `blocked`, `failed`.
+Phase statuses: `backlog`, `implement`, `validate`, `lint_fix`, `rebase`, `compliance_check`, `done`, `merged`, `blocked`, `failed`.
 
 ### Pipeline Phases
 

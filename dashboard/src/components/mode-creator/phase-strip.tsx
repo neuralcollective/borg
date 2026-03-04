@@ -9,6 +9,7 @@ const TYPE_COLORS: Record<PhaseType, string> = {
   rebase: "bg-amber-500/15 text-amber-400",
   lint_fix: "bg-violet-500/15 text-violet-400",
   human_review: "bg-emerald-500/15 text-emerald-400",
+  compliance_check: "bg-fuchsia-500/15 text-fuchsia-400",
 };
 
 const LOOP_COLORS = [

@@ -181,9 +181,38 @@ CREATE TABLE IF NOT EXISTS project_files (
   mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
   size_bytes INTEGER NOT NULL DEFAULT 0,
   extracted_text TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
+
+-- Durable resumable uploads for large file and zip ingestion.
+CREATE TABLE IF NOT EXISTS upload_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  file_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  file_size INTEGER NOT NULL DEFAULT 0,
+  chunk_size INTEGER NOT NULL DEFAULT 0,
+  total_chunks INTEGER NOT NULL DEFAULT 0,
+  uploaded_bytes INTEGER NOT NULL DEFAULT 0,
+  is_zip INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'uploading', -- uploading | processing | done | failed
+  stored_path TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_upload_sessions_project ON upload_sessions(project_id, status, id);
+
+CREATE TABLE IF NOT EXISTS upload_session_chunks (
+  session_id INTEGER NOT NULL REFERENCES upload_sessions(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY(session_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_upload_chunks_session ON upload_session_chunks(session_id, chunk_index);
 
 -- ── Parties (conflict checking) ──────────────────────────────────────────
 
@@ -229,7 +258,7 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_task_id ON pipeline_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_kind ON pipeline_events(kind);
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_created_at ON pipeline_events(created_at);
--- idx_pipeline_events_project created in migrate() after ALTER TABLE.
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_project ON pipeline_events(project_id);
 
 -- ── Per-task chat ─────────────────────────────────────────────────────────
 
@@ -263,6 +292,21 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner, provider);
+
+-- ── Cloud storage connections ───────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS cloud_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL, -- dropbox | google_drive | onedrive
+  access_token TEXT NOT NULL DEFAULT '',
+  refresh_token TEXT NOT NULL DEFAULT '',
+  token_expiry TEXT NOT NULL DEFAULT '',
+  account_email TEXT NOT NULL DEFAULT '',
+  account_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_connections_project ON cloud_connections(project_id);
 
 -- ── Misc / legacy ─────────────────────────────────────────────────────────
 
@@ -300,7 +344,7 @@ CREATE TABLE IF NOT EXISTS knowledge_files (
   file_name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   size_bytes INTEGER NOT NULL DEFAULT 0,
-  inline BOOLEAN NOT NULL DEFAULT 0,
+  "inline" INTEGER NOT NULL DEFAULT 0,
   tags TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'general',
   jurisdiction TEXT NOT NULL DEFAULT '',

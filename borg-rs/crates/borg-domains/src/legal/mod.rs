@@ -235,6 +235,17 @@ PREMIUM (available when configured — use proactively if present):\n\
 - imanage_* / netdocuments_* — document management\n\
 - alb_* — OneAdvanced Legal (ALB) practice and case management\n\
 \n\
+### KLDiscovery Nebula (eDiscovery) — requires KLDISCOVERY_API_KEY\n\
+- kldiscovery_list_matters / kldiscovery_get_matter / kldiscovery_create_matter\n\
+- kldiscovery_list_custodians / kldiscovery_add_custodian\n\
+- kldiscovery_list_holds / kldiscovery_create_hold / kldiscovery_release_hold / kldiscovery_get_hold_acknowledgments / kldiscovery_send_hold_reminder\n\
+- kldiscovery_list_collections / kldiscovery_create_collection / kldiscovery_get_collection_status\n\
+- kldiscovery_create_processing_job / kldiscovery_get_job_status\n\
+- kldiscovery_list_review_sets / kldiscovery_create_review_set / kldiscovery_search_review_set\n\
+- kldiscovery_list_productions / kldiscovery_create_production / kldiscovery_get_production_status\n\
+- kldiscovery_get_matter_report\n\
+Use for: eDiscovery workflows, legal hold management, data preservation, document review and production\n\
+\n\
 CONNECTORS (available when configured via external MCP servers):\n\
 - DocuSign — e-signature, envelope management, template sending\n\
 - Box — cloud document storage, collaboration, metadata search\n\

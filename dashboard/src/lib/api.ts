@@ -3,6 +3,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import type {
   Task,
   TaskDetail,
+  TaskOutput,
   QueueEntry,
   Status,
   LogEvent,
@@ -47,9 +48,60 @@ export function authHeaders(): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
 }
 
-export function sseUrl(path: string): string {
-  const url = `${apiBase()}${path}`;
-  return authToken ? `${url}${url.includes("?") ? "&" : "?"}token=${authToken}` : url;
+// AuthEventSource replaces native EventSource with a fetch-based connection
+// that sends the token in Authorization header instead of a query parameter.
+export class AuthEventSource {
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null;
+
+  private controller = new AbortController();
+
+  constructor(path: string) {
+    this._connect(path);
+  }
+
+  private async _connect(path: string) {
+    if (this.controller.signal.aborted) return;
+    try {
+      const res = await fetch(`${apiBase()}${path}`, {
+        headers: authHeaders(),
+        signal: this.controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        this.onerror?.();
+        return;
+      }
+      this.onopen?.();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let data = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.startsWith("data:")) {
+            data = line.slice(5).trimStart();
+          } else if (line === "" && data) {
+            this.onmessage?.({ data });
+            data = "";
+          }
+          // ignore comment lines (e.g. ": ping" keep-alives)
+        }
+      }
+      if (!this.controller.signal.aborted) this.onerror?.();
+    } catch {
+      if (!this.controller.signal.aborted) this.onerror?.();
+    }
+  }
+
+  close() {
+    this.controller.abort();
+  }
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -111,6 +163,41 @@ export function useTaskDetail(id: number | null) {
 export async function getTaskStructuredData(id: number): Promise<Record<string, unknown> | null> {
   const detail: TaskDetail = await fetchJson(`/api/tasks/${id}`);
   return detail.structured_data ?? null;
+}
+
+export interface TaskDiagnosticsSummary {
+  attempt: number;
+  max_attempts: number;
+  status: string;
+  review_status?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_secs?: number | null;
+  stuck_suspected: boolean;
+  same_failure_streak: number;
+  has_queue_entry: boolean;
+}
+
+export interface TaskDiagnosticsEvent {
+  id: number;
+  task_id: number | null;
+  project_id: number | null;
+  actor: string;
+  kind: string;
+  payload: string;
+  created_at: string;
+}
+
+export interface TaskDiagnostics {
+  task: Task;
+  summary: TaskDiagnosticsSummary;
+  queue_entries: QueueEntry[];
+  recent_outputs: Array<Pick<TaskOutput, "id" | "phase" | "output" | "exit_code" | "created_at">>;
+  recent_events: TaskDiagnosticsEvent[];
+}
+
+export async function getTaskDiagnostics(id: number): Promise<TaskDiagnostics> {
+  return fetchJson(`/api/tasks/${id}/diagnostics`);
 }
 
 export function useQueue() {
@@ -194,6 +281,29 @@ export interface Settings {
   git_user_coauthor: string;
   chat_disallowed_tools: string;
   pipeline_disallowed_tools: string;
+  public_url: string;
+  dropbox_client_id: string;
+  dropbox_client_secret: string;
+  google_client_id: string;
+  google_client_secret: string;
+  ms_client_id: string;
+  ms_client_secret: string;
+  storage_backend: string;
+  s3_bucket: string;
+  s3_region: string;
+  s3_endpoint: string;
+  s3_prefix: string;
+  project_max_bytes: number;
+  knowledge_max_bytes: number;
+  cloud_import_max_batch_files: number;
+  ingestion_queue_backend: string;
+  sqs_queue_url: string;
+  sqs_region: string;
+  search_backend: string;
+  opensearch_url: string;
+  opensearch_index: string;
+  opensearch_username: string;
+  experimental_domains: boolean;
 }
 
 export function useSettings() {
@@ -403,7 +513,7 @@ export async function createTask(
 export function useLogs() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [connected, setConnected] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const esRef = useRef<AuthEventSource | null>(null);
   const invalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retriesRef = useRef(0);
@@ -411,9 +521,8 @@ export function useLogs() {
 
   const connect = useCallback(() => {
     if (esRef.current) esRef.current.close();
-    // Wait for auth token before opening SSE (EventSource can't set headers)
     tokenReady.then(() => {
-      const es = new EventSource(sseUrl("/api/logs"));
+      const es = new AuthEventSource("/api/logs");
       esRef.current = es;
 
       es.onopen = () => {
@@ -574,6 +683,179 @@ export async function uploadProjectFiles(
   return res.json();
 }
 
+export interface UploadSession {
+  id: number;
+  project_id: number;
+  file_name: string;
+  mime_type: string;
+  file_size: number;
+  chunk_size: number;
+  total_chunks: number;
+  uploaded_bytes: number;
+  is_zip: boolean;
+  status: "uploading" | "processing" | "done" | "failed";
+  stored_path: string;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UploadSessionStatus {
+  session: UploadSession;
+  uploaded_chunks: number;
+  total_chunks: number;
+  missing_chunks: number;
+  next_missing_chunk: number | null;
+  missing_ranges: Array<[number, number]>;
+}
+
+export async function createProjectUploadSession(
+  projectId: number,
+  input: {
+    file_name: string;
+    mime_type?: string;
+    file_size: number;
+    chunk_size: number;
+    total_chunks: number;
+    is_zip?: boolean;
+  },
+): Promise<{ session_id: number; project_id: number; status: string; file_name: string; total_chunks: number; chunk_size: number }> {
+  const res = await apiFetch(`/api/projects/${projectId}/uploads/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function uploadProjectUploadChunk(
+  projectId: number,
+  sessionId: number,
+  chunkIndex: number,
+  chunk: Blob,
+): Promise<{ session_id: number; uploaded_bytes: number; file_size: number; status: string }> {
+  await tokenReady;
+  const res = await fetch(
+    `${apiBase()}/api/projects/${projectId}/uploads/sessions/${sessionId}/chunks/${chunkIndex}`,
+    {
+      method: "PUT",
+      headers: authHeaders(),
+      body: chunk,
+    },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function getProjectUploadSessionStatus(
+  projectId: number,
+  sessionId: number,
+): Promise<UploadSessionStatus> {
+  return fetchJson(`/api/projects/${projectId}/uploads/sessions/${sessionId}`);
+}
+
+export async function completeProjectUploadSession(
+  projectId: number,
+  sessionId: number,
+): Promise<{ session_id: number; status: string }> {
+  const res = await apiFetch(`/api/projects/${projectId}/uploads/sessions/${sessionId}/complete`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function retryProjectUploadSession(
+  projectId: number,
+  sessionId: number,
+): Promise<{ session_id: number; status: string }> {
+  const res = await apiFetch(`/api/projects/${projectId}/uploads/sessions/${sessionId}/retry`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function listProjectUploadSessions(
+  projectId: number,
+  limit = 100,
+): Promise<{ sessions: UploadSession[]; counts: Record<string, number> }> {
+  return fetchJson(`/api/projects/${projectId}/uploads/sessions?limit=${limit}`);
+}
+
+export async function getUploadOverview(
+  limit = 100,
+): Promise<{ sessions: UploadSession[]; counts: Record<string, number> }> {
+  return fetchJson(`/api/uploads/overview?limit=${limit}`);
+}
+
+export interface CloudConnection {
+  id: number;
+  provider: "dropbox" | "google_drive" | "onedrive" | string;
+  account_email: string;
+  connected_at: string;
+}
+
+export interface CloudBrowseItem {
+  id: string;
+  name: string;
+  type: "file" | "folder";
+  size?: number;
+  modified?: string;
+  mime_type?: string;
+}
+
+export interface CloudBrowseResponse {
+  items: CloudBrowseItem[];
+  cursor?: string | null;
+  next_page_token?: string | null;
+  has_more?: boolean;
+  folder_id?: string;
+}
+
+export function useProjectCloudConnections(projectId: number | null) {
+  return useQuery<CloudConnection[]>({
+    queryKey: ["project_cloud_connections", projectId],
+    queryFn: () => fetchJson(`/api/projects/${projectId}/cloud`),
+    enabled: projectId !== null,
+    refetchInterval: REFETCH_PROJECTS,
+  });
+}
+
+export async function deleteProjectCloudConnection(projectId: number, connectionId: number): Promise<void> {
+  const res = await apiFetch(`/api/projects/${projectId}/cloud/${connectionId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function browseProjectCloudFiles(
+  projectId: number,
+  connectionId: number,
+  opts: { folder_id?: string; cursor?: string } = {}
+): Promise<CloudBrowseResponse> {
+  const params = new URLSearchParams();
+  if (opts.folder_id) params.set("folder_id", opts.folder_id);
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  const query = params.toString();
+  return fetchJson(`/api/projects/${projectId}/cloud/${connectionId}/browse${query ? `?${query}` : ""}`);
+}
+
+export async function importProjectCloudFiles(
+  projectId: number,
+  connectionId: number,
+  files: Array<{ id: string; name: string; size?: number }>
+): Promise<{ imported: ProjectFile[] }> {
+  const res = await apiFetch(`/api/projects/${projectId}/cloud/${connectionId}/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 export async function fetchProjectFileText(
   projectId: number,
   fileId: number
@@ -674,6 +956,19 @@ export interface FtsSearchResult {
   source?: "keyword" | "semantic";
 }
 
+export interface ThemeTerm {
+  term: string;
+  occurrences: number;
+  document_count: number;
+}
+
+export interface ThemeSummary {
+  documents_scanned: number;
+  tokens_scanned: number;
+  keywords: ThemeTerm[];
+  phrases: ThemeTerm[];
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────
 
 export interface AuditEvent {
@@ -700,6 +995,27 @@ export async function searchDocuments(query: string, projectId?: number, semanti
   if (projectId) params.set("project_id", String(projectId));
   if (semantic) params.set("semantic", "true");
   return fetchJson(`/api/search?${params}`);
+}
+
+export async function summarizeProjectThemes(
+  projectId: number,
+  opts: { limit?: number; minDocs?: number } = {},
+): Promise<ThemeSummary> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.minDocs) params.set("min_docs", String(opts.minDocs));
+  const qs = params.toString();
+  return fetchJson(`/api/projects/${projectId}/themes${qs ? `?${qs}` : ""}`);
+}
+
+export async function summarizeWorkspaceThemes(
+  opts: { limit?: number; minDocs?: number } = {},
+): Promise<ThemeSummary> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.minDocs) params.set("min_docs", String(opts.minDocs));
+  const qs = params.toString();
+  return fetchJson(`/api/themes${qs ? `?${qs}` : ""}`);
 }
 
 export function useProjectTasks(projectId: number | null) {
@@ -829,7 +1145,7 @@ export function useTaskStream(taskId: number | null, active: boolean) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
-  const esRef = useRef<EventSource | null>(null);
+  const esRef = useRef<AuthEventSource | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clear events immediately when switching tasks
@@ -851,7 +1167,7 @@ export function useTaskStream(taskId: number | null, active: boolean) {
 
     tokenReady.then(() => {
       if (cancelled) return;
-      const es = new EventSource(sseUrl(`/api/tasks/${taskId}/stream`));
+      const es = new AuthEventSource(`/api/tasks/${taskId}/stream`);
       esRef.current = es;
       setStreaming(true);
 

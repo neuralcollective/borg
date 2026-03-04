@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.16",
     "discord.js": "^14",

@@ -25,6 +25,7 @@ export function PhaseDetail({
 
   const isAgent = phase.phase_type === "agent" || phase.phase_type === "rebase";
   const isHumanReview = phase.phase_type === "human_review";
+  const isCompliance = phase.phase_type === "compliance_check";
 
   return (
     <div className="space-y-4 overflow-y-auto">
@@ -60,6 +61,7 @@ export function PhaseDetail({
               <option value="rebase">Rebase</option>
               <option value="lint_fix">Lint Fix</option>
               <option value="human_review">Human Review</option>
+              <option value="compliance_check">Compliance Check</option>
             </select>
           </Field>
           <Field label="Next" className="w-28">
@@ -94,6 +96,38 @@ export function PhaseDetail({
               minRows={3}
             />
           </Field>
+        </Section>
+      )}
+
+      {isCompliance && (
+        <Section title="Compliance Check">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Profile">
+              <select
+                value={phase.compliance_profile || "uk_sra"}
+                onChange={(e) => onChange({ compliance_profile: e.target.value })}
+                disabled={readOnly}
+                className={inputCls}
+              >
+                <option value="uk_sra">UK SRA / Law Society</option>
+                <option value="us_prof_resp">US Professional Responsibility</option>
+              </select>
+            </Field>
+            <Field label="Enforcement">
+              <select
+                value={phase.compliance_enforcement || "warn"}
+                onChange={(e) => onChange({ compliance_enforcement: e.target.value })}
+                disabled={readOnly}
+                className={inputCls}
+              >
+                <option value="warn">warn</option>
+                <option value="block">block</option>
+              </select>
+            </Field>
+          </div>
+          <div className="mt-2 text-[11px] text-zinc-500">
+            Runs deterministic regulatory QA on prior output. Use `block` for regulated workflows.
+          </div>
         </Section>
       )}
 
@@ -153,7 +187,7 @@ export function PhaseDetail({
       )}
 
       {/* Tools */}
-      {!isHumanReview && (
+      {!isHumanReview && !isCompliance && (
         <Section title="Allowed Tools">
           <ToolChips
             value={phase.allowed_tools}
@@ -164,7 +198,7 @@ export function PhaseDetail({
       )}
 
       {/* Behavior Flags */}
-      {!isHumanReview && <Section title="Behavior">
+      {!isHumanReview && !isCompliance && <Section title="Behavior">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           <FlagToggle label="Use Docker" checked={phase.use_docker} disabled={readOnly}
             onChange={(v) => onChange({ use_docker: v })} />

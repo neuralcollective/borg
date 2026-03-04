@@ -65,6 +65,24 @@ s: t b install-service restart
 
 ship: dash s
 
+# Full remote bootstrap + deploy (requires BORG_HOST env var).
+agent-deploy:
+    deploy/agent-deploy.sh
+
+# Terraform hybrid infra (requires deploy/terraform/hybrid/terraform.tfvars)
+infra-plan:
+    deploy/provision-hybrid.sh plan
+
+infra-apply:
+    deploy/provision-hybrid.sh apply
+
+infra-destroy:
+    deploy/provision-hybrid.sh destroy
+
+# Provision hybrid infra and deploy Borg in one run.
+infra-ship:
+    deploy/provision-and-deploy.sh
+
 # Install/update the service file (systemd on Linux, launchd on macOS)
 install-service:
     #!/usr/bin/env bash

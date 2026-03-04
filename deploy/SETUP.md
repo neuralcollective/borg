@@ -2,6 +2,39 @@
 
 Hetzner VPS + Cloudflare Tunnel + Cloudflare Access (SSO).
 
+For AWS-only vs low-cost hybrid decision guidance, see [DEPLOYMENT_PROFILES.md](./DEPLOYMENT_PROFILES.md).
+Before cutover, run:
+
+```bash
+deploy/preflight.sh http://127.0.0.1:3131
+```
+
+For agent-driven one-command deploys (bootstrap + build + restart + settings apply + preflight), use:
+
+```bash
+BORG_HOST=root@<server-ip> \
+BORG_SETTINGS_FILE=$(pwd)/deploy/settings.production.example.json \
+deploy/agent-deploy.sh
+```
+
+For full infra + app automation (Terraform provision + deploy), use:
+
+```bash
+cp deploy/terraform/hybrid/terraform.tfvars.example deploy/terraform/hybrid/terraform.tfvars
+# edit secrets/IDs/SSH key in tfvars
+
+deploy/provision-hybrid.sh apply
+# then run the printed BORG_HOST=... deploy/agent-deploy.sh command
+```
+
+Or run full end-to-end in one command:
+
+```bash
+TFVARS_FILE=$(pwd)/deploy/terraform/hybrid/terraform.tfvars \
+BORG_SETTINGS_FILE=$(pwd)/deploy/settings.production.example.json \
+deploy/provision-and-deploy.sh
+```
+
 ## Architecture
 
 ```

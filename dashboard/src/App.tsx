@@ -88,7 +88,7 @@ function detectDefaultMode(domain: { defaultMode: "minimal" | "advanced" }, repo
 function detectDefaultView(domain: { defaultView: "tasks" | "projects" }, repos?: { mode: string; is_self: boolean }[]): View {
   if (!repos || repos.length === 0) return domain.defaultView;
   const primary = repos.find((r) => r.is_self) ?? repos[0];
-  if (["lawborg", "legal", "databorg", "salesborg"].includes(primary.mode)) {
+  if (["lawborg", "legal"].includes(primary.mode)) {
     return "projects";
   }
   return domain.defaultView;
@@ -128,6 +128,7 @@ function AppInner() {
   const { mode: uiMode } = useUIMode();
   const isMobile = useIsMobile();
   const defaultView = useMemo(() => detectDefaultView(domain, status?.watched_repos), [domain, status]);
+  const sidebarAlert = !!status?.guardrail_alert;
 
   useEffect(() => {
     setView((curr) => (curr === "tasks" ? defaultView : curr));
@@ -225,7 +226,14 @@ function AppInner() {
   return (
     <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
       {/* Sidebar nav — expands on hover */}
-      <nav className="group/nav flex w-[52px] hover:w-[160px] shrink-0 flex-col items-start border-r border-white/[0.06] bg-[#09090b] pb-3 transition-[width] duration-200 overflow-hidden">
+      <nav
+        className={cn(
+          "group/nav flex w-[52px] hover:w-[160px] shrink-0 flex-col items-start border-r pb-3 transition-[width] duration-200 overflow-hidden",
+          sidebarAlert
+            ? "border-red-500/30 bg-red-950/35"
+            : "border-white/[0.06] bg-[#09090b]"
+        )}
+      >
         <div className={cn("borg-logo mb-3 w-full shrink-0 h-[52px]", domain.accentBg)}>
           <BorgLogo expanded />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2 group-hover/nav:grid-cols-4 group-hover/nav:grid-rows-1" aria-hidden>
@@ -245,14 +253,23 @@ function AppInner() {
               className={cn(
                 "group relative flex h-9 w-full items-center gap-2.5 rounded-lg px-[9px] transition-all",
                 view === key
-                  ? "bg-white/[0.1] text-zinc-100"
-                  : "text-zinc-600 hover:bg-white/[0.05] hover:text-zinc-400"
+                  ? sidebarAlert
+                    ? "bg-red-400/20 text-red-50"
+                    : "bg-white/[0.1] text-zinc-100"
+                  : sidebarAlert
+                    ? "text-red-200/80 hover:bg-red-400/15 hover:text-red-50"
+                    : "text-zinc-600 hover:bg-white/[0.05] hover:text-zinc-400"
               )}
             >
               <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={view === key ? 2 : 1.5} />
               <span className="truncate text-[12px] font-medium opacity-0 group-hover/nav:opacity-100 transition-opacity duration-200">{label}</span>
               {view === key && (
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r bg-blue-400" />
+                <div
+                  className={cn(
+                    "absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r",
+                    sidebarAlert ? "bg-red-300" : "bg-blue-400"
+                  )}
+                />
               )}
             </button>
           ))}

@@ -91,14 +91,55 @@ pub struct Config {
 
     // Observer
     pub observer_config: String,
+
+    /// Public base URL for OAuth callbacks (e.g. "https://app.borg.legal").
+    /// Falls back to http://localhost:{web_port} if unset.
+    pub public_url: String,
+
+    // File storage backend
+    pub storage_backend: String, // "local" | "s3"
+    pub s3_bucket: String,
+    pub s3_region: String,
+    pub s3_endpoint: String,
+    pub s3_access_key: String,
+    pub s3_secret_key: String,
+    pub s3_prefix: String,
+
+    // Storage quotas
+    pub project_max_bytes: i64,
+    pub knowledge_max_bytes: i64,
+    pub cloud_import_max_batch_files: i64,
+
+    // Ingestion queue backend
+    pub ingestion_queue_backend: String, // "disabled" | "sqs"
+    pub sqs_queue_url: String,
+    pub sqs_region: String,
+
+    // Search backend
+    pub search_backend: String, // "sqlite" | "opensearch"
+    pub opensearch_url: String,
+    pub opensearch_index: String,
+    pub opensearch_username: String,
+    pub opensearch_password: String,
+
+    // Product focus
+    /// Enable non-core domain modes (health/web/crew/sales/data/chef/build/medwrite).
+    pub experimental_domains: bool,
 }
 
-fn parse_dotenv() -> HashMap<String, String> {
+impl Config {
+    pub fn get_base_url(&self) -> String {
+        if !self.public_url.is_empty() {
+            self.public_url.trim_end_matches('/').to_string()
+        } else {
+            format!("http://localhost:{}", self.web_port)
+        }
+    }
+}
+
+fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
-    for line in contents.lines() {
+    for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -116,6 +157,13 @@ fn parse_dotenv() -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_dotenv() -> HashMap<String, String> {
+    let Ok(contents) = std::fs::read_to_string(".env") else {
+        return HashMap::new();
+    };
+    parse_dotenv_str(&contents)
 }
 
 fn get(key: &str, dotenv: &HashMap<String, String>) -> Option<String> {
@@ -159,13 +207,17 @@ fn get_u16(key: &str, dotenv: &HashMap<String, String>, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-fn resolve_tilde(path: &str) -> String {
+fn resolve_tilde_impl(path: &str, home: Option<&str>) -> String {
     if path.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{}/{}", home, path.strip_prefix("~/").unwrap_or(path));
+        if let Some(h) = home {
+            return format!("{}/{}", h, &path[2..]);
         }
     }
     path.to_string()
+}
+
+fn resolve_tilde(path: &str) -> String {
+    resolve_tilde_impl(path, std::env::var("HOME").ok().as_deref())
 }
 
 pub fn codex_has_credentials(path: &str) -> bool {
@@ -334,6 +386,192 @@ fn parse_watched_repos(
     repos
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: call parse_watched_repos with sensible defaults for optional args.
+    fn parse(watched_raw: &str, pipeline_repo: &str) -> Vec<RepoConfig> {
+        parse_watched_repos(watched_raw, pipeline_repo, "cargo test", "cargo clippy", "sweborg")
+    }
+
+    #[test]
+    fn empty_watched_returns_only_primary() {
+        let repos = parse("", "/primary/repo");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, "/primary/repo");
+        assert!(repos[0].is_self);
+        assert!(repos[0].auto_merge);
+        assert_eq!(repos[0].test_cmd, "cargo test");
+        assert_eq!(repos[0].lint_cmd, "cargo clippy");
+        assert_eq!(repos[0].mode, "sweborg");
+    }
+
+    #[test]
+    fn empty_pipeline_repo_and_empty_watched_returns_empty() {
+        let repos = parse("", "");
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn empty_pipeline_repo_with_watched_entry() {
+        let repos = parse("/some/repo", "");
+        assert_eq!(repos.len(), 1);
+        let r = &repos[0];
+        assert!(!r.is_self);
+        assert_eq!(r.path, "/some/repo");
+    }
+
+    #[test]
+    fn single_entry_path_only() {
+        let repos = parse("/watched", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.path, "/watched");
+        assert_eq!(r.test_cmd, "");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+        assert_eq!(r.lint_cmd, "");
+        assert!(r.auto_merge);
+        assert!(!r.is_self);
+    }
+
+    #[test]
+    fn entry_with_two_fields_captures_test_cmd() {
+        let repos = parse("/watched:just test", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.prompt_file, "");
+        assert_eq!(r.mode, "sweborg");
+    }
+
+    #[test]
+    fn entry_with_four_fields_captures_mode() {
+        let repos = parse("/watched:just test:.borg/prompt.md:legal", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.prompt_file, ".borg/prompt.md");
+        assert_eq!(r.mode, "legal");
+        assert_eq!(r.lint_cmd, "");
+    }
+
+    #[test]
+    fn entry_with_five_fields_captures_lint_cmd() {
+        let repos = parse("/watched:just test:.borg/prompt.md:legal:cargo clippy", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.lint_cmd, "cargo clippy");
+        assert_eq!(r.repo_slug, "");
+    }
+
+    #[test]
+    fn entry_with_six_fields_uses_slug_override() {
+        let repos = parse("/watched:just test:.borg/prompt.md:sweborg::owner/repo", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert_eq!(r.repo_slug, "owner/repo");
+        assert_eq!(r.lint_cmd, "");
+    }
+
+    #[test]
+    fn manual_suffix_sets_auto_merge_false_and_strips_suffix() {
+        let repos = parse("/watched:just test!manual", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+    }
+
+    #[test]
+    fn manual_suffix_alone_strips_to_empty_test_cmd() {
+        let repos = parse("/watched:!manual", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "");
+    }
+
+    #[test]
+    fn no_manual_suffix_keeps_auto_merge_true() {
+        let repos = parse("/watched:just test", "/primary");
+        assert!(repos[1].auto_merge);
+    }
+
+    #[test]
+    fn entry_matching_primary_repo_path_is_skipped() {
+        let repos = parse("/primary", "/primary");
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].is_self);
+    }
+
+    #[test]
+    fn multiple_pipe_separated_entries_all_parsed() {
+        let repos = parse("/repo1|/repo2|/repo3", "/primary");
+        assert_eq!(repos.len(), 4); // primary + 3 watched
+        assert_eq!(repos[1].path, "/repo1");
+        assert_eq!(repos[2].path, "/repo2");
+        assert_eq!(repos[3].path, "/repo3");
+    }
+
+    #[test]
+    fn empty_segment_between_pipes_is_skipped() {
+        let repos = parse("/repo1||/repo2", "/primary");
+        assert_eq!(repos.len(), 3); // primary + 2 (empty skipped)
+    }
+
+    #[test]
+    fn whitespace_around_pipe_entries_is_trimmed() {
+        let repos = parse("  /repo1  |  /repo2  ", "/primary");
+        assert_eq!(repos.len(), 3);
+        assert_eq!(repos[1].path, "/repo1");
+        assert_eq!(repos[2].path, "/repo2");
+    }
+
+    #[test]
+    fn default_mode_is_sweborg_when_field_omitted() {
+        let repos = parse("/watched:just test:.borg/prompt.md", "/primary");
+        assert_eq!(repos[1].mode, "sweborg");
+    }
+
+    #[test]
+    fn primary_repo_has_is_self_true_watched_has_false() {
+        let repos = parse("/watched", "/primary");
+        assert!(repos[0].is_self);
+        assert!(!repos[1].is_self);
+    }
+
+    #[test]
+    fn primary_repo_inherits_pipeline_test_and_lint_cmd() {
+        let repos = parse_watched_repos("", "/primary", "make test", "make lint", "sweborg");
+        assert_eq!(repos[0].test_cmd, "make test");
+        assert_eq!(repos[0].lint_cmd, "make lint");
+    }
+
+    #[test]
+    fn manual_flag_with_six_fields_and_slug_override() {
+        let repos = parse("/watched:just test!manual:::cargo clippy:owner/repo", "/primary");
+        assert_eq!(repos.len(), 2);
+        let r = &repos[1];
+        assert!(!r.auto_merge);
+        assert_eq!(r.test_cmd, "just test");
+        assert_eq!(r.repo_slug, "owner/repo");
+        assert_eq!(r.lint_cmd, "cargo clippy");
+    }
+
+    #[test]
+    fn primary_repo_skipped_in_middle_of_pipe_list() {
+        let repos = parse("/repo1|/primary|/repo2", "/primary");
+        assert_eq!(repos.len(), 3); // primary + repo1 + repo2 (/primary watched entry skipped)
+        let paths: Vec<&str> = repos.iter().map(|r| r.path.as_str()).collect();
+        assert!(!paths.contains(&"/primary") || repos.iter().filter(|r| r.path == "/primary").count() == 1);
+        assert_eq!(repos[0].path, "/primary");
+        assert_eq!(repos[1].path, "/repo1");
+        assert_eq!(repos[2].path, "/repo2");
+    }
+}
+
 impl Config {
     /// System prompt for chat-facing agents (Telegram, Discord, WhatsApp, web).
     pub fn chat_system_prompt(&self) -> String {
@@ -421,6 +659,28 @@ impl Config {
             ("self_update_enabled", self.self_update_enabled.to_string()),
             ("observer_config", self.observer_config.clone()),
             ("wa_disabled", self.wa_disabled.to_string()),
+            ("storage_backend", self.storage_backend.clone()),
+            ("s3_bucket", self.s3_bucket.clone()),
+            ("s3_region", self.s3_region.clone()),
+            ("s3_endpoint", self.s3_endpoint.clone()),
+            ("s3_prefix", self.s3_prefix.clone()),
+            ("project_max_bytes", self.project_max_bytes.to_string()),
+            ("knowledge_max_bytes", self.knowledge_max_bytes.to_string()),
+            (
+                "cloud_import_max_batch_files",
+                self.cloud_import_max_batch_files.to_string(),
+            ),
+            (
+                "ingestion_queue_backend",
+                self.ingestion_queue_backend.clone(),
+            ),
+            ("sqs_queue_url", self.sqs_queue_url.clone()),
+            ("sqs_region", self.sqs_region.clone()),
+            ("search_backend", self.search_backend.clone()),
+            ("opensearch_url", self.opensearch_url.clone()),
+            ("opensearch_index", self.opensearch_index.clone()),
+            ("opensearch_username", self.opensearch_username.clone()),
+            ("experimental_domains", self.experimental_domains.to_string()),
         ];
         let conn_guard = db.raw_conn();
         let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
@@ -480,6 +740,26 @@ impl Config {
         c.git_committer_email = get_str("git_committer_email", &c.git_committer_email);
         c.git_user_coauthor = get_str("git_user_coauthor", &c.git_user_coauthor);
         c.observer_config = get_str("observer_config", &c.observer_config);
+        c.public_url = get_str("public_url", &c.public_url);
+        c.storage_backend = get_str("storage_backend", &c.storage_backend);
+        c.s3_bucket = get_str("s3_bucket", &c.s3_bucket);
+        c.s3_region = get_str("s3_region", &c.s3_region);
+        c.s3_endpoint = get_str("s3_endpoint", &c.s3_endpoint);
+        c.s3_prefix = get_str("s3_prefix", &c.s3_prefix);
+        load_i64!("project_max_bytes", c.project_max_bytes);
+        load_i64!("knowledge_max_bytes", c.knowledge_max_bytes);
+        load_i64!(
+            "cloud_import_max_batch_files",
+            c.cloud_import_max_batch_files
+        );
+        c.ingestion_queue_backend = get_str("ingestion_queue_backend", &c.ingestion_queue_backend);
+        c.sqs_queue_url = get_str("sqs_queue_url", &c.sqs_queue_url);
+        c.sqs_region = get_str("sqs_region", &c.sqs_region);
+        c.search_backend = get_str("search_backend", &c.search_backend);
+        c.opensearch_url = get_str("opensearch_url", &c.opensearch_url);
+        c.opensearch_index = get_str("opensearch_index", &c.opensearch_index);
+        c.opensearch_username = get_str("opensearch_username", &c.opensearch_username);
+        c.experimental_domains = get_bool("experimental_domains", c.experimental_domains);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
@@ -634,6 +914,173 @@ impl Config {
             wa_auth_dir: get_str("WA_AUTH_DIR", &dotenv, ""),
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
+            public_url: get_str("PUBLIC_URL", &dotenv, ""),
+            storage_backend: get_str("STORAGE_BACKEND", &dotenv, "local"),
+            s3_bucket: get_str("S3_BUCKET", &dotenv, ""),
+            s3_region: get_str("AWS_REGION", &dotenv, "us-east-1"),
+            s3_endpoint: get_str("S3_ENDPOINT", &dotenv, ""),
+            s3_access_key: get_str("AWS_ACCESS_KEY_ID", &dotenv, ""),
+            s3_secret_key: get_str("AWS_SECRET_ACCESS_KEY", &dotenv, ""),
+            s3_prefix: get_str("S3_PREFIX", &dotenv, "borg/"),
+            project_max_bytes: get_i64("PROJECT_MAX_BYTES", &dotenv, 200 * 1024 * 1024 * 1024),
+            knowledge_max_bytes: get_i64(
+                "KNOWLEDGE_MAX_BYTES",
+                &dotenv,
+                500 * 1024 * 1024 * 1024,
+            ),
+            cloud_import_max_batch_files: get_i64(
+                "CLOUD_IMPORT_MAX_BATCH_FILES",
+                &dotenv,
+                1000,
+            ),
+            ingestion_queue_backend: get_str("INGESTION_QUEUE_BACKEND", &dotenv, "disabled"),
+            sqs_queue_url: get_str("SQS_QUEUE_URL", &dotenv, ""),
+            sqs_region: get_str("SQS_REGION", &dotenv, get_str("AWS_REGION", &dotenv, "us-east-1").as_str()),
+            search_backend: get_str("SEARCH_BACKEND", &dotenv, "sqlite"),
+            opensearch_url: get_str("OPENSEARCH_URL", &dotenv, ""),
+            opensearch_index: get_str("OPENSEARCH_INDEX", &dotenv, "borg-project-files"),
+            opensearch_username: get_str("OPENSEARCH_USERNAME", &dotenv, ""),
+            opensearch_password: get_str("OPENSEARCH_PASSWORD", &dotenv, ""),
+            experimental_domains: get_bool("EXPERIMENTAL_DOMAINS", &dotenv, false),
         })
+    }
+}
+
+#[cfg(test)]
+mod resolve_tilde_tests {
+    use super::*;
+
+    // ── resolve_tilde_impl ────────────────────────────────────────────────────
+
+    #[test]
+    fn tilde_path_expands_with_home() {
+        assert_eq!(
+            resolve_tilde_impl("~/projects/borg", Some("/home/alice")),
+            "/home/alice/projects/borg"
+        );
+    }
+
+    #[test]
+    fn tilde_path_expands_nested() {
+        assert_eq!(
+            resolve_tilde_impl("~/a/b/c", Some("/root")),
+            "/root/a/b/c"
+        );
+    }
+
+    #[test]
+    fn tilde_path_unchanged_when_home_missing() {
+        assert_eq!(
+            resolve_tilde_impl("~/projects/borg", None),
+            "~/projects/borg"
+        );
+    }
+
+    #[test]
+    fn absolute_path_unchanged() {
+        assert_eq!(
+            resolve_tilde_impl("/absolute/path", Some("/home/alice")),
+            "/absolute/path"
+        );
+    }
+
+    #[test]
+    fn relative_path_unchanged() {
+        assert_eq!(
+            resolve_tilde_impl("relative/path", Some("/home/alice")),
+            "relative/path"
+        );
+    }
+
+    #[test]
+    fn bare_tilde_unchanged() {
+        // "~" without trailing slash is not expanded
+        assert_eq!(resolve_tilde_impl("~", Some("/home/alice")), "~");
+    }
+
+    #[test]
+    fn tilde_slash_only_expands_correctly() {
+        assert_eq!(
+            resolve_tilde_impl("~/", Some("/home/alice")),
+            "/home/alice/"
+        );
+    }
+
+    // ── parse_dotenv_str ──────────────────────────────────────────────────────
+
+    #[test]
+    fn dotenv_basic_key_value() {
+        let map = parse_dotenv_str("FOO=bar\n");
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_skips_blank_lines() {
+        let map = parse_dotenv_str("FOO=bar\n\nBAZ=qux\n");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["FOO"], "bar");
+        assert_eq!(map["BAZ"], "qux");
+    }
+
+    #[test]
+    fn dotenv_skips_hash_comment_lines() {
+        let map = parse_dotenv_str("# comment\nFOO=bar\n");
+        assert_eq!(map.len(), 1);
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_strips_double_quotes() {
+        let map = parse_dotenv_str("TOKEN=\"abc123\"\n");
+        assert_eq!(map["TOKEN"], "abc123");
+    }
+
+    #[test]
+    fn dotenv_strips_single_quotes() {
+        let map = parse_dotenv_str("TOKEN='abc123'\n");
+        assert_eq!(map["TOKEN"], "abc123");
+    }
+
+    #[test]
+    fn dotenv_trims_key_whitespace() {
+        let map = parse_dotenv_str("  FOO  =bar\n");
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_trims_value_whitespace() {
+        let map = parse_dotenv_str("FOO=  bar  \n");
+        assert_eq!(map["FOO"], "bar");
+    }
+
+    #[test]
+    fn dotenv_empty_content_returns_empty_map() {
+        assert!(parse_dotenv_str("").is_empty());
+    }
+
+    #[test]
+    fn dotenv_only_comments_returns_empty_map() {
+        assert!(parse_dotenv_str("# comment\n# another\n").is_empty());
+    }
+
+    #[test]
+    fn dotenv_line_without_equals_is_skipped() {
+        assert!(parse_dotenv_str("NOEQUALSSIGN\n").is_empty());
+    }
+
+    #[test]
+    fn dotenv_value_with_equals_uses_first_split() {
+        let map = parse_dotenv_str("URL=https://example.com?a=1\n");
+        assert_eq!(map["URL"], "https://example.com?a=1");
+    }
+
+    #[test]
+    fn dotenv_multiple_entries_parsed() {
+        let input = "A=1\nB=2\nC=3\n";
+        let map = parse_dotenv_str(input);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map["A"], "1");
+        assert_eq!(map["B"], "2");
+        assert_eq!(map["C"], "3");
     }
 }

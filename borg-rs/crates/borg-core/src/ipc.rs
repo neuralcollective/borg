@@ -5,6 +5,9 @@ use tracing::warn;
 /// Hard cap for any file read through the safe IPC channel (1 MiB).
 pub const MAX_IPC_FILE_BYTES: u64 = 1 << 20; // 1_048_576
 
+/// Maximum collision counter before falling back to a PID+nanosecond suffix.
+pub const MAX_QUARANTINE_COUNTER: u32 = 128;
+
 /// Outcome of a safe IPC file check/read.
 #[derive(Debug)]
 pub enum IpcReadResult {
@@ -239,6 +242,15 @@ fn do_quarantine(
     let mut dest = format!("{quarantine_dir}/{basename}.{ts}");
     let mut counter = 0u32;
     while std::path::Path::new(&dest).exists() || std::fs::symlink_metadata(&dest).is_ok() {
+        if counter >= MAX_QUARANTINE_COUNTER {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            let pid = std::process::id();
+            dest = format!("{quarantine_dir}/{basename}.{ts}.{pid}.{nanos}");
+            break;
+        }
         counter += 1;
         dest = format!("{quarantine_dir}/{basename}.{ts}.{counter}");
     }

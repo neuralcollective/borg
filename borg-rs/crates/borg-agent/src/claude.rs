@@ -29,11 +29,7 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
         let after_start = &search[start_pos + PHASE_RESULT_START.len()..];
         if let Some(end_pos) = after_start.find(PHASE_RESULT_END) {
             let content = after_start[..end_pos].trim();
-            if !content.is_empty() {
-                last_content = Some(content);
-            } else {
-                last_content = None;
-            }
+            last_content = (!content.is_empty()).then_some(content);
             search = &after_start[end_pos + PHASE_RESULT_END.len()..];
         } else {
             break;
@@ -42,12 +38,16 @@ pub fn extract_phase_result(text: &str) -> Option<&str> {
     last_content
 }
 
-fn derive_compile_check(test_cmd: &str) -> Option<String> {
+pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
-    if trimmed.contains("cargo test") {
-        Some(format!("{trimmed} --no-run"))
+    if !trimmed.starts_with("cargo test") {
+        return None;
+    }
+    let already_has_no_run = trimmed.split_whitespace().any(|arg| arg == "--no-run");
+    if already_has_no_run {
+        Some(trimmed.to_string())
     } else {
-        None
+        Some(format!("{trimmed} --no-run"))
     }
 }
 
@@ -109,11 +109,6 @@ impl ClaudeBackend {
         self
     }
 
-    /// Refresh OAuth token (triggers CLI refresh if near-expiry, then re-reads from disk).
-    fn fresh_oauth_token(&self, fallback: &str) -> String {
-        borg_core::config::refresh_oauth_token(&self.credentials_path, fallback)
-    }
-
     /// Build JSON payload for the container entrypoint (Docker mode).
     fn build_docker_input(
         &self,
@@ -126,6 +121,7 @@ impl ClaudeBackend {
         compile_check_cmd: &str,
         lint_cmd: &str,
         test_cmd: &str,
+        gh_token: &str,
     ) -> Vec<u8> {
         let commit_message = if !ctx.user_coauthor.is_empty() {
             format!("{}\n\nCo-Authored-By: {}", phase.commit_message, ctx.user_coauthor)
@@ -138,7 +134,7 @@ impl ClaudeBackend {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let branch = format!("task-{}", task.id);
-        let gh_token = Self::resolve_gh_token();
+        let gh_token = gh_token.to_string();
 
         // Docker containers need a GitHub URL, not a local path
         let repo_url = if !ctx.repo_config.repo_slug.is_empty() && !gh_token.is_empty() {
@@ -282,9 +278,11 @@ impl AgentBackend for ClaudeBackend {
                 .join("../../../sidecar");
             let mut mcp_servers = serde_json::Map::new();
             let mode = ctx.task.mode.as_str();
+            let allow_experimental = ctx.experimental_domains;
 
-            // lawborg + healthborg share the legal research MCP (CourtListener, EDGAR, etc.)
-            if matches!(mode, "lawborg" | "healthborg") {
+            // lawborg always gets legal research MCP.
+            // healthborg only gets it when experimental domains are enabled.
+            if mode == "lawborg" || (allow_experimental && mode == "healthborg") {
                 let legal_mcp_path = if let Ok(p) = std::env::var("LAWBORG_MCP_SERVER") {
                     std::path::PathBuf::from(p)
                 } else {
@@ -322,8 +320,8 @@ impl AgentBackend for ClaudeBackend {
                 }
             }
 
-            // buildborg gets the Shovels permits/contractors MCP
-            if mode == "buildborg" {
+            // buildborg gets Shovels only when experimental domains are enabled.
+            if allow_experimental && mode == "buildborg" {
                 let shovels_path = sidecar_base.join("shovels-mcp/server.js");
                 match shovels_path.canonicalize() {
                     Ok(p) => {
@@ -343,8 +341,11 @@ impl AgentBackend for ClaudeBackend {
                 }
             }
 
-            // Plaid banking MCP — available when plaid keys are configured
-            if let (Some(client_id), Some(secret)) = (ctx.api_keys.get("plaid_client_id"), ctx.api_keys.get("plaid_secret")) {
+            // Plaid banking MCP is experimental and disabled unless explicitly enabled.
+            if allow_experimental {
+                if let (Some(client_id), Some(secret)) =
+                    (ctx.api_keys.get("plaid_client_id"), ctx.api_keys.get("plaid_secret"))
+                {
                 let plaid_path = sidecar_base.join("plaid-mcp/server.js");
                 if let Ok(p) = plaid_path.canonicalize() {
                     let mut env_vars = serde_json::Map::new();
@@ -359,17 +360,24 @@ impl AgentBackend for ClaudeBackend {
                         "env": env_vars,
                     }));
                 }
+                }
             }
 
-            // kreuzberg OCR — available to document-heavy modes when installed
-            if matches!(mode, "lawborg" | "healthborg" | "buildborg") {
-                let has_kreuzberg = std::process::Command::new("kreuzberg")
-                    .arg("--version")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
+            // OCR is always available for lawborg; experimental modes are gated by flag.
+            if mode == "lawborg"
+                || (allow_experimental && matches!(mode, "healthborg" | "buildborg"))
+            {
+                let has_kreuzberg = tokio::task::spawn_blocking(|| {
+                    std::process::Command::new("kreuzberg")
+                        .arg("--version")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                })
+                .await
+                .unwrap_or(false);
                 if has_kreuzberg {
                     mcp_servers.insert("ocr".into(), serde_json::json!({
                         "command": "kreuzberg",
@@ -407,7 +415,13 @@ impl AgentBackend for ClaudeBackend {
 
         let effective_mode = &self.sandbox_mode;
 
-        let oauth_token = self.fresh_oauth_token(&ctx.oauth_token);
+        let creds_path = self.credentials_path.clone();
+        let oauth_fallback = ctx.oauth_token.clone();
+        let oauth_token = tokio::task::spawn_blocking(move || {
+            borg_core::config::refresh_oauth_token(&creds_path, &oauth_fallback)
+        })
+        .await
+        .unwrap_or_else(|_| ctx.oauth_token.clone());
 
         info!(
             task_id = task.id,
@@ -456,6 +470,15 @@ impl AgentBackend for ClaudeBackend {
             .unwrap_or_else(|_| format!("{real_home}/.rustup"));
         let cargo_home = std::env::var("CARGO_HOME")
             .unwrap_or_else(|_| format!("{real_home}/.cargo"));
+
+        // Resolve GH token upfront (may invoke `gh auth token` subprocess)
+        let gh_token = if matches!(effective_mode, SandboxMode::Docker) {
+            tokio::task::spawn_blocking(Self::resolve_gh_token)
+                .await
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         let mut child = match effective_mode {
             SandboxMode::Bwrap => {
@@ -522,7 +545,6 @@ impl AgentBackend for ClaudeBackend {
                     ("borg-cache-rustup".to_string(), "/home/bun/.rustup".to_string()),
                 ];
 
-                let gh_token = Self::resolve_gh_token();
                 let mut env_kv: Vec<(String, String)> = vec![
                     ("HOME".to_string(), ctx.session_dir.clone()),
                     ("RUSTUP_HOME".to_string(), "/home/bun/.rustup".to_string()),
@@ -530,7 +552,7 @@ impl AgentBackend for ClaudeBackend {
                     ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), oauth_token.clone()),
                 ];
                 if !gh_token.is_empty() {
-                    env_kv.push(("GH_TOKEN".to_string(), gh_token));
+                    env_kv.push(("GH_TOKEN".to_string(), gh_token.clone()));
                 }
 
                 let binds_ref: Vec<(&str, &str, bool)> = binds
@@ -624,40 +646,47 @@ impl AgentBackend for ClaudeBackend {
                     &compile_check_cmd,
                     "",
                     runs_test_cmd,
+                    &gh_token,
                 );
-                let _ = stdin.write_all(&payload).await;
+                if let Err(e) = stdin.write_all(&payload).await {
+                    warn!(task_id = task.id, error = %e, "failed to write payload to container stdin — aborting run");
+                    return Err(e).context("failed to write payload to container stdin");
+                }
                 // stdin dropped here → EOF to container
             }
         }
 
         // Read container ID from cidfile (Docker writes it shortly after container start).
-        if let Some(ref cid_path) = cidfile_path {
-            let cid_path_clone = cid_path.clone();
-            let stream_tx_cid = ctx.stream_tx.clone();
-            let tid = task.id;
-            tokio::spawn(async move {
-                for _ in 0..30u8 {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    if let Ok(s) = tokio::fs::read_to_string(&cid_path_clone).await {
-                        let cid = s.trim().to_string();
-                        if !cid.is_empty() {
-                            info!(task_id = tid, container_id = %cid, "docker container started");
-                            let evt = serde_json::json!({
-                                "type": "container_event",
-                                "event": "container_id",
-                                "id": cid,
-                                "task_id": tid,
-                            })
-                            .to_string();
-                            if let Some(tx) = stream_tx_cid {
-                                let _ = tx.send(evt);
+        let mut cid_task: Option<tokio::task::JoinHandle<()>> =
+            if let Some(ref cid_path) = cidfile_path {
+                let cid_path_clone = cid_path.clone();
+                let stream_tx_cid = ctx.stream_tx.clone();
+                let tid = task.id;
+                Some(tokio::spawn(async move {
+                    for _ in 0..30u8 {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        if let Ok(s) = tokio::fs::read_to_string(&cid_path_clone).await {
+                            let cid = s.trim().to_string();
+                            if !cid.is_empty() {
+                                info!(task_id = tid, container_id = %cid, "docker container started");
+                                let evt = serde_json::json!({
+                                    "type": "container_event",
+                                    "event": "container_id",
+                                    "id": cid,
+                                    "task_id": tid,
+                                })
+                                .to_string();
+                                if let Some(tx) = stream_tx_cid {
+                                    let _ = tx.send(evt);
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
-                }
-            });
-        }
+                }))
+            } else {
+                None
+            };
 
         let stdout = child.stdout.take().context("failed to take stdout")?;
         let stderr = child.stderr.take().context("failed to take stderr")?;
@@ -762,15 +791,35 @@ impl AgentBackend for ClaudeBackend {
         let (raw_stream, signal_json, container_test_results, success) = if timeout_s > 0 {
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), io_future).await {
                 Ok(Ok(v)) => v,
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => {
+                    if let Some(h) = cid_task.take() { h.abort(); }
+                    return Err(e);
+                },
                 Err(_elapsed) => {
                     warn!(task_id = task.id, phase = %phase.name, timeout_s, "claude subprocess timed out");
+                    if let Some(h) = cid_task.take() { h.abort(); }
                     return Ok(PhaseOutput::failed(String::new()));
                 },
             }
         } else {
-            io_future.await?
+            match io_future.await {
+                Ok(v) => v,
+                Err(e) => {
+                    if let Some(h) = cid_task.take() { h.abort(); }
+                    return Err(e);
+                },
+            }
         };
+
+        // Abort the CID task if still polling; propagate any panic it may have raised.
+        if let Some(handle) = cid_task {
+            handle.abort();
+            if let Err(e) = handle.await {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                }
+            }
+        }
 
         let (output, new_session_id) = crate::event::parse_stream(&raw_stream);
 
@@ -793,18 +842,40 @@ impl AgentBackend for ClaudeBackend {
             container_test_results,
         })
     }
+}
 
-    async fn inject_message(&self, session_id: &str, message: &str) -> Result<()> {
-        warn!(
-            session_id = %session_id,
-            msg_len = message.len(),
-            "inject_message not yet implemented (requires TypeScript sidecar extension)"
-        );
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use super::derive_compile_check;
+
+    #[test]
+    fn cargo_test_gets_no_run() {
+        assert_eq!(derive_compile_check("cargo test"), Some("cargo test --no-run".to_string()));
     }
 
-    async fn interrupt(&self, session_id: &str) -> Result<()> {
-        warn!(session_id = %session_id, "interrupt not yet implemented");
-        Ok(())
+    #[test]
+    fn cargo_test_workspace_gets_no_run() {
+        assert_eq!(
+            derive_compile_check("cargo test --workspace"),
+            Some("cargo test --workspace --no-run".to_string()),
+        );
+    }
+
+    #[test]
+    fn non_cargo_command_returns_none() {
+        assert_eq!(derive_compile_check("npm test"), None);
+    }
+
+    #[test]
+    fn empty_string_returns_none() {
+        assert_eq!(derive_compile_check(""), None);
+    }
+
+    #[test]
+    fn already_has_no_run_no_duplication() {
+        assert_eq!(
+            derive_compile_check("cargo test --no-run"),
+            Some("cargo test --no-run".to_string()),
+        );
     }
 }

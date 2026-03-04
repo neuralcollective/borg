@@ -1,6 +1,10 @@
 mod auth;
+mod ingestion;
 mod logging;
+mod opensearch;
 mod routes;
+mod routes_modes;
+mod storage;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -28,7 +32,7 @@ use borg_core::{
 };
 use chrono::Utc;
 use serde_json::json;
-use tokio::sync::{broadcast, Mutex as TokioMutex};
+use tokio::sync::{broadcast, Mutex as TokioMutex, Semaphore};
 use axum::http::HeaderValue;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -54,6 +58,11 @@ pub struct AppState {
     pub chat_rate: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
     pub triage_running: Arc<std::sync::atomic::AtomicBool>,
     pub embed_client: borg_core::knowledge::EmbeddingClient,
+    pub file_storage: Arc<storage::FileStorage>,
+    pub ingestion_queue: Arc<ingestion::IngestionQueue>,
+    pub opensearch: Option<Arc<opensearch::OpenSearchClient>>,
+    pub upload_processing_sem: Arc<Semaphore>,
+    pub upload_processing_limit: usize,
 }
 
 impl AppState {
@@ -91,8 +100,6 @@ async fn main() -> anyhow::Result<()> {
 
     let env_config = Config::from_env()?;
 
-    borg_core::modes::register_modes(borg_domains::all_modes());
-
     std::fs::create_dir_all(&env_config.data_dir)?;
 
     // Generate per-startup API token and write to disk (0600)
@@ -113,6 +120,8 @@ async fn main() -> anyhow::Result<()> {
     // Seed DB from env on first run, then load DB values (DB wins over env)
     env_config.seed_db(&db)?;
     let config = env_config.load_from_db(&db);
+    let builtin_modes = borg_domains::modes_for_focus(config.experimental_domains);
+    borg_core::modes::register_modes(builtin_modes);
 
     // Abandon any runs left in 'running' state from previous crash
     if let Err(e) = db.abandon_running_agents() {
@@ -162,6 +171,16 @@ async fn main() -> anyhow::Result<()> {
 
     let db = Arc::new(db);
     let config = Arc::new(config);
+    let file_storage = Arc::new(storage::FileStorage::from_config(&config).await?);
+    let ingestion_queue = Arc::new(ingestion::IngestionQueue::from_config(&config).await?);
+    let opensearch = opensearch::OpenSearchClient::from_config(&config).map(Arc::new);
+
+    match &*ingestion_queue {
+        ingestion::IngestionQueue::Disabled => info!("ingestion queue backend: disabled"),
+        ingestion::IngestionQueue::Sqs { queue_url, .. } => {
+            info!("ingestion queue backend: sqs ({queue_url})");
+        }
+    }
 
     // Detect sandbox backend (bwrap preferred, docker fallback, configurable via SANDBOX_BACKEND)
     let sandbox_mode = Sandbox::detect(&config.sandbox_backend).await;
@@ -212,7 +231,14 @@ async fn main() -> anyhow::Result<()> {
             "codex".into(),
             Arc::new(
                 CodexBackend::new(config.codex_api_key.clone(), codex_model)
-                    .with_reasoning_effort(codex_reasoning_effort),
+                    .with_reasoning_effort(codex_reasoning_effort)
+                    .with_timeout(config.agent_timeout_s as u64)
+                    .with_git_identity(
+                        &config.git_author_name,
+                        &config.git_author_email,
+                        &config.git_committer_name,
+                        &config.git_committer_email,
+                    ),
             ),
         );
     }
@@ -222,7 +248,7 @@ async fn main() -> anyhow::Result<()> {
         let model = std::env::var("LOCAL_MODEL").unwrap_or_else(|_| "llama3.2".into());
         backends.insert(
             "local".into(),
-            Arc::new(OllamaBackend::new(url, model).with_timeout(300)),
+            Arc::new(OllamaBackend::new(url, model)?.with_timeout(300)?),
         );
         info!("local backend registered (Ollama)");
     }
@@ -278,6 +304,7 @@ async fn main() -> anyhow::Result<()> {
         let db_tg = Arc::clone(&db);
         let repos = config.watched_repos.clone();
         let config_tg = Arc::clone(&config);
+        let file_storage_tg = Arc::clone(&file_storage);
         let tg_chat_event_tx = chat_event_tx.clone();
         let tg_sessions: Arc<TokioMutex<HashMap<String, String>>> =
             Arc::new(TokioMutex::new(HashMap::new()));
@@ -368,6 +395,7 @@ async fn main() -> anyhow::Result<()> {
                                 let sessions2 = Arc::clone(&tg_sessions);
                                 let config2 = Arc::clone(&config_tg);
                                 let db2 = Arc::clone(&db_tg);
+                                let storage2 = Arc::clone(&file_storage_tg);
                                 let chat_tx2 = tg_chat_event_tx.clone();
                                 let sender_name = msg.sender_name.clone();
                                 let chat_id = msg.chat_id;
@@ -380,6 +408,7 @@ async fn main() -> anyhow::Result<()> {
                                         &sessions2,
                                         &config2,
                                         &db2,
+                                        &storage2,
                                         &chat_tx2,
                                     )
                                     .await
@@ -461,6 +490,7 @@ async fn main() -> anyhow::Result<()> {
     if !config.discord_token.is_empty() || !config.wa_auth_dir.is_empty() {
         let config_sc = Arc::clone(&config);
         let db_sc = Arc::clone(&db);
+        let storage_sc = Arc::clone(&file_storage);
         let sc_chat_event_tx = chat_event_tx.clone();
         match Sidecar::spawn(
             &config.assistant_name,
@@ -487,6 +517,7 @@ async fn main() -> anyhow::Result<()> {
                 let sessions_flush = Arc::clone(&sc_sessions);
                 let config_flush = Arc::clone(&config_sc);
                 let db_flush = Arc::clone(&db_sc);
+                let storage_flush = Arc::clone(&storage_sc);
                 let chat_tx_flush = sc_chat_event_tx.clone();
                 tokio::spawn(async move {
                     loop {
@@ -496,6 +527,7 @@ async fn main() -> anyhow::Result<()> {
                             let sessions2 = Arc::clone(&sessions_flush);
                             let config2 = Arc::clone(&config_flush);
                             let db2 = Arc::clone(&db_flush);
+                            let storage2 = Arc::clone(&storage_flush);
                             let chat_tx2 = chat_tx_flush.clone();
                             let collector2 = Arc::clone(&collector_flush);
                             let is_discord = batch.chat_key.starts_with("discord:");
@@ -514,6 +546,7 @@ async fn main() -> anyhow::Result<()> {
                                     &sessions2,
                                     &config2,
                                     &db2,
+                                    &storage2,
                                     &chat_tx2,
                                 )
                                 .await
@@ -536,6 +569,7 @@ async fn main() -> anyhow::Result<()> {
 
                 // Process incoming sidecar events
                 let db_events = Arc::clone(&db_sc);
+                let storage_events = Arc::clone(&storage_sc);
                 let chat_tx_events = sc_chat_event_tx.clone();
                 tokio::spawn(async move {
                     loop {
@@ -566,6 +600,7 @@ async fn main() -> anyhow::Result<()> {
                             let sessions2 = Arc::clone(&sc_sessions);
                             let config2 = Arc::clone(&config_sc);
                             let db2 = Arc::clone(&db_events);
+                            let storage2 = Arc::clone(&storage_events);
                             let chat_tx2 = chat_tx_events.clone();
                             let collector2 = Arc::clone(&collector);
                             let is_discord = msg.source == Source::Discord;
@@ -585,6 +620,7 @@ async fn main() -> anyhow::Result<()> {
                                     &sessions2,
                                     &config2,
                                     &db2,
+                                    &storage2,
                                     &chat_tx2,
                                 )
                                 .await
@@ -661,6 +697,12 @@ async fn main() -> anyhow::Result<()> {
 
     let stream_manager = Arc::clone(&pipeline.stream_manager);
 
+    let upload_processing_limit = std::env::var("UPLOAD_PROCESSING_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(2);
+
     let state = Arc::new(AppState {
         db,
         config: Arc::clone(&config),
@@ -677,7 +719,22 @@ async fn main() -> anyhow::Result<()> {
         chat_rate: Arc::new(std::sync::Mutex::new(HashMap::new())),
         triage_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         embed_client: borg_core::knowledge::EmbeddingClient::from_env(),
+        file_storage: Arc::clone(&file_storage),
+        ingestion_queue: Arc::clone(&ingestion_queue),
+        opensearch: opensearch.clone(),
+        upload_processing_sem: Arc::new(Semaphore::new(upload_processing_limit)),
+        upload_processing_limit,
     });
+
+    {
+        let queue = Arc::clone(&state.ingestion_queue);
+        let db = Arc::clone(&state.db);
+        let storage = Arc::clone(&state.file_storage);
+        let search = state.opensearch.clone();
+        tokio::spawn(async move {
+            queue.run_worker(db, storage, search).await;
+        });
+    }
 
     let dashboard_dir = config.dashboard_dist_dir.clone();
     let serve_dir = ServeDir::new(&dashboard_dir).fallback(tower_http::services::ServeFile::new(
@@ -701,6 +758,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/:id/verify-citations", post(routes::verify_task_citations))
         .route("/api/tasks/:id/retry", post(routes::retry_task))
         .route("/api/tasks/:id/unblock", post(routes::unblock_task))
+        .route("/api/tasks/:id/diagnostics", get(routes::get_task_diagnostics))
         .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))
         .route(
             "/api/tasks/:id/outputs",
@@ -744,6 +802,27 @@ async fn main() -> anyhow::Result<()> {
             post(routes::upload_project_files).layer(DefaultBodyLimit::max(110 * 1024 * 1024)),
         )
         .route(
+            "/api/projects/:id/uploads/sessions",
+            post(routes::create_upload_session).get(routes::list_project_upload_sessions),
+        )
+        .route(
+            "/api/projects/:id/uploads/sessions/:session_id",
+            get(routes::get_upload_session_status),
+        )
+        .route(
+            "/api/projects/:id/uploads/sessions/:session_id/retry",
+            post(routes::retry_upload_session),
+        )
+        .route(
+            "/api/projects/:id/uploads/sessions/:session_id/complete",
+            post(routes::complete_upload_session),
+        )
+        .route(
+            "/api/projects/:id/uploads/sessions/:session_id/chunks/:chunk_index",
+            put(routes::upload_session_chunk),
+        )
+        .route("/api/uploads/overview", get(routes::get_upload_overview))
+        .route(
             "/api/projects/:id/chat/messages",
             get(routes::get_project_chat_messages),
         )
@@ -754,6 +833,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/:id/deadlines/:did", put(routes::update_deadline).delete(routes::delete_deadline))
         .route("/api/deadlines", get(routes::list_upcoming_deadlines))
         .route("/api/search", get(routes::search_documents))
+        .route("/api/themes", get(routes::summarize_workspace_themes))
+        .route("/api/projects/:id/themes", get(routes::summarize_project_themes))
         .route("/api/projects/:id/audit", get(routes::list_project_audit))
         .route("/api/projects/:id/documents", get(routes::list_project_documents))
         .route(
@@ -814,6 +895,13 @@ async fn main() -> anyhow::Result<()> {
         // Cache volumes
         .route("/api/cache", get(routes::list_cache_volumes))
         .route("/api/cache/:name", delete(routes::delete_cache_volume))
+        // Cloud storage OAuth
+        .route("/api/cloud/:provider/auth", get(routes::cloud_auth_init))
+        .route("/api/cloud/:provider/callback", get(routes::cloud_auth_callback))
+        .route("/api/projects/:id/cloud", get(routes::list_cloud_connections))
+        .route("/api/projects/:id/cloud/:conn_id", delete(routes::delete_cloud_connection))
+        .route("/api/projects/:id/cloud/:conn_id/browse", get(routes::browse_cloud_files))
+        .route("/api/projects/:id/cloud/:conn_id/import", post(routes::import_cloud_files))
         // Knowledge base
         .route("/api/knowledge", get(routes::list_knowledge))
         .route("/api/knowledge/templates", get(routes::list_templates))

@@ -1,5 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { useSettings, useStatus, updateSettings, useRepos, setRepoBackend, useCacheVolumes, deleteCacheVolume, type Settings } from "@/lib/api";
+import {
+  useSettings,
+  useStatus,
+  updateSettings,
+  useRepos,
+  setRepoBackend,
+  useCacheVolumes,
+  deleteCacheVolume,
+  type Settings,
+} from "@/lib/api";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -11,6 +20,17 @@ function formatUptime(seconds: number) {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function isValidHttpUrl(url: string): boolean {
+  const raw = url.trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 export function SettingsPanel() {
@@ -29,6 +49,7 @@ export function SettingsPanel() {
 
   const effective = settings ? { ...settings, ...draft } : null;
   const hasDraft = Object.keys(draft).length > 0;
+  const publicUrlInvalid = !!effective?.public_url && !isValidHttpUrl(effective.public_url);
 
   async function handleSave() {
     if (!hasDraft) return;
@@ -87,6 +108,12 @@ export function SettingsPanel() {
             desc="Auto-seed new tasks when pipeline is idle"
             value={effective.continuous_mode}
             onChange={(v) => update("continuous_mode", v)}
+          />
+          <ToggleField
+            label="Experimental Domains"
+            desc="Enable non-core mode presets and runtime integrations."
+            value={effective.experimental_domains}
+            onChange={(v) => update("experimental_domains", v)}
           />
           <NumberField
             label="Max Backlog"
@@ -210,6 +237,162 @@ export function SettingsPanel() {
             desc="Comma-separated tools to block for pipeline agents (empty = all allowed)"
             value={effective.pipeline_disallowed_tools}
             onChange={(v) => update("pipeline_disallowed_tools", v)}
+          />
+        </Section>
+
+        {/* Cloud Storage */}
+        <Section title="Cloud Storage">
+          <TextField
+            label="Public URL"
+            desc="Public app URL used for OAuth callbacks (for example: https://app.borg.legal)"
+            value={effective.public_url}
+            onChange={(v) => update("public_url", v)}
+          />
+          {publicUrlInvalid && (
+            <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-300">
+              Public URL should be a valid http(s) URL.
+            </div>
+          )}
+          <TextField
+            label="Dropbox Client ID"
+            desc="OAuth app client ID for Dropbox"
+            value={effective.dropbox_client_id}
+            onChange={(v) => update("dropbox_client_id", v)}
+          />
+          <TextField
+            label="Dropbox Client Secret"
+            desc="OAuth app client secret for Dropbox"
+            value={effective.dropbox_client_secret}
+            onChange={(v) => update("dropbox_client_secret", v)}
+          />
+          <TextField
+            label="Google Client ID"
+            desc="OAuth app client ID for Google Drive"
+            value={effective.google_client_id}
+            onChange={(v) => update("google_client_id", v)}
+          />
+          <TextField
+            label="Google Client Secret"
+            desc="OAuth app client secret for Google Drive"
+            value={effective.google_client_secret}
+            onChange={(v) => update("google_client_secret", v)}
+          />
+          <TextField
+            label="Microsoft Client ID"
+            desc="OAuth app client ID for OneDrive"
+            value={effective.ms_client_id}
+            onChange={(v) => update("ms_client_id", v)}
+          />
+          <TextField
+            label="Microsoft Client Secret"
+            desc="OAuth app client secret for OneDrive"
+            value={effective.ms_client_secret}
+            onChange={(v) => update("ms_client_secret", v)}
+          />
+          <SelectField
+            label="File Storage Backend"
+            desc="Where uploaded files are stored"
+            value={effective.storage_backend}
+            onChange={(v) => update("storage_backend", v)}
+            options={[
+              { value: "local", label: "Local Disk" },
+              { value: "s3", label: "AWS S3" },
+            ]}
+          />
+          <TextField
+            label="S3 Bucket"
+            desc="Bucket name for project file storage"
+            value={effective.s3_bucket}
+            onChange={(v) => update("s3_bucket", v)}
+          />
+          <TextField
+            label="S3 Region"
+            desc="AWS region (for example us-east-1)"
+            value={effective.s3_region}
+            onChange={(v) => update("s3_region", v)}
+          />
+          <TextField
+            label="S3 Endpoint"
+            desc="Optional custom endpoint (leave empty for AWS)"
+            value={effective.s3_endpoint}
+            onChange={(v) => update("s3_endpoint", v)}
+          />
+          <TextField
+            label="S3 Prefix"
+            desc="Object key prefix (for example borg/)"
+            value={effective.s3_prefix}
+            onChange={(v) => update("s3_prefix", v)}
+          />
+          <NumberField
+            label="Project Max Bytes"
+            desc="Maximum bytes allowed per project file corpus"
+            value={effective.project_max_bytes}
+            onChange={(v) => update("project_max_bytes", v)}
+            min={1}
+          />
+          <NumberField
+            label="Knowledge Max Bytes"
+            desc="Maximum bytes allowed in global knowledge corpus"
+            value={effective.knowledge_max_bytes}
+            onChange={(v) => update("knowledge_max_bytes", v)}
+            min={1}
+          />
+          <NumberField
+            label="Cloud Import Batch Max"
+            desc="Maximum files per cloud import request"
+            value={effective.cloud_import_max_batch_files}
+            onChange={(v) => update("cloud_import_max_batch_files", v)}
+            min={1}
+          />
+          <SelectField
+            label="Ingestion Queue Backend"
+            desc="Background ingestion queue transport"
+            value={effective.ingestion_queue_backend}
+            onChange={(v) => update("ingestion_queue_backend", v)}
+            options={[
+              { value: "disabled", label: "Disabled" },
+              { value: "sqs", label: "AWS SQS" },
+            ]}
+          />
+          <TextField
+            label="SQS Queue URL"
+            desc="Queue URL for ingestion job messages"
+            value={effective.sqs_queue_url}
+            onChange={(v) => update("sqs_queue_url", v)}
+          />
+          <TextField
+            label="SQS Region"
+            desc="AWS region for SQS client"
+            value={effective.sqs_region}
+            onChange={(v) => update("sqs_region", v)}
+          />
+          <SelectField
+            label="Search Backend"
+            desc="Keyword search engine for project documents"
+            value={effective.search_backend}
+            onChange={(v) => update("search_backend", v)}
+            options={[
+              { value: "sqlite", label: "SQLite FTS (default)" },
+              { value: "opensearch", label: "OpenSearch" },
+            ]}
+          />
+          <TextField
+            label="OpenSearch URL"
+            desc="Base URL for OpenSearch cluster"
+            value={effective.opensearch_url}
+            onChange={(v) => update("opensearch_url", v)}
+          />
+          <TextField
+            label="OpenSearch Index"
+            desc="Index name for project file documents"
+            value={effective.opensearch_index}
+            onChange={(v) => update("opensearch_index", v)}
+          />
+          <TextField
+            label="OpenSearch Username"
+            desc="Optional username for basic auth"
+            value={effective.opensearch_username}
+            onChange={(v) => update("opensearch_username", v)}
           />
         </Section>
 

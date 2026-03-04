@@ -1,5 +1,5 @@
-import { useTaskDetail, useTaskStream, useTaskContainer, useFullModes, retryTask, setTaskBackend, approveTask, rejectTask, requestRevision, getRevisionHistory } from "@/lib/api";
-import type { RevisionHistory } from "@/lib/api";
+import { useTaskDetail, useTaskStream, useTaskContainer, useFullModes, retryTask, setTaskBackend, approveTask, rejectTask, requestRevision, getRevisionHistory, getTaskDiagnostics } from "@/lib/api";
+import type { RevisionHistory, TaskDiagnostics } from "@/lib/api";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { LiveTerminal } from "./live-terminal";
@@ -10,11 +10,34 @@ import { cn } from "@/lib/utils";
 import { parseRawStream, type ParsedStreamEvent } from "@/lib/stream-utils";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { ArrowLeft, RotateCcw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 interface TaskDetailProps {
   taskId: number;
   onBack: () => void;
+}
+
+interface ComplianceFinding {
+  check_id: string;
+  severity: string;
+  issue: string;
+  source_url?: string;
+  as_of?: string;
+}
+
+interface ComplianceCheckData {
+  phase?: string;
+  profile?: string;
+  enforcement?: string;
+  checked_at?: string;
+  passed?: boolean;
+  findings?: ComplianceFinding[];
+}
+
+function complianceData(task: any): ComplianceCheckData | null {
+  const raw = task?.structured_data?.compliance_check;
+  if (!raw || typeof raw !== "object") return null;
+  return raw as ComplianceCheckData;
 }
 
 export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
@@ -31,12 +54,21 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const [revisionFeedback, setRevisionFeedback] = useState("");
   const [revHistory, setRevHistory] = useState<RevisionHistory | null>(null);
   const [showRevHistory, setShowRevHistory] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const { data: diagnostics, isFetching: diagnosticsLoading } = useQuery<TaskDiagnostics>({
+    queryKey: ["task_diagnostics", taskId],
+    queryFn: () => getTaskDiagnostics(taskId),
+    enabled: showDiagnostics,
+    staleTime: 10_000,
+  });
 
   if (isLoading || !task) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-zinc-600">Loading...</div>
     );
   }
+
+  const compliance = complianceData(task);
 
   return (
     <div className="flex h-full flex-col">
@@ -151,6 +183,59 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
           );
         })()}
 
+        {task.status === "pending_review" && compliance && (compliance.findings?.length ?? 0) > 0 && (
+          <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/[0.04] p-3 space-y-2">
+            <div className="text-[11px] text-fuchsia-300/80">
+              Compliance check blocked this task ({compliance.profile ?? "unknown profile"}).
+            </div>
+            <div className="space-y-1">
+              {(compliance.findings ?? []).map((f, idx) => (
+                <div key={`${f.check_id}-${idx}`} className="rounded border border-fuchsia-500/10 bg-black/20 px-2 py-1.5">
+                  <div className="text-[11px] text-zinc-200">{f.issue}</div>
+                  <div className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
+                    <span className="uppercase">{f.severity}</span>
+                    {f.as_of && <span>as of {f.as_of}</span>}
+                    {f.source_url && (
+                      <a className="text-blue-400 hover:text-blue-300" href={f.source_url} target="_blank" rel="noreferrer">
+                        source
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const prefill = `Compliance remediation required (${compliance.profile ?? "profile"}):\n` +
+                    (compliance.findings ?? [])
+                      .map((f) => `- [${f.severity}] ${f.issue}${f.source_url ? ` (source: ${f.source_url})` : ""}`)
+                      .join("\n");
+                  setRevisionFeedback(prefill);
+                  setShowRevision(true);
+                }}
+                className="rounded-md bg-fuchsia-500/15 px-3 py-1.5 text-[11px] font-medium text-fuchsia-300 hover:bg-fuchsia-500/25 transition-colors"
+              >
+                Prefill Revision Request
+              </button>
+              <button
+                onClick={async () => {
+                  const prefill = `Compliance remediation required (${compliance.profile ?? "profile"}):\n` +
+                    (compliance.findings ?? [])
+                      .map((f) => `- [${f.severity}] ${f.issue}${f.source_url ? ` (source: ${f.source_url})` : ""}`)
+                      .join("\n");
+                  await requestRevision(task.id, prefill);
+                  queryClient.invalidateQueries({ queryKey: ["tasks"] });
+                  queryClient.invalidateQueries({ queryKey: ["task", task.id] });
+                }}
+                className="rounded-md bg-amber-500/15 px-3 py-1.5 text-[11px] font-medium text-amber-300 hover:bg-amber-500/25 transition-colors"
+              >
+                Request Revision Now
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
           {task.repo_path && (
             <span title={task.repo_path}>
@@ -173,6 +258,12 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
           <span>
             <span className="text-zinc-600">at</span> {task.created_at}
           </span>
+          <button
+            onClick={() => setShowDiagnostics((v) => !v)}
+            className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10px] text-zinc-500 hover:border-white/[0.16] hover:text-zinc-300 transition-colors"
+          >
+            {showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
+          </button>
           <span className="flex items-center gap-1">
             <span className="text-zinc-600">backend</span>
             <select
@@ -259,6 +350,35 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
           <pre className="max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
             {task.last_error}
           </pre>
+        </div>
+      )}
+
+      {showDiagnostics && (
+        <div className="mx-4 mt-3 rounded-lg border border-white/[0.08] bg-white/[0.02] p-3 text-[11px]">
+          {diagnosticsLoading && !diagnostics ? (
+            <div className="text-zinc-500">Loading diagnostics…</div>
+          ) : diagnostics ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-zinc-400">
+                <span>stuck_suspected: <span className={diagnostics.summary.stuck_suspected ? "text-amber-400" : "text-zinc-500"}>{String(diagnostics.summary.stuck_suspected)}</span></span>
+                <span>same_failure_streak: {diagnostics.summary.same_failure_streak}</span>
+                <span>queue_entries: {diagnostics.queue_entries.length}</span>
+                <span>attempt: {diagnostics.summary.attempt}/{diagnostics.summary.max_attempts}</span>
+              </div>
+              <div>
+                <div className="mb-1 text-zinc-500">Recent events</div>
+                <div className="max-h-24 overflow-y-auto space-y-1">
+                  {diagnostics.recent_events.slice(0, 8).map((e) => (
+                    <div key={e.id} className="font-mono text-[10px] text-zinc-500">
+                      [{e.created_at}] {e.kind}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-zinc-500">Diagnostics unavailable</div>
+          )}
         </div>
       )}
 

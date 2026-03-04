@@ -39,6 +39,8 @@ pub enum PhaseType {
     LintFix,
     /// Halts the pipeline until a human approves, rejects, or requests revision.
     HumanReview,
+    /// Runs deterministic regulatory QA checks over prior phase output.
+    ComplianceCheck,
 }
 
 impl Default for PhaseType {
@@ -162,7 +164,7 @@ pub struct PipelineStateSnapshot {
     pub task_id: i64,
     pub task_title: String,
     pub phase: String,
-    pub work_dir: String,
+    pub worktree_path: String,
     /// GitHub PR URL, or null if no PR has been opened yet.
     pub pr_url: Option<String>,
     /// Queue entries for this task that are in `pending_review` status
@@ -237,6 +239,13 @@ pub struct PhaseConfig {
 
     /// Phase to loop back to on validation failure (Validate phases only).
     pub retry_phase: String,
+
+    /// Compliance pack ID for ComplianceCheck phases (e.g. "uk_sra", "us_prof_resp").
+    #[serde(default)]
+    pub compliance_profile: String,
+    /// Enforcement mode for ComplianceCheck: "warn" (default) or "block".
+    #[serde(default)]
+    pub compliance_enforcement: String,
 }
 
 /// Configuration for a seed scan mode.
@@ -308,6 +317,8 @@ impl Default for PhaseConfig {
             fresh_session: false,
             fix_instruction: String::new(),
             retry_phase: String::new(),
+            compliance_profile: String::new(),
+            compliance_enforcement: "warn".into(),
         }
     }
 }
@@ -443,6 +454,8 @@ pub struct PhaseContext {
     pub prior_research: Vec<String>,
     /// How many revision rounds this task has been through. 0 = first draft.
     pub revision_count: i64,
+    /// Whether non-core experimental domains are enabled for runtime behavior.
+    pub experimental_domains: bool,
 }
 
 /// A single in-container test/lint/compile result emitted by the entrypoint.

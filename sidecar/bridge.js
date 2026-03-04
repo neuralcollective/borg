@@ -7,6 +7,7 @@
 
 import { createInterface } from 'readline';
 import { spawn } from 'child_process';
+import { killWithFallback, waitForExit, KILL_TIMEOUT_MS } from './process-utils.js';
 
 const ASSISTANT_NAME = (process.argv[2] || process.env.ASSISTANT_NAME || 'Borg').toLowerCase();
 
@@ -227,7 +228,7 @@ function handleAgentCommand(cmd) {
   } else if (action === 'interrupt') {
     const sess = agentSessions.get(session_id);
     if (sess) {
-      sess.process.kill('SIGTERM');
+      killWithFallback(sess.process);
       agentSessions.delete(session_id);
       emit('agent', { event: 'interrupted', session_id });
     }
@@ -237,7 +238,7 @@ function handleAgentCommand(cmd) {
 function startAgentSession(session_id, cmd) {
   const existing = agentSessions.get(session_id);
   if (existing) {
-    existing.process.kill('SIGTERM');
+    killWithFallback(existing.process);
     agentSessions.delete(session_id);
     emit('agent', { event: 'replaced', session_id });
   }
@@ -335,9 +336,11 @@ rl.on('line', async (line) => {
   }
 });
 
-rl.on('close', () => {
-  for (const { process: p } of agentSessions.values()) p.kill('SIGTERM');
+rl.on('close', async () => {
+  const procs = [...agentSessions.values()].map(s => s.process);
   agentSessions.clear();
+  for (const p of procs) killWithFallback(p, KILL_TIMEOUT_MS);
+  await Promise.all(procs.map(p => waitForExit(p, KILL_TIMEOUT_MS + 1000)));
   if (discordClient) discordClient.destroy();
   if (waSock?.ws) waSock.ws.close();
   process.exit(0);

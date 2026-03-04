@@ -1,6 +1,7 @@
 use borg_agent::instruction::build_knowledge_section;
 use borg_core::db::KnowledgeFile;
 use std::path::PathBuf;
+use tracing_test::traced_test;
 
 fn kf(id: i64, file_name: &str, description: &str, inline: bool) -> KnowledgeFile {
     KnowledgeFile {
@@ -9,6 +10,10 @@ fn kf(id: i64, file_name: &str, description: &str, inline: bool) -> KnowledgeFil
         description: description.to_string(),
         size_bytes: 0,
         inline,
+        tags: String::new(),
+        category: String::new(),
+        jurisdiction: String::new(),
+        project_id: None,
         created_at: String::new(),
     }
 }
@@ -101,11 +106,19 @@ fn inline_whitespace_only_file_with_description_falls_back() {
 
 #[test]
 fn inline_missing_file_falls_back_to_name_only() {
-    // read_to_string returns empty string on error → same empty-content path
     let files = vec![kf(1, "nonexistent.txt", "", true)];
     let result = build_knowledge_section(&files, "/nonexistent/path");
     assert!(result.contains("- **nonexistent.txt**\n"));
     assert!(!result.contains("```"));
+}
+
+#[traced_test]
+#[test]
+fn inline_missing_file_emits_warn_log() {
+    let files = vec![kf(1, "nonexistent.txt", "", true)];
+    let _ = build_knowledge_section(&files, "/nonexistent/path");
+    assert!(logs_contain("failed to read knowledge file"));
+    assert!(logs_contain("nonexistent.txt"));
 }
 
 // =============================================================================

@@ -1,5 +1,5 @@
 import { useReducer, useMemo, useState, useCallback } from "react";
-import { removeCustomMode, saveCustomMode, useCustomModes, useFullModes } from "@/lib/api";
+import { removeCustomMode, saveCustomMode, useCustomModes, useFullModes, useSettings } from "@/lib/api";
 import type { PipelineModeFull } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ModeSidebar } from "./mode-creator/mode-sidebar";
@@ -10,21 +10,28 @@ import { SeedList } from "./mode-creator/seed-list";
 import { editorReducer, INITIAL_STATE, blankMode } from "./mode-creator/reducer";
 
 const TABS = ["phases", "seeds", "json"] as const;
+const CORE_MODES = new Set(["sweborg", "lawborg", "swe", "legal"]);
 
 export function ModeCreatorPanel() {
   const { data: allModes = [], refetch: refetchAll } = useFullModes();
   const { data: customModes = [], refetch: refetchCustom } = useCustomModes();
+  const { data: settings } = useSettings();
   const [state, dispatch] = useReducer(editorReducer, INITIAL_STATE);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+
+  const allowExperimental = settings?.experimental_domains === true;
 
   const customNameSet = useMemo(
     () => new Set(customModes.map((m) => m.name)),
     [customModes]
   );
   const builtInModes = useMemo(
-    () => allModes.filter((m) => !customNameSet.has(m.name)),
-    [allModes, customNameSet]
+    () =>
+      allModes.filter(
+        (m) => !customNameSet.has(m.name) && (allowExperimental || CORE_MODES.has(m.name))
+      ),
+    [allModes, customNameSet, allowExperimental]
   );
 
   const handleSelect = useCallback((mode: PipelineModeFull, readOnly: boolean) => {
@@ -33,9 +40,13 @@ export function ModeCreatorPanel() {
   }, []);
 
   const handleNew = useCallback(() => {
-    dispatch({ type: "LOAD_MODE", mode: blankMode(), readOnly: false });
+    const mode = blankMode();
+    if (!allowExperimental && (mode.category ?? "").toLowerCase() !== "engineering") {
+      mode.category = "Engineering";
+    }
+    dispatch({ type: "LOAD_MODE", mode, readOnly: false });
     setMsg("");
-  }, []);
+  }, [allowExperimental]);
 
   const handleFork = useCallback(() => {
     const forkName = `${state.mode.name}_custom`;
@@ -45,6 +56,10 @@ export function ModeCreatorPanel() {
 
   const handleSave = useCallback(async () => {
     if (busy) return;
+    if (!allowExperimental && !CORE_MODES.has(state.mode.name)) {
+      setMsg("Save blocked: enable Experimental Domains in Settings for non-core mode names.");
+      return;
+    }
     setBusy(true);
     setMsg("");
     try {
@@ -57,7 +72,7 @@ export function ModeCreatorPanel() {
     } finally {
       setBusy(false);
     }
-  }, [busy, state.mode, refetchAll, refetchCustom]);
+  }, [allowExperimental, busy, state.mode, refetchAll, refetchCustom]);
 
   const handleDiscard = useCallback(() => {
     if (!state.original) return;
@@ -93,6 +108,7 @@ export function ModeCreatorPanel() {
       <ModeSidebar
         builtIn={builtInModes}
         custom={customModes}
+        allowExperimental={allowExperimental}
         activeName={mode.name}
         onSelect={handleSelect}
         onNew={handleNew}
@@ -143,6 +159,34 @@ export function ModeCreatorPanel() {
                 onRemove={(i) => dispatch({ type: "REMOVE_PHASE", index: i })}
                 onMove={(from, to) => dispatch({ type: "MOVE_PHASE", from, to })}
               />
+              {!isReadOnly && mode.phases.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() =>
+                      dispatch({
+                        type: "ADD_COMPLIANCE_PHASE",
+                        afterIndex: selectedPhaseIndex ?? mode.phases.length - 1,
+                        profile: "uk_sra",
+                      })
+                    }
+                    className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+                  >
+                    + UK SRA Check
+                  </button>
+                  <button
+                    onClick={() =>
+                      dispatch({
+                        type: "ADD_COMPLIANCE_PHASE",
+                        afterIndex: selectedPhaseIndex ?? mode.phases.length - 1,
+                        profile: "us_prof_resp",
+                      })
+                    }
+                    className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-300 hover:bg-white/[0.08]"
+                  >
+                    + US Ethics Check
+                  </button>
+                </div>
+              )}
               {selectedPhase && selectedPhaseIndex !== null && (
                 <PhaseDetail
                   phase={selectedPhase}

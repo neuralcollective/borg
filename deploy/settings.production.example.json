@@ -1,0 +1,20 @@
+{
+  "backend": "codex",
+  "continuous_mode": true,
+  "pipeline_max_agents": 2,
+  "project_max_bytes": 21474836480,
+  "knowledge_max_bytes": 21474836480,
+  "public_url": "https://app.example.com",
+  "storage_backend": "s3",
+  "s3_bucket": "borg-prod-files",
+  "s3_region": "us-east-1",
+  "s3_endpoint": "",
+  "s3_prefix": "borg/",
+  "ingestion_queue_backend": "sqs",
+  "sqs_queue_url": "",
+  "sqs_region": "us-east-1",
+  "search_backend": "sqlite",
+  "opensearch_url": "",
+  "opensearch_index": "borg-prod",
+  "opensearch_username": ""
+}

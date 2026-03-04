@@ -12,7 +12,7 @@
 //   EC2: whitespace-only content between markers → None.
 //   EC4: three marker pairs → last (third) is returned.
 
-use borg_agent::claude::extract_phase_result;
+use borg_agent::claude::{derive_compile_check, extract_phase_result};
 
 const START: &str = "---PHASE_RESULT_START---";
 const END: &str = "---PHASE_RESULT_END---";
@@ -190,4 +190,35 @@ fn test_empty_last_pair_nullifies_prior_content() {
         extract_phase_result(&text).is_none(),
         "whitespace-only last pair should nullify prior content"
     );
+}
+
+// =============================================================================
+// derive_compile_check tests
+// =============================================================================
+
+#[test]
+fn test_derive_compile_check_cargo_test() {
+    let result = derive_compile_check("cargo test");
+    assert_eq!(result, Some("cargo test --no-run".to_string()));
+}
+
+#[test]
+fn test_derive_compile_check_cargo_test_with_flags() {
+    let result = derive_compile_check("cargo test --features integration");
+    assert_eq!(
+        result,
+        Some("cargo test --features integration --no-run".to_string())
+    );
+}
+
+#[test]
+fn test_derive_compile_check_non_cargo_returns_none() {
+    let result = derive_compile_check("pytest");
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_derive_compile_check_empty_returns_none() {
+    let result = derive_compile_check("");
+    assert!(result.is_none());
 }

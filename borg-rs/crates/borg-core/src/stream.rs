@@ -1,16 +1,19 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use tokio::sync::{broadcast, Mutex};
 
 const MAX_HISTORY_LINES: usize = 10_000;
+const ENDED_STREAM_TTL: Duration = Duration::from_secs(5 * 60);
 
 struct TaskStream {
     tx: broadcast::Sender<String>,
     history: VecDeque<String>,
     ended: bool,
+    ended_at: Option<Instant>,
 }
 
 /// Per-task NDJSON stream manager.
@@ -32,12 +35,14 @@ impl TaskStreamManager {
     pub async fn start(&self, task_id: i64) {
         let (tx, _) = broadcast::channel(512);
         let mut map = self.streams.lock().await;
+        map.retain(|_, s| s.ended_at.map(|t| t.elapsed() < ENDED_STREAM_TTL).unwrap_or(true));
         map.insert(
             task_id,
             TaskStream {
                 tx,
                 history: VecDeque::new(),
                 ended: false,
+                ended_at: None,
             },
         );
     }
@@ -69,18 +74,36 @@ impl TaskStreamManager {
         let line = r#"{"type":"stream_end"}"#.to_string();
         let mut map = self.streams.lock().await;
         if let Some(s) = map.get_mut(&task_id) {
-            let _ = s.tx.send(line.clone());
-            s.history.push_back(line);
+            // Commit to history and set ended=true before broadcasting so
+            // that the invariant "ended=true ⟹ stream_end in history" holds
+            // for any concurrent subscriber that acquires the lock next.
+            s.history.push_back(line.clone());
             if s.history.len() > MAX_HISTORY_LINES {
                 s.history.pop_front();
             }
             s.ended = true;
+            // Broadcast after the flag is set. Existing receivers still get
+            // the sentinel; new subscribers arriving after this point will
+            // see ended=true and find it in the history snapshot instead.
+            let _ = s.tx.send(line);
         }
+    }
+
+    /// Remove all ended streams older than `max_age`.
+    pub async fn prune_ended(&self, max_age: Duration) {
+        let mut map = self.streams.lock().await;
+        map.retain(|_, s| s.ended_at.map(|t| t.elapsed() < max_age).unwrap_or(true));
     }
 
     /// Subscribe to a task's stream.
     /// Returns (history_snapshot, live_receiver).
     /// If the stream has ended or doesn't exist, receiver is None.
+    ///
+    /// The history snapshot and the ended check are taken atomically under the
+    /// lock, so the two outcomes are mutually exclusive:
+    ///  - ended=true  → history contains the stream_end sentinel; no live rx.
+    ///  - ended=false → tx.subscribe() fires before end_task() can set ended,
+    ///                  so the returned receiver will eventually deliver it.
     pub async fn subscribe(
         &self,
         task_id: i64,

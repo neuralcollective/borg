@@ -20,26 +20,25 @@ pub struct OllamaBackend {
 }
 
 impl OllamaBackend {
-    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
         let timeout_secs = 300u64;
-        Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .build()?;
+        Ok(Self {
             base_url: base_url.into(),
             model: model.into(),
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(timeout_secs))
-                .build()
-                .expect("failed to build HTTP client"),
+            http,
             timeout_secs,
-        }
+        })
     }
 
-    pub fn with_timeout(mut self, secs: u64) -> Self {
+    pub fn with_timeout(mut self, secs: u64) -> Result<Self> {
         self.timeout_secs = secs;
         self.http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(secs))
-            .build()
-            .expect("failed to build HTTP client");
-        self
+            .build()?;
+        Ok(self)
     }
 }
 
@@ -113,27 +112,14 @@ impl AgentBackend for OllamaBackend {
                     timeout_secs = self.timeout_secs,
                     "ollama request timed out"
                 );
-                return Ok(PhaseOutput {
-                    output: format!("Ollama request timed out after {}s", self.timeout_secs),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                    signal_json: None,
-                    ran_in_docker: false,
-                    container_test_results: Vec::new(),
-                });
+                return Ok(PhaseOutput::failed(format!(
+                    "Ollama request timed out after {}s",
+                    self.timeout_secs
+                )));
             },
             Err(e) => {
                 warn!(task_id = task.id, phase = %phase.name, "ollama request failed: {}", e);
-                return Ok(PhaseOutput {
-                    output: format!("Ollama request failed: {}", e),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                    signal_json: None,
-                    ran_in_docker: false,
-                    container_test_results: Vec::new(),
-                });
+                return Ok(PhaseOutput::failed(format!("Ollama request failed: {}", e)));
             },
         };
 
@@ -147,30 +133,17 @@ impl AgentBackend for OllamaBackend {
                 "ollama returned non-200: {}",
                 body
             );
-            return Ok(PhaseOutput {
-                output: format!("Ollama error {}: {}", status, body),
-                new_session_id: None,
-                raw_stream: String::new(),
-                success: false,
-                signal_json: None,
-                ran_in_docker: false,
-                container_test_results: Vec::new(),
-            });
+            return Ok(PhaseOutput::failed(format!("Ollama error {}: {}", status, body)));
         }
 
         let parsed: OllamaChatResponse = match response.json().await {
             Ok(v) => v,
             Err(e) => {
                 warn!(task_id = task.id, phase = %phase.name, "failed to parse ollama response: {}", e);
-                return Ok(PhaseOutput {
-                    output: format!("Failed to parse Ollama response: {}", e),
-                    new_session_id: None,
-                    raw_stream: String::new(),
-                    success: false,
-                    signal_json: None,
-                    ran_in_docker: false,
-                    container_test_results: Vec::new(),
-                });
+                return Ok(PhaseOutput::failed(format!(
+                    "Failed to parse Ollama response: {}",
+                    e
+                )));
             },
         };
 
@@ -193,18 +166,32 @@ impl AgentBackend for OllamaBackend {
             container_test_results: Vec::new(),
         })
     }
+}
 
-    async fn inject_message(&self, session_id: &str, message: &str) -> Result<()> {
-        warn!(
-            session_id = %session_id,
-            msg_len = message.len(),
-            "inject_message not supported for OllamaBackend (stateless)"
-        );
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_returns_ok() {
+        let backend = OllamaBackend::new("http://localhost:11434", "llama3.2");
+        assert!(backend.is_ok());
     }
 
-    async fn interrupt(&self, session_id: &str) -> Result<()> {
-        warn!(session_id = %session_id, "interrupt not supported for OllamaBackend");
-        Ok(())
+    #[test]
+    fn with_timeout_returns_ok() {
+        let backend = OllamaBackend::new("http://localhost:11434", "llama3.2")
+            .unwrap()
+            .with_timeout(60);
+        assert!(backend.is_ok());
+        assert_eq!(backend.unwrap().timeout_secs, 60);
+    }
+
+    #[test]
+    fn new_preserves_fields() {
+        let backend = OllamaBackend::new("http://myhost:9999", "mistral").unwrap();
+        assert_eq!(backend.base_url, "http://myhost:9999");
+        assert_eq!(backend.model, "mistral");
+        assert_eq!(backend.timeout_secs, 300);
     }
 }

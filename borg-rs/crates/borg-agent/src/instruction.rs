@@ -2,6 +2,7 @@ use borg_core::{
     db::KnowledgeFile,
     types::{PhaseConfig, PhaseContext, Task},
 };
+use tracing::warn;
 
 /// Build the instruction string passed to any agent backend.
 ///
@@ -96,7 +97,13 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
     for file in files {
         if file.inline {
             let path = format!("{}/{}", knowledge_dir, file.file_name);
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let content = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(path = %path, "failed to read knowledge file: {}", e);
+                    String::new()
+                }
+            };
             let content = content.trim();
             if content.is_empty() {
                 s.push_str(&format!("- **{}**", file.file_name));

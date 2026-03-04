@@ -8,7 +8,7 @@ use std::{
     os::unix::fs as unix_fs,
 };
 
-use borg_core::ipc::{self, IpcReadResult, MAX_IPC_FILE_BYTES};
+use borg_core::ipc::{self, IpcReadResult, MAX_IPC_FILE_BYTES, MAX_QUARANTINE_COUNTER};
 use tempfile::TempDir;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -451,6 +451,46 @@ fn concurrent_quarantine_same_name_no_panic() {
 
     // All entries should be in errors/ without panic
     assert!(errors_entry_count(&dir) >= 1);
+}
+
+// ── AC: quarantine counter limit prevents infinite loop ───────────────────────
+
+#[test]
+fn quarantine_counter_falls_back_at_limit() {
+    let dir = TempDir::new().unwrap();
+    let errors = errors_dir(&dir);
+    fs::create_dir(&errors).unwrap();
+
+    // Pre-populate collision names for now and now+1 to survive a second boundary.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for t in [ts, ts + 1] {
+        fs::write(errors.join(format!("spec.md.{t}")), b"").unwrap();
+        for i in 1..=(MAX_QUARANTINE_COUNTER + 1) {
+            fs::write(errors.join(format!("spec.md.{t}.{i}")), b"").unwrap();
+        }
+    }
+
+    let real = dir.path().join("real.txt");
+    fs::write(&real, b"x").unwrap();
+    let link = dir.path().join("spec.md");
+    unix_fs::symlink(&real, &link).unwrap();
+
+    // Must return quickly (not spin 4 billion iterations) and still quarantine.
+    let result = ipc::read_file(&base(&dir), "spec.md");
+    assert!(
+        matches!(result, IpcReadResult::Quarantined(_)),
+        "expected Quarantined when collision counter exceeds limit, got {:?}",
+        result
+    );
+
+    // The original symlink must have been removed.
+    assert!(
+        link.symlink_metadata().is_err(),
+        "original symlink should have been moved or deleted"
+    );
 }
 
 // ── IpcReadResult must implement Debug ───────────────────────────────────────

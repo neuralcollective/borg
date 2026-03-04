@@ -23,7 +23,8 @@ export type EditorAction =
   | { type: "ADD_SEED" }
   | { type: "REMOVE_SEED"; index: number }
   | { type: "SET_TAB"; tab: "phases" | "seeds" | "json" }
-  | { type: "FORK"; newName: string };
+  | { type: "FORK"; newName: string }
+  | { type: "ADD_COMPLIANCE_PHASE"; afterIndex: number; profile: "uk_sra" | "us_prof_resp" };
 
 export const DEFAULT_PHASE: PhaseConfigFull = {
   name: "",
@@ -45,6 +46,8 @@ export const DEFAULT_PHASE: PhaseConfigFull = {
   fresh_session: false,
   fix_instruction: "",
   retry_phase: "",
+  compliance_profile: "",
+  compliance_enforcement: "warn",
 };
 
 export const DEFAULT_SEED: SeedConfigFull = {
@@ -204,6 +207,34 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         isDirty: true,
         original: snap,
       };
+    }
+
+    case "ADD_COMPLIANCE_PHASE": {
+      const phases = [...state.mode.phases];
+      const insertAt = action.afterIndex + 1;
+      const prevPhase = phases[action.afterIndex];
+      const nextName = prevPhase?.next || "done";
+      const label = action.profile === "uk_sra" ? "UK SRA Check" : "US Ethics Check";
+      const newPhase: PhaseConfigFull = {
+        ...DEFAULT_PHASE,
+        name: `compliance_${Date.now() % 10000}`,
+        label,
+        phase_type: "compliance_check",
+        use_docker: false,
+        include_task_context: false,
+        include_file_listing: false,
+        commits: false,
+        runs_tests: false,
+        next: nextName,
+        compliance_profile: action.profile,
+        compliance_enforcement: "warn",
+      };
+      if (prevPhase) {
+        phases[action.afterIndex] = { ...prevPhase, next: newPhase.name };
+      }
+      phases.splice(insertAt, 0, newPhase);
+      const mode = { ...state.mode, phases };
+      return { ...markDirty(state, mode), selectedPhaseIndex: insertAt };
     }
 
     default:

@@ -15,12 +15,21 @@ log_event() {
     echo "---BORG_EVENT---${1}" >&2
 }
 
+json_encode() {
+    printf '%s' "$1" | bun -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(s)));"
+}
+
 run_check() {
     local phase="$1"
     local cmd="$2"
     if [ -z "$cmd" ]; then return; fi
     local out rc=0
-    out=$(bash -c "$cmd" 2>&1) || rc=$?
+    local tmpscript
+    tmpscript=$(mktemp /tmp/borg-check.XXXXXX)
+    chmod 700 "$tmpscript"
+    printf '%s\n' "$cmd" > "$tmpscript"
+    out=$(bash "$tmpscript" 2>&1) || rc=$?
+    rm -f "$tmpscript"
     local passed="false"
     [ "$rc" -eq 0 ] && passed="true"
     local truncated escaped
@@ -59,11 +68,11 @@ source "$VARS_FILE"
 
 REPO_DIR=/workspace/repo
 
-log_event "{\"type\":\"container_event\",\"event\":\"agent_started\",\"model\":\"${MODEL}\",\"repo\":\"${REPO_URL}\"}"
+log_event "{\"type\":\"container_event\",\"event\":\"agent_started\",\"model\":$(json_encode "${MODEL}"),\"repo\":$(json_encode "${REPO_URL}")}"
 
 if [ -n "$REPO_URL" ]; then
     CLONE_START=$(date +%s%3N)
-    log_event "{\"type\":\"container_event\",\"event\":\"clone_started\",\"repo\":\"${REPO_URL}\",\"branch\":\"${BRANCH}\"}"
+    log_event "{\"type\":\"container_event\",\"event\":\"clone_started\",\"repo\":$(json_encode "${REPO_URL}"),\"branch\":$(json_encode "${BRANCH}")}"
 
     # Clone to temp dir first, then move into repo dir (which may have mounted volumes)
     CLONE_TMP=$(mktemp -d /workspace/clone.XXXXXX)
@@ -83,9 +92,9 @@ if [ -n "$REPO_URL" ]; then
         # Fetch the task branch if it exists on remote
         git fetch --depth 50 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
         if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-            git checkout -b "$BRANCH" "origin/$BRANCH"
+            git checkout -b -- "$BRANCH" "origin/$BRANCH"
         else
-            git checkout -b "$BRANCH" "$BASE"
+            git checkout -b -- "$BRANCH" "$BASE"
         fi
     fi
 
@@ -135,8 +144,8 @@ fi
 if [ "$exitcode" -eq 0 ]; then
     log_event "{\"type\":\"container_event\",\"event\":\"agent_complete\"}"
 else
-    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | tr '\n' ' ' | sed 's/"/\\"/g')
-    log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":\"${STDERR_TAIL}\"}"
+    STDERR_TAIL=$(tail -c 2000 "$STDERR_FILE" | bun -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(s)));")
+    log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":${STDERR_TAIL}}"
 fi
 
 # Run test/lint/compile checks before committing (only when a repo was cloned)
@@ -161,7 +170,7 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
     fi
 
     if [ -n "$PUSH_AFTER_COMMIT" ] && [ -n "$BRANCH" ]; then
-        if git push origin "$BRANCH"; then
+        if git push origin -- "$BRANCH"; then
             log_event "{\"type\":\"container_event\",\"event\":\"push_complete\",\"branch\":\"${BRANCH}\"}"
         else
             log_event "{\"type\":\"container_event\",\"event\":\"push_failed\",\"branch\":\"${BRANCH}\"}"

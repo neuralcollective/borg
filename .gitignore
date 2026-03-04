@@ -28,6 +28,12 @@ dashboard/dist/
 # SQLite databases
 *.db
 
+# Terraform state
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+
 # OS
 .DS_Store
 

@@ -4,11 +4,32 @@ import { useModes, useStatus, createTask } from "@/lib/api";
 import { repoName, type PipelineMode } from "@/lib/types";
 import { Plus, X } from "lucide-react";
 
-export function TaskCreator() {
+const LEGAL_TASK_TYPES = [
+  { value: "", label: "General legal task" },
+  { value: "research_memo", label: "Research memo" },
+  { value: "contract_analysis", label: "Contract analysis" },
+  { value: "motion_draft", label: "Motion draft" },
+  { value: "brief", label: "Brief" },
+];
+
+interface TaskCreatorProps {
+  defaultMode?: string;
+  hideModePicker?: boolean;
+  projectId?: number;
+  buttonLabel?: string;
+}
+
+export function TaskCreator({
+  defaultMode = "sweborg",
+  hideModePicker = false,
+  projectId,
+  buttonLabel = "New Task",
+}: TaskCreatorProps = {}) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [mode, setMode] = useState("sweborg");
+  const [mode, setMode] = useState(defaultMode);
+  const [taskType, setTaskType] = useState("");
   const [repoPath, setRepoPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -31,6 +52,7 @@ export function TaskCreator() {
         groups.push({ category: cat, modes: [m] });
       }
     }
+    groups.sort((a, b) => a.category.localeCompare(b.category));
     return groups;
   }, [modes]);
 
@@ -40,10 +62,18 @@ export function TaskCreator() {
     setSubmitting(true);
     setError("");
     try {
-      await createTask(title.trim(), description.trim(), mode, repoPath || undefined);
+      await createTask(
+        title.trim(),
+        description.trim(),
+        mode,
+        repoPath || undefined,
+        projectId,
+        taskType || undefined,
+      );
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
       setTitle("");
       setDescription("");
+      setTaskType("");
       setOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create task");
@@ -59,7 +89,7 @@ export function TaskCreator() {
         className="inline-flex items-center gap-1.5 rounded-md bg-blue-500/15 px-3 py-1.5 text-[11px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 transition-colors hover:bg-blue-500/25"
       >
         <Plus className="h-3 w-3" />
-        New Task
+        {buttonLabel}
       </button>
     );
   }
@@ -96,26 +126,30 @@ export function TaskCreator() {
           />
 
           <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Mode</label>
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value)}
-                className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
-              >
-                {groupedModes.length > 0
-                  ? groupedModes.map((g) => (
-                      <optgroup key={g.category} label={g.category}>
-                        {g.modes.map((m) => (
-                          <option key={m.name} value={m.name}>{m.label}</option>
-                        ))}
-                      </optgroup>
-                    ))
-                  : <option value="sweborg">Software Engineering</option>}
-              </select>
-            </div>
+            {!hideModePicker && (
+              <div className="flex-1">
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Mode</label>
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value)}
+                  className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
+                >
+                  {groupedModes.length > 0
+                    ? groupedModes.map((g) => (
+                        <optgroup key={g.category} label={g.category}>
+                          {g.modes.map((m) => (
+                            <option key={m.name} value={m.name}>
+                              {m.experimental ? `${m.label} (experimental)` : m.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))
+                    : <option value="sweborg">Software Engineering</option>}
+                </select>
+              </div>
+            )}
 
-            {repos.length > 1 && (
+            {repos.length > 1 && !projectId && (
               <div className="flex-1">
                 <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Repository</label>
                 <select
@@ -131,6 +165,25 @@ export function TaskCreator() {
               </div>
             )}
           </div>
+
+          {(mode === "lawborg" || mode === "legal") && (
+            <div>
+              <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                Task Type
+              </label>
+              <select
+                value={taskType}
+                onChange={(e) => setTaskType(e.target.value)}
+                className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
+              >
+                {LEGAL_TASK_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {error && <p className="mt-2 text-[11px] text-red-400">{error}</p>}
