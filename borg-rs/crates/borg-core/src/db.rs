@@ -214,6 +214,17 @@ pub struct CloudConnection {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct PlanTodo {
+    pub id: i64,
+    pub title: String,
+    pub details: String,
+    pub status: String,
+    pub priority: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ── Timestamp helpers ─────────────────────────────────────────────────────
 
 fn parse_ts(s: &str) -> DateTime<Utc> {
@@ -268,6 +279,18 @@ fn row_to_cloud_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudCon
         account_email: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
         account_id: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
         created_at: row.get::<_, String>(8).map(|s| parse_ts(&s))?,
+    })
+}
+
+fn row_to_plan_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanTodo> {
+    Ok(PlanTodo {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        details: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        status: row.get(3)?,
+        priority: row.get::<_, Option<i64>>(4)?.unwrap_or(100),
+        created_at: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        updated_at: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
     })
 }
 
@@ -509,6 +532,15 @@ impl Db {
               account_id TEXT NOT NULL DEFAULT '', \
               created_at TEXT NOT NULL DEFAULT (datetime('now')))",
             "CREATE INDEX IF NOT EXISTS idx_cloud_connections_project ON cloud_connections(project_id)",
+            "CREATE TABLE IF NOT EXISTS plan_todos (\
+              id INTEGER PRIMARY KEY AUTOINCREMENT, \
+              title TEXT NOT NULL UNIQUE, \
+              details TEXT NOT NULL DEFAULT '', \
+              status TEXT NOT NULL DEFAULT 'todo', \
+              priority INTEGER NOT NULL DEFAULT 100, \
+              created_at TEXT NOT NULL DEFAULT (datetime('now')), \
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            "CREATE INDEX IF NOT EXISTS idx_plan_todos_status_priority ON plan_todos(status, priority, id)",
         ];
         for sql in alters {
             let _ = conn.execute(sql, []);
@@ -2615,6 +2647,79 @@ impl Db {
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("get_events_filtered")?;
         Ok(events)
+    }
+
+    // ── API Keys (BYOK) ──────────────────────────────────────────────────
+
+    // ── Plan Todos ───────────────────────────────────────────────────────
+
+    pub fn list_plan_todos(&self, status: Option<&str>) -> Result<Vec<PlanTodo>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, title, details, status, priority, created_at, updated_at FROM plan_todos \
+             WHERE (?1 IS NULL OR status = ?1) \
+             ORDER BY priority ASC, id ASC",
+        )?;
+        let todos = stmt
+            .query_map(params![status], row_to_plan_todo)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_plan_todos")?;
+        Ok(todos)
+    }
+
+    pub fn upsert_plan_todo(
+        &self,
+        title: &str,
+        details: &str,
+        status: &str,
+        priority: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO plan_todos (title, details, status, priority) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(title) DO UPDATE SET \
+               details=excluded.details, \
+               status=excluded.status, \
+               priority=excluded.priority, \
+               updated_at=datetime('now')",
+            params![title, details, status, priority],
+        )?;
+        let id = conn
+            .query_row(
+                "SELECT id FROM plan_todos WHERE title = ?1",
+                params![title],
+                |row| row.get(0),
+            )
+            .context("upsert_plan_todo id")?;
+        Ok(id)
+    }
+
+    pub fn update_plan_todo(
+        &self,
+        id: i64,
+        title: Option<&str>,
+        details: Option<&str>,
+        status: Option<&str>,
+        priority: Option<i64>,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = conn.execute(
+            "UPDATE plan_todos SET \
+               title = COALESCE(?1, title), \
+               details = COALESCE(?2, details), \
+               status = COALESCE(?3, status), \
+               priority = COALESCE(?4, priority), \
+               updated_at = datetime('now') \
+             WHERE id = ?5",
+            params![title, details, status, priority, id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn delete_plan_todo(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = conn.execute("DELETE FROM plan_todos WHERE id = ?1", params![id])?;
+        Ok(changed > 0)
     }
 
     // ── API Keys (BYOK) ──────────────────────────────────────────────────

@@ -264,6 +264,34 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner, provider);
 
+-- ── Cloud storage connections ───────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS cloud_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL, -- dropbox | google_drive | onedrive
+  access_token TEXT NOT NULL DEFAULT '',
+  refresh_token TEXT NOT NULL DEFAULT '',
+  token_expiry TEXT NOT NULL DEFAULT '',
+  account_email TEXT NOT NULL DEFAULT '',
+  account_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_connections_project ON cloud_connections(project_id);
+
+-- ── Plan todos ──────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS plan_todos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL UNIQUE,
+  details TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'todo', -- todo | doing | blocked | done
+  priority INTEGER NOT NULL DEFAULT 100,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_todos_status_priority ON plan_todos(status, priority, id);
+
 -- ── Misc / legacy ─────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS state (

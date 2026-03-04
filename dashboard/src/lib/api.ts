@@ -254,6 +254,23 @@ export interface Settings {
   opensearch_username: string;
 }
 
+export interface PlanTodo {
+  id: number;
+  title: string;
+  details: string;
+  status: "todo" | "doing" | "blocked" | "done";
+  priority: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePlanTodoInput {
+  title: string;
+  details?: string;
+  status?: "todo" | "doing" | "blocked" | "done";
+  priority?: number;
+}
+
 export function useSettings() {
   return useQuery<Settings>({
     queryKey: ["settings"],
@@ -270,6 +287,47 @@ export async function updateSettings(settings: Partial<Settings>): Promise<{ upd
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
+}
+
+export async function getPlanTodos(status?: PlanTodo["status"]): Promise<PlanTodo[]> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return fetchJson(`/api/plan/todos${qs}`);
+}
+
+export async function createPlanTodo(input: CreatePlanTodoInput): Promise<{ id: number }> {
+  const res = await apiFetch("/api/plan/todos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function bulkUpsertPlanTodos(
+  items: CreatePlanTodoInput[],
+): Promise<{ upserted: number; ids: number[] }> {
+  const res = await apiFetch("/api/plan/todos/bulk_upsert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function updatePlanTodo(id: number, input: Partial<CreatePlanTodoInput>): Promise<void> {
+  const res = await apiFetch(`/api/plan/todos/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+export async function deletePlanTodo(id: number): Promise<void> {
+  const res = await apiFetch(`/api/plan/todos/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status}`);
 }
 
 export function useFocus() {

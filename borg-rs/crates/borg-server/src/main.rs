@@ -97,8 +97,6 @@ async fn main() -> anyhow::Result<()> {
 
     let env_config = Config::from_env()?;
 
-    borg_core::modes::register_modes(borg_domains::all_modes());
-
     std::fs::create_dir_all(&env_config.data_dir)?;
 
     // Generate per-startup API token and write to disk (0600)
@@ -119,6 +117,8 @@ async fn main() -> anyhow::Result<()> {
     // Seed DB from env on first run, then load DB values (DB wins over env)
     env_config.seed_db(&db)?;
     let config = env_config.load_from_db(&db);
+    let builtin_modes = borg_domains::modes_for_focus(config.experimental_domains);
+    borg_core::modes::register_modes(builtin_modes);
 
     // Abandon any runs left in 'running' state from previous crash
     if let Err(e) = db.abandon_running_agents() {
@@ -835,6 +835,12 @@ async fn main() -> anyhow::Result<()> {
         // Settings
         .route("/api/settings", get(routes::get_settings))
         .route("/api/settings", put(routes::put_settings))
+        // Plan todos
+        .route("/api/plan/todos", get(routes::list_plan_todos))
+        .route("/api/plan/todos", post(routes::create_plan_todo))
+        .route("/api/plan/todos/bulk_upsert", post(routes::bulk_upsert_plan_todos))
+        .route("/api/plan/todos/:id", put(routes::patch_plan_todo))
+        .route("/api/plan/todos/:id", delete(routes::delete_plan_todo))
         // Focus
         .route("/api/focus", get(routes::get_focus))
         .route("/api/focus", post(routes::post_focus))
