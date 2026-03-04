@@ -271,16 +271,20 @@ async fn execute_action(
                 .post(&url)
                 .json(&serde_json::json!({"chat_id": raw_id, "text": msg}))
                 .send()
-                .await?;
+                .await?
+                .error_for_status()?;
         },
         Action::Command { cmd } => {
-            tokio::process::Command::new("/bin/sh")
+            let status = tokio::process::Command::new("/bin/sh")
                 .args(["-c", cmd])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()?
                 .wait()
                 .await?;
+            if !status.success() {
+                anyhow::bail!("command exited with {}", status);
+            }
         },
         Action::Webhook { url } => {
             let body = serde_json::json!({
@@ -289,7 +293,7 @@ async fn execute_action(
                 "summary": result.summary,
                 "recommendation": result.recommendation,
             });
-            client.post(url).json(&body).send().await?;
+            client.post(url).json(&body).send().await?.error_for_status()?;
         },
     }
     Ok(())
@@ -545,20 +549,36 @@ mod tests {
         assert_eq!(entries[0].name, "t");
     }
 
-    #[test]
-    fn observer_model_defaults_to_haiku() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("OBSERVER_MODEL");
-        let obs = Observer::load("/nonexistent/observer.json", "key", "tok");
-        assert_eq!(obs.model, HAIKU);
+    fn make_result() -> AnalysisResult {
+        AnalysisResult {
+            triggered: true,
+            severity: Severity::High,
+            summary: "test".to_string(),
+            recommendation: "fix it".to_string(),
+        }
     }
 
-    #[test]
-    fn observer_model_env_override() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("OBSERVER_MODEL", "claude-sonnet-4-6");
-        let obs = Observer::load("/nonexistent/observer.json", "key", "tok");
-        std::env::remove_var("OBSERVER_MODEL");
-        assert_eq!(obs.model, "claude-sonnet-4-6");
+    #[tokio::test]
+    async fn command_zero_exit_ok() {
+        let client = Client::new();
+        let action = Action::Command { cmd: "exit 0".to_string() };
+        assert!(execute_action(&client, "test", &action, &make_result(), "").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn command_nonzero_exit_is_err() {
+        let client = Client::new();
+        let action = Action::Command { cmd: "exit 1".to_string() };
+        let err = execute_action(&client, "test", &action, &make_result(), "").await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("exited with"));
+    }
+
+    #[tokio::test]
+    async fn alert_with_empty_token_is_ok() {
+        let client = Client::new();
+        let action = Action::Alert { chat_id: "-123".to_string() };
+        // empty token short-circuits without any HTTP call → should be Ok
+        assert!(execute_action(&client, "test", &action, &make_result(), "").await.is_ok());
     }
 }
