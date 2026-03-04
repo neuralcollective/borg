@@ -1001,6 +1001,30 @@ impl Db {
         Ok((active, merged, failed, total))
     }
 
+    pub fn count_tasks_with_status(&self, status: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pipeline_tasks WHERE status = ?1",
+                params![status],
+                |r| r.get(0),
+            )
+            .context("count_tasks_with_status")?;
+        Ok(n)
+    }
+
+    pub fn count_queue_with_status(&self, status: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM integration_queue WHERE status = ?1",
+                params![status],
+                |r| r.get(0),
+            )
+            .context("count_queue_with_status")?;
+        Ok(n)
+    }
+
     pub fn insert_proposal(&self, proposal: &Proposal) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let created_at = proposal.created_at.format("%Y-%m-%d %H:%M:%S").to_string();

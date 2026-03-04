@@ -2858,6 +2858,7 @@ pub(crate) async fn get_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     let uptime_s = state.start_time.elapsed().as_secs();
+    let now = chrono::Utc::now().timestamp();
 
     let watched_repos: Vec<Value> = state.config.watched_repos
         .iter()
@@ -2900,6 +2901,28 @@ pub(crate) async fn get_status(
         .map_err(internal)?
         .unwrap_or_else(|| "Borg".into());
 
+    let rebase_count = state
+        .db
+        .count_tasks_with_status("rebase")
+        .map_err(internal)?;
+    let queued_count = state
+        .db
+        .count_queue_with_status("queued")
+        .map_err(internal)?
+        + state
+            .db
+            .count_queue_with_status("merging")
+            .map_err(internal)?;
+    let last_merge_ts = state.db.get_ts("last_release_ts");
+    let no_merge_mins = if last_merge_ts > 0 {
+        ((now - last_merge_ts).max(0)) / 60
+    } else {
+        0
+    };
+    let rebase_backlog_alert = rebase_count >= 50;
+    let no_merge_alert = queued_count > 0 && last_merge_ts > 0 && (now - last_merge_ts) >= 60 * 60;
+    let guardrail_alert = rebase_backlog_alert || no_merge_alert;
+
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_s": uptime_s,
@@ -2913,6 +2936,10 @@ pub(crate) async fn get_status(
         "failed_tasks": failed,
         "total_tasks": total,
         "dispatched_agents": 0,
+        "guardrail_alert": guardrail_alert,
+        "guardrail_rebase_count": rebase_count,
+        "guardrail_queued_count": queued_count,
+        "guardrail_no_merge_mins": no_merge_mins,
     })))
 }
 

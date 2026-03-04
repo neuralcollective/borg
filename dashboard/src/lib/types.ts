@@ -64,6 +64,10 @@ export interface Status {
   failed_tasks: number;
   total_tasks: number;
   dispatched_agents: number;
+  guardrail_alert?: boolean;
+  guardrail_rebase_count?: number;
+  guardrail_queued_count?: number;
+  guardrail_no_merge_mins?: number;
 }
 
 export function repoName(path: string): string {
