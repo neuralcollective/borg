@@ -657,33 +657,36 @@ impl AgentBackend for ClaudeBackend {
         }
 
         // Read container ID from cidfile (Docker writes it shortly after container start).
-        if let Some(ref cid_path) = cidfile_path {
-            let cid_path_clone = cid_path.clone();
-            let stream_tx_cid = ctx.stream_tx.clone();
-            let tid = task.id;
-            tokio::spawn(async move {
-                for _ in 0..30u8 {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    if let Ok(s) = tokio::fs::read_to_string(&cid_path_clone).await {
-                        let cid = s.trim().to_string();
-                        if !cid.is_empty() {
-                            info!(task_id = tid, container_id = %cid, "docker container started");
-                            let evt = serde_json::json!({
-                                "type": "container_event",
-                                "event": "container_id",
-                                "id": cid,
-                                "task_id": tid,
-                            })
-                            .to_string();
-                            if let Some(tx) = stream_tx_cid {
-                                let _ = tx.send(evt);
+        let mut cid_task: Option<tokio::task::JoinHandle<()>> =
+            if let Some(ref cid_path) = cidfile_path {
+                let cid_path_clone = cid_path.clone();
+                let stream_tx_cid = ctx.stream_tx.clone();
+                let tid = task.id;
+                Some(tokio::spawn(async move {
+                    for _ in 0..30u8 {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        if let Ok(s) = tokio::fs::read_to_string(&cid_path_clone).await {
+                            let cid = s.trim().to_string();
+                            if !cid.is_empty() {
+                                info!(task_id = tid, container_id = %cid, "docker container started");
+                                let evt = serde_json::json!({
+                                    "type": "container_event",
+                                    "event": "container_id",
+                                    "id": cid,
+                                    "task_id": tid,
+                                })
+                                .to_string();
+                                if let Some(tx) = stream_tx_cid {
+                                    let _ = tx.send(evt);
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
-                }
-            });
-        }
+                }))
+            } else {
+                None
+            };
 
         let stdout = child.stdout.take().context("failed to take stdout")?;
         let stderr = child.stderr.take().context("failed to take stderr")?;
@@ -788,30 +791,34 @@ impl AgentBackend for ClaudeBackend {
         let (raw_stream, signal_json, container_test_results, success) = if timeout_s > 0 {
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), io_future).await {
                 Ok(Ok(v)) => v,
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => {
+                    if let Some(h) = cid_task.take() { h.abort(); }
+                    return Err(e);
+                },
                 Err(_elapsed) => {
                     warn!(task_id = task.id, phase = %phase.name, timeout_s, "claude subprocess timed out");
-                    // Kill the Docker container — kill_on_drop only kills the CLI wrapper
-                    if let Some(ref cid_path) = cidfile_path {
-                        if let Ok(cid) = std::fs::read_to_string(cid_path) {
-                            let cid = cid.trim().to_string();
-                            if !cid.is_empty() {
-                                let _ = std::process::Command::new("docker")
-                                    .args(["stop", "--time=5", &cid])
-                                    .output();
-                            }
-                        }
-                        let _ = std::fs::remove_file(cid_path);
-                    }
+                    if let Some(h) = cid_task.take() { h.abort(); }
                     return Ok(PhaseOutput::failed(String::new()));
                 },
             }
         } else {
-            io_future.await?
+            match io_future.await {
+                Ok(v) => v,
+                Err(e) => {
+                    if let Some(h) = cid_task.take() { h.abort(); }
+                    return Err(e);
+                },
+            }
         };
 
-        if let Some(ref cid_path) = cidfile_path {
-            let _ = std::fs::remove_file(cid_path);
+        // Abort the CID task if still polling; propagate any panic it may have raised.
+        if let Some(handle) = cid_task {
+            handle.abort();
+            if let Err(e) = handle.await {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                }
+            }
         }
 
         let (output, new_session_id) = crate::event::parse_stream(&raw_stream);

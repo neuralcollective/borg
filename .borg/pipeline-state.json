@@ -1,10 +1,10 @@
 {
-  "task_id": 243,
-  "task_title": "Bearer token exposed in URL query string via auth.rs fallback path",
+  "task_id": 247,
+  "task_title": "Fire-and-forget CID-reading task in claude.rs drops panics silently",
   "phase": "implement",
-  "worktree_path": "/home/shulgin/borg/.worktrees/task-243",
+  "worktree_path": "/home/shulgin/borg/.worktrees/task-247",
   "pr_url": null,
   "pending_approvals": [],
   "phase_history": [],
-  "generated_at": "2026-03-03T08:06:31.118333997Z"
+  "generated_at": "2026-03-03T08:16:53.499225294Z"
 }
