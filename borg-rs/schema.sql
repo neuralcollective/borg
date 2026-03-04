@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS knowledge_files (
   file_name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   size_bytes INTEGER NOT NULL DEFAULT 0,
-  inline BOOLEAN NOT NULL DEFAULT 0,
+  "inline" INTEGER NOT NULL DEFAULT 0,
   tags TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'general',
   jurisdiction TEXT NOT NULL DEFAULT '',
