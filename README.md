@@ -24,6 +24,19 @@ just ship   # build dashboard, test, build binary, deploy
 
 Dashboard at `http://127.0.0.1:3131`.
 
+## Privacy & Security
+
+Borg is engineered for **Am Law 100** and **Magic Circle** compliance standards (SOC 2, ISO 27001, GDPR).
+
+**The "Dual-Proxy Air-Gap" Architecture:**
+1.  **Air-Gapped Execution:** Agents run in containers with **zero network interfaces** (`--unshare-net`). Exfiltration to the open internet is physically impossible.
+2.  **Zero-Retention Inference:** All LLM traffic is proxied to **AWS Bedrock** (contractual Zero Data Retention). Anthropic never sees or logs client data.
+3.  **Zero-Retention Research:** Web search is proxied to **Brave Search Enterprise ZDR**. Queries are processed in-memory and never logged.
+4.  **Envelope Encryption:** All credentials are encrypted at rest with AES-256-GCM.
+5.  **Burn-After-Reading:** Mandatory 7-day purge cycle for legal tasks ensures sensitive data does not accumulate.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md#data-privacy--security-the-big-law-standard) for the full security specification.
+
 ## Pipelines
 
 Borg is focused on two first-class workforce modes:
@@ -86,6 +99,7 @@ Mention the bot in a registered Telegram, Discord, or WhatsApp group. The agent 
 | `MAX_CHAT_AGENTS` | `4` | Max concurrent chat agents |
 | `WEB_PORT` | `3131` | Dashboard port |
 | `SANDBOX_BACKEND` | `auto` | `auto`, `docker`, `bwrap`, or `none` |
+| `BORG_MASTER_KEY` | — | Hex-encoded 256-bit key for DB encryption |
 
 ## Commands
 

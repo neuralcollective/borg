@@ -1,166 +1,177 @@
-# Borg Architecture
+# Borg Legal AI Agent — Architecture Specification
+## Agreed Implementation Spec (v1)
 
-Autonomous AI agent orchestrator written in Rust. Chat messages trigger Claude Code subprocesses. The engineering pipeline runs agents in Docker containers with git worktree isolation.
+---
 
-Primary product scope is legal + SWE autonomous execution (`lawborg` and `sweborg`). Other domain modes are treated as experimental templates.
+## 1. Infrastructure Layer
 
-## Project Structure
+### LLM Inference
+- **Provider**: AWS Bedrock (Claude models)
+- **Why**: Structural data isolation — Anthropic cannot see inputs/outputs. AWS BAA is self-serve via AWS Artifact (no sales process). GDPR DPA auto-applies. ZDR-equivalent by architecture.
+- **Not**: Anthropic direct API (requires sales negotiation for ZDR), Google Vertex AI (BAA requires sales contact)
+- **Region-locking**: Enforce per firm. EU firms → `eu-central-1` (Frankfurt) or `eu-west-1`. UK firms → `eu-west-2` (London). US firms → `us-east-1` / `us-west-2`.
 
-```
-borg-rs/
-  crates/
-    borg-core/     # Pipeline engine, DB, config, agent traits, modes, sidecar, observer
-    borg-agent/    # Claude + Ollama agent backends
-    borg-server/   # Axum HTTP server, API routes, SSE streaming, logging
-    borg-domains/  # Domain-specific pipeline logic
-dashboard/         # React + Vite + Tailwind web dashboard
-sidecar/           # Unified Discord + WhatsApp bridge (bun, discord.js + Baileys)
-container/         # Docker agent image (bun + claude CLI)
-```
+### Web Search
+- **Provider**: Brave Search Enterprise API with ZDR enabled
+- **Why**: Only search provider with a fully independent index (not scraping Google/Bing), meaning ZDR applies to every query end-to-end. SOC 2 Type II certified (2025). DPA available.
+- **ZDR activation**: Contact Brave API support (searchapi-support@brave.com) to enable enterprise ZDR plan. Self-serve signup available for development; ZDR upgrade required before production.
+- **Not**: Anthropic's native web_search tool (routes through third-party provider not covered by Borg's ZDR agreements)
 
-## System Overview
+### Key Management
+- **Requirement**: All secrets and master encryption keys must be managed via AWS KMS (Customer Managed Keys)
+- **Not permitted**: Environment variable injection of master keys (visible to all processes under same user, leaked in crash dumps, not auditable, not rotatable without restart)
+- **Implementation**: Borg Server retrieves keys from KMS at runtime via IAM role-scoped credentials. Keys never exist in plaintext in the application environment. (Fallback to `BORG_MASTER_KEY` env var allowed only for local dev/non-AWS deployments).
 
-```mermaid
-graph TB
-    subgraph Messaging
-        TG[Telegram Bot API]
-        SC[Sidecar<br/>Discord + WhatsApp]
-        WEB[Web Dashboard]
-    end
+---
 
-    subgraph "borg-server (Rust/Axum)"
-        HTTP[HTTP API + SSE]
-        CHAT[Chat Handler]
-        OBS[Observer]
-    end
+## 2. Container Architecture
 
-    subgraph "borg-core"
-        SM[Per-Group State Machine<br/>IDLE→COLLECTING→RUNNING→COOLDOWN]
-        PL[Pipeline Engine]
-        DB[(SQLite WAL)]
-    end
+### Drafter Agent (Air-Gapped)
+- Runs in a container with **no network interface** (`--unshare-net`)
+- Physically cannot open TCP/UDP sockets to the open internet
+- Communicates exclusively with the Borg Server via Unix socket or `127.0.0.1:3132`
+- Holds all confidential client documents in memory/local workspace
+- Has no direct access to Bedrock, Brave, or any external API
 
-    subgraph "Agents"
-        CA[Claude agent<br/>subprocess]
-        DC[Docker container<br/>pipeline agent]
-    end
+### Borg Server (Proxy Layer)
+- Acts as the sole network-capable component
+- Intercepts all LLM API calls from the Drafter Agent and forwards to Bedrock
+- Intercepts all `web_search` tool calls and routes through the search pipeline (see Section 3)
+- Manages KMS key retrieval and envelope encryption
+- Owns the audit logging pipeline
+- Signs all outbound requests
 
-    TG -->|long-poll| CHAT
-    SC -->|NDJSON stdin/stdout| CHAT
-    WEB -->|POST /api/chat| HTTP
-    HTTP --> CHAT
-    CHAT --> SM
-    SM --> CA
-    PL --> DC
-    PL --> CA
-    CHAT --> DB
-    PL --> DB
-    HTTP --> DB
-```
+---
 
-## Chat Agent Flow
+## 3. Privilege Architecture: The Phase Split
 
-### Per-Group State Machine
+Borg implements a strict **One-Way Phase Gate** to guarantee that privileged data is never exposed to a search engine, even a compliant one.
 
-```mermaid
-stateDiagram-v2
-    [*] --> IDLE
-    IDLE --> COLLECTING : mention or DM
-    COLLECTING --> COLLECTING : more messages (extend window)
-    COLLECTING --> RUNNING : collection window expires
-    RUNNING --> COOLDOWN : agent completes
-    RUNNING --> IDLE : agent timeout
-    COOLDOWN --> IDLE : cooldown expires
-```
+### Phase 1: Research (Unprivileged)
+*   **State:** `session_privileged = false`
+*   **Capabilities:** Full Brave Search ZDR access.
+*   **Restrictions:** **NO privileged document upload permitted.** The UI physically hides the upload mechanism for sensitive files.
+*   **Goal:** The agent performs open-ended legal research, precedent finding, and market analysis *before* seeing the confidential client facts.
 
-Messages arriving during `RUNNING` are stored in DB and included in the next invocation.
+### Phase 2: Execution (Privileged)
+*   **Trigger:** The moment the user uploads the first privileged document.
+*   **State:** `session_privileged = true`. This transition is **permanent** for the session.
+*   **Restrictions:** **Search is Hard-Blocked.** The Borg Server rejects all `web_search` tool calls.
+*   **Capabilities:** Only Bedrock Inference (via PrivateLink) is allowed.
+*   **Goal:** The agent uses the research from Phase 1 and the privileged documents from Phase 2 to draft the final work product.
 
-### Session Continuity
+### Routing Logic
 
-Chat session dirs live at `store/sessions/chat-{key}/`. Claude Code is invoked with `--resume <session_id>` so conversations persist across messages.
+| Session State | Bedrock Inference | Brave Search |
+|---|---|---|
+| Phase 1 (Research) | ✅ Allowed | ✅ Allowed (ZDR) |
+| Phase 2 (Execution) | ✅ Allowed | ❌ **Hard Disabled** |
 
-## Pipeline Flow
+---
 
-### Task Lifecycle
+## 4. Search Pipeline (Phase 1 Only)
 
-```mermaid
-stateDiagram-v2
-    [*] --> backlog : /task or seeder
+### Non-Privileged Sessions
+- Drafter Agent issues `web_search` tool call with freeform query
+- Borg Server forwards directly to Brave Search Enterprise API
+- ZDR ensures no retention by Brave
 
-    backlog --> implement : worktree created
-    implement --> validate : agent commits changes
-    validate --> lint_fix : tests pass, linting needed
-    validate --> rebase : tests pass, rebase needed
-    validate --> implement : tests fail, retry
-    lint_fix --> rebase : lint clean
-    rebase --> done : rebase + tests pass
-    done --> merged : PR merged
+*(Note: The previously proposed "Sanitisation Pipeline" for privileged sessions has been removed. Privileged sessions simply cannot search. This eliminates the risk of "leaky sanitisation" entirely.)*
 
-    implement --> blocked : agent signals blocked
-    blocked --> implement : human input received
-    implement --> failed : max attempts exhausted
-```
+---
 
-Phase statuses: `backlog`, `implement`, `validate`, `lint_fix`, `rebase`, `compliance_check`, `done`, `merged`, `blocked`, `failed`.
+## 5. Lifecycle Management
 
-### Pipeline Phases
+### Burn-After-Reading
+- Configurable retention window **per matter type** (not a hardcoded 7-day idle trigger)
+- Default: prompt the firm to configure at onboarding per their SRA file retention obligations
+  - Standard matters: 6 years post-matter-close (UK SRA default)
+  - Wills/property: configurable to indefinite
+- On retention expiry: destroy all vector embeddings, chat logs, document content, and disk workspaces
+- **Audit metadata is retained** (who, when, which API, which tool — but never the payload content)
 
-A single agent drives the full creative workflow (explore, test, implement). The pipeline then validates independently (runs tests), handles mechanical steps (lint, rebase, merge).
+### Audit Trail
+- Immutable log of: user identity, timestamp, API endpoint hit, tool called, session ID
+- **Phase Transitions:** Specifically logs the timestamp and user who triggered the transition from Phase 1 to Phase 2.
+- No sensitive payload content in logs
+- Stored in your AWS account (CloudTrail + CloudWatch), never in Borg's infrastructure
+- Retained per firm's own compliance requirements (malpractice defence window)
 
-Agents can signal:
-- `blocked` — pauses task, waits for human input
-- `abandon` — marks failed without retrying
+---
 
-After 3 failed retries, sessions reset fresh with a summary of what was tried.
+## 6. Encryption
 
-### Session Persistence
+### At Rest
+- AES-256-GCM for all stored data (SQLite or equivalent)
+- Master key via AWS KMS CMK (not environment variable — see Section 1)
 
-Per-task session dirs at `store/sessions/task-{id}/` are bind-mounted into Docker containers so agents resume across retries.
+### In Transit
+- All communication between Drafter Agent and Borg Server: Unix socket (no network)
+- All communication between Borg Server and Bedrock/Brave: TLS 1.2+ enforced
+- VPC + AWS PrivateLink for Bedrock calls (no public internet egress from within the VPC)
 
-### Per-Repo Configuration
+---
 
-Pipeline agents receive repo-specific context via `.borg/prompt.md` or explicit `prompt_file` in `WATCHED_REPOS`.
+## 7. Contractual / Legal Structure (Non-Engineering, Required Before Production)
 
-### Self-Update
+Borg signs all sub-processor agreements. Law firms sign one agreement with Borg only.
 
-Pipeline detects merges to main on the primary repo, rebuilds (`cargo build --release`), and restarts via `execve`.
+### Borg signs with sub-processors:
+- **AWS**: BAA (self-serve via AWS Artifact) + GDPR DPA (auto-applies)
+- **Brave Search**: Enterprise ZDR DPA (contact searchapi-support@brave.com)
 
-## Sidecar (Discord + WhatsApp)
+### Law firms sign with Borg:
+- **Borg DPA** (Article 28 GDPR/UK GDPR compliant): names AWS and Brave as sub-processors, documents what each sub-processor does, gives firms approval rights over changes to sub-processor list
+- **BAA passthrough** (if US HIPAA-regulated work): Borg's BAA with AWS covers this via the subcontractor chain
 
-Discord and WhatsApp run in a single bun process (`sidecar/bridge.js`) via multiplexed NDJSON over stdin/stdout. The Rust process spawns the sidecar and communicates via stdio.
+### Required before onboarding any firm:
+- DPIA completed and documented (UK GDPR Article 35 / EU GDPR mandatory for AI processing personal data)
+- Borg DPA executed with firm
 
-## Observability
+---
 
-- `TaskStreamManager` (`borg-core/src/stream.rs`): per-task NDJSON broadcast + history buffer
-- Pipeline wires `stream_tx` into `PhaseContext`; agent backends forward each stdout line in real-time
-- `/api/tasks/:id/stream` serves raw Claude NDJSON (history replay + live)
-- `/api/logs` replays a ring buffer to new clients then streams live via SSE
-- `/api/events` queryable endpoint (category/level/since/limit filters)
+## 8. Human-in-the-Loop
 
-## Database Schema (key tables)
+- Borg produces documents only — it does not send, file, or take any automated external action
+- All outputs are reviewed by a solicitor before use
+- This satisfies the *Heppner* doctrine requirement that AI be used "under attorney direction"
+- No additional enforcement gate required in V1 (the product design itself enforces this)
 
-| Table | Purpose |
-|-------|---------|
-| `pipeline_tasks` | Tasks with status, attempts, session_id, mode |
-| `task_outputs` | Per-phase agent output + raw NDJSON stream |
-| `pipeline_events` | Append-only structured event log |
-| `repos` | Watched repos with test_cmd, auto_merge, prompt_file |
-| `messages` | Chat message history |
-| `sessions` | Claude session IDs per chat group/folder |
-| `projects` | Document workspaces with uploaded files |
-| `events` | Legacy unstructured log (still read by `/api/logs`) |
+---
 
-## Configuration
+## 9. Privilege Preservation Conditions (Post-Heppner)
 
-Key environment variables (full list in CLAUDE.md):
+For privileged sessions, all three must be met for privilege to be preserved:
 
-| Variable | Description |
-|----------|-------------|
-| `PIPELINE_REPO` | Primary repo path |
-| `PIPELINE_TEST_CMD` | Test command for primary repo |
-| `PIPELINE_AUTO_MERGE` | Auto-merge PRs (`true`/`false`) |
-| `WATCHED_REPOS` | Additional repos (`path:test_cmd[:prompt_file[:mode[:lint_cmd]]]`). Append `!manual` to `test_cmd` to disable auto-merge. |
-| `CONTINUOUS_MODE` | Auto-seed tasks when pipeline is idle |
-| `DISCORD_TOKEN` | Discord bot token |
-| `WA_AUTH_DIR` | WhatsApp auth directory |
-| `WEB_BIND` | Dashboard bind address (default `127.0.0.1`) |
+1. **Contractual confidentiality**: Borg's DPA with the firm + AWS BAA chain ✅
+2. **Solicitor-operated**: Borg is operated by the solicitor, not the client directly — enforce via auth/access controls
+3. **Reasonable expectation of confidentiality**: Bedrock BAA eliminates any right to retain, train, or disclose — unlike consumer AI tools which waived privilege in *Heppner*
+
+---
+
+## 10. V1 Engineering Checklist
+
+| Item | Status |
+|---|---|
+| Air-gapped Drafter Agent container (`--unshare-net`) | ⬜ Build |
+| Borg Server inference proxy → Bedrock | ⬜ Build |
+| Borg Server search proxy → Brave | ⬜ Build |
+| `privileged` bool on document ingestion | ⬜ Build |
+| Session contamination flag | ⬜ Build |
+| Phase 1 / Phase 2 hard boundary — session state enforcement | ⬜ Build |
+| Phase 1 UI — no privileged document upload mechanism present | ⬜ Build |
+| Phase 2 — Borg Server hard-blocks all search tool calls | ⬜ Build |
+| Phase 1 cannot reopen after Phase 2 entered | ⬜ Build |
+| Audit log entry on phase transition (timestamp, user, matter ID) | ⬜ Build |
+| Burn-after-reading lifecycle (configurable per matter type) | ⬜ Build |
+| Audit metadata trail (no payload content) | ⬜ Build |
+| AWS KMS CMK for master key management | ⬜ Build |
+| AES-256-GCM encryption at rest | ✅ Done |
+| VPC + PrivateLink for Bedrock | ⬜ Build |
+| AWS BAA (self-serve, AWS Artifact) | ⬜ Ops |
+| Brave Enterprise ZDR (email support team) | ⬜ Ops |
+| Borg DPA template | ⬜ Legal |
+| DPIA template | ⬜ Legal |
+| SOC 2 Type II readiness | ⬜ Future |
+| ISO 27001 | ⬜ Future |
+| Pentest programme | ⬜ Future |
