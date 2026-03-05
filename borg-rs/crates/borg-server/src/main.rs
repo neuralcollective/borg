@@ -18,7 +18,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use borg_agent::{claude::ClaudeBackend, codex::CodexBackend, ollama::OllamaBackend};
+use borg_agent::{claude::ClaudeBackend, codex::CodexBackend, gemini::GeminiBackend, ollama::OllamaBackend};
 use borg_core::{
     chat::ChatCollector,
     config::Config,
@@ -242,6 +242,17 @@ async fn main() -> anyhow::Result<()> {
             ),
         );
     }
+
+    if !config.gemini_api_key.is_empty() {
+        backends.insert(
+            "gemini".into(),
+            Arc::new(
+                GeminiBackend::new(config.gemini_api_key.clone())
+                    .with_timeout(config.agent_timeout_s as u64)
+            ),
+        );
+    }
+
     // Local model via Ollama — enabled by setting OLLAMA_URL or LOCAL_MODEL
     if std::env::var("OLLAMA_URL").is_ok() || std::env::var("LOCAL_MODEL").is_ok() {
         let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());

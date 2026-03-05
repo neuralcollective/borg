@@ -83,6 +83,9 @@ pub struct Config {
     // Codex
     pub codex_api_key: String,
     pub codex_credentials_path: String,
+    
+    // Gemini
+    pub gemini_api_key: String,
 
     // Sidecar (Discord + WhatsApp)
     pub discord_token: String,
@@ -827,6 +830,7 @@ impl Config {
         );
         let codex_credentials_path = resolve_tilde(&codex_credentials_path);
         let codex_api_key = get_str("OPENAI_API_KEY", &dotenv, "");
+        let gemini_api_key = get_str("GEMINI_API_KEY", &dotenv, "");
 
         // OAuth token: env/dotenv first, then credentials file
         let oauth_token = get("CLAUDE_CODE_OAUTH_TOKEN", &dotenv)
@@ -910,6 +914,7 @@ impl Config {
             self_update_enabled: get_bool("SELF_UPDATE_ENABLED", &dotenv, false),
             codex_api_key,
             codex_credentials_path,
+            gemini_api_key,
             discord_token: get_str("DISCORD_TOKEN", &dotenv, ""),
             wa_auth_dir: get_str("WA_AUTH_DIR", &dotenv, ""),
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
