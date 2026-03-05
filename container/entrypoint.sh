@@ -62,9 +62,30 @@ process.stdout.write('PUSH_AFTER_COMMIT=\'' + esc(d.pushAfterCommit ? '1' : '') 
 process.stdout.write('COMPILE_CHECK_CMD=\'' + esc(d.compileCheckCmd||'') + \"'\\n\");
 process.stdout.write('LINT_CMD=\'' + esc(d.lintCmd||'') + \"'\\n\");
 process.stdout.write('TEST_CMD=\'' + esc(d.testCmd||'') + \"'\\n\");
+process.stdout.write('PROJECT_ID=\'' + esc(String(d.projectId||'0')) + \"'\\n\");
 " > "$VARS_FILE" || { echo "Failed to parse input JSON" >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$VARS_FILE"
+export PROJECT_ID
+export BORG_HOST_IP
+
+# Create web_search shim that hits our ZDR proxy
+cat <<EOF > /usr/local/bin/web_search
+#!/bin/bash
+QUERY="\$*"
+curl -s -X POST http://\${BORG_HOST_IP}:3132/v1/search \\
+     -H "Content-Type: application/json" \\
+     -d "{\\"query\\": \\"\$QUERY\\", \\"project_id\\": \$PROJECT_ID}" | bun -e "
+let s=''; process.stdin.on('data', c=>s+=c); process.stdin.on('end', ()=>{
+  try {
+    const d=JSON.parse(s);
+    process.stdout.write(d.results || '');
+  } catch(e) {
+    process.stdout.write('Search failed: ' + s);
+  }
+});"
+EOF
+chmod +x /usr/local/bin/web_search
 
 REPO_DIR=/workspace/repo
 

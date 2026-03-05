@@ -16,16 +16,18 @@ use tracing::error;
 #[derive(Clone)]
 pub struct ProxyState {
     pub bedrock: BedrockClient,
+    pub db: Arc<borg_core::db::Db>,
     pub region: String,
 }
 
 impl ProxyState {
-    pub async fn new() -> Self {
+    pub async fn new(db: Arc<borg_core::db::Db>) -> Self {
         let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
         let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let bedrock = BedrockClient::new(&config);
         Self {
             bedrock,
+            db,
             region,
         }
     }
@@ -34,6 +36,40 @@ impl ProxyState {
 pub fn proxy_routes() -> Router<Arc<ProxyState>> {
     Router::new()
         .route("/v1/messages", post(handle_anthropic_messages))
+        .route("/v1/search", post(handle_web_search))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SearchRequest {
+    pub query: String,
+    pub project_id: i64,
+}
+
+async fn handle_web_search(
+    State(state): State<Arc<ProxyState>>,
+    axum::Json(payload): axum::Json<SearchRequest>,
+) -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    // 1. Check if session is privileged
+    let is_privileged = state.db.is_session_privileged(payload.project_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    if is_privileged {
+        error!("search blocked: session is privileged for project {}", payload.project_id);
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // 2. Perform search
+    let key = state.db.get_api_key("global", "brave_search")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::PRECONDITION_FAILED)?;
+
+    let client = borg_core::knowledge::BraveSearchClient::new(key);
+    let results = client.search(&payload.query).await.map_err(|e| {
+        error!("brave search failed: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    Ok(axum::Json(serde_json::json!({ "results": results })))
 }
 
 async fn handle_anthropic_messages(

@@ -65,6 +65,7 @@ fn make_ctx() -> PhaseContext {
         prior_research: vec![],
         revision_count: 0,
         experimental_domains: false,
+        isolated: false,
     }
 }
 

@@ -128,6 +128,7 @@ pub struct ProjectRow {
     pub deadline: Option<String>,
     pub privilege_level: String,
     pub status: String,
+    pub session_privileged: bool,
     pub default_template_id: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
@@ -142,6 +143,7 @@ pub struct ProjectFileRow {
     pub size_bytes: i64,
     pub extracted_text: String,
     pub content_hash: String,
+    pub privileged: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -513,10 +515,11 @@ fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent>
 }
 
 const PROJECT_COLS: &str = "id, name, mode, repo_path, client_name, case_number, jurisdiction, \
-    matter_type, opposing_counsel, deadline, privilege_level, status, default_template_id, created_at";
+    matter_type, opposing_counsel, deadline, privilege_level, status, default_template_id, created_at, session_privileged";
 
 fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
     let created_at_str: String = row.get(13)?;
+    let session_privileged_int: i64 = row.get(14)?;
     Ok(ProjectRow {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -530,13 +533,17 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
         deadline: row.get(9)?,
         privilege_level: row.get(10)?,
         status: row.get(11)?,
+        session_privileged: session_privileged_int != 0,
         default_template_id: row.get(12)?,
         created_at: parse_ts(&created_at_str),
     })
 }
 
+const PROJECT_FILE_COLS: &str = "id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at, privileged";
+
 fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileRow> {
     let created_at_str: String = row.get(8)?;
+    let privileged_int: i64 = row.get(9)?;
     Ok(ProjectFileRow {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -546,6 +553,7 @@ fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileR
         size_bytes: row.get(5)?,
         extracted_text: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
         content_hash: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        privileged: privileged_int != 0,
         created_at: parse_ts(&created_at_str),
     })
 }
@@ -1438,8 +1446,7 @@ impl Db {
     pub fn list_project_files(&self, project_id: i64) -> Result<Vec<ProjectFileRow>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at \
-             FROM project_files WHERE project_id=?1 ORDER BY id ASC",
+            &format!("SELECT {PROJECT_FILE_COLS} FROM project_files WHERE project_id=?1 ORDER BY id ASC"),
         )?;
         let files = stmt
             .query_map(params![project_id], row_to_project_file)?
@@ -1455,8 +1462,7 @@ impl Db {
     ) -> Result<Option<ProjectFileRow>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at \
-             FROM project_files WHERE id=?1 AND project_id=?2",
+            &format!("SELECT {PROJECT_FILE_COLS} FROM project_files WHERE id=?1 AND project_id=?2"),
             params![file_id, project_id],
             row_to_project_file,
         )
@@ -1472,13 +1478,14 @@ impl Db {
         mime_type: &str,
         size_bytes: i64,
         content_hash: &str,
+        privileged: bool,
     ) -> Result<i64> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
         conn.execute(
             "INSERT INTO project_files \
-             (project_id, file_name, stored_path, mime_type, size_bytes, content_hash, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (project_id, file_name, stored_path, mime_type, size_bytes, content_hash, created_at, privileged) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 project_id,
                 file_name,
@@ -1486,11 +1493,29 @@ impl Db {
                 mime_type,
                 size_bytes,
                 content_hash,
-                created_at
+                created_at,
+                if privileged { 1 } else { 0 }
             ],
         )
         .context("insert_project_file")?;
-        Ok(conn.last_insert_rowid())
+        let id = conn.last_insert_rowid();
+        if privileged {
+            conn.execute(
+                "UPDATE projects SET session_privileged = 1 WHERE id = ?1",
+                params![project_id],
+            )?;
+        }
+        Ok(id)
+    }
+
+    pub fn is_session_privileged(&self, project_id: i64) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let priv_int: i64 = conn.query_row(
+            "SELECT session_privileged FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        Ok(priv_int != 0)
     }
 
     pub fn find_project_file_by_hash(
@@ -1503,8 +1528,7 @@ impl Db {
         }
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
-            "SELECT id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at \
-             FROM project_files WHERE project_id=?1 AND content_hash=?2 ORDER BY id ASC LIMIT 1",
+            &format!("SELECT {PROJECT_FILE_COLS} FROM project_files WHERE project_id=?1 AND content_hash=?2 ORDER BY id ASC LIMIT 1"),
             params![project_id, content_hash],
             row_to_project_file,
         )

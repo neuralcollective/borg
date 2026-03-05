@@ -6,6 +6,56 @@ use tracing::{debug, warn};
 
 use crate::db::Db;
 
+// ── Brave Search client ──────────────────────────────────────────────────
+
+pub struct BraveSearchClient {
+    http: reqwest::Client,
+    api_key: String,
+}
+
+impl BraveSearchClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key,
+        }
+    }
+
+    pub async fn search(&self, query: &str) -> Result<String> {
+        let resp = self
+            .http
+            .get("https://api.search.brave.com/res/v1/web/search")
+            .query(&[("q", query)])
+            .header("X-Subscription-Token", &self.api_key)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("brave search error {}: {}", status, text);
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        let mut results = Vec::new();
+        if let Some(web) = json
+            .get("web")
+            .and_then(|v| v.get("results"))
+            .and_then(|v| v.as_array())
+        {
+            for res in web {
+                let title = res.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let description = res.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let url = res.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                results.push(format!("### {title}\nURL: {url}\n{description}"));
+            }
+        }
+
+        Ok(results.join("\n\n"))
+    }
+}
+
 // ── Embedding client ─────────────────────────────────────────────────────
 
 pub struct EmbeddingClient {

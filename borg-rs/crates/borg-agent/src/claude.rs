@@ -16,15 +16,21 @@ const BORG_SIGNAL_MARKER: &str = "BORG_SIGNAL:";
 
 /// Utility to extract phase results from Claude output.
 pub fn extract_phase_result(output: &str) -> Option<String> {
-    output
-        .lines()
-        .rev()
-        .find(|l| l.starts_with(BORG_SIGNAL_MARKER))
-        .and_then(|l| l.strip_prefix(BORG_SIGNAL_MARKER))
-        .map(|s| s.trim().to_string())
+    const START: &str = "---PHASE_RESULT_START---";
+    const END: &str = "---PHASE_RESULT_END---";
+
+    let start_idx = output.rfind(START)?;
+    let end_idx = output[start_idx..].rfind(END)?;
+    let content = &output[start_idx + START.len()..start_idx + end_idx];
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
-fn derive_compile_check(test_cmd: &str) -> Option<String> {
+pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
     if trimmed.starts_with("cargo test") {
         Some(format!("{trimmed} --no-run"))
@@ -156,7 +162,7 @@ impl AgentBackend for ClaudeBackend {
             claude_args.push("--resume".into());
             claude_args.push(task.session_id.clone());
         }
-        claude_args.push(instruction);
+        claude_args.push(instruction.clone());
 
         let full_cmd: Vec<String> = std::iter::once(self.claude_bin.clone())
             .chain(claude_args)
@@ -215,7 +221,7 @@ impl AgentBackend for ClaudeBackend {
         };
 
         let effective_base_url = if ctx.isolated {
-            "http://172.31.0.1:3131".to_string()
+            "http://172.31.0.1:3132".to_string()
         } else if !self.base_url.is_empty() {
             self.base_url.clone()
         } else {
@@ -264,6 +270,9 @@ impl AgentBackend for ClaudeBackend {
                 if !effective_base_url.is_empty() {
                     env_kv.push(("ANTHROPIC_BASE_URL".to_string(), effective_base_url));
                 }
+                
+                let host_ip = if ctx.isolated { "172.31.0.1" } else { "172.30.0.1" };
+                env_kv.push(("BORG_HOST_IP".to_string(), host_ip.to_string()));
 
                 let binds_ref: Vec<(&str, &str, bool)> = binds
                     .iter()
@@ -349,11 +358,20 @@ impl AgentBackend for ClaudeBackend {
                     String::new()
                 };
                 let input = serde_json::json!({
-                    "test_cmd": repo_test_cmd,
-                    "compile_check_cmd": compile_check_cmd,
-                    "lint_cmd": ctx.repo_config.lint_cmd,
-                    "git_user_name": self.git_author_name,
-                    "git_user_email": self.git_author_email,
+                    "prompt": instruction,
+                    "model": self.claude_bin.clone(), // Use model name from backend
+                    "sessionId": task.session_id.clone(),
+                    "systemPrompt": phase.system_prompt.clone(),
+                    "allowedTools": phase.allowed_tools.clone(),
+                    "maxTurns": 200,
+                    "repoUrl": task.repo_path.clone(),
+                    "branch": task.branch.clone(),
+                    "projectId": task.project_id,
+                    "testCmd": repo_test_cmd,
+                    "compileCheckCmd": compile_check_cmd,
+                    "lintCmd": ctx.repo_config.lint_cmd,
+                    "gitAuthorName": self.git_author_name,
+                    "gitAuthorEmail": self.git_author_email,
                 });
                 let payload = serde_json::to_vec(&input).unwrap_or_default();
                 let _ = stdin.write_all(&payload).await;

@@ -62,6 +62,7 @@ pub struct AppState {
     pub file_storage: Arc<storage::FileStorage>,
     pub ingestion_queue: Arc<ingestion::IngestionQueue>,
     pub opensearch: Option<Arc<opensearch::OpenSearchClient>>,
+    pub brave_search: Option<Arc<borg_core::knowledge::BraveSearchClient>>,
     pub upload_processing_sem: Arc<Semaphore>,
     pub upload_processing_limit: usize,
 }
@@ -212,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_timeout(config.agent_timeout_s as u64)
                 .with_resource_limits(config.container_memory_mb, config.container_cpus)
                 .with_git_author(&config.git_author_name, &config.git_author_email)
-                .with_base_url(format!("http://127.0.0.1:{}", config.web_port)),
+                .with_base_url(format!("http://127.0.0.1:3132")),
         ),
     );
     if !config.codex_api_key.is_empty()
@@ -717,8 +718,14 @@ async fn main() -> anyhow::Result<()> {
         .filter(|v| *v > 0)
         .unwrap_or(2);
 
+    let brave_search = if let Ok(Some(key)) = db.get_api_key("global", "brave_search") {
+        Some(Arc::new(borg_core::knowledge::BraveSearchClient::new(key)))
+    } else {
+        None
+    };
+
     let state = Arc::new(AppState {
-        db,
+        db: Arc::clone(&db),
         config: Arc::clone(&config),
         api_token,
         start_time: Instant::now(),
@@ -736,6 +743,7 @@ async fn main() -> anyhow::Result<()> {
         file_storage: Arc::clone(&file_storage),
         ingestion_queue: Arc::clone(&ingestion_queue),
         opensearch: opensearch.clone(),
+        brave_search,
         upload_processing_sem: Arc::new(Semaphore::new(upload_processing_limit)),
         upload_processing_limit,
     });
@@ -755,7 +763,7 @@ async fn main() -> anyhow::Result<()> {
         format!("{dashboard_dir}/index.html"),
     ));
 
-    let proxy_state = Arc::new(proxy::ProxyState::new().await);
+    let proxy_state = Arc::new(proxy::ProxyState::new(Arc::clone(&db)).await);
     let proxy_router = proxy::proxy_routes().with_state(proxy_state);
 
     let app = Router::new()
@@ -971,50 +979,25 @@ async fn main() -> anyhow::Result<()> {
     info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     
-    let unix_socket_path = "/tmp/borg-proxy.sock";
-    let _ = std::fs::remove_file(unix_socket_path);
-    let unix_listener = tokio::net::UnixListener::bind(unix_socket_path)?;
-    info!("Proxy listening on unix://{unix_socket_path}");
+    // Separate listener for the proxy (air-gapped agent access)
+    let proxy_addr = format!("{}:3132", bind);
+    let proxy_listener = tokio::net::TcpListener::bind(&proxy_addr).await?;
+    info!("Proxy listening on {proxy_addr}");
 
     let server = axum::serve(
         listener,
         app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
 
-    use tokio_util::sync::CancellationToken;
-    let token = CancellationToken::new();
-    
-    // Serve on Unix socket too
-    let unix_app = app.clone();
-    let unix_token = token.clone();
-    tokio::spawn(async move {
-        use hyper_util::rt::TokioExecutor;
-        use hyper_util::server::conn::auto::Builder;
-        use tower::Service;
-        
-        loop {
-            tokio::select! {
-                _ = unix_token.cancelled() => break,
-                res = unix_listener.accept() => {
-                    let (stream, _) = match res {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    };
-                    let app = unix_app.clone();
-                    tokio::spawn(async move {
-                        let stream = hyper_util::rt::TokioIo::new(stream);
-                        let _ = Builder::new(TokioExecutor::new())
-                            .serve_connection(stream, app)
-                            .await;
-                    });
-                }
-            }
-        }
-    });
+    let proxy_server = axum::serve(
+        proxy_listener,
+        app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         res = server => { res?; }
+        res = proxy_server => { res?; }
         _ = tokio::signal::ctrl_c() => {
             info!("shutdown signal received (SIGINT)");
         }

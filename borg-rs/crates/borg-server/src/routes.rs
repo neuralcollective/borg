@@ -2501,7 +2501,7 @@ async fn process_uploaded_single_file(
     let size_bytes = tokio::fs::metadata(assembled_path).await?.len() as i64;
     let file_id = state
         .db
-        .insert_project_file(project_id, file_name, &stored_path, mime_type, size_bytes, &content_hash)?;
+        .insert_project_file(project_id, file_name, &stored_path, mime_type, size_bytes, &content_hash, false)?;
     if let Err(e) = state
         .ingestion_queue
         .enqueue_project_file(project_id, file_id, file_name, &stored_path, mime_type, size_bytes)
@@ -2584,7 +2584,7 @@ async fn process_uploaded_zip(
         let mime_type = guess_mime_from_name(&file_name);
         let file_id = state
             .db
-            .insert_project_file(project_id, &file_name, &stored_path, &mime_type, size_bytes, &content_hash)?;
+            .insert_project_file(project_id, &file_name, &stored_path, &mime_type, size_bytes, &content_hash, false)?;
         if let Err(e) = state
             .ingestion_queue
             .enqueue_project_file(project_id, file_id, &file_name, &stored_path, &mime_type, size_bytes)
@@ -2720,7 +2720,7 @@ pub(crate) async fn upload_project_files(
 
         let file_id = state
             .db
-            .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size, &content_hash)
+            .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size, &content_hash, false)
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue
@@ -3152,6 +3152,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 prior_research: Vec::new(),
                 revision_count: 0,
                 experimental_domains: state.config.experimental_domains,
+                isolated: true, // Triage is always secure/isolated
             };
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
@@ -4387,7 +4388,7 @@ pub(crate) async fn import_cloud_files(
         let mime = guess_mime(&file.name);
         let file_id = state
             .db
-            .insert_project_file(id, &safe_name, &stored_path, &mime, file_size, "")
+            .insert_project_file(id, &safe_name, &stored_path, &mime, file_size, "", false)
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue

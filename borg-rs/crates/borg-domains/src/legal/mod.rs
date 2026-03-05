@@ -42,7 +42,7 @@ pub fn legal_mode() -> PipelineMode {
                     "Implement",
                     "",
                     LEGAL_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "review",
                 )
             },
@@ -57,7 +57,7 @@ pub fn legal_mode() -> PipelineMode {
                     "Review",
                     "",
                     LEGAL_REVIEW_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "purge",
                 )
             },
