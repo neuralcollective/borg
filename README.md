@@ -99,7 +99,13 @@ Mention the bot in a registered Telegram, Discord, or WhatsApp group. The agent 
 | `MAX_CHAT_AGENTS` | `4` | Max concurrent chat agents |
 | `WEB_PORT` | `3131` | Dashboard port |
 | `SANDBOX_BACKEND` | `auto` | `auto`, `docker`, `bwrap`, or `none` |
-| `BORG_MASTER_KEY` | — | Hex-encoded 256-bit key for DB encryption |
+| `BORG_MASTER_KEY` | — | Hex-encoded 256-bit key for DB encryption (dev/local fallback) |
+| `BORG_MASTER_KEY_KMS_CIPHERTEXT_B64` | — | Base64 KMS-encrypted 32-byte master key blob for production |
+| `BORG_MASTER_KEY_KMS_KEY_ID` | — | Optional KMS key id/arn used to decrypt `BORG_MASTER_KEY_KMS_CIPHERTEXT_B64` |
+| `BORG_MASTER_KEY_KMS_REGION` | `AWS_REGION` | AWS region for KMS decrypt |
+| `PROXY_AUDIT_CLOUDWATCH_LOG_GROUP` | — | Enable proxy call audit sink to CloudWatch Logs group |
+| `PROXY_AUDIT_CLOUDWATCH_STREAM` | auto | Optional CloudWatch stream name for proxy audit sink |
+| `PROXY_AUDIT_CLOUDWATCH_REGION` | `AWS_REGION` | AWS region for CloudWatch audit sink |
 
 ## Commands
 

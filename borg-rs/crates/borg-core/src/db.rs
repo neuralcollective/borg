@@ -3167,22 +3167,112 @@ impl Db {
 
     // ── API Keys (BYOK) ──────────────────────────────────────────────────
 
-    fn encrypt_secret(secret: &str) -> String {
-        if let Ok(key_hex) = std::env::var("BORG_MASTER_KEY") {
-            if key_hex.len() == 64 {
-                if let Ok(key_bytes) = hex::decode(&key_hex) {
-                    use aes_gcm::{aead::{Aead, KeyInit, OsRng}, Aes256Gcm};
-                    use aes_gcm::aead::AeadCore;
-                    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
-                    let cipher = Aes256Gcm::new(key);
-                    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits
-                    if let Ok(ciphertext) = cipher.encrypt(&nonce, secret.as_bytes()) {
-                        let mut combined = nonce.to_vec();
-                        combined.extend_from_slice(&ciphertext);
-                        use base64::Engine;
-                        return format!("enc:v1:{}", base64::engine::general_purpose::STANDARD.encode(&combined));
-                    }
+    fn block_on_async_option<F, T>(fut: F) -> Option<T>
+    where
+        F: std::future::Future<Output = Option<T>>,
+    {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        } else {
+            let rt = tokio::runtime::Runtime::new().ok()?;
+            rt.block_on(fut)
+        }
+    }
+
+    fn decode_master_key_hex(key_hex: &str) -> Option<[u8; 32]> {
+        if key_hex.len() != 64 {
+            return None;
+        }
+        let key_bytes = hex::decode(key_hex).ok()?;
+        if key_bytes.len() != 32 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&key_bytes);
+        Some(out)
+    }
+
+    fn load_master_key_from_kms() -> Option<[u8; 32]> {
+        use aws_config::{BehaviorVersion, Region};
+        use aws_sdk_kms::primitives::Blob;
+
+        let ciphertext_b64 = std::env::var("BORG_MASTER_KEY_KMS_CIPHERTEXT_B64").ok()?;
+        let ciphertext = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(ciphertext_b64)
+                .ok()?
+        };
+        if ciphertext.is_empty() {
+            return None;
+        }
+
+        Self::block_on_async_option(async move {
+            let region = std::env::var("BORG_MASTER_KEY_KMS_REGION")
+                .ok()
+                .filter(|r| !r.trim().is_empty())
+                .or_else(|| std::env::var("AWS_REGION").ok());
+
+            let mut loader = aws_config::defaults(BehaviorVersion::latest());
+            if let Some(region) = region {
+                loader = loader.region(Region::new(region));
+            }
+            let shared = loader.load().await;
+            let client = aws_sdk_kms::Client::new(&shared);
+
+            let mut req = client.decrypt().ciphertext_blob(Blob::new(ciphertext));
+            if let Ok(key_id) = std::env::var("BORG_MASTER_KEY_KMS_KEY_ID") {
+                if !key_id.trim().is_empty() {
+                    req = req.key_id(key_id);
                 }
+            }
+            let out = req.send().await.ok()?;
+            let plaintext = out.plaintext()?.as_ref();
+            if plaintext.len() != 32 {
+                return None;
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(plaintext);
+            Some(key)
+        })
+    }
+
+    fn master_key_bytes() -> Option<[u8; 32]> {
+        static MASTER_KEY_CACHE: std::sync::OnceLock<Option<[u8; 32]>> =
+            std::sync::OnceLock::new();
+        *MASTER_KEY_CACHE.get_or_init(|| {
+            if let Ok(key_hex) = std::env::var("BORG_MASTER_KEY") {
+                if let Some(key) = Self::decode_master_key_hex(&key_hex) {
+                    return Some(key);
+                }
+                tracing::warn!("BORG_MASTER_KEY is set but invalid (expected 64-char hex)");
+            }
+            let kms_key = Self::load_master_key_from_kms();
+            if kms_key.is_none() && std::env::var("BORG_MASTER_KEY_KMS_CIPHERTEXT_B64").is_ok() {
+                tracing::warn!("failed to resolve master key from AWS KMS ciphertext");
+            }
+            kms_key
+        })
+    }
+
+    fn encrypt_secret(secret: &str) -> String {
+        if let Some(key_bytes) = Self::master_key_bytes() {
+            use aes_gcm::aead::AeadCore;
+            use aes_gcm::{
+                aead::{Aead, KeyInit, OsRng},
+                Aes256Gcm,
+            };
+            let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+            let cipher = Aes256Gcm::new(key);
+            let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits
+            if let Ok(ciphertext) = cipher.encrypt(&nonce, secret.as_bytes()) {
+                let mut combined = nonce.to_vec();
+                combined.extend_from_slice(&ciphertext);
+                use base64::Engine;
+                return format!(
+                    "enc:v1:{}",
+                    base64::engine::general_purpose::STANDARD.encode(&combined)
+                );
             }
         }
         secret.to_string()
@@ -3190,21 +3280,22 @@ impl Db {
 
     fn decrypt_secret(secret: &str) -> String {
         if secret.starts_with("enc:v1:") {
-            if let Ok(key_hex) = std::env::var("BORG_MASTER_KEY") {
-                if key_hex.len() == 64 {
-                    if let Ok(key_bytes) = hex::decode(&key_hex) {
-                        use base64::Engine;
-                        if let Ok(combined) = base64::engine::general_purpose::STANDARD.decode(&secret[7..]) {
-                            if combined.len() > 12 {
-                                use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
-                                let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
-                                let cipher = Aes256Gcm::new(key);
-                                let nonce = Nonce::from_slice(&combined[..12]);
-                                if let Ok(plaintext) = cipher.decrypt(nonce, &combined[12..]) {
-                                    if let Ok(s) = String::from_utf8(plaintext) {
-                                        return s;
-                                    }
-                                }
+            if let Some(key_bytes) = Self::master_key_bytes() {
+                use base64::Engine;
+                if let Ok(combined) =
+                    base64::engine::general_purpose::STANDARD.decode(&secret[7..])
+                {
+                    if combined.len() > 12 {
+                        use aes_gcm::{
+                            aead::{Aead, KeyInit},
+                            Aes256Gcm, Nonce,
+                        };
+                        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+                        let cipher = Aes256Gcm::new(key);
+                        let nonce = Nonce::from_slice(&combined[..12]);
+                        if let Ok(plaintext) = cipher.decrypt(nonce, &combined[12..]) {
+                            if let Ok(s) = String::from_utf8(plaintext) {
+                                return s;
                             }
                         }
                     }
