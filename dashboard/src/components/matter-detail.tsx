@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useProjectDetail,
   useProjectTasks,
+  useProjectFiles,
   useProjectDocuments,
   useProjectDeadlines,
   useProjectAudit,
@@ -15,6 +16,7 @@ import {
   createDeadline,
   updateDeadline,
   deleteDeadline,
+  uploadProjectFiles,
 } from "@/lib/api";
 import type { ConflictHit, Deadline } from "@/lib/api";
 import type { Project, ProjectTask, ProjectDocument } from "@/lib/types";
@@ -206,6 +208,16 @@ function formatDuration(secs: number): string {
   return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
 }
 
+function formatRemaining(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
 // ── Matter header ─────────────────────────────────────────────────────────────
 
 function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () => void }) {
@@ -251,6 +263,11 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[14px] font-semibold text-zinc-100">{project.name}</h2>
             {project.status && <StatusBadge status={project.status} />}
+            {project.session_privileged && (
+              <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-medium text-rose-300">
+                privileged session
+              </span>
+            )}
             {project.matter_type && (
               <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
                 {project.matter_type}
@@ -610,27 +627,133 @@ function TimelineTab({ projectId }: { projectId: number }) {
 
 function DocumentsTab({
   projectId,
+  project,
   onDocumentSelect,
 }: {
   projectId: number;
+  project: Project;
   onDocumentSelect?: (doc: ProjectDocument) => void;
 }) {
   const { data: docs = [], isLoading } = useProjectDocuments(projectId);
+  const { data: files = [], refetch: refetchFiles } = useProjectFiles(projectId);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [privilegedUpload, setPrivilegedUpload] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleUpload(selected: FileList | null) {
+    if (!selected || selected.length === 0 || uploading) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      await uploadProjectFiles(projectId, selected, { privileged: privilegedUpload });
+      await refetchFiles();
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "upload failed";
+      if (msg === "403") {
+        setUploadError("Privileged uploads are only allowed after entering Phase 2.");
+      } else {
+        setUploadError(`Upload failed (${msg}).`);
+      }
+    } finally {
+      setUploading(false);
+    }
+  }
 
   if (isLoading) {
     return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
   }
 
-  if (docs.length === 0) {
+  if (docs.length === 0 && files.length === 0) {
     return (
-      <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">
-        No documents yet. Run a task to generate research or drafts.
+      <div className="space-y-2 p-4">
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+          <div className="mb-2 text-[11px] font-medium text-zinc-400">Document Intake</div>
+          <div className="flex items-center gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={(e) => void handleUpload(e.target.files)}
+              disabled={uploading}
+              className="block w-full text-[11px] text-zinc-500 file:mr-2 file:rounded file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-2 file:py-1 file:text-[10px] file:text-zinc-300"
+            />
+          </div>
+          <label className="mt-2 flex items-center gap-2 text-[11px] text-zinc-400">
+            <input
+              type="checkbox"
+              checked={privilegedUpload}
+              onChange={(e) => setPrivilegedUpload(e.target.checked)}
+              disabled={!project.session_privileged}
+              className="rounded"
+            />
+            Upload as privileged
+          </label>
+          {!project.session_privileged && (
+            <div className="mt-1 text-[10px] text-amber-500/80">
+              Privileged uploads unlock after this matter enters Phase 2.
+            </div>
+          )}
+          {uploadError && <div className="mt-1 text-[10px] text-red-400">{uploadError}</div>}
+        </div>
+        <div className="flex h-24 items-center justify-center text-[12px] text-zinc-600">
+          No documents yet. Upload sources or run a task to generate drafts.
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 gap-2 p-4 sm:grid-cols-2">
+    <div className="space-y-3 p-4">
+      <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+        <div className="mb-2 text-[11px] font-medium text-zinc-400">Document Intake</div>
+        <div className="flex items-center gap-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={(e) => void handleUpload(e.target.files)}
+            disabled={uploading}
+            className="block w-full text-[11px] text-zinc-500 file:mr-2 file:rounded file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-2 file:py-1 file:text-[10px] file:text-zinc-300"
+          />
+        </div>
+        <label className="mt-2 flex items-center gap-2 text-[11px] text-zinc-400">
+          <input
+            type="checkbox"
+            checked={privilegedUpload}
+            onChange={(e) => setPrivilegedUpload(e.target.checked)}
+            disabled={!project.session_privileged}
+            className="rounded"
+          />
+          Upload as privileged
+        </label>
+        {!project.session_privileged && (
+          <div className="mt-1 text-[10px] text-amber-500/80">
+            Privileged uploads unlock after this matter enters Phase 2.
+          </div>
+        )}
+        {uploadError && <div className="mt-1 text-[10px] text-red-400">{uploadError}</div>}
+      </div>
+
+      {files.length > 0 && (
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+          <div className="mb-2 text-[11px] font-medium text-zinc-400">Source Files ({files.length})</div>
+          <div className="max-h-44 space-y-1 overflow-y-auto">
+            {files.map((f) => (
+              <div key={f.id} className="flex items-center gap-2 rounded border border-white/[0.05] px-2 py-1 text-[11px]">
+                <span className="truncate text-zinc-300">{f.file_name}</span>
+                {f.privileged && (
+                  <span className="rounded bg-rose-500/15 px-1 py-0.5 text-[9px] text-rose-300">privileged</span>
+                )}
+                <span className="ml-auto text-zinc-600">{Math.max(1, Math.round(f.size_bytes / 1024))} KB</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
       {docs.map((doc) => (
         <button
           key={`${doc.task_id}-${doc.file_name}`}
@@ -650,6 +773,7 @@ function DocumentsTab({
           )}
         </button>
       ))}
+      </div>
     </div>
   );
 }
@@ -900,6 +1024,10 @@ function TasksTab({ projectId }: { projectId: number }) {
           ? fullModes.find((m) => m.name === task.mode)
               ?.phases.find((p) => p.name === task.status)?.instruction
           : undefined;
+        const purgeEtaMs = task.status === "purge" && task.updated_at
+          ? new Date(task.updated_at).getTime() + (7 * 24 * 60 * 60 * 1000)
+          : null;
+        const purgeRemainingMs = purgeEtaMs != null ? purgeEtaMs - Date.now() : null;
         return (
           <div
             key={task.id}
@@ -925,6 +1053,16 @@ function TasksTab({ projectId }: { projectId: number }) {
                   )}
                   {task.revision_count != null && task.revision_count > 0 && (
                     <span className="text-[9px] text-amber-500/80">rev {task.revision_count}</span>
+                  )}
+                  {task.status === "purge" && (
+                    <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-medium text-red-300">
+                      purge {purgeRemainingMs != null && purgeRemainingMs > 0 ? `in ${formatRemaining(purgeRemainingMs)}` : "pending"}
+                    </span>
+                  )}
+                  {task.status === "purged" && (
+                    <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-medium text-red-300">
+                      purged
+                    </span>
                   )}
                   {task.mode && task.mode !== "lawborg" && task.mode !== "legal" && (
                     <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
@@ -1509,7 +1647,7 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
         )}
         {activeTab === "documents" && (
           <div className="h-full overflow-y-auto">
-            <DocumentsTab projectId={projectId} onDocumentSelect={onDocumentSelect} />
+            <DocumentsTab projectId={projectId} project={project} onDocumentSelect={onDocumentSelect} />
           </div>
         )}
         {activeTab === "tasks" && (

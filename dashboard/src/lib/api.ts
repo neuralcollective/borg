@@ -669,12 +669,18 @@ export async function fetchProjectFileContent(
 
 export async function uploadProjectFiles(
   projectId: number,
-  files: FileList | File[]
+  files: FileList | File[],
+  options?: { privileged?: boolean },
 ): Promise<{ uploaded: ProjectFile[] }> {
   await tokenReady;
   const form = new FormData();
   Array.from(files).forEach((file) => form.append("files", file));
-  const res = await fetch(`${apiBase()}/api/projects/${projectId}/files/upload`, {
+  const params = new URLSearchParams();
+  if (options?.privileged) params.set("privileged", "true");
+  const query = params.toString();
+  const res = await fetch(
+    `${apiBase()}/api/projects/${projectId}/files/upload${query ? `?${query}` : ""}`,
+    {
     method: "POST",
     headers: authHeaders(),
     body: form,
@@ -693,6 +699,7 @@ export interface UploadSession {
   total_chunks: number;
   uploaded_bytes: number;
   is_zip: boolean;
+  privileged?: boolean;
   status: "uploading" | "processing" | "done" | "failed";
   stored_path: string;
   error: string;
@@ -718,6 +725,7 @@ export async function createProjectUploadSession(
     chunk_size: number;
     total_chunks: number;
     is_zip?: boolean;
+    privileged?: boolean;
   },
 ): Promise<{ session_id: number; project_id: number; status: string; file_name: string; total_chunks: number; chunk_size: number }> {
   const res = await apiFetch(`/api/projects/${projectId}/uploads/sessions`, {

@@ -9,6 +9,7 @@ export interface Task {
   max_attempts: number;
   created_by: string;
   created_at: string;
+  updated_at?: string;
   last_error?: string;
   mode?: string;
   backend?: string;
@@ -216,6 +217,7 @@ export interface ProjectTask {
   mode?: string;
   task_type?: string;
   created_at: string;
+  updated_at?: string;
   attempt: number;
   max_attempts: number;
   started_at?: string;
