@@ -183,9 +183,9 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.7.1"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ede2ddc593e6c8acc6ce3358c28d6677a6dc49b65ba4b37a2befe14a11297e75"
+checksum = "5fc0651c57e384202e47153c1260b84a9936e19803d747615edf199dc3b98d17"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
@@ -207,6 +207,33 @@ dependencies = [
  "pin-project-lite",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aws-sdk-bedrockruntime"
+version = "1.127.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd5ccbed3bd50d342077d3f731de46d9608340386c87d07566c4c507891eda"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-eventstream",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "http-body-util",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
@@ -438,6 +465,7 @@ version = "0.63.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba1ab2dc1c2c3749ead27180d333c42f11be8b0e934058fb4b2258ee8dbe5231"
 dependencies = [
+ "aws-smithy-eventstream",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
@@ -783,6 +811,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-credential-types",
+ "aws-sdk-bedrockruntime",
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "aws-sigv4",
@@ -793,6 +822,8 @@ dependencies = [
  "borg-domains",
  "chrono",
  "http 1.4.0",
+ "hyper 1.8.1",
+ "hyper-util",
  "rand 0.8.5",
  "reqwest",
  "serde",
@@ -801,6 +832,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
@@ -1668,6 +1700,7 @@ dependencies = [
  "socket2 0.6.2",
  "system-configuration",
  "tokio",
+ "tower-layer",
  "tower-service",
  "tracing",
  "windows-registry",

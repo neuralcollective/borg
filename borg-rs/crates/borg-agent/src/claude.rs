@@ -156,6 +156,26 @@ impl AgentBackend for ClaudeBackend {
             "--print".to_string(),
             "--dangerously-skip-permissions".to_string(),
         ];
+
+        // Allowed tools
+        if !phase.allowed_tools.is_empty() {
+            claude_args.push("--allowed-tools".into());
+            claude_args.push(phase.allowed_tools.clone());
+        }
+
+        // Disallowed tools (combine phase-specific and global context)
+        let mut disallowed = phase.disallowed_tools.clone();
+        if !ctx.disallowed_tools.is_empty() {
+            if !disallowed.is_empty() {
+                disallowed.push(',');
+            }
+            disallowed.push_str(&ctx.disallowed_tools);
+        }
+        if !disallowed.is_empty() {
+            claude_args.push("--disallowed-tools".into());
+            claude_args.push(disallowed);
+        }
+
         if phase.fresh_session {
             claude_args.push("--no-resume".into());
         } else if !task.session_id.is_empty() {

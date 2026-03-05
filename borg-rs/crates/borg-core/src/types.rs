@@ -216,6 +216,7 @@ pub struct PhaseConfig {
     /// Appended when task.last_error is set; supports `{ERROR}` placeholder.
     pub error_instruction: String,
     pub allowed_tools: String,
+    pub disallowed_tools: String,
     pub use_docker: bool,
 
     // Prompt composition
@@ -311,6 +312,7 @@ impl Default for PhaseConfig {
             instruction: String::new(),
             error_instruction: String::new(),
             allowed_tools: "Read,Glob,Grep,Write".into(),
+            disallowed_tools: String::new(),
             use_docker: false,
             include_task_context: false,
             include_file_listing: false,
