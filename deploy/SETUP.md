@@ -176,6 +176,28 @@ systemctl restart borg
 cat ~/.claude/.credentials.json | jq -r '.oauthToken'
 ```
 
+## Automated Backups (Litestream)
+
+For robust, decoupled cloud backups, the deployment script installs [Litestream](https://litestream.io), which continuously streams your SQLite database changes (WAL) to an S3-compatible storage bucket.
+
+1. **Create an S3 bucket:** (AWS S3, Cloudflare R2, DigitalOcean Spaces, etc.)
+2. **Configure Litestream:** Copy `deploy/litestream.yml.template` to the server:
+   ```bash
+   scp deploy/litestream.yml.template root@$(hcloud server ip borg):/etc/litestream.yml
+   ```
+3. **Edit the configuration:** Add your credentials and bucket URL in `/etc/litestream.yml`.
+4. **Enable and start the service:**
+   ```bash
+   ssh root@$(hcloud server ip borg) "systemctl enable litestream && systemctl start litestream"
+   ```
+
+To restore from a backup:
+```bash
+systemctl stop borg
+litestream restore -if-replica-exists -o /opt/borg/store/borg.db s3://my-backup-bucket/borg-db
+systemctl start borg
+```
+
 ## Useful commands
 
 ```bash

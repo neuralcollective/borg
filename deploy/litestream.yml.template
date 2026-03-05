@@ -1,0 +1,16 @@
+# Litestream configuration template for Borg database backups
+# Copy this file to /etc/litestream.yml on the VPS and restart litestream.service
+
+dbs:
+  - path: /opt/borg/store/borg.db
+    replicas:
+      # S3-compatible storage (AWS S3, Cloudflare R2, DigitalOcean Spaces, etc.)
+      # Replace the URL, access_key_id, and secret_access_key with your own.
+      - url: s3://my-backup-bucket/borg-db
+        access_key_id: YOUR_ACCESS_KEY
+        secret_access_key: YOUR_SECRET_KEY
+        # Set region if using AWS S3
+        # region: us-east-1
+        
+        # Or if using Cloudflare R2 / Custom S3 endpoint:
+        # endpoint: https://<account_id>.r2.cloudflarestorage.com
