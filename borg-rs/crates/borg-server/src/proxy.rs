@@ -1,32 +1,31 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use axum::{
     body::Body,
     extract::{State, Request},
-    http::{StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
     Router,
 };
 use aws_config::BehaviorVersion;
-use aws_credential_types::provider::ProvideCredentials;
-use aws_sigv4::http_request::{sign, SignableRequest, SigningSettings, SignableBody, SigningParams};
-use aws_sigv4::sign::v4;
-use http::Uri;
+use aws_sdk_bedrockruntime::Client as BedrockClient;
+use aws_sdk_bedrockruntime::primitives::Blob;
 use tracing::error;
 
 #[derive(Clone)]
 pub struct ProxyState {
-    pub client: reqwest::Client,
+    pub bedrock: BedrockClient,
     pub region: String,
 }
 
 impl ProxyState {
     pub async fn new() -> Self {
         let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        let bedrock = BedrockClient::new(&config);
         Self {
-            client: reqwest::Client::new(),
+            bedrock,
             region,
         }
     }
@@ -50,6 +49,7 @@ async fn handle_anthropic_messages(
     
     let anthropic_model = json_body.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let bedrock_model = map_model_id(anthropic_model);
+    let is_streaming = json_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
     
     if let Some(obj) = json_body.as_object_mut() {
         obj.remove("model");
@@ -59,75 +59,64 @@ async fn handle_anthropic_messages(
     }
     let new_body_bytes = serde_json::to_vec(&json_body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let url_str = format!(
-        "https://bedrock-runtime.{}.amazonaws.com/model/{}/invoke-with-response-stream",
-        state.region, bedrock_model
-    );
-    let uri: Uri = url_str.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if is_streaming {
+        let mut output = state.bedrock.invoke_model_with_response_stream()
+            .model_id(bedrock_model)
+            .body(Blob::new(new_body_bytes))
+            .send()
+            .await
+            .map_err(|e| {
+                error!("bedrock stream request failed: {e}");
+                StatusCode::BAD_GATEWAY
+            })?;
 
-    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-    let credentials = config.credentials_provider().unwrap().provide_credentials().await
-        .map_err(|e| {
-            error!("failed to load aws credentials: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    
-    let signing_settings = SigningSettings::default();
-    
-    let v4_params = v4::SigningParams {
-        access_key: credentials.access_key_id(),
-        secret_key: credentials.secret_access_key(),
-        security_token: credentials.session_token(),
-        region: &state.region,
-        service_name: "bedrock",
-        time: std::time::SystemTime::now(),
-        settings: signing_settings,
-    };
-    
-    let signing_params = SigningParams::V4(v4_params);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let headers_vec: Vec<(&str, &str)> = vec![]; 
-    
-    let signable = SignableRequest::new(
-        "POST",
-        &url_str, 
-        headers_vec.into_iter(),
-        SignableBody::Bytes(&new_body_bytes),
-    ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        tokio::spawn(async move {
+            while let Ok(Some(event)) = output.body.recv().await {
+                if let Ok(chunk) = event.as_chunk() {
+                    if let Some(blob) = chunk.bytes() {
+                        let bytes = blob.as_ref();
+                        let json_str = String::from_utf8_lossy(bytes);
+                        let sse_line = format!("data: {}\n\n", json_str);
+                        if tx.send(Ok::<_, anyhow::Error>(sse_line)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
 
-    let (signing_instructions, _signature) = sign(signable, &signing_params)
-        .map_err(|e| {
-            error!("signing failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .into_parts();
+        let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        Ok(Body::from_stream(stream).into_response())
+    } else {
+        let output = state.bedrock.invoke_model()
+            .model_id(bedrock_model)
+            .body(Blob::new(new_body_bytes))
+            .send()
+            .await
+            .map_err(|e| {
+                error!("bedrock request failed: {e}");
+                StatusCode::BAD_GATEWAY
+            })?;
 
-    let mut reqwest_req = state.client.post(url_str)
-        .body(new_body_bytes);
-
-    for (name, value) in signing_instructions.headers() {
-        reqwest_req = reqwest_req.header(name, value);
+        let body = output.body.into_inner();
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body))
+            .unwrap())
     }
-
-    let resp = reqwest_req.send().await.map_err(|e| {
-        error!("upstream bedrock request failed: {e}");
-        StatusCode::BAD_GATEWAY
-    })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        error!("bedrock error {}: {}", status, text);
-        return Err(StatusCode::BAD_GATEWAY);
-    }
-
-    Ok(Body::from_stream(resp.bytes_stream()).into_response())
 }
 
 fn map_model_id(anthropic_id: &str) -> &'static str {
     if anthropic_id.contains("opus") {
         "anthropic.claude-3-opus-20240229-v1:0"
+    } else if anthropic_id.contains("sonnet-3-5") || anthropic_id.contains("sonnet-20240620") {
+        "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    } else if anthropic_id.contains("sonnet-4-6") {
+        "anthropic.claude-4-6-sonnet-20260217-v1:0"
     } else {
-        "anthropic.claude-3-5-sonnet-20240620-v1:0" 
+        "anthropic.claude-3-5-sonnet-20240620-v1:0"
     }
 }
