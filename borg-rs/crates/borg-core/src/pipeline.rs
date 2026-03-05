@@ -936,6 +936,7 @@ impl Pipeline {
                 // Do not dispatch to any backend — just return.
                 return Ok(());
             }
+            PhaseType::Purge => self.run_purge_phase(&task, &phase, &mode).await?,
         }
 
         // Async embedding indexing for completed tasks
@@ -1365,6 +1366,40 @@ impl Pipeline {
             },
             Err(_) => crate::types::AgentSignal::default(),
         }
+    }
+
+    /// Run a purge phase: delete vectors, messages, and raw files for a task.
+    async fn run_purge_phase(
+        &self,
+        task: &Task,
+        phase: &PhaseConfig,
+        mode: &PipelineMode,
+    ) -> Result<()> {
+        info!("task #{} [{}] executing purge phase", task.id, task.status);
+
+        // Delete DB vectors and messages
+        self.db.purge_task_data(task.id)?;
+
+        // Delete session directory
+        let session_dir = format!("{}/sessions/task-{}", self.config.data_dir, task.id);
+        if let Err(e) = std::fs::remove_dir_all(&session_dir) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!("task #{} failed to remove session dir {}: {}", task.id, session_dir, e);
+            }
+        }
+
+        // Delete worktree directory if it's outside the main repo
+        if task.repo_path.contains(".worktrees") {
+            if let Err(e) = std::fs::remove_dir_all(&task.repo_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!("task #{} failed to remove worktree {}: {}", task.id, task.repo_path, e);
+                }
+            }
+        }
+
+        // We do NOT delete the task record itself, or task_outputs, so the status and final draft survive
+        self.advance_phase(task, phase, mode)?;
+        Ok(())
     }
 
     /// Run a validate phase: execute test/compile commands independently, loop back on failure.
@@ -3049,6 +3084,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 created_by: "issue_seed".to_string(),
                 notify_chat: String::new(),
                 created_at: Utc::now(),
+                updated_at: Utc::now(),
                 session_id: String::new(),
                 mode: mode_name.clone(),
                 backend: String::new(),
@@ -3141,6 +3177,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             created_by: "seed".to_string(),
             notify_chat: String::new(),
             created_at: Utc::now(),
+            updated_at: Utc::now(),
             session_id: String::new(),
             mode: mode_name.to_string(),
             backend: String::new(),
@@ -3250,6 +3287,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         created_by: "seed".to_string(),
                         notify_chat: String::new(),
                         created_at: Utc::now(),
+                        updated_at: Utc::now(),
                         session_id: String::new(),
                         mode: mode_name.to_string(),
                         backend: String::new(),
@@ -3408,6 +3446,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 created_by: "proposal".into(),
                 notify_chat: String::new(),
                 created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
                 session_id: String::new(),
                 mode: mode.to_string(),
                 backend: String::new(),

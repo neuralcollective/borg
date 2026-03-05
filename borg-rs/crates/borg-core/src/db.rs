@@ -378,12 +378,13 @@ fn row_to_upload_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<UploadSess
 const TASK_COLS: &str = "id, title, description, repo_path, branch, status, attempt, \
     max_attempts, last_error, created_by, notify_chat, created_at, \
     session_id, mode, backend, project_id, task_type, started_at, completed_at, duration_secs, \
-    review_status, revision_count";
+    review_status, revision_count, updated_at";
 
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let created_at_str: String = row.get(11)?;
     let started_at: Option<String> = row.get(17)?;
     let completed_at: Option<String> = row.get(18)?;
+    let updated_at_str: String = row.get(22)?;
     Ok(Task {
         id: row.get(0)?,
         title: row.get(1)?,
@@ -397,6 +398,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_by: row.get(9)?,
         notify_chat: row.get(10)?,
         created_at: parse_ts(&created_at_str),
+        updated_at: parse_ts(&updated_at_str),
         session_id: row.get(12)?,
         mode: row.get(13)?,
         backend: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
@@ -2342,6 +2344,24 @@ impl Db {
         )
         .context("insert_task_output")?;
         Ok(conn.last_insert_rowid())
+    }
+
+    pub fn purge_task_data(&self, task_id: i64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        
+        // Delete vector embeddings
+        conn.execute(
+            "DELETE FROM embeddings WHERE task_id = ?1",
+            params![task_id],
+        ).context("delete embeddings")?;
+
+        // Delete chat history (keep outputs for UI visibility)
+        conn.execute(
+            "DELETE FROM task_messages WHERE task_id = ?1",
+            params![task_id],
+        ).context("delete messages")?;
+
+        Ok(())
     }
 
     pub fn get_task_outputs(&self, task_id: i64) -> Result<Vec<TaskOutput>> {

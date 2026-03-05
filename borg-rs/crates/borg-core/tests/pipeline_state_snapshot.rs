@@ -32,6 +32,7 @@ fn make_task(db: &Db) -> i64 {
         created_by: "test".into(),
         notify_chat: String::new(),
         created_at: Utc::now(),
+        updated_at: Utc::now(),
         session_id: String::new(),
         mode: "sweborg".into(),
         backend: String::new(),

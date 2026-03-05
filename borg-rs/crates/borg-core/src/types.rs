@@ -41,6 +41,8 @@ pub enum PhaseType {
     HumanReview,
     /// Runs deterministic regulatory QA checks over prior phase output.
     ComplianceCheck,
+    /// Deletes task vectors and raw session files to comply with data privacy policies.
+    Purge,
 }
 
 impl Default for PhaseType {
@@ -89,6 +91,7 @@ pub struct Task {
     /// Chat to notify on completion (may be empty).
     pub notify_chat: String,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     /// Claude Code session ID for resumption.
     pub session_id: String,
     /// Pipeline mode name (e.g. "sweborg", "lawborg", "webborg").
@@ -219,6 +222,10 @@ pub struct PhaseConfig {
     pub include_task_context: bool,
     pub include_file_listing: bool,
 
+    // Timing
+    #[serde(default)]
+    pub wait_s: Option<i64>,
+
     // Post-agent actions
     pub runs_tests: bool,
     pub commits: bool,
@@ -307,6 +314,7 @@ impl Default for PhaseConfig {
             use_docker: false,
             include_task_context: false,
             include_file_listing: false,
+            wait_s: None,
             runs_tests: false,
             commits: false,
             commit_message: String::new(),

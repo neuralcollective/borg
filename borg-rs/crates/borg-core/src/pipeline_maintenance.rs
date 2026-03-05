@@ -67,6 +67,7 @@ impl Pipeline {
             created_by: "health-check".into(),
             notify_chat: String::new(),
             created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
             session_id: String::new(),
             mode: "sweborg".into(),
             backend: String::new(),
