@@ -2,6 +2,7 @@ mod auth;
 mod ingestion;
 mod logging;
 mod opensearch;
+mod proxy;
 mod routes;
 mod routes_modes;
 mod storage;
@@ -752,7 +753,11 @@ async fn main() -> anyhow::Result<()> {
         format!("{dashboard_dir}/index.html"),
     ));
 
+    let proxy_state = Arc::new(proxy::ProxyState::new().await);
+    let proxy_router = proxy::proxy_routes().with_state(proxy_state);
+
     let app = Router::new()
+        .merge(proxy_router)
         // Health (unauthenticated)
         .route("/api/health", get(routes::health))
         // Token endpoint (localhost-only, no bearer required)

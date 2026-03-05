@@ -297,7 +297,7 @@ impl PipelineMode {
     }
 
     pub fn is_terminal(&self, status: &str) -> bool {
-        matches!(status, "done" | "merged" | "failed")
+        matches!(status, "done" | "merged" | "failed" | "purged")
     }
 }
 
