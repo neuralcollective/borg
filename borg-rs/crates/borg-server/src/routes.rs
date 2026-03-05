@@ -281,6 +281,7 @@ pub(crate) struct ProjectJson {
     pub privilege_level: String,
     pub status: String,
     pub default_template_id: Option<i64>,
+    pub session_privileged: bool,
     pub created_at: String,
 }
 
@@ -300,6 +301,7 @@ impl From<ProjectRow> for ProjectJson {
             privilege_level: p.privilege_level,
             status: p.status,
             default_template_id: p.default_template_id,
+            session_privileged: p.session_privileged,
             created_at: p.created_at.to_rfc3339(),
         }
     }
@@ -312,6 +314,7 @@ pub(crate) struct ProjectFileJson {
     pub file_name: String,
     pub mime_type: String,
     pub size_bytes: i64,
+    pub privileged: bool,
     pub has_text: bool,
     pub text_chars: usize,
     pub created_at: String,
@@ -326,6 +329,7 @@ impl From<ProjectFileRow> for ProjectFileJson {
             file_name: f.file_name,
             mime_type: f.mime_type,
             size_bytes: f.size_bytes,
+            privileged: f.privileged,
             has_text: text_chars > 0,
             text_chars,
             created_at: f.created_at.to_rfc3339(),
@@ -2140,12 +2144,20 @@ pub(crate) struct CreateUploadSessionBody {
     pub total_chunks: i64,
     #[serde(default)]
     pub is_zip: bool,
+    #[serde(default)]
+    pub privileged: bool,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct UploadSessionsQuery {
     #[serde(default = "default_upload_session_limit")]
     pub limit: i64,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UploadProjectFilesQuery {
+    #[serde(default)]
+    pub privileged: bool,
 }
 
 fn default_upload_session_limit() -> i64 {
@@ -2155,6 +2167,10 @@ fn default_upload_session_limit() -> i64 {
 const MIN_UPLOAD_CHUNK_SIZE: i64 = 256 * 1024; // 256 KiB
 const MAX_UPLOAD_CHUNK_SIZE: i64 = 64 * 1024 * 1024; // 64 MiB
 const MAX_ACTIVE_UPLOAD_SESSIONS_PER_PROJECT: i64 = 24;
+
+fn is_privileged_upload_allowed(state: &AppState, project_id: i64) -> bool {
+    state.db.is_session_privileged(project_id).unwrap_or(false)
+}
 
 fn upload_chunks_dir(data_dir: &str, session_id: i64) -> String {
     format!("{data_dir}/uploads/sessions/{session_id}/chunks")
@@ -2249,6 +2265,9 @@ pub(crate) async fn create_upload_session(
     if file_name.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    if body.privileged && !is_privileged_upload_allowed(state.as_ref(), project_id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mime_type = body
         .mime_type
         .unwrap_or_else(|| guess_mime_from_name(&file_name));
@@ -2262,6 +2281,7 @@ pub(crate) async fn create_upload_session(
             body.chunk_size,
             body.total_chunks,
             body.is_zip || file_name.to_ascii_lowercase().ends_with(".zip"),
+            body.privileged,
         )
         .map_err(internal)?;
     Ok(Json(json!({
@@ -2269,6 +2289,7 @@ pub(crate) async fn create_upload_session(
         "project_id": project_id,
         "status": "uploading",
         "file_name": file_name,
+        "privileged": body.privileged,
         "total_chunks": body.total_chunks,
         "chunk_size": body.chunk_size,
     })))
@@ -2413,9 +2434,25 @@ async fn process_completed_upload_session(state: Arc<AppState>, project_id: i64,
         _ => return,
     };
     let result = if session.is_zip {
-        process_uploaded_zip(state.clone(), project_id, session_id, &assembled_path).await
+        process_uploaded_zip(
+            state.clone(),
+            project_id,
+            session_id,
+            &assembled_path,
+            session.privileged,
+        )
+        .await
     } else {
-        process_uploaded_single_file(state.clone(), project_id, session_id, &session.file_name, &session.mime_type, &assembled_path).await
+        process_uploaded_single_file(
+            state.clone(),
+            project_id,
+            session_id,
+            &session.file_name,
+            &session.mime_type,
+            &assembled_path,
+            session.privileged,
+        )
+        .await
     };
     match result {
         Ok(stored_path) => {
@@ -2488,9 +2525,13 @@ async fn process_uploaded_single_file(
     file_name: &str,
     mime_type: &str,
     assembled_path: &str,
+    privileged: bool,
 ) -> anyhow::Result<String> {
     let content_hash = sha256_hex_file(assembled_path).await?;
     if let Some(existing) = state.db.find_project_file_by_hash(project_id, &content_hash)? {
+        if privileged {
+            let _ = state.db.set_session_privileged(project_id);
+        }
         return Ok(existing.stored_path);
     }
     let unique_name = format!("{}_{}_{}", Utc::now().timestamp_millis(), rand_suffix(), sanitize_upload_name(file_name));
@@ -2501,7 +2542,15 @@ async fn process_uploaded_single_file(
     let size_bytes = tokio::fs::metadata(assembled_path).await?.len() as i64;
     let file_id = state
         .db
-        .insert_project_file(project_id, file_name, &stored_path, mime_type, size_bytes, &content_hash, false)?;
+        .insert_project_file(
+            project_id,
+            file_name,
+            &stored_path,
+            mime_type,
+            size_bytes,
+            &content_hash,
+            privileged,
+        )?;
     if let Err(e) = state
         .ingestion_queue
         .enqueue_project_file(project_id, file_id, file_name, &stored_path, mime_type, size_bytes)
@@ -2517,6 +2566,7 @@ async fn process_uploaded_zip(
     project_id: i64,
     session_id: i64,
     assembled_path: &str,
+    privileged: bool,
 ) -> anyhow::Result<String> {
     let extract_dir = format!("{}/uploads/extracted/{session_id}", state.config.data_dir);
     let assembled_path_owned = assembled_path.to_string();
@@ -2572,6 +2622,9 @@ async fn process_uploaded_zip(
             .find_project_file_by_hash(project_id, &content_hash)?
             .is_some()
         {
+            if privileged {
+                let _ = state.db.set_session_privileged(project_id);
+            }
             deduped += 1;
             continue;
         }
@@ -2584,7 +2637,15 @@ async fn process_uploaded_zip(
         let mime_type = guess_mime_from_name(&file_name);
         let file_id = state
             .db
-            .insert_project_file(project_id, &file_name, &stored_path, &mime_type, size_bytes, &content_hash, false)?;
+            .insert_project_file(
+                project_id,
+                &file_name,
+                &stored_path,
+                &mime_type,
+                size_bytes,
+                &content_hash,
+                privileged,
+            )?;
         if let Err(e) = state
             .ingestion_queue
             .enqueue_project_file(project_id, file_id, &file_name, &stored_path, &mime_type, size_bytes)
@@ -2667,11 +2728,15 @@ pub(crate) async fn complete_upload_session(
 pub(crate) async fn upload_project_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
+    Query(q): Query<UploadProjectFilesQuery>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, StatusCode> {
     let max_project_bytes = state.config.project_max_bytes.max(1);
     if state.db.get_project(id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
+    }
+    if q.privileged && !is_privileged_upload_allowed(state.as_ref(), id) {
+        return Err(StatusCode::FORBIDDEN);
     }
 
     let mut total_bytes = state.db.total_project_file_bytes(id).map_err(internal)?;
@@ -2699,6 +2764,9 @@ pub(crate) async fn upload_project_files(
             .map_err(internal)?
             .is_some()
         {
+            if q.privileged {
+                let _ = state.db.set_session_privileged(id);
+            }
             deduped += 1;
             continue;
         }
@@ -2720,7 +2788,15 @@ pub(crate) async fn upload_project_files(
 
         let file_id = state
             .db
-            .insert_project_file(id, &file_name, &stored_path, &mime_type, file_size, &content_hash, false)
+            .insert_project_file(
+                id,
+                &file_name,
+                &stored_path,
+                &mime_type,
+                file_size,
+                &content_hash,
+                q.privileged,
+            )
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue
@@ -3925,6 +4001,8 @@ pub(crate) struct CloudBrowseQuery {
 #[derive(Deserialize)]
 pub(crate) struct CloudImportBody {
     pub files: Vec<CloudImportFile>,
+    #[serde(default)]
+    pub privileged: bool,
 }
 
 #[derive(Deserialize)]
@@ -4347,6 +4425,9 @@ pub(crate) async fn import_cloud_files(
         .ok_or(StatusCode::NOT_FOUND)?;
     if conn.project_id != id { return Err(StatusCode::NOT_FOUND); }
     state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    if body.privileged && !is_privileged_upload_allowed(state.as_ref(), id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let token = refresh_cloud_token_if_needed(&state.db, &conn, &state.config).await;
     let client = reqwest::Client::builder()
@@ -4388,7 +4469,7 @@ pub(crate) async fn import_cloud_files(
         let mime = guess_mime(&file.name);
         let file_id = state
             .db
-            .insert_project_file(id, &safe_name, &stored_path, &mime, file_size, "", false)
+            .insert_project_file(id, &safe_name, &stored_path, &mime, file_size, "", body.privileged)
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue
@@ -4656,4 +4737,3 @@ mod tests {
         assert_eq!(percent_encode_allow_slash("docs/file?q=1", true), "docs/file%3Fq%3D1");
     }
 }
-

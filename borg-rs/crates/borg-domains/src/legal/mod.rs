@@ -37,6 +37,7 @@ pub fn legal_mode() -> PipelineMode {
                 commit_message: "legal: research, analysis, and draft".into(),
                 error_instruction: LEGAL_IMPLEMENT_RETRY.into(),
                 system_prompt: legal_system(LEGAL_IMPLEMENT_SYSTEM),
+                disallowed_tools: "Bash".into(),
                 ..agent_phase(
                     "implement",
                     "Implement",
@@ -52,12 +53,13 @@ pub fn legal_mode() -> PipelineMode {
                 fresh_session: true,
                 error_instruction: LEGAL_REVIEW_RETRY.into(),
                 system_prompt: legal_system(LEGAL_REVIEW_SYSTEM),
+                disallowed_tools: "Bash,web_search,WebFetch".into(),
                 ..agent_phase(
                     "review",
                     "Review",
                     "",
                     LEGAL_REVIEW_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
+                    "Read,Glob,Grep,Write,Edit",
                     "purge",
                 )
             },

@@ -228,6 +228,7 @@ pub struct UploadSession {
     pub total_chunks: i64,
     pub uploaded_bytes: i64,
     pub is_zip: bool,
+    pub privileged: bool,
     pub status: String,
     pub stored_path: String,
     pub error: String,
@@ -357,6 +358,7 @@ fn row_to_cloud_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudCon
 
 fn row_to_upload_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<UploadSession> {
     let is_zip: i64 = row.get(8)?;
+    let privileged: i64 = row.get(9)?;
     Ok(UploadSession {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -367,11 +369,12 @@ fn row_to_upload_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<UploadSess
         total_chunks: row.get(6)?,
         uploaded_bytes: row.get(7)?,
         is_zip: is_zip != 0,
-        status: row.get(9)?,
-        stored_path: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
-        error: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-        created_at: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
-        updated_at: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        privileged: privileged != 0,
+        status: row.get(10)?,
+        stored_path: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+        error: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+        created_at: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        updated_at: row.get::<_, Option<String>>(14)?.unwrap_or_default(),
     })
 }
 
@@ -611,6 +614,7 @@ impl Db {
             "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE project_files ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE upload_sessions ADD COLUMN privileged INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE projects ADD COLUMN default_template_id INTEGER",
             "CREATE TABLE IF NOT EXISTS cloud_connections (\
               id INTEGER PRIMARY KEY AUTOINCREMENT, \
@@ -1518,6 +1522,16 @@ impl Db {
         Ok(priv_int != 0)
     }
 
+    pub fn set_session_privileged(&self, project_id: i64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE projects SET session_privileged = 1 WHERE id = ?1",
+            params![project_id],
+        )
+        .context("set_session_privileged")?;
+        Ok(())
+    }
+
     pub fn find_project_file_by_hash(
         &self,
         project_id: i64,
@@ -1566,13 +1580,14 @@ impl Db {
         chunk_size: i64,
         total_chunks: i64,
         is_zip: bool,
+        privileged: bool,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_str();
         conn.execute(
             "INSERT INTO upload_sessions \
-             (project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, is_zip, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, 'uploading', ?8, ?8)",
+             (project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, is_zip, privileged, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, 'uploading', ?9, ?9)",
             params![
                 project_id,
                 file_name,
@@ -1581,6 +1596,7 @@ impl Db {
                 chunk_size,
                 total_chunks,
                 if is_zip { 1 } else { 0 },
+                if privileged { 1 } else { 0 },
                 now
             ],
         )
@@ -1592,7 +1608,7 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.query_row(
             "SELECT id, project_id, file_name, mime_type, file_size, chunk_size, total_chunks, \
-                    uploaded_bytes, is_zip, status, stored_path, error, created_at, updated_at \
+                    uploaded_bytes, is_zip, privileged, status, stored_path, error, created_at, updated_at \
              FROM upload_sessions WHERE id = ?1",
             params![session_id],
             row_to_upload_session,
@@ -1610,11 +1626,11 @@ impl Db {
         let lim = limit.clamp(1, 500);
         let sql = if project_id.is_some() {
             "SELECT id, project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, \
-                    is_zip, status, stored_path, error, created_at, updated_at \
+                    is_zip, privileged, status, stored_path, error, created_at, updated_at \
              FROM upload_sessions WHERE project_id=?1 ORDER BY id DESC LIMIT ?2"
         } else {
             "SELECT id, project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, \
-                    is_zip, status, stored_path, error, created_at, updated_at \
+                    is_zip, privileged, status, stored_path, error, created_at, updated_at \
              FROM upload_sessions ORDER BY id DESC LIMIT ?1"
         };
         let mut stmt = conn.prepare(sql).context("list_upload_sessions prepare")?;

@@ -204,6 +204,7 @@ export interface Project {
   privilege_level?: string;
   status?: string;
   default_template_id?: number | null;
+  session_privileged?: boolean;
 }
 
 export interface ProjectTask {
@@ -240,6 +241,7 @@ export interface ProjectFile {
   file_name: string;
   mime_type: string;
   size_bytes: number;
+  privileged?: boolean;
   has_text: boolean;
   text_chars: number;
   created_at: string;

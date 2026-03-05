@@ -394,11 +394,17 @@ impl Pipeline {
                 api_keys.insert(provider.to_string(), key);
             }
         }
-        let disallowed_tools = self.db.get_config("pipeline_disallowed_tools")
+        let mut disallowed_tools = self.db.get_config("pipeline_disallowed_tools")
             .ok().flatten().unwrap_or_default();
         let knowledge_files = self.db.list_knowledge_files().unwrap_or_default();
         let knowledge_dir = format!("{}/knowledge", self.config.data_dir);
         let isolated = task.mode == "lawborg" || task.mode == "legal";
+        if isolated && task.project_id > 0 && self.db.is_session_privileged(task.project_id).unwrap_or(false) {
+            if !disallowed_tools.is_empty() {
+                disallowed_tools.push(',');
+            }
+            disallowed_tools.push_str("web_search,WebFetch");
+        }
         let agent_network = if isolated {
             Some(Sandbox::ISOLATED_NETWORK.to_string())
         } else if self.agent_network_available {
@@ -2136,6 +2142,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     /// Advance a task to the next phase, or enqueue for integration when done.
     fn advance_phase(&self, task: &Task, phase: &PhaseConfig, mode: &PipelineMode) -> Result<()> {
         let next = phase.next.as_str();
+        self.promote_session_privilege_on_phase2_transition(task, mode, next);
         if next == "done" {
             self.read_structured_output(task);
             self.read_task_deadlines(task);
@@ -2170,6 +2177,44 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             message: format!("task #{} advanced to '{}'", task.id, next),
         });
         Ok(())
+    }
+
+    fn promote_session_privilege_on_phase2_transition(
+        &self,
+        task: &Task,
+        mode: &PipelineMode,
+        next_status: &str,
+    ) {
+        if task.project_id <= 0 {
+            return;
+        }
+        let is_legal_mode = matches!(task.mode.as_str(), "lawborg" | "legal")
+            || matches!(mode.name.as_str(), "lawborg" | "legal");
+        if !is_legal_mode {
+            return;
+        }
+        if !Self::is_phase2_or_later(mode, next_status) {
+            return;
+        }
+        if let Err(e) = self.db.set_session_privileged(task.project_id) {
+            warn!(
+                "task #{} failed to mark project {} as session_privileged on phase transition to '{}': {}",
+                task.id, task.project_id, next_status, e
+            );
+        }
+    }
+
+    fn is_phase2_or_later(mode: &PipelineMode, status: &str) -> bool {
+        let mut agent_phase_count = 0usize;
+        for phase in &mode.phases {
+            if phase.phase_type == PhaseType::Agent {
+                agent_phase_count += 1;
+            }
+            if phase.name == status {
+                return agent_phase_count >= 2;
+            }
+        }
+        false
     }
 
     fn read_structured_output(&self, task: &Task) {

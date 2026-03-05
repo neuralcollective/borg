@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS projects (
   privilege_level TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active',
   default_template_id INTEGER,
+  session_privileged INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -182,6 +183,7 @@ CREATE TABLE IF NOT EXISTS project_files (
   size_bytes INTEGER NOT NULL DEFAULT 0,
   extracted_text TEXT NOT NULL DEFAULT '',
   content_hash TEXT NOT NULL DEFAULT '',
+  privileged INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
@@ -197,6 +199,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
   total_chunks INTEGER NOT NULL DEFAULT 0,
   uploaded_bytes INTEGER NOT NULL DEFAULT 0,
   is_zip INTEGER NOT NULL DEFAULT 0,
+  privileged INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'uploading', -- uploading | processing | done | failed
   stored_path TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
