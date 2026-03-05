@@ -242,11 +242,53 @@ impl Sandbox {
         cmd
     }
 
+    /// Create the borg-agent-isolated internal network (no internet egress).
+    pub async fn ensure_isolated_network() -> bool {
+        let name = "borg-agent-isolated";
+        let exists = tokio::process::Command::new("docker")
+            .args(["network", "inspect", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if exists {
+            return true;
+        }
+
+        let ok = tokio::process::Command::new("docker")
+            .args([
+                "network", "create",
+                "--driver", "bridge",
+                "--internal", // This is the key: no gateway to internet
+                "--subnet", "172.31.0.0/16",
+                name,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if ok {
+            info!("sandbox: created isolated agent network {}", name);
+        }
+        ok
+    }
+
     /// Network name used for agent containers.
     pub const AGENT_NETWORK: &'static str = "borg-agent-net";
 
     /// Subnet for the agent bridge network.
     pub const AGENT_SUBNET: &'static str = "172.30.0.0/16";
+
+    /// Isolated network name.
+    pub const ISOLATED_NETWORK: &'static str = "borg-agent-isolated";
+    /// Isolated subnet.
+    pub const ISOLATED_SUBNET: &'static str = "172.31.0.0/16";
 
     /// Create the borg-agent-net bridge network if it doesn't already exist.
     /// Returns true if the network is available (created or already existed).

@@ -398,6 +398,15 @@ impl Pipeline {
             .ok().flatten().unwrap_or_default();
         let knowledge_files = self.db.list_knowledge_files().unwrap_or_default();
         let knowledge_dir = format!("{}/knowledge", self.config.data_dir);
+        let isolated = task.mode == "lawborg" || task.mode == "legal";
+        let agent_network = if isolated {
+            Some(Sandbox::ISOLATED_NETWORK.to_string())
+        } else if self.agent_network_available {
+            Some(Sandbox::AGENT_NETWORK.to_string())
+        } else {
+            None
+        };
+
         PhaseContext {
             task: task.clone(),
             repo_config: self.repo_config(task),
@@ -415,14 +424,11 @@ impl Pipeline {
             disallowed_tools,
             knowledge_files,
             knowledge_dir,
-            agent_network: if self.agent_network_available {
-                Some(Sandbox::AGENT_NETWORK.to_string())
-            } else {
-                None
-            },
+            agent_network,
             prior_research: Vec::new(),
             revision_count: task.revision_count,
             experimental_domains: self.config.experimental_domains,
+            isolated,
         }
     }
 

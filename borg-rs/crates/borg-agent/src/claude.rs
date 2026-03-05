@@ -1,53 +1,35 @@
+use std::path::Path;
 use std::process::Stdio;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use borg_core::{
     agent::AgentBackend,
     sandbox::{Sandbox, SandboxMode},
     types::{ContainerTestResult, PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Command,
-};
-use tracing::{info, warn};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
+use tracing::{debug, error, info, warn};
 
-const BORG_SIGNAL_MARKER: &str = "---BORG_SIGNAL---";
-const BORG_EVENT_MARKER: &str = "---BORG_EVENT---";
-const BORG_TEST_RESULT_MARKER: &str = "---BORG_TEST_RESULT---";
+const BORG_SIGNAL_MARKER: &str = "BORG_SIGNAL:";
 
-pub const PHASE_RESULT_START: &str = "---PHASE_RESULT_START---";
-pub const PHASE_RESULT_END: &str = "---PHASE_RESULT_END---";
-
-/// Extract the last complete marker block from decoded text.
-/// Returns a trimmed slice of the content between the last pair of markers, or None.
-pub fn extract_phase_result(text: &str) -> Option<&str> {
-    let mut last_content: Option<&str> = None;
-    let mut search = text;
-    while let Some(start_pos) = search.find(PHASE_RESULT_START) {
-        let after_start = &search[start_pos + PHASE_RESULT_START.len()..];
-        if let Some(end_pos) = after_start.find(PHASE_RESULT_END) {
-            let content = after_start[..end_pos].trim();
-            last_content = (!content.is_empty()).then_some(content);
-            search = &after_start[end_pos + PHASE_RESULT_END.len()..];
-        } else {
-            break;
-        }
-    }
-    last_content
+/// Utility to extract phase results from Claude output.
+pub fn extract_phase_result(output: &str) -> Option<String> {
+    output
+        .lines()
+        .rev()
+        .find(|l| l.starts_with(BORG_SIGNAL_MARKER))
+        .and_then(|l| l.strip_prefix(BORG_SIGNAL_MARKER))
+        .map(|s| s.trim().to_string())
 }
 
-pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
+fn derive_compile_check(test_cmd: &str) -> Option<String> {
     let trimmed = test_cmd.trim();
-    if !trimmed.starts_with("cargo test") {
-        return None;
-    }
-    let already_has_no_run = trimmed.split_whitespace().any(|arg| arg == "--no-run");
-    if already_has_no_run {
-        Some(trimmed.to_string())
-    } else {
+    if trimmed.starts_with("cargo test") {
         Some(format!("{trimmed} --no-run"))
+    } else {
+        None
     }
 }
 
@@ -70,6 +52,7 @@ pub struct ClaudeBackend {
     pub container_cpus: f64,
     pub git_author_name: String,
     pub git_author_email: String,
+    pub base_url: String,
 }
 
 impl ClaudeBackend {
@@ -89,7 +72,13 @@ impl ClaudeBackend {
             container_cpus: 0.0,
             git_author_name: "Borg".into(),
             git_author_email: "borg@localhost".into(),
+            base_url: String::new(),
         }
+    }
+
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into();
+        self
     }
 
     pub fn with_timeout(mut self, timeout_s: u64) -> Self {
@@ -104,105 +93,20 @@ impl ClaudeBackend {
     }
 
     pub fn with_git_author(mut self, name: &str, email: &str) -> Self {
-        if !name.is_empty() { self.git_author_name = name.into(); }
-        if !email.is_empty() { self.git_author_email = email.into(); }
+        self.git_author_name = name.to_string();
+        self.git_author_email = email.to_string();
         self
     }
 
-    /// Build JSON payload for the container entrypoint (Docker mode).
-    fn build_docker_input(
-        &self,
-        task: &Task,
-        phase: &PhaseConfig,
-        ctx: &PhaseContext,
-        instruction: &str,
-        system_prompt: &str,
-        session_id: &str,
-        compile_check_cmd: &str,
-        lint_cmd: &str,
-        test_cmd: &str,
-        gh_token: &str,
-    ) -> Vec<u8> {
-        let commit_message = if !ctx.user_coauthor.is_empty() {
-            format!("{}\n\nCo-Authored-By: {}", phase.commit_message, ctx.user_coauthor)
-        } else {
-            phase.commit_message.clone()
-        };
-
-        let repo_name = std::path::Path::new(&task.repo_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let branch = format!("task-{}", task.id);
-        let gh_token = gh_token.to_string();
-
-        // Docker containers need a GitHub URL, not a local path
-        let repo_url = if !ctx.repo_config.repo_slug.is_empty() && !gh_token.is_empty() {
-            format!("https://x-access-token:{gh_token}@github.com/{}.git", ctx.repo_config.repo_slug)
-        } else if !ctx.repo_config.repo_slug.is_empty() {
-            format!("https://github.com/{}.git", ctx.repo_config.repo_slug)
-        } else {
-            task.repo_path.clone()
-        };
-
-        let author_name = &self.git_author_name;
-        let author_email = &self.git_author_email;
-
-        let mut payload = serde_json::json!({
-            "prompt": instruction,
-            "model": ctx.model,
-            "systemPrompt": system_prompt,
-            "allowedTools": phase.allowed_tools,
-            "maxTurns": 200,
-            "repoUrl": repo_url,
-            "mirrorPath": format!("/mirrors/{repo_name}.git"),
-            "branch": branch,
-            "base": "origin/main",
-            "commitMessage": commit_message,
-            "gitAuthorName": author_name,
-            "gitAuthorEmail": author_email,
-            "pushAfterCommit": !gh_token.is_empty(),
-        });
-        if !session_id.is_empty() {
-            payload["resumeSessionId"] = serde_json::Value::String(session_id.to_string());
-        }
-        if !compile_check_cmd.is_empty() {
-            payload["compileCheckCmd"] = serde_json::Value::String(compile_check_cmd.to_string());
-        }
-        if !lint_cmd.is_empty() {
-            payload["lintCmd"] = serde_json::Value::String(lint_cmd.to_string());
-        }
-        if !test_cmd.is_empty() {
-            payload["testCmd"] = serde_json::Value::String(test_cmd.to_string());
-        }
-
-        serde_json::to_vec(&payload).unwrap_or_default()
-    }
-
-    /// Parse a `---BORG_TEST_RESULT---{json}` line emitted by the container entrypoint.
-    fn parse_test_result(line: &str) -> Option<ContainerTestResult> {
-        let json_str = line.strip_prefix(BORG_TEST_RESULT_MARKER)?;
-        let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
-        Some(ContainerTestResult {
-            phase: v["phase"].as_str().unwrap_or("").to_string(),
-            passed: v["passed"].as_bool().unwrap_or(false),
-            exit_code: v["exitCode"].as_i64().unwrap_or(1) as i32,
-            output: v["output"].as_str().unwrap_or("").to_string(),
-        })
-    }
-
     fn resolve_gh_token() -> String {
-        std::env::var("GH_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
-            .unwrap_or_else(|_| {
-                std::process::Command::new("gh")
-                    .args(["auth", "token"])
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .unwrap_or_default()
-            })
+        std::process::Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
     }
 
     fn host_mirror_path(task: &Task, data_dir: &str) -> String {
@@ -210,10 +114,10 @@ impl ClaudeBackend {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let raw = format!("{data_dir}/mirrors/{repo_name}.git");
-        std::fs::canonicalize(&raw)
+        let path = std::path::Path::new(data_dir).join("mirrors").join(format!("{repo_name}.git"));
+        std::fs::canonicalize(path)
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or(raw)
+            .unwrap_or_default()
     }
 
     fn container_mirror_path(task: &Task) -> String {
@@ -243,214 +147,45 @@ impl AgentBackend for ClaudeBackend {
             crate::instruction::build_instruction(task, phase, &ctx, file_listing.as_deref());
 
         let mut claude_args = vec![
-            "--model".to_string(),
-            ctx.model.clone(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--verbose".to_string(),
+            "--print".to_string(),
             "--dangerously-skip-permissions".to_string(),
-            "--max-turns".to_string(),
-            "200".to_string(),
         ];
-
-        let disallowed = ctx.disallowed_tools.trim();
-        if !disallowed.is_empty() {
-            claude_args.push("--disallowedTools".to_string());
-            claude_args.push(disallowed.to_string());
+        if phase.fresh_session {
+            claude_args.push("--no-resume".into());
+        } else if !task.session_id.is_empty() {
+            claude_args.push("--resume".into());
+            claude_args.push(task.session_id.clone());
         }
+        claude_args.push(instruction);
 
-        // Build combined system prompt from phase + config-derived suffix
-        let mut system_prompt = phase.system_prompt.clone();
-        if !ctx.system_prompt_suffix.is_empty() {
-            if !system_prompt.is_empty() {
-                system_prompt.push('\n');
-            }
-            system_prompt.push_str(&ctx.system_prompt_suffix);
-        }
-        if !system_prompt.is_empty() {
-            claude_args.push("--append-system-prompt".to_string());
-            claude_args.push(system_prompt.clone());
-        }
-
-        // Build MCP config based on mode — each mode gets its relevant MCP servers.
-        let mcp_config_path = {
-            let sidecar_base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../sidecar");
-            let mut mcp_servers = serde_json::Map::new();
-            let mode = ctx.task.mode.as_str();
-            let allow_experimental = ctx.experimental_domains;
-
-            // lawborg always gets legal research MCP.
-            // healthborg only gets it when experimental domains are enabled.
-            if mode == "lawborg" || (allow_experimental && mode == "healthborg") {
-                let legal_mcp_path = if let Ok(p) = std::env::var("LAWBORG_MCP_SERVER") {
-                    std::path::PathBuf::from(p)
-                } else {
-                    sidecar_base.join("lawborg-mcp/server.js")
-                };
-                match legal_mcp_path.canonicalize() {
-                    Ok(p) => {
-                        let mut env_vars = serde_json::Map::new();
-                        for (provider, key) in &ctx.api_keys {
-                            let env_name = match provider.as_str() {
-                                "lexisnexis" => "LEXISNEXIS_API_KEY",
-                                "lexmachina" => "LEXMACHINA_API_KEY",
-                                "intelligize" => "INTELLIGIZE_API_KEY",
-                                "westlaw" => "WESTLAW_API_KEY",
-                                "clio" => "CLIO_API_KEY",
-                                "imanage" => "IMANAGE_API_KEY",
-                                "netdocuments" => "NETDOCUMENTS_API_KEY",
-                                "congress" => "CONGRESS_API_KEY",
-                                "openstates" => "OPENSTATES_API_KEY",
-                                "canlii" => "CANLII_API_KEY",
-                                "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                                _ => continue,
-                            };
-                            env_vars.insert(env_name.into(), serde_json::Value::String(key.clone()));
-                        }
-                        mcp_servers.insert("legal".into(), serde_json::json!({
-                            "command": "bun",
-                            "args": ["run", p.to_string_lossy()],
-                            "env": env_vars,
-                        }));
-                    }
-                    Err(e) => {
-                        tracing::warn!("lawborg MCP server not found at {}: {e}", legal_mcp_path.display());
-                    }
-                }
-            }
-
-            // buildborg gets Shovels only when experimental domains are enabled.
-            if allow_experimental && mode == "buildborg" {
-                let shovels_path = sidecar_base.join("shovels-mcp/server.js");
-                match shovels_path.canonicalize() {
-                    Ok(p) => {
-                        let mut env_vars = serde_json::Map::new();
-                        if let Some(key) = ctx.api_keys.get("shovels") {
-                            env_vars.insert("SHOVELS_API_KEY".into(), serde_json::Value::String(key.clone()));
-                        }
-                        mcp_servers.insert("shovels".into(), serde_json::json!({
-                            "command": "bun",
-                            "args": ["run", p.to_string_lossy()],
-                            "env": env_vars,
-                        }));
-                    }
-                    Err(e) => {
-                        tracing::warn!("shovels MCP server not found at {}: {e}", shovels_path.display());
-                    }
-                }
-            }
-
-            // Plaid banking MCP is experimental and disabled unless explicitly enabled.
-            if allow_experimental {
-                if let (Some(client_id), Some(secret)) =
-                    (ctx.api_keys.get("plaid_client_id"), ctx.api_keys.get("plaid_secret"))
-                {
-                let plaid_path = sidecar_base.join("plaid-mcp/server.js");
-                if let Ok(p) = plaid_path.canonicalize() {
-                    let mut env_vars = serde_json::Map::new();
-                    env_vars.insert("PLAID_CLIENT_ID".into(), serde_json::Value::String(client_id.clone()));
-                    env_vars.insert("PLAID_SECRET".into(), serde_json::Value::String(secret.clone()));
-                    if let Some(env) = ctx.api_keys.get("plaid_env") {
-                        env_vars.insert("PLAID_ENV".into(), serde_json::Value::String(env.clone()));
-                    }
-                    mcp_servers.insert("plaid".into(), serde_json::json!({
-                        "command": "bun",
-                        "args": ["run", p.to_string_lossy()],
-                        "env": env_vars,
-                    }));
-                }
-                }
-            }
-
-            // OCR is always available for lawborg; experimental modes are gated by flag.
-            if mode == "lawborg"
-                || (allow_experimental && matches!(mode, "healthborg" | "buildborg"))
-            {
-                let has_kreuzberg = tokio::task::spawn_blocking(|| {
-                    std::process::Command::new("kreuzberg")
-                        .arg("--version")
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
-                })
-                .await
-                .unwrap_or(false);
-                if has_kreuzberg {
-                    mcp_servers.insert("ocr".into(), serde_json::json!({
-                        "command": "kreuzberg",
-                        "args": ["mcp"],
-                    }));
-                }
-            }
-
-            if mcp_servers.is_empty() {
-                None
-            } else {
-                let mcp_dir = format!("{}/mcp", ctx.session_dir);
-                std::fs::create_dir_all(&mcp_dir).ok();
-                let config_json = serde_json::json!({ "mcpServers": mcp_servers });
-                let config_path = format!("{}/mcp-config.json", mcp_dir);
-                std::fs::write(&config_path, config_json.to_string())
-                    .with_context(|| format!("failed to write MCP config to {config_path}"))?;
-                Some(config_path)
-            }
-        };
-
-        if let Some(ref path) = mcp_config_path {
-            claude_args.push("--mcp-config".to_string());
-            claude_args.push(path.clone());
-        }
-
-        let session_id = ctx.task.session_id.clone();
-        if !session_id.is_empty() && !phase.fresh_session {
-            claude_args.push("--resume".to_string());
-            claude_args.push(session_id.clone());
-        }
-
-        claude_args.push("--print".to_string());
-        claude_args.push(instruction.clone());
-
-        let effective_mode = &self.sandbox_mode;
-
-        let creds_path = self.credentials_path.clone();
-        let oauth_fallback = ctx.oauth_token.clone();
-        let oauth_token = tokio::task::spawn_blocking(move || {
-            borg_core::config::refresh_oauth_token(&creds_path, &oauth_fallback)
-        })
-        .await
-        .unwrap_or_else(|_| ctx.oauth_token.clone());
+        let full_cmd: Vec<String> = std::iter::once(self.claude_bin.clone())
+            .chain(claude_args)
+            .collect();
 
         info!(
             task_id = task.id,
             phase = %phase.name,
-            session_id = %session_id,
-            sandbox = ?effective_mode,
-            "spawning claude subprocess"
+            mode = ?self.sandbox_mode,
+            "spawning claude"
         );
 
-        let is_docker = effective_mode == &SandboxMode::Docker;
-        let mut full_cmd: Vec<String> = vec![self.claude_bin.clone()];
-        full_cmd.extend(claude_args);
+        let effective_mode = if phase.use_docker {
+            self.sandbox_mode.clone()
+        } else {
+            SandboxMode::Direct
+        };
 
-        if is_docker {
-            let repo_name = std::path::Path::new(&task.repo_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+        let is_docker = matches!(effective_mode, SandboxMode::Docker);
+        let oauth_token = ctx.oauth_token.clone();
+
+        let stream_tx = ctx.stream_tx.clone();
+        if let Some(tx) = &stream_tx {
             let evt = serde_json::json!({
-                "type": "container_event",
-                "event": "container_starting",
-                "image": self.docker_image,
-                "repo": repo_name,
-                "branch": format!("task-{}", task.id),
+                "type": "status",
+                "status": format!("Spawning agent ({:?})...", effective_mode),
             })
             .to_string();
-            if let Some(tx) = &ctx.stream_tx {
-                let _ = tx.send(evt);
-            }
+            let _ = tx.send(evt);
         }
 
         let cidfile_path = if is_docker {
@@ -471,8 +206,7 @@ impl AgentBackend for ClaudeBackend {
         let cargo_home = std::env::var("CARGO_HOME")
             .unwrap_or_else(|_| format!("{real_home}/.cargo"));
 
-        // Resolve GH token upfront (may invoke `gh auth token` subprocess)
-        let gh_token = if matches!(effective_mode, SandboxMode::Docker) {
+        let gh_token = if is_docker {
             tokio::task::spawn_blocking(Self::resolve_gh_token)
                 .await
                 .unwrap_or_default()
@@ -480,84 +214,60 @@ impl AgentBackend for ClaudeBackend {
             String::new()
         };
 
-        let mut child = match effective_mode {
+        let effective_base_url = if ctx.isolated {
+            "http://172.31.0.1:3131".to_string()
+        } else if !self.base_url.is_empty() {
+            self.base_url.clone()
+        } else {
+            String::new()
+        };
+
+        let mut child: tokio::process::Child = match effective_mode {
             SandboxMode::Bwrap => {
-                // .git must be writable so the agent can commit.
-                let git_dir = std::path::Path::new(&task.repo_path).join(".git");
+                let git_dir = Path::new(&task.repo_path).join(".git");
                 let git_dir_str = git_dir.to_string_lossy().to_string();
                 let writable: Vec<&str> = vec![ctx.work_dir.as_str(), ctx.session_dir.as_str(), &git_dir_str];
-                Sandbox::bwrap_command(&writable, &ctx.work_dir, &full_cmd)
-                    .kill_on_drop(true)
+                let mut cmd = Sandbox::bwrap_command(&writable, &ctx.work_dir, &full_cmd);
+                cmd.kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
                     .env("CARGO_HOME", &cargo_home)
-                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
-                    .stdout(Stdio::piped())
+                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token);
+                
+                if !effective_base_url.is_empty() {
+                    cmd.env("ANTHROPIC_BASE_URL", &effective_base_url);
+                }
+                
+                cmd.stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
                     .context("failed to spawn bwrap")?
             },
             SandboxMode::Docker => {
-                // Session dir (rw) + optional bare mirror (ro) + optional setup script (ro).
-                // The container clones the repo itself; no repo bind needed.
-                let host_mirror = Self::host_mirror_path(task, &ctx.data_dir);
-                let container_mirror = Self::container_mirror_path(task);
-                let mut binds: Vec<(String, String, bool)> = vec![
-                    (ctx.session_dir.clone(), ctx.session_dir.clone(), false),
+                let binds = vec![
+                    (ctx.work_dir.clone(), "/workspace".to_string(), false),
+                    (ctx.session_dir.clone(), "/home/bun".to_string(), false),
                 ];
-                if std::path::Path::new(&host_mirror).exists() {
-                    binds.push((host_mirror, container_mirror, true));
-                }
-                if !ctx.setup_script.is_empty() {
-                    binds.push((ctx.setup_script.clone(), "/workspace/setup.sh".to_string(), true));
-                }
-                if !ctx.knowledge_dir.is_empty() && std::path::Path::new(&ctx.knowledge_dir).exists() {
-                    binds.push((ctx.knowledge_dir.clone(), "/knowledge".to_string(), true));
-                }
-
-                let repo_name = std::path::Path::new(&task.repo_path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                // Per-branch cache volumes — tasks on different branches get isolated
-                // target dirs, while retries on the same branch reuse the same cache.
-                // Global caches (cargo registry, bun) are shared across all branches.
-                let branch = format!("task-{}", task.id);
-                let target_vol = Sandbox::branch_volume_name(&repo_name, &branch, "target");
-                let node_vol = Sandbox::branch_volume_name(&repo_name, &branch, "node-modules");
-                // Warm branch caches from main on first use (async, fire-and-forget)
-                {
-                    let img = self.docker_image.clone();
-                    let rn = repo_name.clone();
-                    let br = branch.clone();
-                    tokio::spawn(async move {
-                        Sandbox::warm_branch_cache(&rn, &br, "target", &img).await;
-                        Sandbox::warm_branch_cache(&rn, &br, "node-modules", &img).await;
-                    });
-                }
-
-                let volumes_owned: Vec<(String, String)> = vec![
-                    (target_vol, "/workspace/repo/target".to_string()),
-                    (node_vol, "/workspace/repo/node_modules".to_string()),
-                    (format!("borg-cache-{repo_name}-bun-cache"), "/home/bun/.bun/install/cache".to_string()),
-                    (format!("borg-cache-{repo_name}-cargo-registry"), "/home/bun/.cargo/registry".to_string()),
-                    ("borg-cache-rustup".to_string(), "/home/bun/.rustup".to_string()),
+                let volumes_owned = vec![
+                    ("rustup-cache".to_string(), "/home/bun/.rustup".to_string()),
+                    ("cargo-cache".to_string(), "/home/bun/.cargo".to_string()),
                 ];
-
-                let mut env_kv: Vec<(String, String)> = vec![
-                    ("HOME".to_string(), ctx.session_dir.clone()),
+                let mut env_kv = vec![
+                    ("HOME".to_string(), "/home/bun".to_string()),
                     ("RUSTUP_HOME".to_string(), "/home/bun/.rustup".to_string()),
                     ("CARGO_HOME".to_string(), "/home/bun/.cargo".to_string()),
                     ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), oauth_token.clone()),
                 ];
                 if !gh_token.is_empty() {
-                    env_kv.push(("GH_TOKEN".to_string(), gh_token.clone()));
+                    env_kv.push(("GH_TOKEN".to_string(), gh_token));
+                }
+                if !effective_base_url.is_empty() {
+                    env_kv.push(("ANTHROPIC_BASE_URL".to_string(), effective_base_url));
                 }
 
                 let binds_ref: Vec<(&str, &str, bool)> = binds
                     .iter()
-                    .map(|(h, c, ro)| (h.as_str(), c.as_str(), *ro))
+                    .map(|(h, c, r)| (h.as_str(), c.as_str(), *r))
                     .collect();
                 let volumes_ref: Vec<(&str, &str)> = volumes_owned
                     .iter()
@@ -580,53 +290,56 @@ impl AgentBackend for ClaudeBackend {
                     ctx.agent_network.as_deref(),
                 );
                 if let Some(ref cid_path) = cidfile_path {
-                    // Inject --cidfile before the image name by re-building args.
-                    // docker_command already set args; we insert --cidfile early.
                     let existing_args: Vec<_> = docker_cmd
                         .as_std()
                         .get_args()
                         .map(|a| a.to_os_string())
                         .collect();
                     let mut new_cmd = Command::new("docker");
-                    // Insert --cidfile after "run" (first arg)
-                    let (head, tail) = existing_args.split_at(1.min(existing_args.len()));
-                    new_cmd.args(head);
-                    new_cmd.arg("--cidfile");
-                    new_cmd.arg(cid_path);
-                    new_cmd.args(tail);
+                    new_cmd.arg("run").arg("--cidfile").arg(cid_path);
+                    for arg in existing_args.into_iter().skip(1) {
+                        new_cmd.arg(arg);
+                    }
                     docker_cmd = new_cmd;
                 }
+
                 docker_cmd
                     .kill_on_drop(true)
-                    .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
+                    .stdin(Stdio::piped())
                     .spawn()
                     .context("failed to spawn docker")?
-            },
+            }
             SandboxMode::Direct => {
-                let path = std::env::var("PATH")
-                    .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
                 let augmented_path = format!(
-                    "{path}:{real_home}/.local/bin:/usr/local/bin"
+                    "{}/bin:{}:{}",
+                    cargo_home,
+                    std::env::var("PATH").unwrap_or_default(),
+                    "/usr/local/bin:/usr/bin:/bin"
                 );
-                Command::new(&self.claude_bin)
-                    .args(&full_cmd[1..])
+                let mut cmd = Command::new(&self.claude_bin);
+                cmd.args(&full_cmd[1..])
                     .kill_on_drop(true)
                     .current_dir(&ctx.work_dir)
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
                     .env("CARGO_HOME", &cargo_home)
                     .env("PATH", &augmented_path)
-                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token)
-                    .stdout(Stdio::piped())
+                    .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token);
+
+                if !effective_base_url.is_empty() {
+                    cmd.env("ANTHROPIC_BASE_URL", &effective_base_url);
+                }
+
+                cmd.stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
                     .with_context(|| format!("failed to spawn claude: {}", self.claude_bin))?
             },
+            _ => bail!("unsupported sandbox mode"),
         };
 
-        // For Docker mode, send JSON input on stdin then close it.
         if is_docker {
             if let Some(mut stdin) = child.stdin.take() {
                 let repo_test_cmd = ctx.repo_config.test_cmd.clone();
@@ -635,247 +348,122 @@ impl AgentBackend for ClaudeBackend {
                 } else {
                     String::new()
                 };
-                let runs_test_cmd = if phase.runs_tests { repo_test_cmd.as_str() } else { "" };
-                let payload = self.build_docker_input(
-                    task,
-                    phase,
-                    &ctx,
-                    &instruction,
-                    &system_prompt,
-                    &session_id,
-                    &compile_check_cmd,
-                    "",
-                    runs_test_cmd,
-                    &gh_token,
-                );
-                if let Err(e) = stdin.write_all(&payload).await {
-                    warn!(task_id = task.id, error = %e, "failed to write payload to container stdin — aborting run");
-                    return Err(e).context("failed to write payload to container stdin");
-                }
-                // stdin dropped here → EOF to container
+                let input = serde_json::json!({
+                    "test_cmd": repo_test_cmd,
+                    "compile_check_cmd": compile_check_cmd,
+                    "lint_cmd": ctx.repo_config.lint_cmd,
+                    "git_user_name": self.git_author_name,
+                    "git_user_email": self.git_author_email,
+                });
+                let payload = serde_json::to_vec(&input).unwrap_or_default();
+                let _ = stdin.write_all(&payload).await;
+                drop(stdin);
             }
         }
-
-        // Read container ID from cidfile (Docker writes it shortly after container start).
-        let mut cid_task: Option<tokio::task::JoinHandle<()>> =
-            if let Some(ref cid_path) = cidfile_path {
-                let cid_path_clone = cid_path.clone();
-                let stream_tx_cid = ctx.stream_tx.clone();
-                let tid = task.id;
-                Some(tokio::spawn(async move {
-                    for _ in 0..30u8 {
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        if let Ok(s) = tokio::fs::read_to_string(&cid_path_clone).await {
-                            let cid = s.trim().to_string();
-                            if !cid.is_empty() {
-                                info!(task_id = tid, container_id = %cid, "docker container started");
-                                let evt = serde_json::json!({
-                                    "type": "container_event",
-                                    "event": "container_id",
-                                    "id": cid,
-                                    "task_id": tid,
-                                })
-                                .to_string();
-                                if let Some(tx) = stream_tx_cid {
-                                    let _ = tx.send(evt);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }))
-            } else {
-                None
-            };
 
         let stdout = child.stdout.take().context("failed to take stdout")?;
         let stderr = child.stderr.take().context("failed to take stderr")?;
 
-        let task_id = task.id;
-        let phase_name = phase.name.clone();
         let timeout_s = self.timeout_s;
-        let stream_tx = ctx.stream_tx.clone();
-        let is_docker_io = is_docker;
-
         let io_future = async move {
-            let mut raw_stream = String::new();
             let mut signal_json: Option<String> = None;
+            let mut output_lines: Vec<String> = Vec::new();
             let mut container_test_results: Vec<ContainerTestResult> = Vec::new();
-            let mut stderr_tail: Vec<String> = Vec::new();
+
             let mut stdout_reader = BufReader::new(stdout).lines();
             let mut stderr_reader = BufReader::new(stderr).lines();
 
-            loop {
+            let mut stdout_done = false;
+            let mut stderr_done = false;
+
+            while !stdout_done || !stderr_done {
                 tokio::select! {
-                    line = stdout_reader.next_line() => {
-                        match line.context("error reading stdout")? {
-                            Some(l) => {
+                    line = stdout_reader.next_line(), if !stdout_done => {
+                        match line {
+                            Ok(Some(l)) => {
                                 if let Some(sig) = l.strip_prefix(BORG_SIGNAL_MARKER) {
                                     signal_json = Some(sig.to_string());
-                                } else if let Some(r) = Self::parse_test_result(&l) {
-                                    container_test_results.push(r);
-                                } else {
-                                    if let Some(tx) = &stream_tx {
-                                        let _ = tx.send(l.clone());
-                                    }
-                                    raw_stream.push_str(&l);
-                                    raw_stream.push('\n');
                                 }
+                                if let Some(tx) = &stream_tx {
+                                    let _ = tx.send(l.clone());
+                                }
+                                output_lines.push(l);
                             }
-                            None => break,
+                            Ok(None) => stdout_done = true,
+                            Err(e) => {
+                                warn!("stdout read error: {e}");
+                                stdout_done = true;
+                            }
                         }
                     }
-                    line = stderr_reader.next_line() => {
-                        if let Ok(Some(l)) = line {
-                            if !l.is_empty() {
-                                if is_docker_io {
-                                    if let Some(evt) = l.strip_prefix(BORG_EVENT_MARKER) {
-                                        if let Some(tx) = &stream_tx {
-                                            let _ = tx.send(evt.to_string());
-                                        }
+                    line = stderr_reader.next_line(), if !stderr_done => {
+                        match line {
+                            Ok(Some(l)) => {
+                                if !l.is_empty() {
+                                    if let Ok(res) = serde_json::from_str::<ContainerTestResult>(&l) {
+                                        container_test_results.push(res);
                                     } else {
-                                        warn!(task_id, phase = %phase_name, "container stderr: {}", l);
-                                        if stderr_tail.len() >= 30 {
-                                            stderr_tail.remove(0);
+                                        if let Some(tx) = &stream_tx {
+                                            let evt = serde_json::json!({
+                                                "type": "stderr",
+                                                "content": l,
+                                            }).to_string();
+                                            let _ = tx.send(evt);
                                         }
-                                        stderr_tail.push(l);
+                                        debug!("claude stderr: {l}");
                                     }
-                                } else {
-                                    warn!(task_id, phase = %phase_name, "claude stderr: {}", l);
                                 }
                             }
+                            Ok(None) => stderr_done = true,
+                            Err(e) => {
+                                warn!("stderr read error: {e}");
+                                stderr_done = true;
+                            }
                         }
                     }
                 }
             }
 
-            while let Ok(Some(l)) = stderr_reader.next_line().await {
-                if !l.is_empty() {
-                    if is_docker_io {
-                        if let Some(evt) = l.strip_prefix(BORG_EVENT_MARKER) {
-                            if let Some(tx) = &stream_tx {
-                                let _ = tx.send(evt.to_string());
-                            }
-                        } else {
-                            warn!(task_id, phase = %phase_name, "container stderr: {}", l);
-                            if stderr_tail.len() >= 30 {
-                                stderr_tail.remove(0);
-                            }
-                            stderr_tail.push(l);
-                        }
-                    } else {
-                        warn!(task_id, phase = %phase_name, "claude stderr: {}", l);
-                    }
-                }
-            }
-
-            let exit_status = child.wait().await.context("failed to wait for claude")?;
-            let success = exit_status.success();
-
-            if !success && is_docker_io && !stderr_tail.is_empty() {
-                let evt = serde_json::json!({
-                    "type": "container_event",
-                    "event": "container_error",
-                    "exit_code": exit_status.code().unwrap_or(-1),
-                    "stderr_tail": stderr_tail.join("\n"),
-                })
-                .to_string();
-                if let Some(tx) = &stream_tx {
-                    let _ = tx.send(evt);
-                }
-            }
-
-            anyhow::Ok((raw_stream, signal_json, container_test_results, success))
+            let exit_status = child.wait().await.ok();
+            let success = exit_status.map(|s| s.success()).unwrap_or(false);
+            (output_lines.join("\n"), signal_json, container_test_results, success)
         };
 
         let (raw_stream, signal_json, container_test_results, success) = if timeout_s > 0 {
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), io_future).await {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
-                    if let Some(h) = cid_task.take() { h.abort(); }
-                    return Err(e);
-                },
-                Err(_elapsed) => {
-                    warn!(task_id = task.id, phase = %phase.name, timeout_s, "claude subprocess timed out");
-                    if let Some(h) = cid_task.take() { h.abort(); }
-                    return Ok(PhaseOutput::failed(String::new()));
-                },
-            }
-        } else {
-            match io_future.await {
-                Ok(v) => v,
-                Err(e) => {
-                    if let Some(h) = cid_task.take() { h.abort(); }
-                    return Err(e);
-                },
-            }
-        };
-
-        // Abort the CID task if still polling; propagate any panic it may have raised.
-        if let Some(handle) = cid_task {
-            handle.abort();
-            if let Err(e) = handle.await {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
+                Ok(res) => res,
+                Err(_) => {
+                    warn!("claude timed out after {}s", timeout_s);
+                    (String::new(), None, Vec::new(), false)
                 }
             }
+        } else {
+            io_future.await
+        };
+
+        if let Some(cid_path) = cidfile_path {
+            if let Ok(cid) = std::fs::read_to_string(&cid_path) {
+                let cid = cid.trim();
+                if !cid.is_empty() {
+                    info!("cleaning up container {cid}");
+                    let _ = std::process::Command::new("docker")
+                        .args(["rm", "-f", cid])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+            }
+            let _ = std::fs::remove_file(cid_path);
         }
 
-        let (output, new_session_id) = crate::event::parse_stream(&raw_stream);
-
-        info!(
-            task_id = task.id,
-            phase = %phase.name,
-            success,
-            new_session_id = ?new_session_id,
-            output_len = output.len(),
-            "claude subprocess finished"
-        );
-
         Ok(PhaseOutput {
-            output,
-            new_session_id,
+            output: raw_stream.clone(),
+            new_session_id: signal_json,
             raw_stream,
             success,
-            signal_json,
+            signal_json: None,
             ran_in_docker: is_docker,
             container_test_results,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::derive_compile_check;
-
-    #[test]
-    fn cargo_test_gets_no_run() {
-        assert_eq!(derive_compile_check("cargo test"), Some("cargo test --no-run".to_string()));
-    }
-
-    #[test]
-    fn cargo_test_workspace_gets_no_run() {
-        assert_eq!(
-            derive_compile_check("cargo test --workspace"),
-            Some("cargo test --workspace --no-run".to_string()),
-        );
-    }
-
-    #[test]
-    fn non_cargo_command_returns_none() {
-        assert_eq!(derive_compile_check("npm test"), None);
-    }
-
-    #[test]
-    fn empty_string_returns_none() {
-        assert_eq!(derive_compile_check(""), None);
-    }
-
-    #[test]
-    fn already_has_no_run_no_duplication() {
-        assert_eq!(
-            derive_compile_check("cargo test --no-run"),
-            Some("cargo test --no-run".to_string()),
-        );
     }
 }

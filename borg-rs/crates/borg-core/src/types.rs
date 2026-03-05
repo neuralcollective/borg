@@ -464,10 +464,12 @@ pub struct PhaseContext {
     pub revision_count: i64,
     /// Whether non-core experimental domains are enabled for runtime behavior.
     pub experimental_domains: bool,
+    /// Whether to run in a network-isolated environment (air-gapped).
+    pub isolated: bool,
 }
 
 /// A single in-container test/lint/compile result emitted by the entrypoint.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContainerTestResult {
     pub phase: String,
     pub passed: bool,

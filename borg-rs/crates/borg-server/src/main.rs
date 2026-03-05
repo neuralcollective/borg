@@ -191,6 +191,7 @@ async fn main() -> anyhow::Result<()> {
     let agent_network_available = if sandbox_mode == borg_core::sandbox::SandboxMode::Docker {
         Sandbox::prune_orphan_containers().await;
         let net_ok = Sandbox::ensure_agent_network().await;
+        let _ = Sandbox::ensure_isolated_network().await;
         if net_ok {
             if !Sandbox::install_network_rules().await {
                 tracing::warn!("sandbox: iptables rules not installed — agent containers have unrestricted network access");
@@ -210,7 +211,8 @@ async fn main() -> anyhow::Result<()> {
             ClaudeBackend::new("claude", sandbox_mode.clone(), &config.container_image)
                 .with_timeout(config.agent_timeout_s as u64)
                 .with_resource_limits(config.container_memory_mb, config.container_cpus)
-                .with_git_author(&config.git_author_name, &config.git_author_email),
+                .with_git_author(&config.git_author_name, &config.git_author_email)
+                .with_base_url(format!("http://127.0.0.1:{}", config.web_port)),
         ),
     );
     if !config.codex_api_key.is_empty()
@@ -968,10 +970,47 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    
+    let unix_socket_path = "/tmp/borg-proxy.sock";
+    let _ = std::fs::remove_file(unix_socket_path);
+    let unix_listener = tokio::net::UnixListener::bind(unix_socket_path)?;
+    info!("Proxy listening on unix://{unix_socket_path}");
+
     let server = axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
+
+    use tokio_util::sync::CancellationToken;
+    let token = CancellationToken::new();
+    
+    // Serve on Unix socket too
+    let unix_app = app.clone();
+    let unix_token = token.clone();
+    tokio::spawn(async move {
+        use hyper_util::rt::TokioExecutor;
+        use hyper_util::server::conn::auto::Builder;
+        use tower::Service;
+        
+        loop {
+            tokio::select! {
+                _ = unix_token.cancelled() => break,
+                res = unix_listener.accept() => {
+                    let (stream, _) = match res {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+                    let app = unix_app.clone();
+                    tokio::spawn(async move {
+                        let stream = hyper_util::rt::TokioIo::new(stream);
+                        let _ = Builder::new(TokioExecutor::new())
+                            .serve_connection(stream, app)
+                            .await;
+                    });
+                }
+            }
+        }
+    });
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
