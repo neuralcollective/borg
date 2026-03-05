@@ -2017,6 +2017,7 @@ impl Db {
         project_id: Option<i64>,
     ) -> Result<Vec<crate::knowledge::EmbeddingSearchResult>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let cap = limit.max(1).min(5000);
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project_id {
             Some(pid) => (
                 format!("SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1 ORDER BY rowid DESC LIMIT {cap}"),
@@ -3106,7 +3107,52 @@ impl Db {
 
     // ── API Keys (BYOK) ──────────────────────────────────────────────────
 
-    // ── API Keys (BYOK) ──────────────────────────────────────────────────
+    fn encrypt_secret(secret: &str) -> String {
+        if let Ok(key_hex) = std::env::var("BORG_MASTER_KEY") {
+            if key_hex.len() == 64 {
+                if let Ok(key_bytes) = hex::decode(&key_hex) {
+                    use aes_gcm::{aead::{Aead, KeyInit, OsRng}, Aes256Gcm};
+                    use aes_gcm::aead::AeadCore;
+                    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+                    let cipher = Aes256Gcm::new(key);
+                    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits
+                    if let Ok(ciphertext) = cipher.encrypt(&nonce, secret.as_bytes()) {
+                        let mut combined = nonce.to_vec();
+                        combined.extend_from_slice(&ciphertext);
+                        use base64::Engine;
+                        return format!("enc:v1:{}", base64::engine::general_purpose::STANDARD.encode(&combined));
+                    }
+                }
+            }
+        }
+        secret.to_string()
+    }
+
+    fn decrypt_secret(secret: &str) -> String {
+        if secret.starts_with("enc:v1:") {
+            if let Ok(key_hex) = std::env::var("BORG_MASTER_KEY") {
+                if key_hex.len() == 64 {
+                    if let Ok(key_bytes) = hex::decode(&key_hex) {
+                        use base64::Engine;
+                        if let Ok(combined) = base64::engine::general_purpose::STANDARD.decode(&secret[7..]) {
+                            if combined.len() > 12 {
+                                use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+                                let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+                                let cipher = Aes256Gcm::new(key);
+                                let nonce = Nonce::from_slice(&combined[..12]);
+                                if let Ok(plaintext) = cipher.decrypt(nonce, &combined[12..]) {
+                                    if let Ok(s) = String::from_utf8(plaintext) {
+                                        return s;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        secret.to_string()
+    }
 
     pub fn store_api_key(
         &self,
@@ -3116,10 +3162,11 @@ impl Db {
         key_value: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let encrypted_value = Self::encrypt_secret(key_value);
         conn.execute(
             "INSERT INTO api_keys (owner, provider, key_name, key_value) VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(owner, provider) DO UPDATE SET key_name=excluded.key_name, key_value=excluded.key_value",
-            params![owner, provider, key_name, key_value],
+            params![owner, provider, key_name, encrypted_value],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -3135,8 +3182,8 @@ impl Db {
             )
             .optional()
             .context("get_api_key")?;
-        if result.is_some() {
-            return Ok(result);
+        if let Some(val) = result {
+            return Ok(Some(Self::decrypt_secret(&val)));
         }
         if owner != "global" {
             let global = conn
@@ -3147,7 +3194,9 @@ impl Db {
                 )
                 .optional()
                 .context("get_api_key global fallback")?;
-            return Ok(global);
+            if let Some(val) = global {
+                return Ok(Some(Self::decrypt_secret(&val)));
+            }
         }
         Ok(None)
     }
