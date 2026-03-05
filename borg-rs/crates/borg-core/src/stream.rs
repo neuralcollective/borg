@@ -82,6 +82,7 @@ impl TaskStreamManager {
                 s.history.pop_front();
             }
             s.ended = true;
+            s.ended_at = Some(std::time::Instant::now());
             // Broadcast after the flag is set. Existing receivers still get
             // the sentinel; new subscribers arriving after this point will
             // see ended=true and find it in the history snapshot instead.

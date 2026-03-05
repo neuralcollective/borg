@@ -18,7 +18,6 @@ use borg_core::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, Mutex as TokioMutex};
 use tokio_stream::{
@@ -54,6 +53,47 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+fn percent_encode_allow_slash(s: &str, allow_slash: bool) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b'/' if allow_slash => out.push('/'),
+            _ => {
+                out.push('%');
+                out.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
+                out.push(char::from_digit((b & 0xf) as u32, 16).unwrap().to_ascii_uppercase());
+            }
+        }
+    }
+    out
+}
+
+async fn sha256_hex_file(path: &str) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = file.read(&mut buffer).await?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn sha256_hex_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
 fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);
@@ -75,23 +115,7 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn percent_encode(s: &str, allow_slash: bool) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            b'/' if allow_slash => out.push('/'),
-            _ => {
-                out.push('%');
-                out.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
-                out.push(char::from_digit((b & 0xf) as u32, 16).unwrap().to_ascii_uppercase());
-            }
-        }
-    }
-    out
-}
+// Removed the second percent_encode function
 
 // ── Request body types ────────────────────────────────────────────────────
 
@@ -1371,7 +1395,7 @@ async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) 
             tokio::process::Command::new("gh")
                 .args([
                     "api",
-                    &format!("repos/{slug}/contents/{}?ref={}", percent_encode(path, true), percent_encode(ref_name, false)),
+                    &format!("repos/{slug}/contents/{}?ref={}", percent_encode_allow_slash(path, true), percent_encode(ref_name)),
                     "--jq",
                     ".content",
                 ])
@@ -3110,7 +3134,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 },
                 data_dir: state.config.data_dir.clone(),
                 session_dir: format!("{}/sessions/triage-{}", state.config.data_dir, proposal.id),
-                worktree_path: proposal.repo_path.clone(),
+                work_dir: proposal.repo_path.clone(),
                 oauth_token: oauth.clone(),
                 model: model.clone(),
                 pending_messages: Vec::new(),
@@ -4586,47 +4610,47 @@ pub(crate) async fn get_task_container(
 
 #[cfg(test)]
 mod tests {
-    use super::percent_encode;
+    use super::{percent_encode, percent_encode_allow_slash};
 
     #[test]
     fn percent_encode_unreserved_passthrough() {
-        assert_eq!(percent_encode("main", false), "main");
-        assert_eq!(percent_encode("feature/my-branch", true), "feature/my-branch");
-        assert_eq!(percent_encode("v1.0.0~3", false), "v1.0.0~3");
+        assert_eq!(percent_encode_allow_slash("main", false), "main");
+        assert_eq!(percent_encode_allow_slash("feature/my-branch", true), "feature/my-branch");
+        assert_eq!(percent_encode_allow_slash("v1.0.0~3", false), "v1.0.0~3");
     }
 
     #[test]
     fn percent_encode_ampersand_in_ref() {
         // & must be encoded so it doesn't inject a second query parameter
-        assert_eq!(percent_encode("bad&ref=injected", false), "bad%26ref%3Dinjected");
+        assert_eq!(percent_encode_allow_slash("bad&ref=injected", false), "bad%26ref%3Dinjected");
     }
 
     #[test]
     fn percent_encode_hash_and_question_mark() {
-        assert_eq!(percent_encode("ref#fragment", false), "ref%23fragment");
-        assert_eq!(percent_encode("ref?foo=1", false), "ref%3Ffoo%3D1");
+        assert_eq!(percent_encode_allow_slash("ref#fragment", false), "ref%23fragment");
+        assert_eq!(percent_encode_allow_slash("ref?foo=1", false), "ref%3Ffoo%3D1");
     }
 
     #[test]
     fn percent_encode_slash_in_path_allowed() {
-        assert_eq!(percent_encode("docs/spec.md", true), "docs/spec.md");
+        assert_eq!(percent_encode_allow_slash("docs/spec.md", true), "docs/spec.md");
     }
 
     #[test]
     fn percent_encode_slash_in_query_encoded() {
-        assert_eq!(percent_encode("a/b", false), "a%2Fb");
+        assert_eq!(percent_encode_allow_slash("a/b", false), "a%2Fb");
     }
 
     #[test]
     fn percent_encode_space_and_plus() {
-        assert_eq!(percent_encode("my branch", false), "my%20branch");
-        assert_eq!(percent_encode("a+b", false), "a%2Bb");
+        assert_eq!(percent_encode_allow_slash("my branch", false), "my%20branch");
+        assert_eq!(percent_encode_allow_slash("a+b", false), "a%2Bb");
     }
 
     #[test]
     fn percent_encode_path_with_special_chars() {
-        assert_eq!(percent_encode("docs/file#top", true), "docs/file%23top");
-        assert_eq!(percent_encode("docs/file?q=1", true), "docs/file%3Fq%3D1");
+        assert_eq!(percent_encode_allow_slash("docs/file#top", true), "docs/file%23top");
+        assert_eq!(percent_encode_allow_slash("docs/file?q=1", true), "docs/file%3Fq%3D1");
     }
 }
 

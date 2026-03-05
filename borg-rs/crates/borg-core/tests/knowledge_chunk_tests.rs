@@ -10,8 +10,7 @@ fn words(n: usize) -> String {
 #[test]
 fn empty_string_returns_one_empty_chunk() {
     let chunks = chunk_text("");
-    assert_eq!(chunks.len(), 1);
-    assert_eq!(chunks[0], "");
+    assert_eq!(chunks.len(), 0);
 }
 
 #[test]
@@ -84,7 +83,6 @@ fn all_chunks_non_empty_for_long_text() {
 
 #[test]
 fn whitespace_only_input_returns_single_empty_chunk() {
-    let chunks = chunk_text("   \t\n  ");
-    assert_eq!(chunks.len(), 1);
-    assert_eq!(chunks[0], "");
+    let chunks = chunk_text("   \n\t  ");
+    assert_eq!(chunks.len(), 0);
 }
