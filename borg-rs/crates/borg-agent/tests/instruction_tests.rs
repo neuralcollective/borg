@@ -19,6 +19,7 @@ fn make_task(title: &str, description: &str, last_error: &str) -> Task {
         created_by: String::new(),
         notify_chat: String::new(),
         created_at: Utc::now(),
+        updated_at: Utc::now(),
         session_id: String::new(),
         mode: String::new(),
         backend: String::new(),

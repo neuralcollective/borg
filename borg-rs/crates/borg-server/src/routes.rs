@@ -2998,6 +2998,7 @@ pub(crate) async fn approve_proposal(
         created_by: "proposal".into(),
         notify_chat: String::new(),
         created_at: Utc::now(),
+        updated_at: Utc::now(),
         session_id: String::new(),
         mode: state.config.watched_repos.iter()
             .find(|r| r.path == proposal.repo_path)
@@ -3098,6 +3099,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 created_by: "triage".into(),
                 notify_chat: String::new(),
                 created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
                 session_id: String::new(),
                 mode: "sweborg".into(),
                 backend: String::new(),

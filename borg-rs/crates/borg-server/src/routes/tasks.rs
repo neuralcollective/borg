@@ -204,6 +204,7 @@ pub(crate) async fn create_task(
         created_by: "api".into(),
         notify_chat: String::new(),
         created_at: Utc::now(),
+        updated_at: Utc::now(),
         session_id: String::new(),
         mode,
         backend: String::new(),

@@ -58,8 +58,16 @@ pub fn legal_mode() -> PipelineMode {
                     "",
                     LEGAL_REVIEW_INSTRUCTION,
                     "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
-                    "done",
+                    "purge",
                 )
+            },
+            PhaseConfig {
+                name: "purge".into(),
+                label: "Burn After Reading (7d)".into(),
+                phase_type: borg_core::types::PhaseType::Purge,
+                wait_s: Some(604800),
+                next: "purged".into(),
+                ..Default::default()
             },
         ],
         seed_modes: vec![
