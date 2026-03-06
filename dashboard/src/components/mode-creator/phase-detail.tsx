@@ -15,90 +15,93 @@ export function PhaseDetail({
   readOnly: boolean;
   onChange: (patch: Partial<PhaseConfigFull>) => void;
 }) {
-  const [showError, setShowError] = useState(!!phase.error_instruction);
-  const [showFix, setShowFix] = useState(!!phase.fix_instruction);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Reset advanced panel when switching phases
   useEffect(() => {
-    setShowError(!!phase.error_instruction);
-    setShowFix(!!phase.fix_instruction);
-  }, [phase.name, phase.error_instruction, phase.fix_instruction]);
+    setShowAdvanced(false);
+  }, [phase.name]);
 
   const isAgent = phase.phase_type === "agent" || phase.phase_type === "rebase";
   const isHumanReview = phase.phase_type === "human_review";
   const isCompliance = phase.phase_type === "compliance_check";
 
-  return (
-    <div className="space-y-4 overflow-y-auto">
-      {/* Identity */}
-      <Section title="Identity">
-        <div className="flex gap-3">
-          <Field label="Name" className="w-40">
-            <input
-              value={phase.name}
-              onChange={(e) => onChange({ name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
-              disabled={readOnly}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Label" className="flex-1">
-            <input
-              value={phase.label}
-              onChange={(e) => onChange({ label: e.target.value })}
-              disabled={readOnly}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Type" className="w-28">
-            <select
-              value={phase.phase_type}
-              onChange={(e) => onChange({ phase_type: e.target.value as PhaseType })}
-              disabled={readOnly}
-              className={inputCls}
-            >
-              <option value="setup">Setup</option>
-              <option value="agent">Agent</option>
-              <option value="validate">Validate</option>
-              <option value="rebase">Rebase</option>
-              <option value="lint_fix">Lint Fix</option>
-              <option value="human_review">Human Review</option>
-              <option value="compliance_check">Compliance Check</option>
-            </select>
-          </Field>
-          <Field label="Next" className="w-28">
-            <select
-              value={phase.next}
-              onChange={(e) => onChange({ next: e.target.value })}
-              disabled={readOnly}
-              className={inputCls}
-            >
-              {phaseNames.filter((n) => n !== phase.name).map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-              <option value="done">done</option>
-            </select>
-          </Field>
-        </div>
-      </Section>
+  const advancedCount = [
+    phase.system_prompt,
+    phase.error_instruction,
+    phase.fix_instruction,
+  ].filter((s) => s.trim()).length;
 
-      {/* Human Review info */}
+  return (
+    <div className="space-y-3 overflow-y-auto">
+      {/* Identity — compact inline row */}
+      <div className="flex items-end gap-2">
+        <Field label="Name" className="w-36">
+          <input
+            value={phase.name}
+            onChange={(e) => onChange({ name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Label" className="flex-1">
+          <input
+            value={phase.label}
+            onChange={(e) => onChange({ label: e.target.value })}
+            disabled={readOnly}
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Type" className="w-28">
+          <select
+            value={phase.phase_type}
+            onChange={(e) => onChange({ phase_type: e.target.value as PhaseType })}
+            disabled={readOnly}
+            className={inputCls}
+          >
+            <option value="setup">Setup</option>
+            <option value="agent">Agent</option>
+            <option value="validate">Validate</option>
+            <option value="rebase">Rebase</option>
+            <option value="lint_fix">Lint Fix</option>
+            <option value="human_review">Human Review</option>
+            <option value="compliance_check">Compliance</option>
+          </select>
+        </Field>
+        <Field label="Next" className="w-28">
+          <select
+            value={phase.next}
+            onChange={(e) => onChange({ next: e.target.value })}
+            disabled={readOnly}
+            className={inputCls}
+          >
+            {phaseNames.filter((n) => n !== phase.name).map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+            <option value="done">done</option>
+          </select>
+        </Field>
+      </div>
+
+      {/* Human Review */}
       {isHumanReview && (
         <Section title="Human Review">
           <div className="mb-2 rounded bg-emerald-500/5 border border-emerald-500/20 px-3 py-2 text-[11px] text-emerald-400/80">
-            This phase pauses the pipeline until a human approves, rejects, or requests revision.
-            The task will sit in this status until acted on from the dashboard.
+            Pauses the pipeline until a human approves, rejects, or requests revision.
           </div>
-          <Field label="Reviewer Guidance (shown in dashboard)">
+          <Field label="Reviewer Guidance">
             <AutoTextarea
               value={phase.instruction}
               onChange={(v) => onChange({ instruction: v })}
               disabled={readOnly}
-              placeholder="Instructions for the human reviewer (e.g. check citations, verify formatting)..."
+              placeholder="Instructions for the human reviewer..."
               minRows={3}
             />
           </Field>
         </Section>
       )}
 
+      {/* Compliance */}
       {isCompliance && (
         <Section title="Compliance Check">
           <div className="grid grid-cols-2 gap-3">
@@ -125,70 +128,25 @@ export function PhaseDetail({
               </select>
             </Field>
           </div>
-          <div className="mt-2 text-[11px] text-zinc-500">
-            Runs deterministic regulatory QA on prior output. Use `block` for regulated workflows.
-          </div>
         </Section>
       )}
 
-      {/* Agent Configuration */}
+      {/* Main instruction — the primary thing users edit */}
       {isAgent && (
-        <Section title="Agent Configuration">
-          <Field label="System Prompt">
-            <AutoTextarea
-              value={phase.system_prompt}
-              onChange={(v) => onChange({ system_prompt: v })}
-              disabled={readOnly}
-              placeholder="System prompt for the agent..."
-            />
-          </Field>
-          <Field label="Instruction" className="mt-3">
-            <AutoTextarea
-              value={phase.instruction}
-              onChange={(v) => onChange({ instruction: v })}
-              disabled={readOnly}
-              placeholder="Task instruction..."
-            />
-          </Field>
-
-          {/* Collapsible optional fields */}
-          <CollapsibleField
-            label="Error Instruction"
-            value={phase.error_instruction}
-            expanded={showError}
-            onToggle={() => setShowError(!showError)}
-          >
-            <AutoTextarea
-              value={phase.error_instruction}
-              onChange={(v) => onChange({ error_instruction: v })}
-              disabled={readOnly}
-              placeholder="Instruction when retrying after error..."
-              minRows={2}
-            />
-          </CollapsibleField>
-
-          {phase.phase_type === "rebase" && (
-            <CollapsibleField
-              label="Fix Instruction"
-              value={phase.fix_instruction}
-              expanded={showFix}
-              onToggle={() => setShowFix(!showFix)}
-            >
-              <AutoTextarea
-                value={phase.fix_instruction}
-                onChange={(v) => onChange({ fix_instruction: v })}
-                disabled={readOnly}
-                placeholder="Instruction for the rebase fix agent..."
-                minRows={2}
-              />
-            </CollapsibleField>
-          )}
+        <Section title="Instruction">
+          <AutoTextarea
+            value={phase.instruction}
+            onChange={(v) => onChange({ instruction: v })}
+            disabled={readOnly}
+            placeholder="What should the agent do in this phase?"
+            minRows={4}
+          />
         </Section>
       )}
 
-      {/* Tools */}
-      {!isHumanReview && !isCompliance && (
-        <Section title="Allowed Tools">
+      {/* Tools — compact toggles */}
+      {isAgent && (
+        <Section title="Tools">
           <ToolChips
             value={phase.allowed_tools}
             onChange={(v) => onChange({ allowed_tools: v })}
@@ -197,48 +155,101 @@ export function PhaseDetail({
         </Section>
       )}
 
-      {/* Behavior Flags */}
-      {!isHumanReview && !isCompliance && <Section title="Behavior">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-          <FlagToggle label="Use Docker" checked={phase.use_docker} disabled={readOnly}
-            onChange={(v) => onChange({ use_docker: v })} />
-          <FlagToggle label="Include Task Context" checked={phase.include_task_context} disabled={readOnly}
-            onChange={(v) => onChange({ include_task_context: v })} />
-          <FlagToggle label="Include File Listing" checked={phase.include_file_listing} disabled={readOnly}
-            onChange={(v) => onChange({ include_file_listing: v })} />
-          <FlagToggle label="Runs Tests" checked={phase.runs_tests} disabled={readOnly}
-            onChange={(v) => onChange({ runs_tests: v })} />
-          <FlagToggle label="Commits" checked={phase.commits} disabled={readOnly}
-            onChange={(v) => onChange({ commits: v })} />
-          <FlagToggle label="Allow No Changes" checked={phase.allow_no_changes} disabled={readOnly}
-            onChange={(v) => onChange({ allow_no_changes: v })} />
-          <FlagToggle label="Fresh Session" checked={phase.fresh_session} disabled={readOnly}
-            onChange={(v) => onChange({ fresh_session: v })} />
-        </div>
-      </Section>}
-
-      {/* Commit & Artifact */}
-      {phase.commits && (
-        <Section title="Commit & Artifact">
-          <Field label="Commit Message">
-            <input
-              value={phase.commit_message}
-              onChange={(e) => onChange({ commit_message: e.target.value })}
-              disabled={readOnly}
-              placeholder="impl: implementation from worker agent"
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Check Artifact" className="mt-2">
-            <input
-              value={phase.check_artifact ?? ""}
-              onChange={(e) => onChange({ check_artifact: e.target.value || null })}
-              disabled={readOnly}
-              placeholder="spec.md (optional)"
-              className={inputCls}
-            />
-          </Field>
+      {/* Behavior — common flags inline, grouped logically */}
+      {isAgent && (
+        <Section title="Behavior">
+          <div className="grid grid-cols-3 gap-x-4 gap-y-1.5">
+            <FlagToggle label="Commits" checked={phase.commits} disabled={readOnly}
+              onChange={(v) => onChange({ commits: v })} />
+            <FlagToggle label="Runs Tests" checked={phase.runs_tests} disabled={readOnly}
+              onChange={(v) => onChange({ runs_tests: v })} />
+            <FlagToggle label="Use Docker" checked={phase.use_docker} disabled={readOnly}
+              onChange={(v) => onChange({ use_docker: v })} />
+            <FlagToggle label="Include Context" checked={phase.include_task_context} disabled={readOnly}
+              onChange={(v) => onChange({ include_task_context: v })} />
+            <FlagToggle label="File Listing" checked={phase.include_file_listing} disabled={readOnly}
+              onChange={(v) => onChange({ include_file_listing: v })} />
+            <FlagToggle label="Allow No Changes" checked={phase.allow_no_changes} disabled={readOnly}
+              onChange={(v) => onChange({ allow_no_changes: v })} />
+            <FlagToggle label="Fresh Session" checked={phase.fresh_session} disabled={readOnly}
+              onChange={(v) => onChange({ fresh_session: v })} />
+          </div>
+          {/* Commit settings inline when enabled */}
+          {phase.commits && (
+            <div className="mt-2.5 flex gap-3 border-t border-white/[0.04] pt-2.5">
+              <Field label="Commit Message" className="flex-1">
+                <input
+                  value={phase.commit_message}
+                  onChange={(e) => onChange({ commit_message: e.target.value })}
+                  disabled={readOnly}
+                  placeholder="feat: implementation from agent"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Required Artifact" className="w-40">
+                <input
+                  value={phase.check_artifact ?? ""}
+                  onChange={(e) => onChange({ check_artifact: e.target.value || null })}
+                  disabled={readOnly}
+                  placeholder="(optional)"
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+          )}
         </Section>
+      )}
+
+      {/* Advanced — collapsed by default, for power users */}
+      {isAgent && (
+        <div className="rounded-lg border border-white/[0.04]">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-zinc-500 hover:text-zinc-400"
+          >
+            <span className="text-[9px]">{showAdvanced ? "\u25BC" : "\u25B6"}</span>
+            <span className="font-medium">Advanced</span>
+            {!showAdvanced && advancedCount > 0 && (
+              <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-zinc-500">
+                {advancedCount} configured
+              </span>
+            )}
+          </button>
+          {showAdvanced && (
+            <div className="space-y-3 border-t border-white/[0.04] px-3 pb-3 pt-2">
+              <Field label="System Prompt">
+                <AutoTextarea
+                  value={phase.system_prompt}
+                  onChange={(v) => onChange({ system_prompt: v })}
+                  disabled={readOnly}
+                  placeholder="Override the default system prompt..."
+                  minRows={2}
+                />
+              </Field>
+              <Field label="Error Instruction">
+                <AutoTextarea
+                  value={phase.error_instruction}
+                  onChange={(v) => onChange({ error_instruction: v })}
+                  disabled={readOnly}
+                  placeholder="Instruction when retrying after error (use {ERROR} placeholder)..."
+                  minRows={2}
+                />
+              </Field>
+              {phase.phase_type === "rebase" && (
+                <Field label="Fix Instruction">
+                  <AutoTextarea
+                    value={phase.fix_instruction}
+                    onChange={(v) => onChange({ fix_instruction: v })}
+                    disabled={readOnly}
+                    placeholder="Instruction for the rebase fix agent..."
+                    minRows={2}
+                  />
+                </Field>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -297,40 +308,5 @@ function FlagToggle({
       </span>
       {label}
     </button>
-  );
-}
-
-function CollapsibleField({
-  label,
-  value,
-  expanded,
-  onToggle,
-  children,
-}: {
-  label: string;
-  value: string;
-  expanded: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  const hasContent = value.trim().length > 0;
-  return (
-    <div className="mt-3">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-400"
-      >
-        <span className="text-[9px]">{expanded ? "\u25BC" : "\u25B6"}</span>
-        {label}
-        {!expanded && hasContent && (
-          <span className="text-zinc-600">({value.split("\n").length} lines)</span>
-        )}
-        {!expanded && !hasContent && (
-          <span className="text-zinc-700">(empty)</span>
-        )}
-      </button>
-      {expanded && <div className="mt-1">{children}</div>}
-    </div>
   );
 }
