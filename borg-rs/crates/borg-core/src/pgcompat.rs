@@ -317,21 +317,18 @@ enum GuardState {
 
 pub struct ConnectionGuard {
     state: GuardState,
-    last_insert_id: Cell<i64>,
 }
 
 impl ConnectionGuard {
     fn ready(client: PoolClient) -> Self {
         Self {
             state: GuardState::Ready(Some(client)),
-            last_insert_id: Cell::new(0),
         }
     }
 
     fn failed(message: String) -> Self {
         Self {
             state: GuardState::Failed(message),
-            last_insert_id: Cell::new(0),
         }
     }
 
@@ -357,19 +354,22 @@ impl ConnectionGuard {
         let translated = translate_sql(sql);
         let params = params.into_params();
         let refs = pg_refs(&params);
-        let changed = self.with_client(|client| {
+        self.with_client(|client| {
             let changed = block_on(client.execute(&translated, &refs))? as usize;
             Ok(changed)
-        })?;
-        if changed > 0 && is_insert_statement(&translated) {
-            if let Ok(id) = self.with_client(|client| {
-                let row = block_on(client.query_one("SELECT LASTVAL()", &[]))?;
-                Ok(row.get::<usize, i64>(0))
-            }) {
-                self.last_insert_id.set(id);
-            }
-        }
-        Ok(changed)
+        })
+    }
+
+    pub fn execute_returning_id<P: ParamsLike>(&self, sql: &str, params: P) -> Result<i64> {
+        let translated = translate_sql(sql);
+        let returning_sql = append_returning_id(&translated);
+        let params = params.into_params();
+        let refs = pg_refs(&params);
+        self.with_client(|client| {
+            let row = block_on(client.query_one(&returning_sql, &refs))?;
+            let id: i64 = row.get(0);
+            Ok(id)
+        })
     }
 
     pub fn query_row<P: ParamsLike, T>(
@@ -408,9 +408,6 @@ impl ConnectionGuard {
         })
     }
 
-    pub fn last_insert_rowid(&self) -> i64 {
-        self.last_insert_id.get()
-    }
 }
 
 pub struct Statement<'a> {
@@ -544,11 +541,9 @@ fn pg_refs(params: &[Param]) -> Vec<&(dyn PgToSql + Sync)> {
     params.iter().map(Param::as_pg).collect()
 }
 
-fn is_insert_statement(sql: &str) -> bool {
-    sql.trim_start()
-        .get(..6)
-        .map(|prefix| prefix.eq_ignore_ascii_case("INSERT"))
-        .unwrap_or(false)
+fn append_returning_id(sql: &str) -> String {
+    let trimmed = sql.trim_end().trim_end_matches(';');
+    format!("{trimmed} RETURNING id")
 }
 
 fn translate_sql(sql: &str) -> String {

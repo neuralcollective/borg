@@ -752,7 +752,7 @@ impl Db {
         } else {
             Some(task.project_id)
         };
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO pipeline_tasks \
              (title, description, repo_path, branch, status, attempt, max_attempts, \
               last_error, created_by, notify_chat, created_at, session_id, mode, backend, project_id, task_type) \
@@ -781,7 +781,7 @@ impl Db {
             ],
         )
         .context("insert_task")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn update_task_status(&self, id: i64, status: &str, error: Option<&str>) -> Result<()> {
@@ -1129,7 +1129,7 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = proposal.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO proposals \
              (repo_path, title, description, rationale, status, created_at, \
               triage_score, triage_impact, triage_feasibility, triage_risk, \
@@ -1151,7 +1151,7 @@ impl Db {
             ],
         )
         .context("insert_proposal")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn update_proposal_status(&self, id: i64, status: &str) -> Result<()> {
@@ -1254,7 +1254,7 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO projects (name, mode, repo_path, client_name, jurisdiction, matter_type, \
              privilege_level, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
@@ -1269,7 +1269,7 @@ impl Db {
             ],
         )
         .context("insert_project")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn update_project(
@@ -1507,11 +1507,11 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO deadlines (project_id, label, due_date, rule_basis, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![project_id, label, due_date, rule_basis, now_str()],
         ).context("insert_deadline")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn update_deadline(
@@ -1881,7 +1881,7 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO project_files \
              (project_id, file_name, source_path, stored_path, mime_type, size_bytes, content_hash, created_at, privileged) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -1898,7 +1898,6 @@ impl Db {
             ],
         )
         .context("insert_project_file")?;
-        let id = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO project_corpus_stats \
              (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
@@ -2052,7 +2051,7 @@ impl Db {
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO upload_sessions \
              (project_id, file_name, mime_type, file_size, chunk_size, total_chunks, uploaded_bytes, is_zip, privileged, status, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, 'uploading', ?9, ?9)",
@@ -2069,7 +2068,7 @@ impl Db {
             ],
         )
         .context("create_upload_session")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn get_upload_session(&self, session_id: i64) -> Result<Option<UploadSession>> {
@@ -2335,14 +2334,14 @@ impl Db {
         account_id: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO cloud_connections \
              (project_id, provider, access_token, refresh_token, token_expiry, account_email, account_id, created_at) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![project_id, provider, access_token, refresh_token, token_expiry,
                     account_email, account_id, now_str()],
         ).context("insert_cloud_connection")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn list_cloud_connections(&self, project_id: i64) -> Result<Vec<CloudConnection>> {
@@ -2543,12 +2542,12 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO knowledge_files (file_name, description, size_bytes, \"inline\") \
              VALUES (?1, ?2, ?3, ?4)",
             params![file_name, description, size_bytes, inline as i64],
         )?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn delete_knowledge_file(&self, id: i64) -> Result<()> {
@@ -2794,12 +2793,12 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO citation_verifications (task_id, citation_text, citation_type, status, source, treatment, checked_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![task_id, citation_text, citation_type, status, source, treatment, checked_at],
         )?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn get_task_citations(&self, task_id: i64) -> Result<Vec<CitationVerification>> {
@@ -2919,13 +2918,13 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let queued_at = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO integration_queue (task_id, branch, repo_path, status, queued_at, pr_number) \
              VALUES (?1, ?2, ?3, 'queued', ?4, ?5)",
             params![task_id, branch, repo_path, queued_at, pr_number],
         )
         .context("enqueue")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     /// Ensure a task/branch has exactly one active queue entry.
@@ -2969,13 +2968,13 @@ impl Db {
             return Ok(id);
         }
 
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO integration_queue (task_id, branch, repo_path, status, queued_at, pr_number) \
              VALUES (?1, ?2, ?3, 'queued', ?4, ?5)",
             params![task_id, branch, repo_path, queued_at, pr_number],
         )
         .context("enqueue_or_requeue insert")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn update_queue_status(&self, id: i64, status: &str) -> Result<()> {
@@ -3083,13 +3082,13 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO task_outputs (task_id, phase, output, raw_stream, exit_code, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![task_id, phase, output, raw_stream, exit_code, created_at],
         )
         .context("insert_task_output")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn purge_task_data(&self, task_id: i64) -> Result<()> {
@@ -3139,13 +3138,13 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO task_messages (task_id, role, content, created_at) \
              VALUES (?1, ?2, ?3, ?4)",
             params![task_id, role, content, created_at],
         )
         .context("insert_task_message")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn get_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>> {
@@ -3325,13 +3324,13 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let payload_str = payload.to_string();
         let created_at = now_str();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO pipeline_events (task_id, repo_id, project_id, actor, kind, payload, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![task_id, repo_id, project_id, actor, kind, payload_str, created_at],
         )
         .context("log_event")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn list_project_events(&self, project_id: i64, limit: i64) -> Result<Vec<AuditEvent>> {
@@ -3441,13 +3440,13 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let ts = Utc::now().timestamp();
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO events (ts, level, category, message, metadata) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![ts, level, category, message, metadata],
         )
         .context("log_legacy_event")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn get_recent_events(&self, limit: i64) -> Result<Vec<LegacyEvent>> {
@@ -3479,7 +3478,7 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO pipeline_tasks \
              (title, description, repo_path, status, attempt, max_attempts, last_error, \
               created_by, notify_chat, created_at, session_id, mode, backend) \
@@ -3495,7 +3494,7 @@ impl Db {
             ],
         )
         .context("create_pipeline_task")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     /// Return "done" tasks that have no integration_queue entry (orphaned after restart).
@@ -3870,13 +3869,13 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO chat_agent_runs (jid, status, transport, original_id, trigger_msg_id, folder) \
              VALUES (?1, 'running', ?2, ?3, ?4, ?5)",
             params![jid, transport, original_id, trigger_msg_id, folder],
         )
         .context("create_chat_agent_run")?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn complete_chat_agent_run(
@@ -4155,12 +4154,12 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let encrypted_value = Self::encrypt_secret(key_value);
-        conn.execute(
+        let id = conn.execute_returning_id(
             "INSERT INTO api_keys (owner, provider, key_name, key_value) VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(owner, provider) DO UPDATE SET key_name=excluded.key_name, key_value=excluded.key_value",
             params![owner, provider, key_name, encrypted_value],
         )?;
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn get_api_key(&self, owner: &str, provider: &str) -> Result<Option<String>> {
