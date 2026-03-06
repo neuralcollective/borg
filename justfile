@@ -20,6 +20,22 @@ dash:
 image:
     docker build -t borg-agent:latest -f container/Dockerfile container/
 
+# Boot the local dependency stack: Postgres, SeaweedFS, Vespa.
+stack-up:
+    docker compose -f deploy/docker-compose.stack.yml up -d
+
+# Stop the local dependency stack.
+stack-down:
+    docker compose -f deploy/docker-compose.stack.yml down -v
+
+# Tail dependency stack logs.
+stack-logs:
+    docker compose -f deploy/docker-compose.stack.yml logs -f --tail=200
+
+# Run the local ingest/retrieval load harness against a running Borg server.
+local-loadtest *ARGS='':
+    python3 deploy/local_loadtest.py {{ARGS}}
+
 # Install sidecar dependencies
 sidecar:
     cd sidecar && bun install

@@ -1,11 +1,13 @@
+mod backup;
 mod auth;
 mod ingestion;
 mod logging;
-mod opensearch;
 mod proxy;
 mod routes;
 mod routes_modes;
+mod search;
 mod storage;
+mod vespa;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -64,7 +66,7 @@ pub struct AppState {
     pub embed_client: borg_core::knowledge::EmbeddingClient,
     pub file_storage: Arc<storage::FileStorage>,
     pub ingestion_queue: Arc<ingestion::IngestionQueue>,
-    pub opensearch: Option<Arc<opensearch::OpenSearchClient>>,
+    pub search: Option<Arc<search::SearchClient>>,
     pub brave_search: Option<Arc<borg_core::knowledge::BraveSearchClient>>,
     pub upload_processing_sem: Arc<Semaphore>,
     pub upload_processing_limit: usize,
@@ -187,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(config);
     let file_storage = Arc::new(storage::FileStorage::from_config(&config).await?);
     let ingestion_queue = Arc::new(ingestion::IngestionQueue::from_config(&config).await?);
-    let opensearch = opensearch::OpenSearchClient::from_config(&config).map(Arc::new);
+    let search = search::SearchClient::from_config(&config).map(Arc::new);
 
     match &*ingestion_queue {
         ingestion::IngestionQueue::Disabled => info!("ingestion queue backend: disabled"),
@@ -333,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
         let repos = config.watched_repos.clone();
         let config_tg = Arc::clone(&config);
         let file_storage_tg = Arc::clone(&file_storage);
-        let opensearch_tg = opensearch.clone();
+        let search_tg = search.clone();
         let tg_chat_event_tx = chat_event_tx.clone();
         let tg_ai_request_count = Arc::clone(&ai_request_count);
         let tg_sessions: Arc<TokioMutex<HashMap<String, String>>> =
@@ -426,7 +428,7 @@ async fn main() -> anyhow::Result<()> {
                                 let sessions2 = Arc::clone(&tg_sessions);
                                 let config2 = Arc::clone(&config_tg);
                                 let db2 = Arc::clone(&db_tg);
-                                let opensearch2 = opensearch_tg.clone();
+                                let search2 = search_tg.clone();
                                 let storage2 = Arc::clone(&file_storage_tg);
                                 let chat_tx2 = tg_chat_event_tx.clone();
                                 let ai_request_count2 = Arc::clone(&tg_ai_request_count);
@@ -441,7 +443,7 @@ async fn main() -> anyhow::Result<()> {
                                         &sessions2,
                                         &config2,
                                         &db2,
-                                        opensearch2.clone(),
+                                        search2.clone(),
                                         &storage2,
                                         &chat_tx2,
                                         &ai_request_count2,
@@ -553,7 +555,7 @@ async fn main() -> anyhow::Result<()> {
                 let config_flush = Arc::clone(&config_sc);
                 let db_flush = Arc::clone(&db_sc);
                 let storage_flush = Arc::clone(&storage_sc);
-                let opensearch_flush = opensearch.clone();
+                let search_flush = search.clone();
                 let chat_tx_flush = sc_chat_event_tx.clone();
                 let flush_ai_request_count = Arc::clone(&ai_request_count);
                 tokio::spawn(async move {
@@ -564,7 +566,7 @@ async fn main() -> anyhow::Result<()> {
                             let sessions2 = Arc::clone(&sessions_flush);
                             let config2 = Arc::clone(&config_flush);
                             let db2 = Arc::clone(&db_flush);
-                            let opensearch2 = opensearch_flush.clone();
+                            let search2 = search_flush.clone();
                             let storage2 = Arc::clone(&storage_flush);
                             let chat_tx2 = chat_tx_flush.clone();
                             let ai_request_count2 = Arc::clone(&flush_ai_request_count);
@@ -585,7 +587,7 @@ async fn main() -> anyhow::Result<()> {
                                     &sessions2,
                                     &config2,
                                     &db2,
-                                    opensearch2.clone(),
+                                    search2.clone(),
                                     &storage2,
                                     &chat_tx2,
                                     &ai_request_count2,
@@ -611,7 +613,7 @@ async fn main() -> anyhow::Result<()> {
                 // Process incoming sidecar events
                 let db_events = Arc::clone(&db_sc);
                 let storage_events = Arc::clone(&storage_sc);
-                let opensearch_events = opensearch.clone();
+                let search_events = search.clone();
                 let chat_tx_events = sc_chat_event_tx.clone();
                 let events_ai_request_count = Arc::clone(&ai_request_count);
                 tokio::spawn(async move {
@@ -643,7 +645,7 @@ async fn main() -> anyhow::Result<()> {
                             let sessions2 = Arc::clone(&sc_sessions);
                             let config2 = Arc::clone(&config_sc);
                             let db2 = Arc::clone(&db_events);
-                            let opensearch2 = opensearch_events.clone();
+                            let search2 = search_events.clone();
                             let storage2 = Arc::clone(&storage_events);
                             let chat_tx2 = chat_tx_events.clone();
                             let ai_request_count2 = Arc::clone(&events_ai_request_count);
@@ -665,7 +667,7 @@ async fn main() -> anyhow::Result<()> {
                                     &sessions2,
                                     &config2,
                                     &db2,
-                                    opensearch2.clone(),
+                                    search2.clone(),
                                     &storage2,
                                     &chat_tx2,
                                     &ai_request_count2,
@@ -775,7 +777,7 @@ async fn main() -> anyhow::Result<()> {
         embed_client: borg_core::knowledge::EmbeddingClient::from_env(),
         file_storage: Arc::clone(&file_storage),
         ingestion_queue: Arc::clone(&ingestion_queue),
-        opensearch: opensearch.clone(),
+        search: search.clone(),
         brave_search,
         upload_processing_sem: Arc::new(Semaphore::new(upload_processing_limit)),
         upload_processing_limit,
@@ -785,9 +787,18 @@ async fn main() -> anyhow::Result<()> {
         let queue = Arc::clone(&state.ingestion_queue);
         let db = Arc::clone(&state.db);
         let storage = Arc::clone(&state.file_storage);
-        let search = state.opensearch.clone();
+        let search = state.search.clone();
         tokio::spawn(async move {
             queue.run_worker(db, storage, search).await;
+        });
+    }
+
+    {
+        let db = Arc::clone(&db);
+        let config = Arc::clone(&config);
+        let storage = Arc::clone(&file_storage);
+        tokio::spawn(async move {
+            backup::run_backup_loop(db, config, storage).await;
         });
     }
 

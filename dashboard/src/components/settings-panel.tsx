@@ -291,12 +291,12 @@ export function SettingsPanel() {
           />
           <SelectField
             label="File Storage Backend"
-            desc="Where uploaded files are stored"
+            desc="Where uploaded files are stored. Use an S3-compatible endpoint for SeaweedFS."
             value={effective.storage_backend}
             onChange={(v) => update("storage_backend", v)}
             options={[
               { value: "local", label: "Local Disk" },
-              { value: "s3", label: "AWS S3" },
+              { value: "s3", label: "S3-Compatible" },
             ]}
           />
           <TextField
@@ -313,7 +313,7 @@ export function SettingsPanel() {
           />
           <TextField
             label="S3 Endpoint"
-            desc="Optional custom endpoint (leave empty for AWS)"
+            desc="Optional custom endpoint (for example SeaweedFS, Backblaze B2, or AWS-compatible storage)"
             value={effective.s3_endpoint}
             onChange={(v) => update("s3_endpoint", v)}
           />
@@ -322,6 +322,57 @@ export function SettingsPanel() {
             desc="Object key prefix (for example borg/)"
             value={effective.s3_prefix}
             onChange={(v) => update("s3_prefix", v)}
+          />
+          <SelectField
+            label="Backup Backend"
+            desc="Offsite backup target for active work artifacts"
+            value={effective.backup_backend}
+            onChange={(v) => update("backup_backend", v)}
+            options={[
+              { value: "disabled", label: "Disabled" },
+              { value: "s3", label: "S3-Compatible" },
+            ]}
+          />
+          <SelectField
+            label="Backup Mode"
+            desc="Default is to protect active work only. Upload backup is opt-in because it is the expensive path."
+            value={effective.backup_mode}
+            onChange={(v) => update("backup_mode", v)}
+            options={[
+              { value: "active_work_only", label: "Active Work Only" },
+              { value: "include_uploads", label: "Include Uploads" },
+            ]}
+          />
+          <TextField
+            label="Backup Bucket"
+            desc="Bucket used for offsite backup snapshots"
+            value={effective.backup_bucket}
+            onChange={(v) => update("backup_bucket", v)}
+          />
+          <TextField
+            label="Backup Region"
+            desc="Region for the backup target"
+            value={effective.backup_region}
+            onChange={(v) => update("backup_region", v)}
+          />
+          <TextField
+            label="Backup Endpoint"
+            desc="Custom endpoint for backup target (for example Backblaze B2 S3 API)"
+            value={effective.backup_endpoint}
+            onChange={(v) => update("backup_endpoint", v)}
+          />
+          <TextField
+            label="Backup Prefix"
+            desc="Object key prefix for backup snapshots"
+            value={effective.backup_prefix}
+            onChange={(v) => update("backup_prefix", v)}
+          />
+          <NumberField
+            label="Backup Poll Interval"
+            desc="Seconds between active-work backup snapshots"
+            value={effective.backup_poll_interval_s}
+            onChange={(v) => update("backup_poll_interval_s", v)}
+            min={30}
           />
           <NumberField
             label="Project Max Bytes"
@@ -368,31 +419,30 @@ export function SettingsPanel() {
           />
           <SelectField
             label="Search Backend"
-            desc="Keyword search engine for project documents"
+            desc="External retrieval engine for project documents"
             value={effective.search_backend}
             onChange={(v) => update("search_backend", v)}
             options={[
-              { value: "sqlite", label: "SQLite FTS (default)" },
-              { value: "opensearch", label: "OpenSearch" },
+              { value: "vespa", label: "Vespa" },
             ]}
           />
           <TextField
-            label="OpenSearch URL"
-            desc="Base URL for OpenSearch cluster"
-            value={effective.opensearch_url}
-            onChange={(v) => update("opensearch_url", v)}
+            label="Vespa URL"
+            desc="Base URL for Vespa query/document API"
+            value={effective.vespa_url}
+            onChange={(v) => update("vespa_url", v)}
           />
           <TextField
-            label="OpenSearch Index"
-            desc="Index name for project file documents"
-            value={effective.opensearch_index}
-            onChange={(v) => update("opensearch_index", v)}
+            label="Vespa Namespace"
+            desc="Vespa document namespace"
+            value={effective.vespa_namespace}
+            onChange={(v) => update("vespa_namespace", v)}
           />
           <TextField
-            label="OpenSearch Username"
-            desc="Optional username for basic auth"
-            value={effective.opensearch_username}
-            onChange={(v) => update("opensearch_username", v)}
+            label="Vespa Document Type"
+            desc="Vespa document type for indexed project files"
+            value={effective.vespa_document_type}
+            onChange={(v) => update("vespa_document_type", v)}
           />
         </Section>
 

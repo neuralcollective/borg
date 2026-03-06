@@ -51,6 +51,8 @@ fi
 
 backend="$(printf '%s' "${settings}" | jq -r '.backend // ""')"
 storage_backend="$(printf '%s' "${settings}" | jq -r '.storage_backend // ""')"
+backup_backend="$(printf '%s' "${settings}" | jq -r '.backup_backend // ""')"
+search_backend="$(printf '%s' "${settings}" | jq -r '.search_backend // ""')"
 public_url="$(printf '%s' "${settings}" | jq -r '.public_url // ""')"
 project_max_bytes="$(printf '%s' "${settings}" | jq -r '.project_max_bytes // 0')"
 pipeline_max_agents="$(printf '%s' "${settings}" | jq -r '.pipeline_max_agents // 0')"
@@ -74,6 +76,28 @@ if [[ "${storage_backend}" == "s3" ]]; then
   s3_region="$(printf '%s' "${settings}" | jq -r '.s3_region // ""')"
   if [[ -z "${s3_bucket}" ]]; then fail "s3_bucket is required when storage_backend=s3"; else ok "s3_bucket configured"; fi
   if [[ -z "${s3_region}" ]]; then fail "s3_region is required when storage_backend=s3"; else ok "s3_region configured"; fi
+fi
+
+if [[ "${backup_backend}" != "disabled" && "${backup_backend}" != "s3" ]]; then
+  fail "backup_backend must be disabled or s3 (got '${backup_backend}')"
+elif [[ "${backup_backend}" == "s3" ]]; then
+  backup_bucket="$(printf '%s' "${settings}" | jq -r '.backup_bucket // ""')"
+  backup_region="$(printf '%s' "${settings}" | jq -r '.backup_region // ""')"
+  if [[ -z "${backup_bucket}" ]]; then fail "backup_bucket is required when backup_backend=s3"; else ok "backup_bucket configured"; fi
+  if [[ -z "${backup_region}" ]]; then fail "backup_region is required when backup_backend=s3"; else ok "backup_region configured"; fi
+else
+  warn "offsite backups are disabled"
+fi
+
+if [[ "${search_backend}" != "vespa" ]]; then
+  fail "search_backend must be vespa (got '${search_backend}')"
+else
+  vespa_url="$(printf '%s' "${settings}" | jq -r '.vespa_url // ""')"
+  if [[ -z "${vespa_url}" ]]; then
+    fail "vespa_url is required when search_backend=vespa"
+  else
+    ok "vespa_url configured"
+  fi
 fi
 
 if [[ "${public_url}" =~ ^https?:// ]]; then

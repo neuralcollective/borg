@@ -7,7 +7,7 @@ use aws_sdk_sqs::Client;
 use borg_core::{config::Config, db::Db};
 use serde_json::json;
 
-use crate::{opensearch::OpenSearchClient, storage::FileStorage};
+use crate::{search::SearchClient, storage::FileStorage};
 
 #[derive(Clone)]
 pub enum IngestionQueue {
@@ -88,7 +88,7 @@ impl IngestionQueue {
         self: Arc<Self>,
         db: Arc<Db>,
         storage: Arc<FileStorage>,
-        search: Option<Arc<OpenSearchClient>>,
+        search: Option<Arc<SearchClient>>,
     ) {
         let (queue_url, client) = match self.as_ref() {
             Self::Disabled => return,
@@ -146,7 +146,7 @@ async fn process_message(
     body: &str,
     db: &Db,
     storage: &FileStorage,
-    search: Option<&OpenSearchClient>,
+    search: Option<&SearchClient>,
 ) -> bool {
     let parsed = serde_json::from_str::<ProjectFileIngestMsg>(body);
     let Ok(msg) = parsed else {
@@ -209,7 +209,7 @@ async fn process_message(
             )
             .await
         {
-            tracing::warn!("ingestion worker opensearch index failed: {e}");
+            tracing::warn!("ingestion worker search index failed: {e}");
         }
     }
 

@@ -472,6 +472,13 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "s3_region",
     "s3_endpoint",
     "s3_prefix",
+    "backup_backend",
+    "backup_mode",
+    "backup_bucket",
+    "backup_region",
+    "backup_endpoint",
+    "backup_prefix",
+    "backup_poll_interval_s",
     "project_max_bytes",
     "knowledge_max_bytes",
     "cloud_import_max_batch_files",
@@ -479,9 +486,9 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "sqs_queue_url",
     "sqs_region",
     "search_backend",
-    "opensearch_url",
-    "opensearch_index",
-    "opensearch_username",
+    "vespa_url",
+    "vespa_namespace",
+    "vespa_document_type",
     "experimental_domains",
 ];
 
@@ -515,16 +522,23 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("s3_region", "us-east-1"),
     ("s3_endpoint", ""),
     ("s3_prefix", "borg/"),
+    ("backup_backend", "disabled"),
+    ("backup_mode", "active_work_only"),
+    ("backup_bucket", ""),
+    ("backup_region", "us-east-1"),
+    ("backup_endpoint", ""),
+    ("backup_prefix", "borg-backups/"),
+    ("backup_poll_interval_s", "300"),
     ("project_max_bytes", "214748364800"),
     ("knowledge_max_bytes", "536870912000"),
     ("cloud_import_max_batch_files", "1000"),
     ("ingestion_queue_backend", "disabled"),
     ("sqs_queue_url", ""),
     ("sqs_region", "us-east-1"),
-    ("search_backend", "sqlite"),
-    ("opensearch_url", ""),
-    ("opensearch_index", "borg-project-files"),
-    ("opensearch_username", ""),
+    ("search_backend", "vespa"),
+    ("vespa_url", "http://127.0.0.1:8080"),
+    ("vespa_namespace", "borg"),
+    ("vespa_document_type", "project_file"),
     ("experimental_domains", "false"),
 ];
 
@@ -638,16 +652,6 @@ fn format_compact_bytes(n: i64) -> String {
     }
 }
 
-fn normalized_retrieval_query(query: &str) -> String {
-    let tokens = query
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
-        .map(str::trim)
-        .filter(|t| t.len() >= 2)
-        .take(20)
-        .collect::<Vec<_>>();
-    tokens.join(" ")
-}
-
 fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
     if input.chars().count() <= max_chars {
         return (input.to_string(), false);
@@ -694,14 +698,14 @@ struct StagedProjectFile {
 
 async fn search_project_context_hits(
     db: &Db,
-    opensearch: Option<&crate::opensearch::OpenSearchClient>,
+    search: Option<&crate::search::SearchClient>,
     project_id: i64,
     query: &str,
     limit: i64,
 ) -> Vec<ProjectContextHit> {
     let mut hits = Vec::new();
     let mut seen = HashSet::new();
-    if let Some(search) = opensearch {
+    if let Some(search) = search {
         match search.search(query, Some(project_id), limit.max(1)).await {
             Ok(results) => {
                 for r in results {
@@ -710,32 +714,14 @@ async fn search_project_context_hits(
                             source_path: r.file_path,
                             snippet: r.content_snippet,
                             score: r.score,
-                            source: "opensearch",
+                            source: "search",
                         });
                     }
                 }
             },
             Err(e) => {
-                tracing::warn!(
-                    "project context opensearch query failed, falling back to sqlite fts: {e}"
-                );
+                tracing::warn!("project context search query failed: {e}");
             },
-        }
-    }
-
-    let fts_query = normalized_retrieval_query(query);
-    if hits.is_empty() && !fts_query.is_empty() {
-        if let Ok(results) = db.fts_search(&fts_query, Some(project_id), limit.max(1)) {
-            for r in results {
-                if seen.insert(r.file_path.clone()) {
-                    hits.push(ProjectContextHit {
-                        source_path: r.file_path,
-                        snippet: r.content_snippet,
-                        score: (-r.rank).max(0.0),
-                        source: "keyword",
-                    });
-                }
-            }
         }
     }
 
@@ -842,7 +828,7 @@ async fn build_project_context(
     retrieval_query: &str,
     session_dir: &str,
     db: &Db,
-    opensearch: Option<&crate::opensearch::OpenSearchClient>,
+    search: Option<&crate::search::SearchClient>,
     storage: &FileStorage,
 ) -> String {
     let stats = db.get_project_file_stats(project.id).unwrap_or_default();
@@ -861,7 +847,7 @@ async fn build_project_context(
     let hits = if raw_query.is_empty() {
         Vec::new()
     } else {
-        search_project_context_hits(db, opensearch, project.id, raw_query, 12).await
+        search_project_context_hits(db, search, project.id, raw_query, 12).await
     };
     let mut selected = Vec::new();
     for hit in hits {
@@ -1026,7 +1012,7 @@ pub(crate) async fn run_chat_agent(
     sessions: &Arc<TokioMutex<HashMap<String, String>>>,
     config: &Config,
     db: &Arc<Db>,
-    opensearch: Option<Arc<crate::opensearch::OpenSearchClient>>,
+    search: Option<Arc<crate::search::SearchClient>>,
     storage: &Arc<FileStorage>,
     chat_event_tx: &broadcast::Sender<String>,
     ai_request_count: &Arc<AtomicU64>,
@@ -1077,7 +1063,7 @@ pub(crate) async fn run_chat_agent(
             &retrieval_query,
             &session_dir,
             db,
-            opensearch.as_deref(),
+            search.as_deref(),
             storage,
         )
         .await;
@@ -1339,8 +1325,31 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
 
 // ── Handlers ──────────────────────────────────────────────────────────────
 
-pub(crate) async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
+pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let storage_result = state.file_storage.healthcheck().await;
+    let search_result = if let Some(search) = &state.search {
+        search.healthcheck().await
+    } else {
+        Ok(())
+    };
+    let backup = crate::backup::backup_status_snapshot(&state.db, &state.config).await;
+    let ok = storage_result.is_ok() && search_result.is_ok();
+    Json(json!({
+        "status": if ok { "ok" } else { "degraded" },
+        "storage": {
+            "backend": state.file_storage.backend_name(),
+            "target": state.file_storage.target(),
+            "healthy": storage_result.is_ok(),
+            "error": storage_result.err().map(|e| e.to_string()),
+        },
+        "search": {
+            "backend": state.search.as_ref().map(|s| s.backend_name()).unwrap_or("none"),
+            "target": state.search.as_ref().map(|s| s.target()).unwrap_or_default(),
+            "healthy": search_result.is_ok(),
+            "error": search_result.err().map(|e| e.to_string()),
+        },
+        "backup": backup,
+    }))
 }
 
 // Projects
@@ -1756,16 +1765,14 @@ pub(crate) async fn search_documents(
 
     let mut items: Vec<Value> = Vec::new();
 
-    // Keyword search backend: OpenSearch when configured, otherwise SQLite FTS5.
-    let mut used_fts_fallback = true;
-    if let Some(opensearch) = &state.opensearch {
-        match opensearch
+    // Keyword search backend: Vespa (or another configured external search provider).
+    if let Some(search) = &state.search {
+        match search
             .search(&query.q, query.project_id, query.limit)
             .await
         {
-            Ok(os_results) => {
-                used_fts_fallback = false;
-                for r in os_results {
+            Ok(results) => {
+                for r in results {
                     let project_name = state
                         .db
                         .get_project(r.project_id)
@@ -1781,40 +1788,16 @@ pub(crate) async fn search_documents(
                         "title_snippet": r.title_snippet,
                         "content_snippet": r.content_snippet,
                         "score": r.score,
-                        "source": "keyword",
+                        "source": search.backend_name(),
                     }));
                 }
             },
             Err(e) => {
-                tracing::warn!("opensearch query failed, falling back to sqlite fts: {e}");
+                tracing::warn!("external search query failed: {e}");
             },
         }
-    }
-
-    if used_fts_fallback {
-        let fts_results = state
-            .db
-            .fts_search(&query.q, query.project_id, query.limit)
-            .map_err(internal)?;
-        for r in &fts_results {
-            let project_name = state
-                .db
-                .get_project(r.project_id)
-                .ok()
-                .flatten()
-                .map(|p| p.name.clone())
-                .unwrap_or_default();
-            items.push(json!({
-                "project_id": r.project_id,
-                "project_name": project_name,
-                "task_id": r.task_id,
-                "file_path": r.file_path,
-                "title_snippet": r.title_snippet,
-                "content_snippet": r.content_snippet,
-                "rank": r.rank,
-                "source": "keyword",
-            }));
-        }
+    } else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
     // Semantic search (when requested and embeddings exist)
@@ -3627,9 +3610,9 @@ async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow)
         tracing::warn!("project file fts index failed for {}: {e}", file.file_name);
         return;
     }
-    if let Some(os) = &state.opensearch {
+    if let Some(search) = &state.search {
         let doc_id = format!("project-{}-file-{}", file.project_id, file.id);
-        if let Err(e) = os
+        if let Err(e) = search
             .index_document(
                 &doc_id,
                 file.project_id,
@@ -3641,7 +3624,7 @@ async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow)
             .await
         {
             tracing::warn!(
-                "project file opensearch index failed for {}: {e}",
+                "project file search index failed for {}: {e}",
                 file.file_name
             );
         }
@@ -3690,8 +3673,8 @@ pub(crate) async fn reextract_project_file(
             .db
             .fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text)
             .map_err(internal)?;
-        if let Some(os) = &state.opensearch {
-            let _ = os
+        if let Some(search) = &state.search {
+            let _ = search
                 .index_document(
                     &format!("project-{}-file-{}", project_id, file_id),
                     project_id,
@@ -3788,6 +3771,7 @@ pub(crate) async fn get_status(
     let no_merge_alert = queued_count > 0 && last_merge_ts > 0 && (now - last_merge_ts) >= 60 * 60;
     let guardrail_alert = rebase_backlog_alert || no_merge_alert;
     let ai_requests = state.ai_request_count.load(Ordering::Relaxed);
+    let backup = crate::backup::backup_status_snapshot(&state.db, &state.config).await;
 
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -3807,6 +3791,15 @@ pub(crate) async fn get_status(
         "guardrail_rebase_count": rebase_count,
         "guardrail_queued_count": queued_count,
         "guardrail_no_merge_mins": no_merge_mins,
+        "storage": {
+            "backend": state.file_storage.backend_name(),
+            "target": state.file_storage.target(),
+        },
+        "search": {
+            "backend": state.search.as_ref().map(|s| s.backend_name()).unwrap_or("none"),
+            "target": state.search.as_ref().map(|s| s.target()).unwrap_or_default(),
+        },
+        "backup": backup,
     })))
 }
 
@@ -4089,6 +4082,7 @@ pub(crate) async fn get_settings(
                 | "project_max_bytes"
                 | "knowledge_max_bytes"
                 | "cloud_import_max_batch_files"
+                | "backup_poll_interval_s"
         ) {
             s.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(s))
         } else {
@@ -4391,7 +4385,7 @@ pub(crate) async fn post_project_chat(
             &state2.web_sessions,
             &state2.config,
             &state2.db,
-            state2.opensearch.clone(),
+            state2.search.clone(),
             &state2.file_storage,
             &state2.chat_event_tx,
             &state2.ai_request_count,
@@ -4475,7 +4469,7 @@ pub(crate) async fn post_chat(
             &state2.web_sessions,
             &state2.config,
             &state2.db,
-            state2.opensearch.clone(),
+            state2.search.clone(),
             &state2.file_storage,
             &state2.chat_event_tx,
             &state2.ai_request_count,
@@ -5534,7 +5528,7 @@ pub(crate) async fn import_cloud_files(
         if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) {
             // Kick off text extraction in-process when queue is disabled
             let db2 = state.db.clone();
-            let opensearch = state.opensearch.clone();
+            let search = state.search.clone();
             let mime2 = mime.clone();
             let bytes2 = bytes.clone();
             let proj_id = id;
@@ -5545,8 +5539,8 @@ pub(crate) async fn import_cloud_files(
                     if !text.is_empty() {
                         let _ = db2.update_project_file_text(file_id, &text);
                         let _ = db2.fts_index_document(proj_id, 0, &source_path2, &fname, &text);
-                        if let Some(os) = &opensearch {
-                            let _ = os
+                        if let Some(search) = &search {
+                            let _ = search
                                 .index_document(
                                     &format!("project-{}-file-{}", proj_id, file_id),
                                     proj_id,

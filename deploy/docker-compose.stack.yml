@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: borg-postgres
+    environment:
+      POSTGRES_DB: borg
+      POSTGRES_USER: borg
+      POSTGRES_PASSWORD: borg
+    ports:
+      - "5432:5432"
+    volumes:
+      - borg-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U borg -d borg"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: borg-seaweedfs
+    command:
+      [
+        "server",
+        "-dir=/data",
+        "-master.port=9333",
+        "-filer.port=8888",
+        "-s3",
+        "-s3.port=8333",
+        "-s3.config=/etc/seaweedfs/s3.conf",
+        "-volume.max=0"
+      ]
+    ports:
+      - "8333:8333"
+      - "8888:8888"
+      - "9333:9333"
+    volumes:
+      - borg-seaweedfs:/data
+      - ./seaweedfs/s3.conf:/etc/seaweedfs/s3.conf:ro
+
+  seaweed-init:
+    image: amazon/aws-cli:2.31.3
+    depends_on:
+      - seaweedfs
+    environment:
+      AWS_ACCESS_KEY_ID: seaweedfs
+      AWS_SECRET_ACCESS_KEY: seaweedfssecret
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      until aws --endpoint-url http://seaweedfs:8333 s3api list-buckets >/dev/null 2>&1;
+      do sleep 2; done;
+      aws --endpoint-url http://seaweedfs:8333 s3api create-bucket --bucket borg-files 2>/dev/null || true;
+      aws --endpoint-url http://seaweedfs:8333 s3api create-bucket --bucket borg-backups 2>/dev/null || true
+
+  vespa:
+    image: vespaengine/vespa:latest
+    container_name: borg-vespa
+    hostname: vespa
+    ports:
+      - "8080:8080"
+      - "19071:19071"
+    volumes:
+      - borg-vespa:/opt/vespa/var
+
+  vespa-init:
+    image: vespaengine/vespa-cli:latest
+    depends_on:
+      - vespa
+    volumes:
+      - ./vespa/application:/app:ro
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      until curl -fsS http://vespa:19071/state/v1/health >/dev/null 2>&1;
+      do sleep 3; done;
+      vespa config set target http://vespa:19071 &&
+      vespa deploy /app &&
+      vespa status --wait 300
+
+volumes:
+  borg-postgres:
+  borg-seaweedfs:
+  borg-vespa:

@@ -10,11 +10,18 @@
   "s3_region": "us-east-1",
   "s3_endpoint": "",
   "s3_prefix": "borg/",
+  "backup_backend": "s3",
+  "backup_mode": "active_work_only",
+  "backup_bucket": "borg-prod-backups",
+  "backup_region": "us-east-1",
+  "backup_endpoint": "",
+  "backup_prefix": "borg-backups/",
+  "backup_poll_interval_s": 300,
   "ingestion_queue_backend": "sqs",
   "sqs_queue_url": "",
   "sqs_region": "us-east-1",
-  "search_backend": "sqlite",
-  "opensearch_url": "",
-  "opensearch_index": "borg-prod",
-  "opensearch_username": ""
+  "search_backend": "vespa",
+  "vespa_url": "http://vespa.internal:8080",
+  "vespa_namespace": "borg",
+  "vespa_document_type": "project_file"
 }

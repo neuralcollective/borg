@@ -1,0 +1,49 @@
+schema project_file {
+  document project_file {
+    field project_id type long {
+      indexing: attribute | summary
+    }
+
+    field task_id type long {
+      indexing: attribute | summary
+    }
+
+    field file_path type string {
+      indexing: index | summary
+      index: enable-bm25
+    }
+
+    field title type string {
+      indexing: index | summary
+      index: enable-bm25
+    }
+
+    field content type string {
+      indexing: index | summary
+      index: enable-bm25
+    }
+
+    field indexed_at type string {
+      indexing: attribute | summary
+    }
+  }
+
+  fieldset default {
+    fields: title, content, file_path
+  }
+
+  rank-profile default {
+    first-phase {
+      expression: bm25(title) + bm25(content) + bm25(file_path)
+    }
+  }
+
+  document-summary default {
+    summary project_id type long {}
+    summary task_id type long {}
+    summary file_path type string {}
+    summary title type string {}
+    summary content type string {}
+    summary indexed_at type string {}
+  }
+}

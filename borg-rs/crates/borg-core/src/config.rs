@@ -108,6 +108,17 @@ pub struct Config {
     pub s3_secret_key: String,
     pub s3_prefix: String,
 
+    // Work backup backend
+    pub backup_backend: String, // "disabled" | "s3"
+    pub backup_mode: String,    // "active_work_only" | "include_uploads"
+    pub backup_bucket: String,
+    pub backup_region: String,
+    pub backup_endpoint: String,
+    pub backup_access_key: String,
+    pub backup_secret_key: String,
+    pub backup_prefix: String,
+    pub backup_poll_interval_s: i64,
+
     // Storage quotas
     pub project_max_bytes: i64,
     pub knowledge_max_bytes: i64,
@@ -119,11 +130,10 @@ pub struct Config {
     pub sqs_region: String,
 
     // Search backend
-    pub search_backend: String, // "sqlite" | "opensearch"
-    pub opensearch_url: String,
-    pub opensearch_index: String,
-    pub opensearch_username: String,
-    pub opensearch_password: String,
+    pub search_backend: String, // "vespa"
+    pub vespa_url: String,
+    pub vespa_namespace: String,
+    pub vespa_document_type: String,
 
     // Product focus
     /// Enable non-core domain modes (health/web/crew/sales/data/chef/build/medwrite).
@@ -687,6 +697,16 @@ impl Config {
             ("s3_region", self.s3_region.clone()),
             ("s3_endpoint", self.s3_endpoint.clone()),
             ("s3_prefix", self.s3_prefix.clone()),
+            ("backup_backend", self.backup_backend.clone()),
+            ("backup_mode", self.backup_mode.clone()),
+            ("backup_bucket", self.backup_bucket.clone()),
+            ("backup_region", self.backup_region.clone()),
+            ("backup_endpoint", self.backup_endpoint.clone()),
+            ("backup_prefix", self.backup_prefix.clone()),
+            (
+                "backup_poll_interval_s",
+                self.backup_poll_interval_s.to_string(),
+            ),
             ("project_max_bytes", self.project_max_bytes.to_string()),
             ("knowledge_max_bytes", self.knowledge_max_bytes.to_string()),
             (
@@ -700,9 +720,9 @@ impl Config {
             ("sqs_queue_url", self.sqs_queue_url.clone()),
             ("sqs_region", self.sqs_region.clone()),
             ("search_backend", self.search_backend.clone()),
-            ("opensearch_url", self.opensearch_url.clone()),
-            ("opensearch_index", self.opensearch_index.clone()),
-            ("opensearch_username", self.opensearch_username.clone()),
+            ("vespa_url", self.vespa_url.clone()),
+            ("vespa_namespace", self.vespa_namespace.clone()),
+            ("vespa_document_type", self.vespa_document_type.clone()),
             (
                 "experimental_domains",
                 self.experimental_domains.to_string(),
@@ -772,6 +792,13 @@ impl Config {
         c.s3_region = get_str("s3_region", &c.s3_region);
         c.s3_endpoint = get_str("s3_endpoint", &c.s3_endpoint);
         c.s3_prefix = get_str("s3_prefix", &c.s3_prefix);
+        c.backup_backend = get_str("backup_backend", &c.backup_backend);
+        c.backup_mode = get_str("backup_mode", &c.backup_mode);
+        c.backup_bucket = get_str("backup_bucket", &c.backup_bucket);
+        c.backup_region = get_str("backup_region", &c.backup_region);
+        c.backup_endpoint = get_str("backup_endpoint", &c.backup_endpoint);
+        c.backup_prefix = get_str("backup_prefix", &c.backup_prefix);
+        load_i64!("backup_poll_interval_s", c.backup_poll_interval_s);
         load_i64!("project_max_bytes", c.project_max_bytes);
         load_i64!("knowledge_max_bytes", c.knowledge_max_bytes);
         load_i64!(
@@ -782,9 +809,9 @@ impl Config {
         c.sqs_queue_url = get_str("sqs_queue_url", &c.sqs_queue_url);
         c.sqs_region = get_str("sqs_region", &c.sqs_region);
         c.search_backend = get_str("search_backend", &c.search_backend);
-        c.opensearch_url = get_str("opensearch_url", &c.opensearch_url);
-        c.opensearch_index = get_str("opensearch_index", &c.opensearch_index);
-        c.opensearch_username = get_str("opensearch_username", &c.opensearch_username);
+        c.vespa_url = get_str("vespa_url", &c.vespa_url);
+        c.vespa_namespace = get_str("vespa_namespace", &c.vespa_namespace);
+        c.vespa_document_type = get_str("vespa_document_type", &c.vespa_document_type);
         c.experimental_domains = get_bool("experimental_domains", c.experimental_domains);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
@@ -947,6 +974,27 @@ impl Config {
             s3_access_key: get_str("AWS_ACCESS_KEY_ID", &dotenv, ""),
             s3_secret_key: get_str("AWS_SECRET_ACCESS_KEY", &dotenv, ""),
             s3_prefix: get_str("S3_PREFIX", &dotenv, "borg/"),
+            backup_backend: get_str("BACKUP_BACKEND", &dotenv, "disabled"),
+            backup_mode: get_str("BACKUP_MODE", &dotenv, "active_work_only"),
+            backup_bucket: get_str("BACKUP_BUCKET", &dotenv, ""),
+            backup_region: get_str(
+                "BACKUP_REGION",
+                &dotenv,
+                get_str("AWS_REGION", &dotenv, "us-east-1").as_str(),
+            ),
+            backup_endpoint: get_str("BACKUP_ENDPOINT", &dotenv, ""),
+            backup_access_key: get_str(
+                "BACKUP_ACCESS_KEY_ID",
+                &dotenv,
+                get_str("AWS_ACCESS_KEY_ID", &dotenv, "").as_str(),
+            ),
+            backup_secret_key: get_str(
+                "BACKUP_SECRET_ACCESS_KEY",
+                &dotenv,
+                get_str("AWS_SECRET_ACCESS_KEY", &dotenv, "").as_str(),
+            ),
+            backup_prefix: get_str("BACKUP_PREFIX", &dotenv, "borg-backups/"),
+            backup_poll_interval_s: get_i64("BACKUP_POLL_INTERVAL_S", &dotenv, 300),
             project_max_bytes: get_i64("PROJECT_MAX_BYTES", &dotenv, 200 * 1024 * 1024 * 1024),
             knowledge_max_bytes: get_i64("KNOWLEDGE_MAX_BYTES", &dotenv, 500 * 1024 * 1024 * 1024),
             cloud_import_max_batch_files: get_i64("CLOUD_IMPORT_MAX_BATCH_FILES", &dotenv, 1000),
@@ -957,11 +1005,10 @@ impl Config {
                 &dotenv,
                 get_str("AWS_REGION", &dotenv, "us-east-1").as_str(),
             ),
-            search_backend: get_str("SEARCH_BACKEND", &dotenv, "sqlite"),
-            opensearch_url: get_str("OPENSEARCH_URL", &dotenv, ""),
-            opensearch_index: get_str("OPENSEARCH_INDEX", &dotenv, "borg-project-files"),
-            opensearch_username: get_str("OPENSEARCH_USERNAME", &dotenv, ""),
-            opensearch_password: get_str("OPENSEARCH_PASSWORD", &dotenv, ""),
+            search_backend: get_str("SEARCH_BACKEND", &dotenv, "vespa"),
+            vespa_url: get_str("VESPA_URL", &dotenv, ""),
+            vespa_namespace: get_str("VESPA_NAMESPACE", &dotenv, "borg"),
+            vespa_document_type: get_str("VESPA_DOCUMENT_TYPE", &dotenv, "project_file"),
             experimental_domains: get_bool("EXPERIMENTAL_DOMAINS", &dotenv, false),
         })
     }

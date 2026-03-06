@@ -295,6 +295,13 @@ export interface Settings {
   s3_region: string;
   s3_endpoint: string;
   s3_prefix: string;
+  backup_backend: string;
+  backup_mode: string;
+  backup_bucket: string;
+  backup_region: string;
+  backup_endpoint: string;
+  backup_prefix: string;
+  backup_poll_interval_s: number;
   project_max_bytes: number;
   knowledge_max_bytes: number;
   cloud_import_max_batch_files: number;
@@ -302,9 +309,9 @@ export interface Settings {
   sqs_queue_url: string;
   sqs_region: string;
   search_backend: string;
-  opensearch_url: string;
-  opensearch_index: string;
-  opensearch_username: string;
+  vespa_url: string;
+  vespa_namespace: string;
+  vespa_document_type: string;
   experimental_domains: boolean;
 }
 
@@ -980,7 +987,7 @@ export function useUpcomingDeadlines(limit = 50) {
   });
 }
 
-// ── Full-text search ──────────────────────────────────────────────────
+// ── Retrieval ─────────────────────────────────────────────────────────
 
 export interface FtsSearchResult {
   project_id: number;
@@ -991,7 +998,7 @@ export interface FtsSearchResult {
   content_snippet: string;
   rank?: number;
   score?: number;
-  source?: "keyword" | "semantic";
+  source?: string;
 }
 
 export interface ThemeTerm {

@@ -76,6 +76,45 @@ impl FileStorage {
         })
     }
 
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::S3 { .. } => "s3",
+        }
+    }
+
+    pub fn target(&self) -> String {
+        match self {
+            Self::Local { data_dir } => data_dir.clone(),
+            Self::S3 { bucket, prefix, .. } => format!("s3://{bucket}/{prefix}"),
+        }
+    }
+
+    pub async fn healthcheck(&self) -> Result<()> {
+        match self {
+            Self::Local { data_dir } => {
+                tokio::fs::create_dir_all(data_dir)
+                    .await
+                    .with_context(|| format!("ensure local storage dir {data_dir}"))?;
+                let probe = format!("{data_dir}/.storage-healthcheck");
+                tokio::fs::write(&probe, b"ok")
+                    .await
+                    .with_context(|| format!("write storage healthcheck probe {probe}"))?;
+                tokio::fs::remove_file(&probe).await.ok();
+                Ok(())
+            },
+            Self::S3 { bucket, client, .. } => {
+                client
+                    .head_bucket()
+                    .bucket(bucket)
+                    .send()
+                    .await
+                    .context("s3 head_bucket healthcheck")?;
+                Ok(())
+            },
+        }
+    }
+
     fn parse_s3_uri(uri: &str) -> Option<(String, String)> {
         let rest = uri.strip_prefix("s3://")?;
         let (bucket, key) = rest.split_once('/')?;

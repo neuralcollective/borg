@@ -18,6 +18,7 @@ pub struct Db {
 
 // ── Auxiliary types ───────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TaskOutput {
     pub id: i64,
     pub task_id: i64,
@@ -28,6 +29,7 @@ pub struct TaskOutput {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TaskMessage {
     pub id: i64,
     pub task_id: i64,
@@ -37,6 +39,7 @@ pub struct TaskMessage {
     pub delivered_phase: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RepoRow {
     pub id: i64,
     pub path: String,
@@ -116,7 +119,7 @@ pub struct ChatAgentRun {
     pub completed_at: Option<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ProjectRow {
     pub id: i64,
     pub name: String,
