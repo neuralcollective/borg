@@ -82,7 +82,7 @@ impl CognitiveClient {
     pub async fn define(&self, term: &str) -> Result<DictionaryEntry> {
         let resp = self
             .http
-            .get(format!("{}/dictionary/{}", self.base_url, term))
+            .get(format!("{}/dictionary/{}", self.base_url, urlencoding::encode(term)))
             .bearer_auth(&self.api_key)
             .send()
             .await?

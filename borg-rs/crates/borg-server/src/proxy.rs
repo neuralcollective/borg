@@ -228,7 +228,7 @@ async fn handle_anthropic_messages(
     req: Request,
 ) -> Result<Response, StatusCode> {
     let headers = req.headers().clone();
-    let body_bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+    let body_bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 

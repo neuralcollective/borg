@@ -29,7 +29,7 @@ impl FederalRegisterClient {
     }
 
     pub async fn get_document(&self, document_number: &str) -> Result<serde_json::Value> {
-        let url = format!("{BASE}/documents/{document_number}");
+        let url = format!("{BASE}/documents/{}", urlencoding::encode(document_number));
         Ok(self
             .http
             .get(&url)

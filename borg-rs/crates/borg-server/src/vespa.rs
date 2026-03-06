@@ -181,9 +181,13 @@ fn excerpt_for_query(content: &str, query: &str) -> String {
         .map(|part| part.to_lowercase());
     if let Some(term) = term {
         if let Some(idx) = lowered.find(&term) {
-            let start = idx.saturating_sub(160);
-            let end = (idx + term.len() + 240).min(trimmed.len());
-            return trimmed[start..end].replace('\n', " ");
+            let char_idx = trimmed.char_indices()
+                .position(|(i, _)| i >= idx)
+                .unwrap_or(0);
+            let chars: Vec<char> = trimmed.chars().collect();
+            let start = char_idx.saturating_sub(160);
+            let end = (char_idx + term.chars().count() + 240).min(chars.len());
+            return chars[start..end].iter().collect::<String>().replace('\n', " ");
         }
     }
     trimmed.chars().take(360).collect::<String>().replace('\n', " ")

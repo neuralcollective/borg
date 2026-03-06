@@ -80,7 +80,7 @@ static PATTERNS: LazyLock<Vec<CitationPattern>> = LazyLock::new(|| {
             citation_type: "regulation",
         },
         CitationPattern {
-            regex: Regex::new(r"(?:Cal|N\.Y|Tex|Fla|Ill|Ohio|Pa|Mass|Mich|Ga|N\.J|Va|Wash|Ariz|Md|Minn|Mo|Wis|Colo|Conn|Or|S\.C|Ky|La|Okla|Ala|Ind)\.?\s+[A-Z][A-Za-z.&\s]+§+\s*\d+[\w.-]*").unwrap(),
+            regex: Regex::new(r"(?:Cal|N\.Y|Tex|Fla|Ill|Ohio|Pa|Mass|Mich|Ga|N\.J|Va|Wash|Ariz|Md|Minn|Mo|Wis|Colo|Conn|Or|S\.C|Ky|La|Okla|Ala|Ind)\.?\s+[A-Z][A-Za-z.&\s]{1,60}§+\s*\d+[\w.-]*").unwrap(),
             citation_type: "statute",
         },
     ]

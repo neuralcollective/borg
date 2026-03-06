@@ -34,6 +34,7 @@ function cached(key) {
 }
 
 function setCache(key, val) {
+  cache.delete(key);
   if (cache.size >= MAX_CACHE) cache.delete(cache.keys().next().value);
   cache.set(key, { val, ts: Date.now() });
   return val;

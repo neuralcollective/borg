@@ -361,9 +361,9 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
-server.setRequestHandler("tools/list", async () => ({ tools: TOOLS }));
+server.setRequestHandler({ method: "tools/list" }, async () => ({ tools: TOOLS }));
 
-server.setRequestHandler("tools/call", async (request) => {
+server.setRequestHandler({ method: "tools/call" }, async (request) => {
   const { name, arguments: args } = request.params;
   if (!API_KEY) {
     return {

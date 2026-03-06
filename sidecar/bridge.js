@@ -151,7 +151,7 @@ async function startWhatsApp() {
             emit('whatsapp', { event: 'error', message: 'max reconnection attempts exceeded' });
           }
         } else {
-          process.exit(0);
+          emit('whatsapp', { event: 'logged_out', message: 'WhatsApp logged out' });
         }
       }
 
@@ -310,6 +310,15 @@ function startAgentSession(session_id, cmd) {
 
   proc.on('close', (code) => {
     if (agentSessions.get(session_id)?.process !== proc) return;
+    if (stdoutBuf.trim()) {
+      emit('agent', { event: 'stream_line', session_id, line: stdoutBuf });
+      try {
+        const obj = JSON.parse(stdoutBuf);
+        if (obj.type === 'result' && obj.result) lastResult = obj.result;
+        if ((obj.type === 'system' || obj.type === 'result') && obj.session_id)
+          lastSessionId = obj.session_id;
+      } catch {}
+    }
     agentSessions.delete(session_id);
     emit('agent', { event: 'complete', session_id, output: lastResult, new_session_id: lastSessionId, exit_code: code ?? 0 });
   });

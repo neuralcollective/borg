@@ -318,7 +318,9 @@ pub(crate) async fn approve_task(
         .db
         .update_task_status(id, &next, None)
         .map_err(internal)?;
-    let _ = state.db.mark_task_completed(id);
+    if next == "done" {
+        let _ = state.db.mark_task_completed(id);
+    }
     let pid = if task.project_id > 0 {
         Some(task.project_id)
     } else {
@@ -437,7 +439,7 @@ pub(crate) async fn get_revision_history(
                         "phases": round_outputs.iter().map(|o| json!({
                             "phase": o.phase,
                             "exit_code": o.exit_code,
-                            "output_preview": if o.output.len() > 500 { format!("{}…", &o.output[..500]) } else { o.output.clone() },
+                            "output_preview": if o.output.len() > 500 { let end = o.output.floor_char_boundary(500); format!("{}…", &o.output[..end]) } else { o.output.clone() },
                             "created_at": o.created_at.to_rfc3339(),
                         })).collect::<Vec<_>>(),
                     }));
@@ -462,7 +464,7 @@ pub(crate) async fn get_revision_history(
             "phases": round_outputs.iter().map(|o| json!({
                 "phase": o.phase,
                 "exit_code": o.exit_code,
-                "output_preview": if o.output.len() > 500 { format!("{}…", &o.output[..500]) } else { o.output.clone() },
+                "output_preview": if o.output.len() > 500 { let end = o.output.floor_char_boundary(500); format!("{}…", &o.output[..end]) } else { o.output.clone() },
                 "created_at": o.created_at.to_rfc3339(),
             })).collect::<Vec<_>>(),
         }));
@@ -631,18 +633,19 @@ pub(crate) async fn unblock_task(
                 .db
                 .insert_task_message(id, "user", &body.response)
                 .map_err(internal)?;
-            let next_phase = borg_core::modes::get_mode(&task.mode)
-                .map(|m| {
-                    m.phases
-                        .iter()
-                        .find(|p| p.phase_type == PhaseType::Agent)
-                        .map(|p| p.name.clone())
+            let resume_phase = state.db.get_task_outputs(id)
+                .ok()
+                .and_then(|outputs| outputs.last().map(|o| o.phase.clone()))
+                .unwrap_or_else(|| {
+                    borg_core::modes::get_mode(&task.mode)
+                        .and_then(|m| m.phases.iter()
+                            .find(|p| p.phase_type == PhaseType::Agent)
+                            .map(|p| p.name.clone()))
                         .unwrap_or_else(|| "implement".to_string())
-                })
-                .unwrap_or_else(|| "implement".to_string());
+                });
             state
                 .db
-                .update_task_status(id, &next_phase, None)
+                .update_task_status(id, &resume_phase, None)
                 .map_err(internal)?;
             Ok(StatusCode::OK)
         },

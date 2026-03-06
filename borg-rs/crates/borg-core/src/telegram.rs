@@ -241,7 +241,9 @@ fn split_text(text: &str, limit: usize) -> Vec<String> {
     let mut remaining = text;
     while remaining.len() > limit {
         let safe_limit = remaining.floor_char_boundary(limit);
-        let cut = remaining[..safe_limit].rfind('\n').unwrap_or(safe_limit);
+        let cut = remaining[..safe_limit].rfind('\n')
+            .filter(|&pos| pos > 0)
+            .unwrap_or(safe_limit);
         chunks.push(remaining[..cut].to_string());
         remaining = &remaining[cut..];
         remaining = remaining.trim_start_matches('\n');

@@ -5,6 +5,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { PlaidApi, PlaidEnvironments, Configuration } from "plaid";
+import { createHash } from "crypto";
 
 const CLIENT_ID = process.env.PLAID_CLIENT_ID || "";
 const SECRET = process.env.PLAID_SECRET || "";
@@ -57,6 +58,7 @@ function cached(key) {
 }
 
 function setCache(key, val) {
+  cache.delete(key);
   if (cache.size >= MAX_CACHE) cache.delete(cache.keys().next().value);
   cache.set(key, { val, ts: Date.now() });
   return val;
@@ -228,7 +230,7 @@ const handlers = {
 
   plaid_get_accounts: async (args) => {
     checkRate();
-    const key = `accounts:${args.access_token}`;
+    const key = `accounts:${createHash("sha256").update(args.access_token).digest("hex").slice(0, 16)}`;
     const hit = cached(key);
     if (hit) return hit;
     const resp = await plaid().accountsGet({
@@ -274,7 +276,7 @@ const handlers = {
 
   plaid_get_identity: async (args) => {
     checkRate();
-    const key = `identity:${args.access_token}`;
+    const key = `identity:${createHash("sha256").update(args.access_token).digest("hex").slice(0, 16)}`;
     const hit = cached(key);
     if (hit) return hit;
     const resp = await plaid().identityGet({

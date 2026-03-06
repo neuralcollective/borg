@@ -18,7 +18,7 @@ impl EdgarClient {
     }
 
     pub async fn fulltext_search(&self, query: &str) -> Result<serde_json::Value> {
-        let url = format!("{EFTS}/search-index?q={}", urlencoding::encode(query));
+        let url = format!("{EFTS}/search?q={}", urlencoding::encode(query));
         Ok(self
             .http
             .get(&url)

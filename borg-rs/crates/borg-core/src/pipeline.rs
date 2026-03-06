@@ -301,16 +301,18 @@ impl Pipeline {
         };
         let now = Utc::now().timestamp();
         let unlock_at = now + secs;
-        self.retry_not_before
-            .try_lock()
-            .map(|mut m| m.insert(task_id, unlock_at))
-            .ok();
+        if let Ok(mut m) = self.retry_not_before.try_lock() {
+            m.insert(task_id, unlock_at);
+        }
         Some(secs)
     }
 
     fn should_defer_retry(&self, task_id: i64) -> Option<i64> {
         let now = Utc::now().timestamp();
-        let map = self.retry_not_before.try_lock().ok()?;
+        let map = match self.retry_not_before.try_lock() {
+            Ok(m) => m,
+            Err(_) => return Some(5),
+        };
         let unlock_at = *map.get(&task_id)?;
         if unlock_at > now {
             Some(unlock_at - now)
@@ -1891,7 +1893,7 @@ impl Pipeline {
         }
 
         let push = tokio::process::Command::new("git")
-            .args(["push", "--force", "origin", branch])
+            .args(["push", "--force-with-lease", "origin", branch])
             .current_dir(&work_dir_s)
             .env("TMPDIR", &tmp_env)
             .output()
@@ -4094,7 +4096,7 @@ fn tmp_health(path: &str) -> Option<TmpHealth> {
     Some(TmpHealth {
         inode_used_pct,
         free_inodes: stat.f_ffree,
-        free_bytes: stat.f_bavail.saturating_mul(stat.f_bsize),
+        free_bytes: stat.f_bavail.saturating_mul(stat.f_frsize),
     })
 }
 

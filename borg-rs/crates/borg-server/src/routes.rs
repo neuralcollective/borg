@@ -983,7 +983,7 @@ async fn build_project_context(
         if let Ok(outputs) = db.get_task_outputs(task.id) {
             if let Some(last) = outputs.last() {
                 let summary = if last.output.len() > 2000 {
-                    &last.output[..2000]
+                    &last.output[..last.output.floor_char_boundary(2000)]
                 } else {
                     &last.output
                 };
@@ -1813,7 +1813,7 @@ pub(crate) async fn search_documents(
                         "project_id": r.project_id,
                         "task_id": r.task_id,
                         "file_path": r.file_path,
-                        "content_snippet": if r.chunk_text.len() > 200 { &r.chunk_text[..200] } else { &r.chunk_text },
+                        "content_snippet": if r.chunk_text.len() > 200 { &r.chunk_text[..r.chunk_text.floor_char_boundary(200)] } else { &r.chunk_text },
                         "score": r.score,
                         "source": "semantic",
                     }));
@@ -4641,7 +4641,7 @@ pub(crate) async fn list_knowledge(
         "total": total,
         "offset": offset,
         "limit": limit,
-        "has_more": offset + limit < total,
+        "has_more": offset + (files.len() as i64) < total,
         "total_bytes": state.db.total_knowledge_file_bytes().map_err(internal)?,
     })))
 }

@@ -74,7 +74,7 @@ impl StateNetClient {
     pub async fn get_bill(&self, bill_id: &str) -> Result<serde_json::Value> {
         let resp = self
             .http
-            .get(format!("{}/bills/{}", self.base_url, bill_id))
+            .get(format!("{}/bills/{}", self.base_url, urlencoding::encode(bill_id)))
             .bearer_auth(&self.api_key)
             .send()
             .await?
@@ -102,7 +102,7 @@ impl StateNetClient {
     pub async fn get_statute(&self, citation: &str) -> Result<serde_json::Value> {
         let resp = self
             .http
-            .get(format!("{}/statutes/{}", self.base_url, citation))
+            .get(format!("{}/statutes/{}", self.base_url, urlencoding::encode(citation)))
             .bearer_auth(&self.api_key)
             .send()
             .await?

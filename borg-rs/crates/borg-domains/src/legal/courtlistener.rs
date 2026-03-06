@@ -25,7 +25,7 @@ impl CourtListenerClient {
     }
 
     pub async fn search_opinions(&self, query: &str, court: Option<&str>) -> Result<SearchResult> {
-        let mut url = format!("{BASE}/search/?q={}&type=o", urlencoding::encode(query));
+        let mut url = format!("{BASE}/opinions/?q={}", urlencoding::encode(query));
         if let Some(c) = court {
             url.push_str(&format!("&court={}", urlencoding::encode(c)));
         }
@@ -51,7 +51,7 @@ impl CourtListenerClient {
     }
 
     pub async fn search_dockets(&self, query: &str) -> Result<SearchResult> {
-        let url = format!("{BASE}/search/?q={}&type=d", urlencoding::encode(query));
+        let url = format!("{BASE}/dockets/?q={}", urlencoding::encode(query));
         Ok(self
             .http
             .get(&url)
@@ -74,7 +74,7 @@ impl CourtListenerClient {
     }
 
     pub async fn search_judges(&self, query: &str) -> Result<SearchResult> {
-        let url = format!("{BASE}/search/?q={}&type=p", urlencoding::encode(query));
+        let url = format!("{BASE}/people/?q={}", urlencoding::encode(query));
         Ok(self
             .http
             .get(&url)
@@ -87,7 +87,7 @@ impl CourtListenerClient {
 
     pub async fn citation_lookup(&self, cite: &str) -> Result<SearchResult> {
         let url = format!(
-            "{BASE}/search/?citation={}&type=o",
+            "{BASE}/opinions/?cite={}",
             urlencoding::encode(cite)
         );
         Ok(self

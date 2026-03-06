@@ -101,9 +101,9 @@ function cached(key) {
 }
 
 function setCache(key, val) {
+  cache.delete(key);
   if (cache.size >= MAX_CACHE) {
-    const oldest = cache.keys().next().value;
-    cache.delete(oldest);
+    cache.delete(cache.keys().next().value);
   }
   cache.set(key, { val, ts: Date.now() });
   return val;
@@ -1978,7 +1978,7 @@ async function handleTool(name, args) {
           ?exp cdm:expression_title ?title .
           ${typeFilter}
           ${dateFilter}
-          FILTER(CONTAINS(LCASE(?title), "${args.text.toLowerCase().replace(/"/g, '\\"')}"))
+          FILTER(CONTAINS(LCASE(?title), "${args.text.toLowerCase().replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"))
         }
         ORDER BY DESC(?date)
         LIMIT ${limit} OFFSET ${offset}
@@ -2559,11 +2559,11 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
-server.setRequestHandler("tools/list", async () => ({
+server.setRequestHandler({ method: "tools/list" }, async () => ({
   tools: getAvailableTools(),
 }));
 
-server.setRequestHandler("tools/call", async (request) => {
+server.setRequestHandler({ method: "tools/call" }, async (request) => {
   const { name, arguments: args } = request.params;
   try {
     const result = await handleTool(name, args || {});

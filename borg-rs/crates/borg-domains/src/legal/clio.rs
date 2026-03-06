@@ -55,14 +55,16 @@ impl ClioClient {
     }
 
     pub async fn create_time_entry(&self, entry: &TimeEntry) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "data": {
-                "matter": { "id": entry.matter_id },
-                "date": entry.date,
-                "quantity": entry.quantity,
-                "note": entry.description,
-            }
+        let mut data = serde_json::json!({
+            "matter": { "id": entry.matter_id },
+            "date": entry.date,
+            "quantity": entry.quantity,
+            "note": entry.description,
         });
+        if let Some(ref code) = entry.activity_code {
+            data["activity_description"] = serde_json::json!({ "id": code });
+        }
+        let body = serde_json::json!({ "data": data });
         Ok(self
             .http
             .post(format!("{}/activities", self.base_url))

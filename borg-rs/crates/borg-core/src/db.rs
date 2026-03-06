@@ -1347,8 +1347,10 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let _ = conn.execute("DELETE FROM parties WHERE project_id=?1", params![id]);
-        let _ = conn.execute("DELETE FROM project_files WHERE project_id=?1", params![id]);
+        conn.execute("DELETE FROM parties WHERE project_id=?1", params![id])
+            .context("delete parties for project")?;
+        conn.execute("DELETE FROM project_files WHERE project_id=?1", params![id])
+            .context("delete project_files for project")?;
         let affected = conn
             .execute("DELETE FROM projects WHERE id=?1", params![id])
             .context("delete_project")?;
@@ -1984,7 +1986,7 @@ impl Db {
             "UPDATE project_files SET extracted_text = ?1 WHERE id = ?2",
             params![text, file_id],
         )?;
-        let new_chars = text.len() as i64;
+        let new_chars = text.chars().count() as i64;
         conn.execute(
             "INSERT INTO project_corpus_stats \
              (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \

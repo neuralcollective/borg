@@ -91,7 +91,7 @@ impl LexisClient {
     pub async fn shepards(&self, citation: &str) -> Result<ShepardsResult> {
         let resp = self
             .http
-            .get(format!("{}/shepards/{}", self.base_url, citation))
+            .get(format!("{}/shepards/{}", self.base_url, urlencoding::encode(citation)))
             .bearer_auth(&self.api_key)
             .send()
             .await?

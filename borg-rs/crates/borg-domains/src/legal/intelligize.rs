@@ -73,9 +73,9 @@ impl IntelligizeClient {
         filing_id: &str,
         section: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let mut url = format!("{}/filings/{}", self.base_url, filing_id);
+        let mut url = format!("{}/filings/{}", self.base_url, urlencoding::encode(filing_id));
         if let Some(s) = section {
-            url.push_str(&format!("?section={}", s));
+            url.push_str(&format!("?section={}", urlencoding::encode(s)));
         }
         let resp = self
             .http
