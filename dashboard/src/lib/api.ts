@@ -313,6 +313,7 @@ export interface Settings {
   vespa_namespace: string;
   vespa_document_type: string;
   experimental_domains: boolean;
+  visible_categories: string;
 }
 
 export function useSettings() {

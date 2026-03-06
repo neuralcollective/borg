@@ -490,6 +490,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "vespa_namespace",
     "vespa_document_type",
     "experimental_domains",
+    "visible_categories",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -540,6 +541,7 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("vespa_namespace", "borg"),
     ("vespa_document_type", "project_file"),
     ("experimental_domains", "false"),
+    ("visible_categories", ""),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────

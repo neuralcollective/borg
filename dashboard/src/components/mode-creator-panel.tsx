@@ -23,6 +23,11 @@ export function ModeCreatorPanel() {
   const [showAllOptions, setShowAllOptions] = useState(false);
 
   const allowExperimental = settings?.experimental_domains === true;
+  const visibleCats = useMemo(() => {
+    const raw = settings?.visible_categories ?? "";
+    const cats = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    return cats.length > 0 ? new Set(cats) : null; // null = show all
+  }, [settings?.visible_categories]);
 
   const customNameSet = useMemo(
     () => new Set(customModes.map((m) => m.name)),
@@ -31,9 +36,12 @@ export function ModeCreatorPanel() {
   const builtInModes = useMemo(
     () =>
       allModes.filter(
-        (m) => !customNameSet.has(m.name) && (allowExperimental || CORE_MODES.has(m.name))
+        (m) =>
+          !customNameSet.has(m.name) &&
+          (allowExperimental || CORE_MODES.has(m.name)) &&
+          (visibleCats === null || visibleCats.has(m.category || ""))
       ),
-    [allModes, customNameSet, allowExperimental]
+    [allModes, customNameSet, allowExperimental, visibleCats]
   );
 
   const handleSelect = useCallback((mode: PipelineModeFull, readOnly: boolean) => {

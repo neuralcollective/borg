@@ -115,6 +115,10 @@ export function SettingsPanel() {
             value={effective.experimental_domains}
             onChange={(v) => update("experimental_domains", v)}
           />
+          <CategoryPicker
+            value={effective.visible_categories}
+            onChange={(v) => update("visible_categories", v)}
+          />
           <NumberField
             label="Max Backlog"
             desc="Maximum concurrent pipeline tasks"
@@ -725,6 +729,58 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between">
       <span className="text-[12px] text-zinc-500">{label}</span>
       <span className="text-[12px] font-medium tabular-nums text-zinc-300">{value}</span>
+    </div>
+  );
+}
+
+const ALL_CATEGORIES = [
+  { value: "Engineering", label: "Engineering" },
+  { value: "Professional Services", label: "Legal / Professional" },
+  { value: "People & Ops", label: "People & Ops" },
+  { value: "Data & Analytics", label: "Data & Analytics" },
+];
+
+function CategoryPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const active = new Set(value.split(",").map((s) => s.trim()).filter(Boolean));
+  const allSelected = active.size === 0;
+
+  function toggle(cat: string) {
+    const next = new Set(active);
+    if (next.has(cat)) {
+      next.delete(cat);
+    } else {
+      next.add(cat);
+    }
+    onChange([...next].join(","));
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <div>
+          <Label>Visible Domains</Label>
+          <Desc>Which mode categories appear in the pipeline editor. Empty means all.</Desc>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {ALL_CATEGORIES.map((cat) => {
+          const on = allSelected || active.has(cat.value);
+          return (
+            <button
+              key={cat.value}
+              onClick={() => toggle(cat.value)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[11px] transition-colors",
+                on
+                  ? "bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/20"
+                  : "bg-white/[0.04] text-zinc-600 hover:bg-white/[0.08] hover:text-zinc-400"
+              )}
+            >
+              {cat.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
