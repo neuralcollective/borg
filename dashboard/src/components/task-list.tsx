@@ -31,10 +31,6 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
     <div className="flex h-full flex-col">
       {/* Stats row */}
       <div className="flex shrink-0 items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
-        <Stat value={status?.active_tasks ?? 0} label="Active" color="text-blue-400" />
-        <Stat value={status?.merged_tasks ?? 0} label="Merged" color="text-emerald-400" />
-        <Stat value={status?.ai_requests ?? 0} label="AI" color="text-cyan-400" />
-        <Stat value={status?.failed_tasks ?? 0} label="Failed" color="text-red-400" />
         {(status?.failed_tasks ?? 0) > 0 && (
           <button
             onClick={async () => {
@@ -50,11 +46,11 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
             disabled={retryingAll}
             className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] text-zinc-500 hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-50 transition-colors"
           >
-            {retryingAll ? "..." : "Retry all"}
+            {retryingAll ? "..." : "Retry all failed"}
           </button>
         )}
         <span className="ml-auto rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] tabular-nums text-zinc-600">
-          {filtered?.length ?? 0}
+          {filtered?.length ?? 0} tasks
         </span>
       </div>
 
@@ -87,14 +83,6 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   );
 }
 
-function Stat({ value, label, color }: { value: number; label: string; color: string }) {
-  return (
-    <div className="flex items-baseline gap-1">
-      <span className={cn("text-[13px] font-semibold tabular-nums", color)}>{value}</span>
-      <span className="text-[10px] text-zinc-600">{label}</span>
-    </div>
-  );
-}
 
 function TaskRow({
   task,

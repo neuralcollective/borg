@@ -102,6 +102,19 @@ export function Header({
             <span>
               Model <span className="text-zinc-300">{status?.model ?? "--"}</span>
             </span>
+            <span className="h-3 w-px bg-white/[0.06]" />
+            <span>
+              Active <span className="text-blue-400 tabular-nums">{status?.active_tasks ?? 0}</span>
+            </span>
+            <span>
+              Merged <span className="text-emerald-400 tabular-nums">{status?.merged_tasks ?? 0}</span>
+            </span>
+            <span>
+              AI Calls <span className="text-cyan-400 tabular-nums">{status?.ai_requests ?? 0}</span>
+            </span>
+            <span>
+              Failed <span className="text-red-400 tabular-nums">{status?.failed_tasks ?? 0}</span>
+            </span>
             {status?.version && (
               <span className="rounded-full bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] text-zinc-600">
                 {status.version}

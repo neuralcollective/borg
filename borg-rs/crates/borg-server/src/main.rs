@@ -91,7 +91,6 @@ async fn main() -> anyhow::Result<()> {
     let log_ring: Arc<std::sync::Mutex<VecDeque<String>>> =
         Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(500)));
     let (chat_event_tx, _) = broadcast::channel::<String>(256);
-    let ai_request_count = Arc::new(AtomicU64::new(0));
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         "borg_server=info,borg_core=info,borg_agent=info,tower_http=warn".into()
@@ -184,6 +183,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let persisted_ai_count = db.get_ts("ai_request_count") as u64;
+    let ai_request_count = Arc::new(AtomicU64::new(persisted_ai_count));
     let db = Arc::new(db);
     let config = Arc::new(config);
     let file_storage = Arc::new(storage::FileStorage::from_config(&config).await?);

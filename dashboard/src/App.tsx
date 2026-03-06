@@ -346,7 +346,7 @@ function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks:
         <div className="flex gap-6 mt-2">
           <StatPill value={status.active_tasks} label="Active" color="text-blue-400" />
           <StatPill value={status.merged_tasks} label="Merged" color="text-emerald-400" />
-          <StatPill value={status.ai_requests} label="AI" color="text-cyan-400" />
+          <StatPill value={status.ai_requests} label="AI Calls" color="text-cyan-400" />
           <StatPill value={status.failed_tasks} label="Failed" color="text-red-400" />
           <StatPill value={status.total_tasks} label="Total" color="text-zinc-400" />
         </div>

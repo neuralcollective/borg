@@ -3767,6 +3767,7 @@ pub(crate) async fn get_status(
     let no_merge_alert = queued_count > 0 && last_merge_ts > 0 && (now - last_merge_ts) >= 60 * 60;
     let guardrail_alert = rebase_backlog_alert || no_merge_alert;
     let ai_requests = state.ai_request_count.load(Ordering::Relaxed);
+    state.db.set_ts("ai_request_count", ai_requests as i64);
     let backup = crate::backup::backup_status_snapshot(&state.db, &state.config).await;
 
     Ok(Json(json!({
