@@ -190,29 +190,19 @@ impl Pipeline {
 
     // ── Backend resolution ────────────────────────────────────────────────
 
-    /// Select the agent backend for a task: task override → repo override → global → any.
+    /// Select the agent backend for a task: task override → repo override → global.
+    /// Returns None if the resolved backend name isn't registered (missing API key, etc).
     fn resolve_backend(&self, task: &Task) -> Option<Arc<dyn AgentBackend>> {
-        if !task.backend.is_empty() {
-            if let Some(b) = self.backends.get(&task.backend) {
-                return Some(Arc::clone(b));
-            }
-        }
-        if let Some(repo) = self
-            .config
-            .watched_repos
-            .iter()
-            .find(|r| r.path == task.repo_path)
-        {
-            if !repo.backend.is_empty() {
-                if let Some(b) = self.backends.get(&repo.backend) {
-                    return Some(Arc::clone(b));
-                }
-            }
-        }
-        if let Some(b) = self.backends.get(&self.config.backend) {
+        let name = self.selected_backend_name(task);
+        if let Some(b) = self.backends.get(&name) {
             return Some(Arc::clone(b));
         }
-        self.backends.values().next().map(Arc::clone)
+        warn!(
+            task_id = task.id,
+            backend = %name,
+            "backend not registered (missing API key?), skipping task"
+        );
+        None
     }
 
     async fn run_backend_phase(

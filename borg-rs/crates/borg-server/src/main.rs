@@ -74,10 +74,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn default_backend(&self, name: &str) -> Option<Arc<dyn borg_core::agent::AgentBackend>> {
-        self.backends
-            .get(name)
-            .or_else(|| self.backends.values().next())
-            .map(Arc::clone)
+        self.backends.get(name).map(Arc::clone)
     }
 }
 
