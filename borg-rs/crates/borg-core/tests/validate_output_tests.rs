@@ -1,8 +1,5 @@
 /// Tests for validate-phase output persistence in task_outputs.
-use borg_core::{
-    db::Db,
-    types::Task,
-};
+use borg_core::{db::Db, types::Task};
 use chrono::Utc;
 
 fn open_db() -> Db {
@@ -188,7 +185,11 @@ fn test_compile_check_failure_saved_independently() {
         .expect("insert compile check output");
 
     let outputs = db.get_task_outputs(task_id).expect("get_task_outputs");
-    assert_eq!(outputs.len(), 1, "only compile check output, no test suite output");
+    assert_eq!(
+        outputs.len(),
+        1,
+        "only compile check output, no test suite output"
+    );
     assert_eq!(outputs[0].phase, "validate");
     assert!(outputs[0].output.contains("E0425"));
 }

@@ -55,7 +55,8 @@ pub fn data_mode() -> PipelineMode {
                     reasonable bounds, referential integrity between related tables, encoding \
                     issues, and schema drift between files. Quantify each issue (e.g. '15% of \
                     rows missing zip code'). Create a task for each issue with the specific \
-                    file, column, and recommended fix.".into(),
+                    file, column, and recommended fix."
+                    .into(),
                 allowed_tools: "Read,Glob,Grep,Bash".into(),
                 target_primary_repo: false,
             },
@@ -69,7 +70,8 @@ pub fn data_mode() -> PipelineMode {
                     inefficient operations (loading entire datasets when filtering would suffice), \
                     missing logging/observability on pipeline stages, and missing idempotency \
                     (will a re-run produce correct results?). Create a task for each concrete \
-                    issue with the file path and recommended fix.".into(),
+                    issue with the file path and recommended fix."
+                    .into(),
                 allowed_tools: "Read,Glob,Grep,Bash".into(),
                 target_primary_repo: false,
             },
@@ -82,7 +84,8 @@ pub fn data_mode() -> PipelineMode {
                     opportunities, and anomalies worth investigating. Each proposal should \
                     describe: the specific finding, the data that supports it, and what \
                     action it suggests. Base proposals on actual data you read, not \
-                    hypothetical analysis.".into(),
+                    hypothetical analysis."
+                    .into(),
                 allowed_tools: "Read,Glob,Grep,Bash".into(),
                 target_primary_repo: false,
             },

@@ -4,7 +4,10 @@ use borg_core::knowledge::{bytes_to_embedding, cosine_similarity, embedding_to_b
 fn identical_vectors_score_one() {
     let v = vec![1.0f32, 2.0, 3.0];
     let score = cosine_similarity(&v, &v);
-    assert!((score - 1.0).abs() < 1e-6, "identical vectors: expected 1.0, got {score}");
+    assert!(
+        (score - 1.0).abs() < 1e-6,
+        "identical vectors: expected 1.0, got {score}"
+    );
 }
 
 #[test]
@@ -12,7 +15,10 @@ fn orthogonal_vectors_score_zero() {
     let a = vec![1.0f32, 0.0, 0.0];
     let b = vec![0.0f32, 1.0, 0.0];
     let score = cosine_similarity(&a, &b);
-    assert!((score - 0.0).abs() < 1e-6, "orthogonal vectors: expected 0.0, got {score}");
+    assert!(
+        (score - 0.0).abs() < 1e-6,
+        "orthogonal vectors: expected 0.0, got {score}"
+    );
 }
 
 #[test]
@@ -87,6 +93,11 @@ fn roundtrip_special_values() {
     let out = roundtrip(&v);
     assert_eq!(out.len(), v.len());
     for (a, b) in v.iter().zip(out.iter()) {
-        assert!(bits_eq(*a, *b), "bit mismatch: {:?} vs {:?}", a.to_bits(), b.to_bits());
+        assert!(
+            bits_eq(*a, *b),
+            "bit mismatch: {:?} vs {:?}",
+            a.to_bits(),
+            b.to_bits()
+        );
     }
 }

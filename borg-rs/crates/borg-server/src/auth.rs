@@ -58,16 +58,15 @@ pub async fn auth_middleware(
 // dashboard. The token protects against rogue local processes (e.g. a
 // compromised container), not against someone who already has HTTP access to
 // the dashboard. If the dashboard page loads, the caller is authorized.
-pub async fn get_token(
-    State(state): State<Arc<AppState>>,
-) -> Response {
+pub async fn get_token(State(state): State<Arc<AppState>>) -> Response {
     Json(json!({"token": state.api_token})).into_response()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::http::{HeaderMap, HeaderValue};
+
+    use super::*;
 
     #[test]
     fn is_exempt_health() {

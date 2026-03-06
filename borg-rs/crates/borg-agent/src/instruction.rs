@@ -14,7 +14,12 @@ const MAX_INLINE_KNOWLEDGE_CHARS_PER_FILE: usize = 8_000;
 /// Composes task context, the phase instruction, an optional file listing,
 /// error context from the previous attempt, and any pending user messages.
 /// All backends use this so the prompt format stays consistent.
-pub fn build_instruction(task: &Task, phase: &PhaseConfig, ctx: &PhaseContext, file_listing: Option<&str>) -> String {
+pub fn build_instruction(
+    task: &Task,
+    phase: &PhaseConfig,
+    ctx: &PhaseContext,
+    file_listing: Option<&str>,
+) -> String {
     let mut s = String::new();
 
     let kb_files = select_relevant_knowledge_files(
@@ -129,7 +134,7 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
                 Err(e) => {
                     warn!(path = %path, "failed to read knowledge file: {}", e);
                     String::new()
-                }
+                },
             };
             let content = content.trim();
             if content.is_empty() {
@@ -139,7 +144,8 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
                 }
                 s.push('\n');
             } else {
-                let remaining_inline = MAX_INLINE_KNOWLEDGE_CHARS_TOTAL.saturating_sub(inline_chars_used);
+                let remaining_inline =
+                    MAX_INLINE_KNOWLEDGE_CHARS_TOTAL.saturating_sub(inline_chars_used);
                 let file_cap = remaining_inline.min(MAX_INLINE_KNOWLEDGE_CHARS_PER_FILE);
                 let (content, clipped) = truncate_chars(content, file_cap);
                 s.push_str(&format!("- **{}**", file.file_name));
@@ -247,7 +253,13 @@ pub fn select_relevant_knowledge_files(
     scored.sort_by(|(score_a, file_a), (score_b, file_b)| {
         score_b
             .cmp(score_a)
-            .then_with(|| file_a.project_id.is_some().cmp(&file_b.project_id.is_some()).reverse())
+            .then_with(|| {
+                file_a
+                    .project_id
+                    .is_some()
+                    .cmp(&file_b.project_id.is_some())
+                    .reverse()
+            })
             .then_with(|| file_a.file_name.cmp(&file_b.file_name))
     });
 

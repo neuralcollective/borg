@@ -1,17 +1,15 @@
 use std::sync::Arc;
 
+use aws_config::BehaviorVersion;
+use aws_sdk_bedrockruntime::{primitives::Blob, Client as BedrockClient};
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::HeaderMap,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
     Router,
 };
-use aws_config::BehaviorVersion;
-use aws_sdk_bedrockruntime::Client as BedrockClient;
-use aws_sdk_bedrockruntime::primitives::Blob;
 use tracing::{error, warn};
 
 #[derive(Clone)]
@@ -183,11 +181,16 @@ async fn handle_web_search(
         .unwrap_or_else(|| "unknown".to_string());
 
     // 1. Check if session is privileged
-    let is_privileged = state.db.is_session_privileged(payload.project_id)
+    let is_privileged = state
+        .db
+        .is_session_privileged(payload.project_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
     if is_privileged {
-        error!("search blocked: session is privileged for project {}", payload.project_id);
+        error!(
+            "search blocked: session is privileged for project {}",
+            payload.project_id
+        );
         state
             .audit
             .log_proxy_call(
@@ -202,7 +205,9 @@ async fn handle_web_search(
     }
 
     // 2. Perform search
-    let key = state.db.get_api_key("global", "brave_search")
+    let key = state
+        .db
+        .get_api_key("global", "brave_search")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::PRECONDITION_FAILED)?;
 
@@ -234,9 +239,9 @@ async fn handle_anthropic_messages(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let mut json_body: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    
+    let mut json_body: serde_json::Value =
+        serde_json::from_slice(&body_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
     let actor_id = actor_id_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
     let project_id = project_id_from_headers(&headers)
         .or_else(|| json_body.get("project_id").and_then(|v| v.as_i64()));
@@ -246,18 +251,24 @@ async fn handle_anthropic_messages(
         .unwrap_or("")
         .to_string();
     let bedrock_model = map_model_id(&anthropic_model);
-    let is_streaming = json_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-    
+    let is_streaming = json_body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     if let Some(obj) = json_body.as_object_mut() {
         obj.remove("model");
         if !obj.contains_key("anthropic_version") {
             obj.insert("anthropic_version".to_string(), "bedrock-2023-05-31".into());
         }
     }
-    let new_body_bytes = serde_json::to_vec(&json_body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let new_body_bytes =
+        serde_json::to_vec(&json_body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if is_streaming {
-        let mut output = state.bedrock.invoke_model_with_response_stream()
+        let mut output = state
+            .bedrock
+            .invoke_model_with_response_stream()
             .model_id(bedrock_model)
             .body(Blob::new(new_body_bytes))
             .send()
@@ -297,7 +308,9 @@ async fn handle_anthropic_messages(
         let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
         Ok(Body::from_stream(stream).into_response())
     } else {
-        let output = state.bedrock.invoke_model()
+        let output = state
+            .bedrock
+            .invoke_model()
             .model_id(bedrock_model)
             .body(Blob::new(new_body_bytes))
             .send()

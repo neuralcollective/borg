@@ -35,7 +35,11 @@ impl TaskStreamManager {
     pub async fn start(&self, task_id: i64) {
         let (tx, _) = broadcast::channel(512);
         let mut map = self.streams.lock().await;
-        map.retain(|_, s| s.ended_at.map(|t| t.elapsed() < ENDED_STREAM_TTL).unwrap_or(true));
+        map.retain(|_, s| {
+            s.ended_at
+                .map(|t| t.elapsed() < ENDED_STREAM_TTL)
+                .unwrap_or(true)
+        });
         map.insert(
             task_id,
             TaskStream {

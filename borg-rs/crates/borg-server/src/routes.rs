@@ -1,4 +1,10 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use axum::{
     body::Bytes,
@@ -6,20 +12,24 @@ use axum::{
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
-        IntoResponse,
-        Json,
+        IntoResponse, Json,
     },
 };
 use borg_core::{
     config::{refresh_oauth_token, Config},
-    db::{Db, LegacyEvent, ProjectFileMetaRow, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
+    db::{
+        Db, LegacyEvent, ProjectFileMetaRow, ProjectFilePageCursor, ProjectFileRow, ProjectRow,
+        TaskMessage, TaskOutput,
+    },
     types::{PhaseConfig, PhaseContext, RepoConfig, Task},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::AsyncWriteExt;
-use tokio::sync::{broadcast, Mutex as TokioMutex};
+use tokio::{
+    io::AsyncWriteExt,
+    sync::{broadcast, Mutex as TokioMutex},
+};
 use tokio_stream::{
     wrappers::{BroadcastStream, UnboundedReceiverStream},
     StreamExt,
@@ -29,6 +39,7 @@ use crate::{ingestion::IngestionQueue, storage::FileStorage, AppState};
 
 pub(crate) mod tasks;
 pub(crate) use tasks::*;
+
 pub(crate) use crate::routes_modes::{
     delete_custom_mode, get_full_modes, get_modes, list_custom_modes, upsert_custom_mode,
 };
@@ -46,7 +57,7 @@ fn percent_encode(s: &str) -> String {
         match b {
             b'?' | b'&' | b'#' | b' ' | b'%' | b'+' => {
                 out.push_str(&format!("%{b:02X}"));
-            }
+            },
             _ => out.push(b as char),
         }
     }
@@ -59,13 +70,21 @@ fn percent_encode_allow_slash(s: &str, allow_slash: bool) -> String {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(b as char);
-            }
+            },
             b'/' if allow_slash => out.push('/'),
             _ => {
                 out.push('%');
-                out.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
-                out.push(char::from_digit((b & 0xf) as u32, 16).unwrap().to_ascii_uppercase());
-            }
+                out.push(
+                    char::from_digit((b >> 4) as u32, 16)
+                        .unwrap()
+                        .to_ascii_uppercase(),
+                );
+                out.push(
+                    char::from_digit((b & 0xf) as u32, 16)
+                        .unwrap()
+                        .to_ascii_uppercase(),
+                );
+            },
         }
     }
     out
@@ -87,6 +106,23 @@ async fn sha256_hex_file(path: &str) -> anyhow::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn sha256_hex_file_blocking(path: &std::path::Path) -> anyhow::Result<String> {
+    use std::io::Read;
+
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn sha256_hex_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -101,8 +137,12 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     let mut buf = 0u32;
     let mut bits = 0u32;
     for c in clean.bytes() {
-        if c == b'=' { break; }
-        let val = table.iter().position(|&t| t == c)
+        if c == b'=' {
+            break;
+        }
+        let val = table
+            .iter()
+            .position(|&t| t == c)
             .ok_or_else(|| anyhow::anyhow!("invalid base64 char"))? as u32;
         buf = (buf << 6) | val;
         bits += 6;
@@ -312,6 +352,7 @@ pub(crate) struct ProjectFileJson {
     pub id: i64,
     pub project_id: i64,
     pub file_name: String,
+    pub source_path: String,
     pub mime_type: String,
     pub size_bytes: i64,
     pub privileged: bool,
@@ -323,10 +364,16 @@ pub(crate) struct ProjectFileJson {
 impl From<ProjectFileRow> for ProjectFileJson {
     fn from(f: ProjectFileRow) -> Self {
         let text_chars = f.extracted_text.len();
+        let source_path = if f.source_path.is_empty() {
+            f.file_name.clone()
+        } else {
+            f.source_path.clone()
+        };
         Self {
             id: f.id,
             project_id: f.project_id,
             file_name: f.file_name,
+            source_path,
             mime_type: f.mime_type,
             size_bytes: f.size_bytes,
             privileged: f.privileged,
@@ -339,10 +386,16 @@ impl From<ProjectFileRow> for ProjectFileJson {
 
 impl From<ProjectFileMetaRow> for ProjectFileJson {
     fn from(f: ProjectFileMetaRow) -> Self {
+        let source_path = if f.source_path.is_empty() {
+            f.file_name.clone()
+        } else {
+            f.source_path.clone()
+        };
         Self {
             id: f.id,
             project_id: f.project_id,
             file_name: f.file_name,
+            source_path,
             mime_type: f.mime_type,
             size_bytes: f.size_bytes,
             privileged: f.privileged,
@@ -360,6 +413,8 @@ pub(crate) struct ListProjectFilesQuery {
     #[serde(default)]
     offset: i64,
     #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
     q: String,
     #[serde(default)]
     has_text: Option<bool>,
@@ -367,7 +422,9 @@ pub(crate) struct ListProjectFilesQuery {
     privileged_only: Option<bool>,
 }
 
-fn default_project_file_limit() -> i64 { 50 }
+fn default_project_file_limit() -> i64 {
+    50
+}
 
 #[derive(Deserialize)]
 pub(crate) struct ListKnowledgeQuery {
@@ -507,11 +564,25 @@ fn sanitize_upload_name(name: &str) -> String {
     }
 }
 
+fn sanitize_upload_relative_path(name: &str) -> String {
+    let parts = std::path::Path::new(name)
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(seg) => seg.to_str().map(sanitize_upload_name),
+            _ => None,
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        sanitize_upload_name(name)
+    } else {
+        parts.join("/")
+    }
+}
+
 /// Resolve a knowledge file path, canonicalizing to prevent traversal.
 fn safe_knowledge_path(data_dir: &str, file_name: &str) -> Option<std::path::PathBuf> {
-    let base = std::path::Path::new(file_name)
-        .file_name()?
-        .to_str()?;
+    let base = std::path::Path::new(file_name).file_name()?.to_str()?;
     let dir = std::path::Path::new(data_dir).join("knowledge");
     let full = dir.join(base);
     // Ensure the resolved path stays inside the knowledge directory
@@ -527,14 +598,18 @@ fn project_chat_key(project_id: i64) -> String {
 }
 
 fn rand_suffix() -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
+    use std::{
+        collections::hash_map::RandomState,
+        hash::{BuildHasher, Hasher},
+    };
     let s = RandomState::new();
     let mut h = s.build_hasher();
-    h.write_u64(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64);
+    h.write_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64,
+    );
     h.finish()
 }
 
@@ -581,9 +656,27 @@ fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
     (clipped, true)
 }
 
+fn encode_project_file_cursor(file: &ProjectFileMetaRow) -> String {
+    format!(
+        "{}|{}",
+        file.created_at.format("%Y-%m-%d %H:%M:%S"),
+        file.id
+    )
+}
+
+fn decode_project_file_cursor(raw: Option<&str>) -> Option<ProjectFilePageCursor> {
+    let raw = raw?.trim();
+    let (created_at, id_str) = raw.rsplit_once('|')?;
+    let id = id_str.parse::<i64>().ok()?;
+    Some(ProjectFilePageCursor {
+        created_at: created_at.to_string(),
+        id,
+    })
+}
+
 #[derive(Clone)]
 struct ProjectContextHit {
-    file_name: String,
+    source_path: String,
     snippet: String,
     score: f64,
     source: &'static str,
@@ -614,17 +707,19 @@ async fn search_project_context_hits(
                 for r in results {
                     if seen.insert(r.file_path.clone()) {
                         hits.push(ProjectContextHit {
-                            file_name: r.file_path,
+                            source_path: r.file_path,
                             snippet: r.content_snippet,
                             score: r.score,
                             source: "opensearch",
                         });
                     }
                 }
-            }
+            },
             Err(e) => {
-                tracing::warn!("project context opensearch query failed, falling back to sqlite fts: {e}");
-            }
+                tracing::warn!(
+                    "project context opensearch query failed, falling back to sqlite fts: {e}"
+                );
+            },
         }
     }
 
@@ -634,7 +729,7 @@ async fn search_project_context_hits(
             for r in results {
                 if seen.insert(r.file_path.clone()) {
                     hits.push(ProjectContextHit {
-                        file_name: r.file_path,
+                        source_path: r.file_path,
                         snippet: r.content_snippet,
                         score: (-r.rank).max(0.0),
                         source: "keyword",
@@ -644,15 +739,32 @@ async fn search_project_context_hits(
         }
     }
 
-    if let Ok((meta_rows, _)) = db.list_project_file_page(project_id, Some(query), limit, 0, None, None) {
-        for row in meta_rows {
-            if seen.insert(row.file_name.clone()) {
-                hits.push(ProjectContextHit {
-                    file_name: row.file_name,
-                    snippet: "Filename matched the current request.".to_string(),
-                    score: 0.0,
-                    source: "filename",
-                });
+    let trimmed = query.trim();
+    let filename_targeted = trimmed.contains('/')
+        || trimmed.contains('.')
+        || trimmed.contains('_')
+        || (trimmed.contains('-') && trimmed.split_whitespace().count() == 1);
+    let filename_limit = if filename_targeted {
+        limit
+    } else {
+        limit.min(6)
+    };
+    if (filename_targeted || hits.is_empty()) && !trimmed.is_empty() {
+        if let Ok(meta_rows) = db.search_project_file_name_hits(project_id, query, filename_limit) {
+            for row in meta_rows {
+                let source_path = if row.source_path.is_empty() {
+                    row.file_name.clone()
+                } else {
+                    row.source_path
+                };
+                if seen.insert(source_path.clone()) {
+                    hits.push(ProjectContextHit {
+                        source_path,
+                        snippet: "Filename matched the current request.".to_string(),
+                        score: 0.0,
+                        source: "filename",
+                    });
+                }
             }
         }
     }
@@ -699,13 +811,17 @@ async fn stage_project_files(
         let per_file_budget = MAX_STAGE_CHARS_PER_FILE.min(remaining_chars);
         let (clipped_text, clipped) = truncate_chars(&source_text, per_file_budget);
         let base_name = sanitize_upload_name(&file.file_name);
-        let stage_name = if is_binary_mime(&file.mime_type) || !file.mime_type.starts_with("text/") {
+        let stage_name = if is_binary_mime(&file.mime_type) || !file.mime_type.starts_with("text/")
+        {
             format!("{:02}-{}.extracted.txt", idx + 1, base_name)
         } else {
             format!("{:02}-{}", idx + 1, base_name)
         };
         let dest = format!("{dest_dir}/{stage_name}");
-        if tokio::fs::write(&dest, clipped_text.as_bytes()).await.is_err() {
+        if tokio::fs::write(&dest, clipped_text.as_bytes())
+            .await
+            .is_err()
+        {
             continue;
         }
         remaining_chars = remaining_chars.saturating_sub(clipped_text.chars().count());
@@ -749,18 +865,28 @@ async fn build_project_context(
     };
     let mut selected = Vec::new();
     for hit in hits {
-        if let Ok(Some(file)) = db.find_latest_project_file_by_name(project.id, &hit.file_name) {
+        if let Ok(Some(file)) =
+            db.find_latest_project_file_by_source_path(project.id, &hit.source_path)
+        {
             selected.push((file, hit));
         }
     }
     if selected.is_empty() && !project.session_privileged && stats.total_files <= 50 {
-        for file in db.list_recent_project_files(project.id, 4, true).unwrap_or_default() {
-            let file_name = file.file_name.clone();
+        for file in db
+            .list_recent_project_files(project.id, 4, true)
+            .unwrap_or_default()
+        {
+            let source_path = if file.source_path.is_empty() {
+                file.file_name.clone()
+            } else {
+                file.source_path.clone()
+            };
             selected.push((
                 file,
                 ProjectContextHit {
-                    file_name,
-                    snippet: "Recent project document selected as a small-corpus fallback.".to_string(),
+                    source_path,
+                    snippet: "Recent project document selected as a small-corpus fallback."
+                        .to_string(),
                     score: 0.0,
                     source: "recent",
                 },
@@ -787,9 +913,21 @@ async fn build_project_context(
     {
         context.push_str(&format!(
             "Matter details: client={}, jurisdiction={}, type={}\n",
-            if project.client_name.trim().is_empty() { "n/a" } else { project.client_name.trim() },
-            if project.jurisdiction.trim().is_empty() { "n/a" } else { project.jurisdiction.trim() },
-            if project.matter_type.trim().is_empty() { "n/a" } else { project.matter_type.trim() },
+            if project.client_name.trim().is_empty() {
+                "n/a"
+            } else {
+                project.client_name.trim()
+            },
+            if project.jurisdiction.trim().is_empty() {
+                "n/a"
+            } else {
+                project.jurisdiction.trim()
+            },
+            if project.matter_type.trim().is_empty() {
+                "n/a"
+            } else {
+                project.matter_type.trim()
+            },
         ));
     }
     if !raw_query.is_empty() {
@@ -817,13 +955,18 @@ async fn build_project_context(
             break;
         }
         let entry = format!(
-            "- {} [{}; {}; privileged={}; score={:.3}; source={}]\n  staged at: {}\n  snippet: {}\n{}",
+            "- {} [{}; {}; privileged={}; score={:.3}; source={}]\n  source path: {}\n  staged at: {}\n  snippet: {}\n{}",
             staged.file.file_name,
             staged.file.mime_type,
             format_compact_bytes(staged.file.size_bytes),
             if staged.file.privileged { "yes" } else { "no" },
             staged.score,
             staged.source,
+            if staged.file.source_path.is_empty() {
+                staged.file.file_name.as_str()
+            } else {
+                staged.file.source_path.as_str()
+            },
             staged.staged_path,
             staged.snippet.replace('\n', " "),
             if staged.clipped {
@@ -853,8 +996,15 @@ async fn build_project_context(
         }
         if let Ok(outputs) = db.get_task_outputs(task.id) {
             if let Some(last) = outputs.last() {
-                let summary = if last.output.len() > 2000 { &last.output[..2000] } else { &last.output };
-                let entry = format!("\n\n## Prior research: {} (Task #{})\n{}", task.title, task.id, summary);
+                let summary = if last.output.len() > 2000 {
+                    &last.output[..2000]
+                } else {
+                    &last.output
+                };
+                let entry = format!(
+                    "\n\n## Prior research: {} (Task #{})\n{}",
+                    task.title, task.id, summary
+                );
                 if entry.len() > remaining {
                     break;
                 }
@@ -879,6 +1029,7 @@ pub(crate) async fn run_chat_agent(
     opensearch: Option<Arc<crate::opensearch::OpenSearchClient>>,
     storage: &Arc<FileStorage>,
     chat_event_tx: &broadcast::Sender<String>,
+    ai_request_count: &Arc<AtomicU64>,
 ) -> anyhow::Result<String> {
     let session_dir = format!(
         "{}/sessions/chat-{}",
@@ -912,8 +1063,8 @@ pub(crate) async fn run_chat_agent(
     }
 
     let retrieval_query = messages.join("\n");
-    let project_for_chat = parse_project_chat_key(chat_key)
-        .and_then(|pid| db.get_project(pid).ok().flatten());
+    let project_for_chat =
+        parse_project_chat_key(chat_key).and_then(|pid| db.get_project(pid).ok().flatten());
     let prompt = if messages.len() == 1 {
         format!("{} says: {}", sender_name, messages[0])
     } else {
@@ -1010,8 +1161,17 @@ pub(crate) async fn run_chat_agent(
             Ok(mcp_server) => {
                 tracing::info!(chat_key, path = %mcp_server.display(), "wiring lawborg-mcp for chat");
                 let mut env_vars = serde_json::Map::new();
-                let providers = ["lexisnexis", "westlaw", "clio", "imanage",
-                    "netdocuments", "congress", "openstates", "canlii", "regulations_gov"];
+                let providers = [
+                    "lexisnexis",
+                    "westlaw",
+                    "clio",
+                    "imanage",
+                    "netdocuments",
+                    "congress",
+                    "openstates",
+                    "canlii",
+                    "regulations_gov",
+                ];
                 for provider in providers {
                     if let Ok(Some(key)) = db.get_api_key("global", provider) {
                         let env_name = match provider {
@@ -1046,15 +1206,18 @@ pub(crate) async fn run_chat_agent(
                 // Also pass via --mcp-config for the current invocation
                 args.push("--mcp-config".to_string());
                 args.push(mcp_json_path);
-            }
+            },
             Err(e) => {
                 tracing::warn!(chat_key, path = %legal_mcp_path.display(), "lawborg-mcp not found: {e}");
-            }
+            },
         }
     }
 
-    let session_id = sessions.lock().await.get(chat_key).cloned()
-        .or_else(|| db.get_session(&format!("chat-{}", sanitize_chat_key(chat_key))).ok().flatten());
+    let session_id = sessions.lock().await.get(chat_key).cloned().or_else(|| {
+        db.get_session(&format!("chat-{}", sanitize_chat_key(chat_key)))
+            .ok()
+            .flatten()
+    });
     if let Some(ref sid) = session_id {
         args.push("--resume".to_string());
         args.push(sid.clone());
@@ -1066,6 +1229,7 @@ pub(crate) async fn run_chat_agent(
     let token = refresh_oauth_token(&config.credentials_path, &config.oauth_token);
 
     let timeout = std::time::Duration::from_secs(config.agent_timeout_s.max(300) as u64);
+    ai_request_count.fetch_add(1, Ordering::Relaxed);
     let out = tokio::time::timeout(
         timeout,
         tokio::process::Command::new("claude")
@@ -1078,19 +1242,25 @@ pub(crate) async fn run_chat_agent(
             .output(),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("chat agent timed out after {}s", timeout.as_secs()))?
-    ?;
+    .map_err(|_| anyhow::anyhow!("chat agent timed out after {}s", timeout.as_secs()))??;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::warn!("chat agent failed ({}): {}", chat_key, stderr.chars().take(500).collect::<String>());
+        tracing::warn!(
+            "chat agent failed ({}): {}",
+            chat_key,
+            stderr.chars().take(500).collect::<String>()
+        );
     }
 
     let raw = String::from_utf8_lossy(&out.stdout).into_owned();
     let (text, new_session_id) = borg_agent::event::parse_stream(&raw);
 
     if let Some(sid) = new_session_id {
-        sessions.lock().await.insert(chat_key.to_string(), sid.clone());
+        sessions
+            .lock()
+            .await
+            .insert(chat_key.to_string(), sid.clone());
         let folder = format!("chat-{}", sanitize_chat_key(chat_key));
         let _ = db.set_session(&folder, &sid);
     }
@@ -1132,7 +1302,7 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
         None => {
             tracing::error!("empty build_cmd");
             return false;
-        }
+        },
     };
     let build = tokio::process::Command::new(cmd)
         .args(args)
@@ -1148,7 +1318,7 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
                 Err(e) => {
                     tracing::error!("failed to resolve current_exe: {e}");
                     return false;
-                }
+                },
             };
             use std::os::unix::process::CommandExt;
             let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
@@ -1220,15 +1390,27 @@ pub(crate) async fn create_project(
     // Insert with empty repo_path first to get the ID
     let id = state
         .db
-        .insert_project(name, &mode, "", client_name, jurisdiction, matter_type, privilege_level)
+        .insert_project(
+            name,
+            &mode,
+            "",
+            client_name,
+            jurisdiction,
+            matter_type,
+            privilege_level,
+        )
         .map_err(internal)?;
 
     // Sync parties for future conflict checks
-    let _ = state.db.sync_project_parties(id, client_name, opposing_counsel);
+    let _ = state
+        .db
+        .sync_project_parties(id, client_name, opposing_counsel);
 
     // Auto-init a dedicated git repo for legal projects
     let repo_dir = format!("{}/legal-repos/{}", state.config.data_dir, id);
-    tokio::fs::create_dir_all(&repo_dir).await.map_err(internal)?;
+    tokio::fs::create_dir_all(&repo_dir)
+        .await
+        .map_err(internal)?;
     let init = tokio::process::Command::new("git")
         .args(["init", &repo_dir])
         .output()
@@ -1242,11 +1424,31 @@ pub(crate) async fn create_project(
             .await;
         state
             .db
-            .update_project(id, None, None, None, None, None, None, None, None, None, Some(&repo_dir), None)
+            .update_project(
+                id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(&repo_dir),
+                None,
+            )
             .map_err(internal)?;
     }
 
-    let _ = state.db.log_event_full(None, None, Some(id), "api", "matter.created", &json!({ "name": name, "mode": mode }));
+    let _ = state.db.log_event_full(
+        None,
+        None,
+        Some(id),
+        "api",
+        "matter.created",
+        &json!({ "name": name, "mode": mode }),
+    );
 
     let mut resp = json!({ "id": id });
     if !conflicts.is_empty() {
@@ -1292,22 +1494,28 @@ pub(crate) async fn update_project(
             body.default_template_id,
         )
         .map_err(internal)?;
-    let updated = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let updated = state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     // Re-sync parties when client or opposing counsel change
     if body.client_name.is_some() || body.opposing_counsel.is_some() {
-        let _ = state.db.sync_project_parties(
-            id,
-            &updated.client_name,
-            &updated.opposing_counsel,
-        );
+        let _ = state
+            .db
+            .sync_project_parties(id, &updated.client_name, &updated.opposing_counsel);
     }
 
     let mut resp = json!(ProjectJson::from(updated));
 
     // Return conflicts if party fields changed
     if body.client_name.is_some() || body.opposing_counsel.is_some() {
-        let project = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+        let project = state
+            .db
+            .get_project(id)
+            .map_err(internal)?
+            .ok_or(StatusCode::NOT_FOUND)?;
         let conflicts = state
             .db
             .check_conflicts(Some(id), &project.client_name, &project.opposing_counsel)
@@ -1338,12 +1546,23 @@ pub(crate) async fn delete_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
-    let project = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let project = state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     // Clean up dedicated repo if it exists
     if !project.repo_path.is_empty() {
         let _ = tokio::fs::remove_dir_all(&project.repo_path).await;
     }
-    let _ = state.db.log_event_full(None, None, Some(id), "api", "matter.deleted", &json!({ "name": project.name }));
+    let _ = state.db.log_event_full(
+        None,
+        None,
+        Some(id),
+        "api",
+        "matter.deleted",
+        &json!({ "name": project.name }),
+    );
     state.db.delete_project(id).map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1388,8 +1607,18 @@ pub(crate) async fn create_deadline(
     if state.db.get_project(id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
-    let did = state.db.insert_deadline(id, &body.label, &body.due_date, &body.rule_basis).map_err(internal)?;
-    let _ = state.db.log_event_full(None, None, Some(id), "api", "deadline.created", &json!({ "label": body.label, "due_date": body.due_date }));
+    let did = state
+        .db
+        .insert_deadline(id, &body.label, &body.due_date, &body.rule_basis)
+        .map_err(internal)?;
+    let _ = state.db.log_event_full(
+        None,
+        None,
+        Some(id),
+        "api",
+        "deadline.created",
+        &json!({ "label": body.label, "due_date": body.due_date }),
+    );
     Ok(Json(json!({ "id": did })))
 }
 
@@ -1406,7 +1635,16 @@ pub(crate) async fn update_deadline(
     Path((_pid, did)): Path<(i64, i64)>,
     Json(body): Json<UpdateDeadlineBody>,
 ) -> Result<StatusCode, StatusCode> {
-    state.db.update_deadline(did, body.label.as_deref(), body.due_date.as_deref(), body.rule_basis.as_deref(), body.status.as_deref()).map_err(internal)?;
+    state
+        .db
+        .update_deadline(
+            did,
+            body.label.as_deref(),
+            body.due_date.as_deref(),
+            body.rule_basis.as_deref(),
+            body.status.as_deref(),
+        )
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1423,24 +1661,32 @@ pub(crate) struct UpcomingDeadlinesQuery {
     #[serde(default = "default_deadline_limit")]
     limit: i64,
 }
-fn default_deadline_limit() -> i64 { 50 }
+fn default_deadline_limit() -> i64 {
+    50
+}
 
 pub(crate) async fn list_upcoming_deadlines(
     State(state): State<Arc<AppState>>,
     Query(q): Query<UpcomingDeadlinesQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let rows = state.db.list_upcoming_deadlines(q.limit).map_err(internal)?;
-    let items: Vec<Value> = rows.into_iter().map(|(d, project_name)| {
-        json!({
-            "id": d.id,
-            "project_id": d.project_id,
-            "project_name": project_name,
-            "label": d.label,
-            "due_date": d.due_date,
-            "rule_basis": d.rule_basis,
-            "status": d.status,
+    let rows = state
+        .db
+        .list_upcoming_deadlines(q.limit)
+        .map_err(internal)?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(d, project_name)| {
+            json!({
+                "id": d.id,
+                "project_id": d.project_id,
+                "project_name": project_name,
+                "label": d.label,
+                "due_date": d.due_date,
+                "rule_basis": d.rule_basis,
+                "status": d.status,
+            })
         })
-    }).collect();
+        .collect();
     Ok(Json(json!(items)))
 }
 
@@ -1456,7 +1702,9 @@ pub(crate) struct FtsSearchQuery {
     #[serde(default)]
     semantic: bool,
 }
-fn default_search_limit() -> i64 { 50 }
+fn default_search_limit() -> i64 {
+    50
+}
 
 #[derive(Deserialize)]
 pub(crate) struct ThemeQuery {
@@ -1465,8 +1713,12 @@ pub(crate) struct ThemeQuery {
     #[serde(default = "default_theme_min_docs")]
     min_docs: i64,
 }
-fn default_theme_limit() -> i64 { 30 }
-fn default_theme_min_docs() -> i64 { 2 }
+fn default_theme_limit() -> i64 {
+    30
+}
+fn default_theme_min_docs() -> i64 {
+    2
+}
 
 // ── Audit ────────────────────────────────────────────────────────────────
 
@@ -1475,7 +1727,9 @@ pub(crate) struct AuditQuery {
     #[serde(default = "default_audit_limit")]
     limit: i64,
 }
-fn default_audit_limit() -> i64 { 100 }
+fn default_audit_limit() -> i64 {
+    100
+}
 
 pub(crate) async fn list_project_audit(
     State(state): State<Arc<AppState>>,
@@ -1485,7 +1739,10 @@ pub(crate) async fn list_project_audit(
     if state.db.get_project(id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
-    let events = state.db.list_project_events(id, q.limit).map_err(internal)?;
+    let events = state
+        .db
+        .list_project_events(id, q.limit)
+        .map_err(internal)?;
     Ok(Json(json!(events)))
 }
 
@@ -1502,7 +1759,10 @@ pub(crate) async fn search_documents(
     // Keyword search backend: OpenSearch when configured, otherwise SQLite FTS5.
     let mut used_fts_fallback = true;
     if let Some(opensearch) = &state.opensearch {
-        match opensearch.search(&query.q, query.project_id, query.limit).await {
+        match opensearch
+            .search(&query.q, query.project_id, query.limit)
+            .await
+        {
             Ok(os_results) => {
                 used_fts_fallback = false;
                 for r in os_results {
@@ -1524,17 +1784,22 @@ pub(crate) async fn search_documents(
                         "source": "keyword",
                     }));
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!("opensearch query failed, falling back to sqlite fts: {e}");
-            }
+            },
         }
     }
 
     if used_fts_fallback {
-        let fts_results = state.db.fts_search(&query.q, query.project_id, query.limit).map_err(internal)?;
+        let fts_results = state
+            .db
+            .fts_search(&query.q, query.project_id, query.limit)
+            .map_err(internal)?;
         for r in &fts_results {
-            let project_name = state.db.get_project(r.project_id)
+            let project_name = state
+                .db
+                .get_project(r.project_id)
                 .ok()
                 .flatten()
                 .map(|p| p.name.clone())
@@ -1555,7 +1820,11 @@ pub(crate) async fn search_documents(
     // Semantic search (when requested and embeddings exist)
     if query.semantic && state.db.embedding_count() > 0 {
         if let Ok(query_emb) = state.embed_client.embed_single(&query.q).await {
-            if let Ok(sem_results) = state.db.search_embeddings(&query_emb, query.limit as usize, query.project_id) {
+            if let Ok(sem_results) =
+                state
+                    .db
+                    .search_embeddings(&query_emb, query.limit as usize, query.project_id)
+            {
                 for r in sem_results.iter().filter(|r| r.score > 0.5) {
                     items.push(json!({
                         "project_id": r.project_id,
@@ -1624,7 +1893,11 @@ async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) 
             tokio::process::Command::new("gh")
                 .args([
                     "api",
-                    &format!("repos/{slug}/contents/{}?ref={}", percent_encode_allow_slash(path, true), percent_encode(ref_name)),
+                    &format!(
+                        "repos/{slug}/contents/{}?ref={}",
+                        percent_encode_allow_slash(path, true),
+                        percent_encode(ref_name)
+                    ),
                     "--jq",
                     ".content",
                 ])
@@ -1634,7 +1907,9 @@ async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) 
         .await;
         if let Ok(Ok(output)) = out {
             if output.status.success() {
-                let b64 = String::from_utf8_lossy(&output.stdout).trim().replace('\n', "");
+                let b64 = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .replace('\n', "");
                 return base64_decode(&b64).ok();
             }
         }
@@ -1677,7 +1952,7 @@ pub(crate) async fn list_project_documents(
             match out {
                 Ok(Ok(output)) if output.status.success() => {
                     Some(String::from_utf8_lossy(&output.stdout).to_string())
-                }
+                },
                 _ => None,
             }
         } else {
@@ -1704,10 +1979,10 @@ pub(crate) async fn list_project_documents(
                 match out {
                     Ok(Ok(output)) if output.status.success() => {
                         String::from_utf8_lossy(&output.stdout).to_string()
-                    }
+                    },
                     _ => continue,
                 }
-            }
+            },
             _ => continue,
         };
 
@@ -1794,9 +2069,13 @@ pub(crate) async fn get_project_document_versions(
             std::time::Duration::from_secs(5),
             tokio::process::Command::new("git")
                 .args([
-                    "-C", repo_path, "log", &task.branch,
+                    "-C",
+                    repo_path,
+                    "log",
+                    &task.branch,
                     "--format=%H\t%s\t%aI\t%an",
-                    "--", path,
+                    "--",
+                    path,
                 ])
                 .stderr(std::process::Stdio::null())
                 .output(),
@@ -1939,7 +2218,11 @@ pub(crate) async fn export_project_document(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let project = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let project = state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let add_toc = q.toc.unwrap_or(false);
     let number_sections = q.number_sections.unwrap_or(false);
     let title_page = q.title_page.unwrap_or(true);
@@ -1962,10 +2245,32 @@ pub(crate) async fn export_project_document(
         let title_block = format!(
             "---\ntitle: \"{}\"\n{}{}{}{}\ndate: \"{}\"\n---\n\n",
             task.title.replace('"', "'"),
-            if !project.client_name.is_empty() { format!("subtitle: \"Prepared for {}\"\n", project.client_name.replace('"', "'")) } else { String::new() },
-            if !project.case_number.is_empty() { format!("subject: \"Case No. {}\"\n", project.case_number) } else { String::new() },
-            if !project.jurisdiction.is_empty() { format!("keywords: [\"{}\"]\n", project.jurisdiction) } else { String::new() },
-            if !project.privilege_level.is_empty() { format!("header-includes: |\n  \\fancyfoot[C]{{PRIVILEGED AND CONFIDENTIAL — {}}}\n", project.privilege_level.to_uppercase()) } else { String::new() },
+            if !project.client_name.is_empty() {
+                format!(
+                    "subtitle: \"Prepared for {}\"\n",
+                    project.client_name.replace('"', "'")
+                )
+            } else {
+                String::new()
+            },
+            if !project.case_number.is_empty() {
+                format!("subject: \"Case No. {}\"\n", project.case_number)
+            } else {
+                String::new()
+            },
+            if !project.jurisdiction.is_empty() {
+                format!("keywords: [\"{}\"]\n", project.jurisdiction)
+            } else {
+                String::new()
+            },
+            if !project.privilege_level.is_empty() {
+                format!(
+                    "header-includes: |\n  \\fancyfoot[C]{{PRIVILEGED AND CONFIDENTIAL — {}}}\n",
+                    project.privilege_level.to_uppercase()
+                )
+            } else {
+                String::new()
+            },
             Utc::now().format("%B %d, %Y"),
         );
         md_content = format!("{}{}", title_block, md_content);
@@ -1976,16 +2281,22 @@ pub(crate) async fn export_project_document(
     // Resolve template: explicit template_id takes priority, then project default
     let effective_template_id = q.template_id.or(project.default_template_id);
     let template_info = if let Some(tid) = effective_template_id {
-        state.db.get_knowledge_file(tid).map_err(internal)?.map(|f| {
-            let p = format!("{}/knowledge/{}", state.config.data_dir, f.file_name);
-            let is_docx = f.file_name.to_lowercase().ends_with(".docx");
-            (p, is_docx)
-        })
+        state
+            .db
+            .get_knowledge_file(tid)
+            .map_err(internal)?
+            .map(|f| {
+                let p = format!("{}/knowledge/{}", state.config.data_dir, f.file_name);
+                let is_docx = f.file_name.to_lowercase().ends_with(".docx");
+                (p, is_docx)
+            })
     } else {
         None
     };
     let use_docxtemplater = format == "docx"
-        && template_info.as_ref().is_some_and(|(p, is_docx)| *is_docx && std::path::Path::new(p).exists());
+        && template_info
+            .as_ref()
+            .is_some_and(|(p, is_docx)| *is_docx && std::path::Path::new(p).exists());
 
     let tmp_dir = tempfile::tempdir().map_err(internal)?;
     let stem = std::path::Path::new(path)
@@ -2014,10 +2325,15 @@ pub(crate) async fn export_project_document(
             "outputPath": out_path.to_string_lossy(),
             "data": fill_data,
         });
-        let fill_script = format!("{}/sidecar/docx-template/fill.ts",
-            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| ".".into()));
+        let fill_script = format!(
+            "{}/sidecar/docx-template/fill.ts",
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".into())
+        );
         if let Ok(mut child) = tokio::process::Command::new("bun")
-            .arg("run").arg(&fill_script)
+            .arg("run")
+            .arg(&fill_script)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -2029,12 +2345,15 @@ pub(crate) async fn export_project_document(
             }
             match child.wait_with_output().await {
                 Ok(out) if !out.status.success() => {
-                    tracing::warn!("docxtemplater fill failed: {}", String::from_utf8_lossy(&out.stderr));
-                }
+                    tracing::warn!(
+                        "docxtemplater fill failed: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                },
                 Err(e) => {
                     tracing::warn!("docxtemplater process error: {e}");
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }
@@ -2042,12 +2361,16 @@ pub(crate) async fn export_project_document(
     // Fall back to pandoc if docxtemplater didn't produce output
     if !out_path.exists() {
         let md_path = tmp_dir.path().join("document.md");
-        tokio::fs::write(&md_path, &md_bytes).await.map_err(internal)?;
+        tokio::fs::write(&md_path, &md_bytes)
+            .await
+            .map_err(internal)?;
 
         let mut cmd = tokio::process::Command::new("pandoc");
         cmd.arg(&md_path)
-            .arg("-f").arg("markdown")
-            .arg("-o").arg(&out_path)
+            .arg("-f")
+            .arg("markdown")
+            .arg("-o")
+            .arg(&out_path)
             .stderr(std::process::Stdio::piped());
 
         if add_toc {
@@ -2068,13 +2391,10 @@ pub(crate) async fn export_project_document(
             }
         }
 
-        let pandoc_out = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            cmd.output(),
-        )
-        .await
-        .map_err(internal)?
-        .map_err(internal)?;
+        let pandoc_out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output())
+            .await
+            .map_err(internal)?
+            .map_err(internal)?;
 
         // If weasyprint failed for PDF, retry with xelatex
         if !pandoc_out.status.success() && format == "pdf" {
@@ -2082,8 +2402,10 @@ pub(crate) async fn export_project_document(
                 std::time::Duration::from_secs(60),
                 tokio::process::Command::new("pandoc")
                     .arg(&md_path)
-                    .arg("-f").arg("markdown")
-                    .arg("-o").arg(&out_path)
+                    .arg("-f")
+                    .arg("markdown")
+                    .arg("-o")
+                    .arg(&out_path)
                     .arg("--pdf-engine=xelatex")
                     .stderr(std::process::Stdio::piped())
                     .output(),
@@ -2142,7 +2464,11 @@ pub(crate) async fn export_all_project_documents(
     Path(id): Path<i64>,
     Query(q): Query<ExportAllQuery>,
 ) -> Result<axum::response::Response, StatusCode> {
-    let project = state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let project = state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let tasks = state.db.list_project_tasks(id).map_err(internal)?;
     let format = q.format.as_deref().unwrap_or("docx");
     if format != "pdf" && format != "docx" {
@@ -2161,18 +2487,31 @@ pub(crate) async fn export_all_project_documents(
         })
     });
     let use_docxtemplater = format == "docx"
-        && template_info.as_ref().is_some_and(|(p, is_docx)| *is_docx && std::path::Path::new(p).exists());
-    let fill_script = format!("{}/sidecar/docx-template/fill.ts",
-        std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| ".".into()));
+        && template_info
+            .as_ref()
+            .is_some_and(|(p, is_docx)| *is_docx && std::path::Path::new(p).exists());
+    let fill_script = format!(
+        "{}/sidecar/docx-template/fill.ts",
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".into())
+    );
 
     for task in &tasks {
-        if task.branch.is_empty() { continue; }
-        let slug = state.config.watched_repos.iter()
+        if task.branch.is_empty() {
+            continue;
+        }
+        let slug = state
+            .config
+            .watched_repos
+            .iter()
             .find(|r| r.path == task.repo_path)
-            .map(|r| r.repo_slug.as_str()).unwrap_or("");
+            .map(|r| r.repo_slug.as_str())
+            .unwrap_or("");
 
         for doc_path in &["research.md", "analysis.md", "review_notes.md"] {
-            let raw_bytes = match git_show_file(&task.repo_path, slug, &task.branch, doc_path).await {
+            let raw_bytes = match git_show_file(&task.repo_path, slug, &task.branch, doc_path).await
+            {
                 Some(b) if !b.is_empty() => b,
                 _ => continue,
             };
@@ -2182,16 +2521,22 @@ pub(crate) async fn export_all_project_documents(
             if !project.privilege_level.is_empty() {
                 md_content = format!(
                     "**PRIVILEGED AND CONFIDENTIAL — {}**\n\n---\n\n{}",
-                    project.privilege_level.to_uppercase(), md_content
+                    project.privilege_level.to_uppercase(),
+                    md_content
                 );
             }
 
-            let safe_title = task.title.chars()
+            let safe_title = task
+                .title
+                .chars()
                 .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
                 .collect::<String>()
-                .trim().to_string();
-            let stem = std::path::Path::new(doc_path).file_stem()
-                .and_then(|s| s.to_str()).unwrap_or("doc");
+                .trim()
+                .to_string();
+            let stem = std::path::Path::new(doc_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("doc");
             let out_name = format!("{}-{}.{}", safe_title, stem, format);
             let md_path = tmp_dir.path().join(format!("src-{}-{}.md", task.id, stem));
             let out_path = tmp_dir.path().join(&out_name);
@@ -2213,7 +2558,8 @@ pub(crate) async fn export_all_project_documents(
                     },
                 });
                 if let Ok(mut child) = tokio::process::Command::new("bun")
-                    .arg("run").arg(&fill_script)
+                    .arg("run")
+                    .arg(&fill_script)
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
@@ -2232,9 +2578,15 @@ pub(crate) async fn export_all_project_documents(
             }
 
             if !produced {
-                tokio::fs::write(&md_path, md_content.as_bytes()).await.map_err(internal)?;
+                tokio::fs::write(&md_path, md_content.as_bytes())
+                    .await
+                    .map_err(internal)?;
                 let mut cmd = tokio::process::Command::new("pandoc");
-                cmd.arg(&md_path).arg("-f").arg("markdown").arg("-o").arg(&out_path)
+                cmd.arg(&md_path)
+                    .arg("-f")
+                    .arg("markdown")
+                    .arg("-o")
+                    .arg(&out_path)
                     .stderr(std::process::Stdio::piped());
                 if q.toc.unwrap_or(false) {
                     cmd.arg("--toc").arg("--toc-depth=3");
@@ -2250,7 +2602,9 @@ pub(crate) async fn export_all_project_documents(
                     }
                 }
                 let out = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output())
-                    .await.map_err(internal)?.map_err(internal)?;
+                    .await
+                    .map_err(internal)?
+                    .map_err(internal)?;
                 produced = out.status.success();
             }
 
@@ -2280,13 +2634,23 @@ pub(crate) async fn export_all_project_documents(
     zip.finish().map_err(internal)?;
 
     let zip_bytes = tokio::fs::read(&zip_path).await.map_err(internal)?;
-    let filename = format!("{}-export.zip", project.name.chars()
-        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
-        .collect::<String>().trim().to_string());
+    let filename = format!(
+        "{}-export.zip",
+        project
+            .name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
+            .collect::<String>()
+            .trim()
+            .to_string()
+    );
 
     Ok(axum::response::Response::builder()
         .header("content-type", "application/zip")
-        .header("content-disposition", format!("attachment; filename=\"{filename}\""))
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{filename}\""),
+        )
         .body(axum::body::Body::from(zip_bytes))
         .unwrap())
 }
@@ -2295,8 +2659,16 @@ pub(crate) async fn delete_project_document(
     State(state): State<Arc<AppState>>,
     Path((id, task_id)): Path<(i64, i64)>,
 ) -> Result<Json<Value>, StatusCode> {
-    state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
-    let task = state.db.get_task(task_id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let task = state
+        .db
+        .get_task(task_id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     if task.branch.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -2314,7 +2686,11 @@ pub(crate) async fn delete_project_document(
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::warn!(task_id, branch = task.branch, "git branch -D failed: {stderr}");
+        tracing::warn!(
+            task_id,
+            branch = task.branch,
+            "git branch -D failed: {stderr}"
+        );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -2329,6 +2705,7 @@ pub(crate) async fn list_project_files(
     if state.db.get_project(id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
+    let cursor = decode_project_file_cursor(q.cursor.as_deref());
     let (files, total) = state
         .db
         .list_project_file_page(
@@ -2336,20 +2713,24 @@ pub(crate) async fn list_project_files(
             Some(&q.q),
             q.limit,
             q.offset,
+            cursor.as_ref(),
             q.has_text,
             q.privileged_only,
         )
         .map_err(internal)?;
+    let next_cursor = files.last().map(encode_project_file_cursor);
     let out: Vec<ProjectFileJson> = files.into_iter().map(ProjectFileJson::from).collect();
     let stats = state.db.get_project_file_stats(id).map_err(internal)?;
     let limit = q.limit.clamp(1, 200);
     let offset = q.offset.max(0);
+    let has_more = offset + (out.len() as i64) < total;
     Ok(Json(json!({
         "items": out,
         "total": total,
         "offset": offset,
         "limit": limit,
-        "has_more": offset + limit < total,
+        "has_more": has_more,
+        "next_cursor": if has_more { next_cursor } else { None },
         "summary": stats,
     })))
 }
@@ -2373,7 +2754,10 @@ pub(crate) async fn get_project_file_content(
     let safe_name = row.file_name.replace('"', "_");
     Ok(axum::response::Response::builder()
         .header("content-type", "application/octet-stream")
-        .header("content-disposition", format!("attachment; filename=\"{safe_name}\""))
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{safe_name}\""),
+        )
         .body(axum::body::Body::from(bytes))
         .unwrap())
 }
@@ -2478,7 +2862,12 @@ pub(crate) async fn create_upload_session(
     Path(project_id): Path<i64>,
     Json(body): Json<CreateUploadSessionBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    if state.db.get_project(project_id).map_err(internal)?.is_none() {
+    if state
+        .db
+        .get_project(project_id)
+        .map_err(internal)?
+        .is_none()
+    {
         return Err(StatusCode::NOT_FOUND);
     }
     let active_sessions = state
@@ -2500,7 +2889,10 @@ pub(crate) async fn create_upload_session(
     if body.total_chunks != expected_chunks {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let current_bytes = state.db.total_project_file_bytes(project_id).map_err(internal)?;
+    let current_bytes = state
+        .db
+        .total_project_file_bytes(project_id)
+        .map_err(internal)?;
     if current_bytes + body.file_size > state.config.project_max_bytes.max(1) {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -2543,7 +2935,12 @@ pub(crate) async fn list_project_upload_sessions(
     Path(project_id): Path<i64>,
     Query(q): Query<UploadSessionsQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    if state.db.get_project(project_id).map_err(internal)?.is_none() {
+    if state
+        .db
+        .get_project(project_id)
+        .map_err(internal)?
+        .is_none()
+    {
         return Err(StatusCode::NOT_FOUND);
     }
     let sessions = state
@@ -2618,7 +3015,9 @@ pub(crate) async fn upload_session_chunk(
         .await
         .map_err(internal)?;
     let chunk_path = format!("{chunks_dir}/{chunk_index}.part");
-    let mut file = tokio::fs::File::create(&chunk_path).await.map_err(internal)?;
+    let mut file = tokio::fs::File::create(&chunk_path)
+        .await
+        .map_err(internal)?;
     file.write_all(&bytes).await.map_err(internal)?;
     file.flush().await.map_err(internal)?;
     state
@@ -2650,7 +3049,10 @@ pub(crate) async fn get_upload_session_status(
     if session.project_id != project_id {
         return Err(StatusCode::NOT_FOUND);
     }
-    let uploaded_chunks = state.db.list_uploaded_chunks(session_id).map_err(internal)?;
+    let uploaded_chunks = state
+        .db
+        .list_uploaded_chunks(session_id)
+        .map_err(internal)?;
     let uploaded_set: HashSet<i64> = uploaded_chunks.iter().copied().collect();
     let uploaded_count = uploaded_set.len() as i64;
     let mut next_missing = None;
@@ -2671,7 +3073,12 @@ pub(crate) async fn get_upload_session_status(
     })))
 }
 
-async fn process_completed_upload_session(state: Arc<AppState>, project_id: i64, session_id: i64, assembled_path: String) {
+async fn process_completed_upload_session(
+    state: Arc<AppState>,
+    project_id: i64,
+    session_id: i64,
+    assembled_path: String,
+) {
     let session = match state.db.get_upload_session(session_id) {
         Ok(Some(s)) => s,
         _ => return,
@@ -2699,18 +3106,22 @@ async fn process_completed_upload_session(state: Arc<AppState>, project_id: i64,
     };
     match result {
         Ok(stored_path) => {
-            let _ = state
-                .db
-                .set_upload_session_state(session_id, "done", Some(&stored_path), Some(""));
+            let _ =
+                state
+                    .db
+                    .set_upload_session_state(session_id, "done", Some(&stored_path), Some(""));
             let _ = tokio::fs::remove_file(&assembled_path).await;
             let chunks_dir = upload_chunks_dir(&state.config.data_dir, session_id);
             let _ = tokio::fs::remove_dir_all(chunks_dir).await;
-        }
+        },
         Err(e) => {
-            let _ = state
-                .db
-                .set_upload_session_state(session_id, "failed", Some(&assembled_path), Some(&e.to_string()));
-        }
+            let _ = state.db.set_upload_session_state(
+                session_id,
+                "failed",
+                Some(&assembled_path),
+                Some(&e.to_string()),
+            );
+        },
     }
 }
 
@@ -2734,7 +3145,12 @@ pub(crate) async fn retry_upload_session(
     }
     state
         .db
-        .set_upload_session_state(session_id, "processing", Some(&session.stored_path), Some(""))
+        .set_upload_session_state(
+            session_id,
+            "processing",
+            Some(&session.stored_path),
+            Some(""),
+        )
         .map_err(internal)?;
 
     let state_cloned = state.clone();
@@ -2752,7 +3168,8 @@ pub(crate) async fn retry_upload_session(
             return;
         }
         let _permit = permit.unwrap();
-        process_completed_upload_session(state_cloned, project_id, session_id, assembled_path).await;
+        process_completed_upload_session(state_cloned, project_id, session_id, assembled_path)
+            .await;
     });
 
     Ok(Json(json!({
@@ -2771,32 +3188,48 @@ async fn process_uploaded_single_file(
     privileged: bool,
 ) -> anyhow::Result<String> {
     let content_hash = sha256_hex_file(assembled_path).await?;
-    if let Some(existing) = state.db.find_project_file_by_hash(project_id, &content_hash)? {
+    if let Some(existing) = state
+        .db
+        .find_project_file_by_hash(project_id, &content_hash)?
+    {
         if privileged {
             let _ = state.db.set_session_privileged(project_id);
         }
         return Ok(existing.stored_path);
     }
-    let unique_name = format!("{}_{}_{}", Utc::now().timestamp_millis(), rand_suffix(), sanitize_upload_name(file_name));
+    let safe_name = sanitize_upload_name(file_name);
+    let source_path = sanitize_upload_relative_path(file_name);
+    let unique_name = format!(
+        "{}_{}_{}",
+        Utc::now().timestamp_millis(),
+        rand_suffix(),
+        safe_name
+    );
     let stored_path = state
         .file_storage
         .put_project_file_from_path(project_id, &unique_name, assembled_path)
         .await?;
     let size_bytes = tokio::fs::metadata(assembled_path).await?.len() as i64;
-    let file_id = state
-        .db
-        .insert_project_file(
+    let file_id = state.db.insert_project_file(
+        project_id,
+        &safe_name,
+        &source_path,
+        &stored_path,
+        mime_type,
+        size_bytes,
+        &content_hash,
+        privileged,
+    )?;
+    if let Err(e) = state
+        .ingestion_queue
+        .enqueue_project_file(
             project_id,
+            file_id,
             file_name,
             &stored_path,
             mime_type,
             size_bytes,
-            &content_hash,
-            privileged,
-        )?;
-    if let Err(e) = state
-        .ingestion_queue
-        .enqueue_project_file(project_id, file_id, file_name, &stored_path, mime_type, size_bytes)
+        )
         .await
     {
         tracing::warn!("failed to enqueue uploaded file ingest: {e}");
@@ -2816,99 +3249,100 @@ async fn process_uploaded_zip(
     assembled_path: &str,
     privileged: bool,
 ) -> anyhow::Result<String> {
-    let extract_dir = format!("{}/uploads/extracted/{session_id}", state.config.data_dir);
     let assembled_path_owned = assembled_path.to_string();
-    let extract_dir_owned = extract_dir.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        std::fs::create_dir_all(&extract_dir_owned)?;
+    let state_for_zip = state.clone();
+    let (imported, deduped) = tokio::task::spawn_blocking(move || -> anyhow::Result<(i64, i64)> {
+        let handle = tokio::runtime::Handle::current();
+        let tmp_dir = std::path::Path::new(&state_for_zip.config.data_dir).join("uploads/tmp");
+        std::fs::create_dir_all(&tmp_dir)?;
         let file = std::fs::File::open(&assembled_path_owned)?;
         let mut archive = zip::ZipArchive::new(file)?;
+        let mut imported = 0i64;
+        let mut deduped = 0i64;
+
         for idx in 0..archive.len() {
             let mut entry = archive.by_index(idx)?;
             if entry.is_dir() {
                 continue;
             }
+
             let raw_name = entry.name().to_string();
             let fallback = format!("file-{idx}");
-            let leaf = std::path::Path::new(&raw_name)
+            let source_path = sanitize_upload_relative_path(&raw_name);
+            let leaf = std::path::Path::new(&source_path)
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or(&fallback);
-            let safe_name = sanitize_upload_name(leaf);
-            if safe_name.is_empty() {
+            let file_name = sanitize_upload_name(leaf);
+            if file_name.is_empty() {
                 continue;
             }
-            let out_name = format!("{idx:07}__{safe_name}");
-            let out_path = std::path::Path::new(&extract_dir_owned).join(out_name);
-            let mut out = std::fs::File::create(out_path)?;
-            std::io::copy(&mut entry, &mut out)?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("zip extraction join error: {e}"))??;
 
-    let mut dir = tokio::fs::read_dir(&extract_dir).await?;
-    let mut imported = 0i64;
-    let mut deduped = 0i64;
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let stem = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file.bin");
-        let file_name = stem
-            .split_once("__")
-            .map(|(_, name)| name.to_string())
-            .unwrap_or_else(|| stem.to_string());
-        let content_hash = sha256_hex_file(path.to_string_lossy().as_ref()).await?;
-        if state
-            .db
-            .find_project_file_by_hash(project_id, &content_hash)?
-            .is_some()
-        {
-            if privileged {
-                let _ = state.db.set_session_privileged(project_id);
+            let mut tmp = tempfile::NamedTempFile::new_in(&tmp_dir)?;
+            std::io::copy(&mut entry, &mut tmp)?;
+            let tmp_path = tmp.path().to_path_buf();
+            let content_hash = sha256_hex_file_blocking(&tmp_path)?;
+            if state_for_zip
+                .db
+                .find_project_file_by_hash(project_id, &content_hash)?
+                .is_some()
+            {
+                if privileged {
+                    let _ = state_for_zip.db.set_session_privileged(project_id);
+                }
+                deduped += 1;
+                continue;
             }
-            deduped += 1;
-            continue;
-        }
-        let unique_name = format!("{}_{}_{}", Utc::now().timestamp_millis(), rand_suffix(), sanitize_upload_name(&file_name));
-        let stored_path = state
-            .file_storage
-            .put_project_file_from_path(project_id, &unique_name, path.to_string_lossy().as_ref())
-            .await?;
-        let size_bytes = tokio::fs::metadata(&path).await?.len() as i64;
-        let mime_type = guess_mime_from_name(&file_name);
-        let file_id = state
-            .db
-            .insert_project_file(
+
+            let unique_name = format!(
+                "{}_{}_{}",
+                Utc::now().timestamp_millis(),
+                rand_suffix(),
+                sanitize_upload_name(&file_name)
+            );
+            let tmp_path_str = tmp_path.to_string_lossy().to_string();
+            let stored_path =
+                handle.block_on(state_for_zip.file_storage.put_project_file_from_path(
+                    project_id,
+                    &unique_name,
+                    &tmp_path_str,
+                ))?;
+            let size_bytes = tmp.as_file().metadata()?.len() as i64;
+            let mime_type = guess_mime_from_name(&file_name);
+            let file_id = state_for_zip.db.insert_project_file(
                 project_id,
                 &file_name,
+                &source_path,
                 &stored_path,
                 &mime_type,
                 size_bytes,
                 &content_hash,
                 privileged,
             )?;
-        if let Err(e) = state
-            .ingestion_queue
-            .enqueue_project_file(project_id, file_id, &file_name, &stored_path, &mime_type, size_bytes)
-            .await
-        {
-            tracing::warn!("failed to enqueue zip file ingest: {e}");
-        }
-        if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) {
-            if let Ok(Some(row)) = state.db.get_project_file(project_id, file_id) {
-                extract_and_index_project_file(state.as_ref(), &row).await;
+            if let Err(e) = handle.block_on(state_for_zip.ingestion_queue.enqueue_project_file(
+                project_id,
+                file_id,
+                &file_name,
+                &stored_path,
+                &mime_type,
+                size_bytes,
+            )) {
+                tracing::warn!("failed to enqueue zip file ingest: {e}");
             }
+            if matches!(
+                state_for_zip.ingestion_queue.as_ref(),
+                IngestionQueue::Disabled
+            ) {
+                if let Ok(Some(row)) = state_for_zip.db.get_project_file(project_id, file_id) {
+                    handle.block_on(extract_and_index_project_file(state_for_zip.as_ref(), &row));
+                }
+            }
+            imported += 1;
         }
-        imported += 1;
-    }
-    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+        Ok((imported, deduped))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("zip extraction join error: {e}"))??;
     Ok(format!(
         "zip://session/{session_id}/imported/{imported}/deduped/{deduped}"
     ))
@@ -2929,7 +3363,10 @@ pub(crate) async fn complete_upload_session(
     if session.status != "uploading" {
         return Err(StatusCode::CONFLICT);
     }
-    let uploaded = state.db.list_uploaded_chunks(session_id).map_err(internal)?;
+    let uploaded = state
+        .db
+        .list_uploaded_chunks(session_id)
+        .map_err(internal)?;
     let uploaded_set: HashSet<i64> = uploaded.into_iter().collect();
     for idx in 0..session.total_chunks {
         if !uploaded_set.contains(&idx) {
@@ -2938,9 +3375,14 @@ pub(crate) async fn complete_upload_session(
     }
 
     let assembled_dir = format!("{}/uploads/assembled", state.config.data_dir);
-    tokio::fs::create_dir_all(&assembled_dir).await.map_err(internal)?;
-    let assembled_path = upload_assembled_path(&state.config.data_dir, session_id, &session.file_name);
-    let mut assembled_file = tokio::fs::File::create(&assembled_path).await.map_err(internal)?;
+    tokio::fs::create_dir_all(&assembled_dir)
+        .await
+        .map_err(internal)?;
+    let assembled_path =
+        upload_assembled_path(&state.config.data_dir, session_id, &session.file_name);
+    let mut assembled_file = tokio::fs::File::create(&assembled_path)
+        .await
+        .map_err(internal)?;
     let chunks_dir = upload_chunks_dir(&state.config.data_dir, session_id);
     for idx in 0..session.total_chunks {
         let chunk_path = format!("{chunks_dir}/{idx}.part");
@@ -2969,7 +3411,8 @@ pub(crate) async fn complete_upload_session(
             return;
         }
         let _permit = permit.unwrap();
-        process_completed_upload_session(state_cloned, project_id, session_id, assembled_path).await;
+        process_completed_upload_session(state_cloned, project_id, session_id, assembled_path)
+            .await;
     });
 
     Ok(Json(json!({
@@ -3045,6 +3488,7 @@ pub(crate) async fn upload_project_files(
             .insert_project_file(
                 id,
                 &file_name,
+                &file_name,
                 &stored_path,
                 &mime_type,
                 file_size,
@@ -3070,7 +3514,9 @@ pub(crate) async fn upload_project_files(
         uploaded.push(ProjectFileJson::from(inserted));
     }
 
-    if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) && !uploaded_rows.is_empty() {
+    if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled)
+        && !uploaded_rows.is_empty()
+    {
         // Extract text from uploaded files in background (legacy mode when queue is disabled)
         let state2 = Arc::clone(&state);
         let rows = uploaded_rows;
@@ -3084,17 +3530,27 @@ pub(crate) async fn upload_project_files(
     Ok(Json(json!({ "uploaded": uploaded, "deduped": deduped })))
 }
 
-async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String, StatusCode> {
+async fn extract_text_from_bytes(
+    file_name: &str,
+    mime: &str,
+    bytes: &[u8],
+) -> Result<String, StatusCode> {
     let file_name = file_name.to_string();
     let mime = mime.to_string();
     let bytes = bytes.to_vec();
     let text = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
         let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
         let is_pdf = mime.contains("pdf") || ext == "pdf";
-        let is_docx = mime.contains("wordprocessingml") || mime.contains("msword")
-            || ext == "docx" || ext == "doc";
-        let is_text = mime.starts_with("text/") || ext == "txt" || ext == "md"
-            || ext == "csv" || ext == "json" || ext == "xml";
+        let is_docx = mime.contains("wordprocessingml")
+            || mime.contains("msword")
+            || ext == "docx"
+            || ext == "doc";
+        let is_text = mime.starts_with("text/")
+            || ext == "txt"
+            || ext == "md"
+            || ext == "csv"
+            || ext == "json"
+            || ext == "xml";
 
         if is_pdf {
             let tmp = tempfile::NamedTempFile::new()?;
@@ -3105,10 +3561,17 @@ async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> R
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         } else if is_docx {
             let suffix = if ext.is_empty() { "docx" } else { &ext };
-            let tmp = tempfile::Builder::new().suffix(&format!(".{suffix}")).tempfile()?;
+            let tmp = tempfile::Builder::new()
+                .suffix(&format!(".{suffix}"))
+                .tempfile()?;
             std::fs::write(tmp.path(), &bytes)?;
             let out = std::process::Command::new("pandoc")
-                .args([tmp.path().to_str().unwrap_or(""), "-t", "plain", "--wrap=none"])
+                .args([
+                    tmp.path().to_str().unwrap_or(""),
+                    "-t",
+                    "plain",
+                    "--wrap=none",
+                ])
                 .output()?;
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         } else if is_text {
@@ -3116,7 +3579,10 @@ async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> R
         } else {
             Ok(String::new())
         }
-    }).await.map_err(internal)?.map_err(internal)?;
+    })
+    .await
+    .map_err(internal)?
+    .map_err(internal)?;
     Ok(text)
 }
 
@@ -3124,30 +3590,39 @@ async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow)
     if !file.extracted_text.is_empty() {
         return;
     }
+    let source_path = if file.source_path.is_empty() {
+        file.file_name.as_str()
+    } else {
+        file.source_path.as_str()
+    };
     let bytes = match state.file_storage.read_all(&file.stored_path).await {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!("project file read failed for {}: {e}", file.file_name);
             return;
-        }
+        },
     };
     let text = match extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!("project file extract failed for {}: {e}", file.file_name);
             return;
-        }
+        },
     };
     if text.is_empty() {
         return;
     }
     if let Err(e) = state.db.update_project_file_text(file.id, &text) {
-        tracing::warn!("project file text update failed for {}: {e}", file.file_name);
+        tracing::warn!(
+            "project file text update failed for {}: {e}",
+            file.file_name
+        );
         return;
     }
-    if let Err(e) = state
-        .db
-        .fts_index_document(file.project_id, 0, &file.file_name, &file.file_name, &text)
+    if let Err(e) =
+        state
+            .db
+            .fts_index_document(file.project_id, 0, source_path, &file.file_name, &text)
     {
         tracing::warn!("project file fts index failed for {}: {e}", file.file_name);
         return;
@@ -3159,13 +3634,16 @@ async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow)
                 &doc_id,
                 file.project_id,
                 0,
-                &file.file_name,
+                source_path,
                 &file.file_name,
                 &text,
             )
             .await
         {
-            tracing::warn!("project file opensearch index failed for {}: {e}", file.file_name);
+            tracing::warn!(
+                "project file opensearch index failed for {}: {e}",
+                file.file_name
+            );
         }
     }
     tracing::info!("extracted {} chars from {}", text.len(), file.file_name);
@@ -3175,7 +3653,10 @@ pub(crate) async fn get_project_file_text(
     State(state): State<Arc<AppState>>,
     Path((project_id, file_id)): Path<(i64, i64)>,
 ) -> Result<Json<Value>, StatusCode> {
-    let file = state.db.get_project_file(project_id, file_id).map_err(internal)?
+    let file = state
+        .db
+        .get_project_file(project_id, file_id)
+        .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(json!({
         "id": file.id,
@@ -3189,13 +3670,25 @@ pub(crate) async fn reextract_project_file(
     State(state): State<Arc<AppState>>,
     Path((project_id, file_id)): Path<(i64, i64)>,
 ) -> Result<Json<Value>, StatusCode> {
-    let file = state.db.get_project_file(project_id, file_id).map_err(internal)?
+    let file = state
+        .db
+        .get_project_file(project_id, file_id)
+        .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let bytes = state.file_storage.read_all(&file.stored_path).await.map_err(internal)?;
+    let bytes = state
+        .file_storage
+        .read_all(&file.stored_path)
+        .await
+        .map_err(internal)?;
     let text = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await?;
     if !text.is_empty() {
-        state.db.update_project_file_text(file_id, &text).map_err(internal)?;
-        state.db.fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text)
+        state
+            .db
+            .update_project_file_text(file_id, &text)
+            .map_err(internal)?;
+        state
+            .db
+            .fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text)
             .map_err(internal)?;
         if let Some(os) = &state.opensearch {
             let _ = os
@@ -3230,7 +3723,9 @@ pub(crate) async fn get_status(
     let uptime_s = state.start_time.elapsed().as_secs();
     let now = chrono::Utc::now().timestamp();
 
-    let watched_repos: Vec<Value> = state.config.watched_repos
+    let watched_repos: Vec<Value> = state
+        .config
+        .watched_repos
         .iter()
         .map(|r| {
             json!({
@@ -3292,6 +3787,7 @@ pub(crate) async fn get_status(
     let rebase_backlog_alert = rebase_count >= 50;
     let no_merge_alert = queued_count > 0 && last_merge_ts > 0 && (now - last_merge_ts) >= 60 * 60;
     let guardrail_alert = rebase_backlog_alert || no_merge_alert;
+    let ai_requests = state.ai_request_count.load(Ordering::Relaxed);
 
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -3303,6 +3799,7 @@ pub(crate) async fn get_status(
         "assistant_name": assistant_name,
         "active_tasks": active,
         "merged_tasks": merged,
+        "ai_requests": ai_requests,
         "failed_tasks": failed,
         "total_tasks": total,
         "dispatched_agents": 0,
@@ -3354,7 +3851,10 @@ pub(crate) async fn approve_proposal(
         created_at: Utc::now(),
         updated_at: Utc::now(),
         session_id: String::new(),
-        mode: state.config.watched_repos.iter()
+        mode: state
+            .config
+            .watched_repos
+            .iter()
             .find(|r| r.path == proposal.repo_path)
             .map(|r| r.mode.clone())
             .unwrap_or_else(|| "sweborg".into()),
@@ -3404,7 +3904,10 @@ pub(crate) async fn reopen_proposal(
 }
 
 pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json<Value> {
-    if state.triage_running.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    if state
+        .triage_running
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
         return Json(json!({ "scored": 0, "error": "triage already running" }));
     }
 
@@ -3511,6 +4014,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
 
+            state.ai_request_count.fetch_add(1, Ordering::Relaxed);
             match backend.run_phase(&task, &phase, ctx).await {
                 Ok(result) => {
                     if let Some(json_start) = result.output.find('{') {
@@ -3808,12 +4312,15 @@ pub(crate) async fn get_chat_messages(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ChatMessagesQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let msgs = match state.db.get_chat_messages(&q.thread, q.limit.unwrap_or(100)) {
+    let msgs = match state
+        .db
+        .get_chat_messages(&q.thread, q.limit.unwrap_or(100))
+    {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("get_chat_messages({}): {e}", q.thread);
             return Ok(Json(json!([])));
-        }
+        },
     };
     let v: Vec<Value> = msgs
         .iter()
@@ -3887,6 +4394,7 @@ pub(crate) async fn post_project_chat(
             state2.opensearch.clone(),
             &state2.file_storage,
             &state2.chat_event_tx,
+            &state2.ai_request_count,
         )
         .await
         {
@@ -3970,6 +4478,7 @@ pub(crate) async fn post_chat(
             state2.opensearch.clone(),
             &state2.file_storage,
             &state2.chat_event_tx,
+            &state2.ai_request_count,
         )
         .await
         {
@@ -4092,7 +4601,9 @@ pub(crate) async fn list_cache_volumes(
     let volumes = borg_core::sandbox::Sandbox::list_cache_volumes("borg-cache-").await;
     let arr: Vec<_> = volumes
         .into_iter()
-        .map(|(name, size, last_used)| json!({ "name": name, "size": size, "last_used": last_used }))
+        .map(
+            |(name, size, last_used)| json!({ "name": name, "size": size, "last_used": last_used }),
+        )
         .collect();
     Ok(Json(json!({ "volumes": arr })))
 }
@@ -4102,7 +4613,11 @@ pub(crate) async fn delete_cache_volume(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     // Only allow alphanumeric, hyphens, and underscores in volume names
-    if !name.starts_with("borg-cache-") || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !name.starts_with("borg-cache-")
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     let removed = borg_core::sandbox::Sandbox::remove_volume(&name).await;
@@ -4157,13 +4672,21 @@ pub(crate) async fn upload_knowledge(
     let mut category = String::new();
     let mut file_bytes: Vec<u8> = Vec::new();
 
-    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
         match field.name() {
             Some("file") => {
                 if let Some(name) = field.file_name() {
                     file_name = sanitize_upload_name(name);
                 }
-                file_bytes = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?.to_vec();
+                file_bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|_| StatusCode::BAD_REQUEST)?
+                    .to_vec();
             },
             Some("description") => {
                 description = field.text().await.unwrap_or_default();
@@ -4204,7 +4727,9 @@ pub(crate) async fn upload_knowledge(
         .insert_knowledge_file(&file_name, &description, file_bytes.len() as i64, inline)
         .map_err(internal)?;
     if !category.is_empty() {
-        let _ = state.db.update_knowledge_file(id, None, None, None, Some(&category), None);
+        let _ = state
+            .db
+            .update_knowledge_file(id, None, None, None, Some(&category), None);
     }
 
     Ok(Json(json!({ "id": id, "file_name": file_name })))
@@ -4217,7 +4742,14 @@ pub(crate) async fn update_knowledge(
 ) -> Result<Json<Value>, StatusCode> {
     state
         .db
-        .update_knowledge_file(id, body.description.as_deref(), body.inline, body.tags.as_deref(), body.category.as_deref(), body.jurisdiction.as_deref())
+        .update_knowledge_file(
+            id,
+            body.description.as_deref(),
+            body.inline,
+            body.tags.as_deref(),
+            body.category.as_deref(),
+            body.jurisdiction.as_deref(),
+        )
         .map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -4245,7 +4777,10 @@ pub(crate) async fn list_templates(
     State(state): State<Arc<AppState>>,
     Query(q): Query<TemplatesQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let templates = state.db.list_templates(q.category.as_deref(), q.jurisdiction.as_deref()).map_err(internal)?;
+    let templates = state
+        .db
+        .list_templates(q.category.as_deref(), q.jurisdiction.as_deref())
+        .map_err(internal)?;
     Ok(Json(json!(templates)))
 }
 
@@ -4269,7 +4804,10 @@ pub(crate) async fn get_knowledge_content(
     Ok((
         axum::http::StatusCode::OK,
         [
-            (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
             (axum::http::header::CONTENT_DISPOSITION, disp),
         ],
         bytes,
@@ -4321,8 +4859,16 @@ fn base64_encode(input: &[u8]) -> String {
         let combined = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[((combined >> 18) & 0x3f) as usize] as char);
         out.push(TABLE[((combined >> 12) & 0x3f) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[((combined >> 6) & 0x3f) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(combined & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[((combined >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(combined & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -4338,15 +4884,22 @@ pub(crate) async fn cloud_auth_init(
     Path(provider): Path<String>,
     Query(q): Query<CloudAuthQuery>,
 ) -> Result<axum::response::Response, StatusCode> {
-    let public_url = state.db.get_config("public_url").map_err(internal)?.unwrap_or_default();
+    let public_url = state
+        .db
+        .get_config("public_url")
+        .map_err(internal)?
+        .unwrap_or_default();
     if public_url.trim().is_empty() {
-        return Ok(axum::response::Redirect::temporary("/#/projects?cloud_error=missing_public_url").into_response());
+        return Ok(axum::response::Redirect::temporary(
+            "/#/projects?cloud_error=missing_public_url",
+        )
+        .into_response());
     }
 
     let client_id = match provider.as_str() {
-        "dropbox"      => state.db.get_config("dropbox_client_id").map_err(internal)?,
+        "dropbox" => state.db.get_config("dropbox_client_id").map_err(internal)?,
         "google_drive" => state.db.get_config("google_client_id").map_err(internal)?,
-        "onedrive"     => state.db.get_config("ms_client_id").map_err(internal)?,
+        "onedrive" => state.db.get_config("ms_client_id").map_err(internal)?,
         _ => return Err(StatusCode::NOT_FOUND),
     };
     let client_id = client_id.unwrap_or_else(|| {
@@ -4354,10 +4907,14 @@ pub(crate) async fn cloud_auth_init(
         String::new()
     });
     if client_id.trim().is_empty() {
-        return Ok(axum::response::Redirect::temporary(&format!("/#/projects?cloud_error=missing_credentials&provider={provider}")).into_response());
+        return Ok(axum::response::Redirect::temporary(&format!(
+            "/#/projects?cloud_error=missing_credentials&provider={provider}"
+        ))
+        .into_response());
     }
 
-    let state_json = serde_json::json!({ "project_id": q.project_id, "provider": provider }).to_string();
+    let state_json =
+        serde_json::json!({ "project_id": q.project_id, "provider": provider }).to_string();
     let encoded_state = base64_encode(state_json.as_bytes());
     let redirect_uri = cloud_callback_url(&state.config, &provider);
 
@@ -4394,35 +4951,47 @@ pub(crate) async fn cloud_auth_callback(
 ) -> Result<axum::response::Response, StatusCode> {
     if let Some(err) = q.error {
         tracing::warn!("cloud OAuth error for {provider}: {err}");
-        return Ok(axum::response::Redirect::temporary(
-            &format!("/#/projects?cloud_error=access_denied&provider={provider}")
-        ).into_response());
+        return Ok(axum::response::Redirect::temporary(&format!(
+            "/#/projects?cloud_error=access_denied&provider={provider}"
+        ))
+        .into_response());
     }
     let code = q.code.ok_or(StatusCode::BAD_REQUEST)?;
     let state_raw = q.state.ok_or(StatusCode::BAD_REQUEST)?;
     let state_bytes = base64_decode(&state_raw).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let state_val: serde_json::Value = serde_json::from_slice(&state_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let project_id = state_val["project_id"].as_i64().ok_or(StatusCode::BAD_REQUEST)?;
+    let state_val: serde_json::Value =
+        serde_json::from_slice(&state_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let project_id = state_val["project_id"]
+        .as_i64()
+        .ok_or(StatusCode::BAD_REQUEST)?;
 
     let client_id = match provider.as_str() {
-        "dropbox"      => state.db.get_config("dropbox_client_id").map_err(internal)?,
+        "dropbox" => state.db.get_config("dropbox_client_id").map_err(internal)?,
         "google_drive" => state.db.get_config("google_client_id").map_err(internal)?,
-        "onedrive"     => state.db.get_config("ms_client_id").map_err(internal)?,
+        "onedrive" => state.db.get_config("ms_client_id").map_err(internal)?,
         _ => return Err(StatusCode::NOT_FOUND),
-    }.ok_or(StatusCode::BAD_REQUEST)?;
+    }
+    .ok_or(StatusCode::BAD_REQUEST)?;
     let client_secret = match provider.as_str() {
-        "dropbox"      => state.db.get_config("dropbox_client_secret").map_err(internal)?,
-        "google_drive" => state.db.get_config("google_client_secret").map_err(internal)?,
-        "onedrive"     => state.db.get_config("ms_client_secret").map_err(internal)?,
+        "dropbox" => state
+            .db
+            .get_config("dropbox_client_secret")
+            .map_err(internal)?,
+        "google_drive" => state
+            .db
+            .get_config("google_client_secret")
+            .map_err(internal)?,
+        "onedrive" => state.db.get_config("ms_client_secret").map_err(internal)?,
         _ => return Err(StatusCode::NOT_FOUND),
-    }.ok_or(StatusCode::BAD_REQUEST)?;
+    }
+    .ok_or(StatusCode::BAD_REQUEST)?;
 
     let redirect_uri = cloud_callback_url(&state.config, &provider);
     let token_url = match provider.as_str() {
-        "dropbox"      => "https://api.dropboxapi.com/oauth2/token",
+        "dropbox" => "https://api.dropboxapi.com/oauth2/token",
         "google_drive" => "https://oauth2.googleapis.com/token",
-        "onedrive"     => "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-        _              => return Err(StatusCode::NOT_FOUND),
+        "onedrive" => "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        _ => return Err(StatusCode::NOT_FOUND),
     };
 
     let client = reqwest::Client::new();
@@ -4433,49 +5002,84 @@ pub(crate) async fn cloud_auth_callback(
         ("client_id", &client_id),
         ("client_secret", &client_secret),
     ];
-    let resp = client.post(token_url).form(&params).send().await.map_err(internal)?;
+    let resp = client
+        .post(token_url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(internal)?;
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
         tracing::error!("cloud token exchange failed for {provider}: {body}");
-        return Ok(axum::response::Redirect::temporary(
-            &format!("/#/projects?cloud_error=token_exchange&provider={provider}")
-        ).into_response());
+        return Ok(axum::response::Redirect::temporary(&format!(
+            "/#/projects?cloud_error=token_exchange&provider={provider}"
+        ))
+        .into_response());
     }
     let token_json: serde_json::Value = resp.json().await.map_err(internal)?;
-    let access_token = token_json["access_token"].as_str().unwrap_or("").to_string();
-    let refresh_token = token_json["refresh_token"].as_str().unwrap_or("").to_string();
+    let access_token = token_json["access_token"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let refresh_token = token_json["refresh_token"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let expires_in = token_json["expires_in"].as_i64().unwrap_or(3600);
-    let expiry = (chrono::Utc::now() + chrono::Duration::seconds(expires_in))
-        .to_rfc3339();
+    let expiry = (chrono::Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
 
     // Fetch account info
-    let (account_email, account_id) = fetch_cloud_account_info(&client, &provider, &access_token).await;
+    let (account_email, account_id) =
+        fetch_cloud_account_info(&client, &provider, &access_token).await;
 
     // Check if this account is already connected to this project
-    let existing = state.db.list_cloud_connections(project_id).map_err(internal)?;
-    if let Some(conn) = existing.iter().find(|c| c.provider == provider && c.account_id == account_id) {
-        state.db.update_cloud_connection_tokens(conn.id, &access_token, &refresh_token, &expiry)
+    let existing = state
+        .db
+        .list_cloud_connections(project_id)
+        .map_err(internal)?;
+    if let Some(conn) = existing
+        .iter()
+        .find(|c| c.provider == provider && c.account_id == account_id)
+    {
+        state
+            .db
+            .update_cloud_connection_tokens(conn.id, &access_token, &refresh_token, &expiry)
             .map_err(internal)?;
     } else {
-        state.db.insert_cloud_connection(
-            project_id, &provider, &access_token, &refresh_token, &expiry,
-            &account_email, &account_id,
-        ).map_err(internal)?;
+        state
+            .db
+            .insert_cloud_connection(
+                project_id,
+                &provider,
+                &access_token,
+                &refresh_token,
+                &expiry,
+                &account_email,
+                &account_id,
+            )
+            .map_err(internal)?;
     }
 
-    Ok(axum::response::Redirect::temporary(
-        &format!("/#/projects?cloud_connected={provider}&project_id={project_id}")
-    ).into_response())
+    Ok(axum::response::Redirect::temporary(&format!(
+        "/#/projects?cloud_connected={provider}&project_id={project_id}"
+    ))
+    .into_response())
 }
 
-async fn fetch_cloud_account_info(client: &reqwest::Client, provider: &str, access_token: &str) -> (String, String) {
+async fn fetch_cloud_account_info(
+    client: &reqwest::Client,
+    provider: &str,
+    access_token: &str,
+) -> (String, String) {
     match provider {
         "dropbox" => {
-            let resp = client.post("https://api.dropboxapi.com/2/users/get_current_account")
+            let resp = client
+                .post("https://api.dropboxapi.com/2/users/get_current_account")
                 .header("Authorization", format!("Bearer {access_token}"))
                 .header("Content-Type", "")
                 .body("")
-                .send().await;
+                .send()
+                .await;
             if let Ok(r) = resp {
                 if let Ok(v) = r.json::<serde_json::Value>().await {
                     let email = v["email"].as_str().unwrap_or("").to_string();
@@ -4483,10 +5087,13 @@ async fn fetch_cloud_account_info(client: &reqwest::Client, provider: &str, acce
                     return (email, id);
                 }
             }
-        }
+        },
         "google_drive" => {
-            let resp = client.get("https://www.googleapis.com/oauth2/v2/userinfo")
-                .bearer_auth(access_token).send().await;
+            let resp = client
+                .get("https://www.googleapis.com/oauth2/v2/userinfo")
+                .bearer_auth(access_token)
+                .send()
+                .await;
             if let Ok(r) = resp {
                 if let Ok(v) = r.json::<serde_json::Value>().await {
                     let email = v["email"].as_str().unwrap_or("").to_string();
@@ -4494,27 +5101,34 @@ async fn fetch_cloud_account_info(client: &reqwest::Client, provider: &str, acce
                     return (email, id);
                 }
             }
-        }
+        },
         "onedrive" => {
-            let resp = client.get("https://graph.microsoft.com/v1.0/me")
-                .bearer_auth(access_token).send().await;
+            let resp = client
+                .get("https://graph.microsoft.com/v1.0/me")
+                .bearer_auth(access_token)
+                .send()
+                .await;
             if let Ok(r) = resp {
                 if let Ok(v) = r.json::<serde_json::Value>().await {
-                    let email = v["mail"].as_str()
+                    let email = v["mail"]
+                        .as_str()
                         .or_else(|| v["userPrincipalName"].as_str())
-                        .unwrap_or("").to_string();
+                        .unwrap_or("")
+                        .to_string();
                     let id = v["id"].as_str().unwrap_or("").to_string();
                     return (email, id);
                 }
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
     (String::new(), String::new())
 }
 
 async fn refresh_cloud_token_if_needed(
-    db: &Db, conn: &borg_core::db::CloudConnection, config: &borg_core::config::Config,
+    db: &Db,
+    conn: &borg_core::db::CloudConnection,
+    config: &borg_core::config::Config,
 ) -> String {
     // Check if token expires within 5 minutes
     let expires_soon = chrono::DateTime::parse_from_rfc3339(&conn.token_expiry)
@@ -4527,13 +5141,33 @@ async fn refresh_cloud_token_if_needed(
         return conn.access_token.clone();
     }
     let (client_id_key, client_secret_key, token_url) = match conn.provider.as_str() {
-        "dropbox"      => ("dropbox_client_id", "dropbox_client_secret", "https://api.dropboxapi.com/oauth2/token"),
-        "google_drive" => ("google_client_id", "google_client_secret", "https://oauth2.googleapis.com/token"),
-        "onedrive"     => ("ms_client_id", "ms_client_secret", "https://login.microsoftonline.com/common/oauth2/v2.0/token"),
+        "dropbox" => (
+            "dropbox_client_id",
+            "dropbox_client_secret",
+            "https://api.dropboxapi.com/oauth2/token",
+        ),
+        "google_drive" => (
+            "google_client_id",
+            "google_client_secret",
+            "https://oauth2.googleapis.com/token",
+        ),
+        "onedrive" => (
+            "ms_client_id",
+            "ms_client_secret",
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        ),
         _ => return conn.access_token.clone(),
     };
-    let client_id = db.get_config(client_id_key).ok().flatten().unwrap_or_default();
-    let client_secret = db.get_config(client_secret_key).ok().flatten().unwrap_or_default();
+    let client_id = db
+        .get_config(client_id_key)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let client_secret = db
+        .get_config(client_secret_key)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let _ = config; // unused but kept for future use
     let client = reqwest::Client::new();
     let params = [
@@ -4546,10 +5180,15 @@ async fn refresh_cloud_token_if_needed(
         if let Ok(v) = resp.json::<serde_json::Value>().await {
             let new_access = v["access_token"].as_str().unwrap_or("").to_string();
             if !new_access.is_empty() {
-                let new_refresh = v["refresh_token"].as_str().unwrap_or(&conn.refresh_token).to_string();
+                let new_refresh = v["refresh_token"]
+                    .as_str()
+                    .unwrap_or(&conn.refresh_token)
+                    .to_string();
                 let expires_in = v["expires_in"].as_i64().unwrap_or(3600);
-                let expiry = (chrono::Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
-                let _ = db.update_cloud_connection_tokens(conn.id, &new_access, &new_refresh, &expiry);
+                let expiry =
+                    (chrono::Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
+                let _ =
+                    db.update_cloud_connection_tokens(conn.id, &new_access, &new_refresh, &expiry);
                 return new_access;
             }
         }
@@ -4562,15 +5201,24 @@ pub(crate) async fn list_cloud_connections(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let conns = state.db.list_cloud_connections(id).map_err(internal)?;
     // Don't expose tokens
-    let out: Vec<Value> = conns.iter().map(|c| json!({
-        "id": c.id,
-        "provider": c.provider,
-        "account_email": c.account_email,
-        "connected_at": c.created_at,
-    })).collect();
+    let out: Vec<Value> = conns
+        .iter()
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "provider": c.provider,
+                "account_email": c.account_email,
+                "connected_at": c.created_at,
+            })
+        })
+        .collect();
     Ok(Json(json!(out)))
 }
 
@@ -4579,12 +5227,18 @@ pub(crate) async fn delete_cloud_connection(
     State(state): State<Arc<AppState>>,
     Path((id, conn_id)): Path<(i64, i64)>,
 ) -> Result<StatusCode, StatusCode> {
-    let conn = state.db.get_cloud_connection(conn_id).map_err(internal)?
+    let conn = state
+        .db
+        .get_cloud_connection(conn_id)
+        .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
     if conn.project_id != id {
         return Err(StatusCode::NOT_FOUND);
     }
-    state.db.delete_cloud_connection(conn_id).map_err(internal)?;
+    state
+        .db
+        .delete_cloud_connection(conn_id)
+        .map_err(internal)?;
     Ok(StatusCode::OK)
 }
 
@@ -4594,46 +5248,75 @@ pub(crate) async fn browse_cloud_files(
     Path((id, conn_id)): Path<(i64, i64)>,
     Query(q): Query<CloudBrowseQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let conn = state.db.get_cloud_connection(conn_id).map_err(internal)?
+    let conn = state
+        .db
+        .get_cloud_connection(conn_id)
+        .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    if conn.project_id != id { return Err(StatusCode::NOT_FOUND); }
+    if conn.project_id != id {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let token = refresh_cloud_token_if_needed(&state.db, &conn, &state.config).await;
     let client = reqwest::Client::new();
     let result = match conn.provider.as_str() {
-        "dropbox" => browse_dropbox(&client, &token, q.folder_id.as_deref(), q.cursor.as_deref()).await,
-        "google_drive" => browse_google_drive(&client, &token, q.folder_id.as_deref(), q.cursor.as_deref()).await,
-        "onedrive" => browse_onedrive(&client, &token, q.folder_id.as_deref(), q.cursor.as_deref()).await,
+        "dropbox" => {
+            browse_dropbox(&client, &token, q.folder_id.as_deref(), q.cursor.as_deref()).await
+        },
+        "google_drive" => {
+            browse_google_drive(&client, &token, q.folder_id.as_deref(), q.cursor.as_deref()).await
+        },
+        "onedrive" => {
+            browse_onedrive(&client, &token, q.folder_id.as_deref(), q.cursor.as_deref()).await
+        },
         _ => return Err(StatusCode::NOT_FOUND),
     };
-    result.map(Json).map_err(|e| { tracing::error!("cloud browse error: {e}"); StatusCode::INTERNAL_SERVER_ERROR })
+    result.map(Json).map_err(|e| {
+        tracing::error!("cloud browse error: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
-async fn browse_dropbox(client: &reqwest::Client, token: &str, folder_path: Option<&str>, cursor: Option<&str>) -> anyhow::Result<Value> {
+async fn browse_dropbox(
+    client: &reqwest::Client,
+    token: &str,
+    folder_path: Option<&str>,
+    cursor: Option<&str>,
+) -> anyhow::Result<Value> {
     let (url, body) = if let Some(cur) = cursor {
-        ("https://api.dropboxapi.com/2/files/list_folder/continue".to_string(),
-         serde_json::json!({ "cursor": cur }).to_string())
+        (
+            "https://api.dropboxapi.com/2/files/list_folder/continue".to_string(),
+            serde_json::json!({ "cursor": cur }).to_string(),
+        )
     } else {
         ("https://api.dropboxapi.com/2/files/list_folder".to_string(),
          serde_json::json!({ "path": folder_path.unwrap_or(""), "recursive": false, "limit": 200 }).to_string())
     };
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .body(body)
-        .send().await?
-        .json::<serde_json::Value>().await?;
-    let entries: Vec<Value> = resp["entries"].as_array().unwrap_or(&vec![]).iter().map(|e| {
-        let is_folder = e[".tag"].as_str() == Some("folder");
-        json!({
-            "id": e["id"].as_str().unwrap_or(""),
-            "name": e["name"].as_str().unwrap_or(""),
-            "type": if is_folder { "folder" } else { "file" },
-            "size": e["size"].as_i64().unwrap_or(0),
-            "modified": e["server_modified"].as_str().unwrap_or(""),
-            "path": e["path_display"].as_str().unwrap_or(""),
-            "mime_type": e["media_info"]["metadata"]["mime_type"].as_str().unwrap_or(""),
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+    let entries: Vec<Value> = resp["entries"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|e| {
+            let is_folder = e[".tag"].as_str() == Some("folder");
+            json!({
+                "id": e["id"].as_str().unwrap_or(""),
+                "name": e["name"].as_str().unwrap_or(""),
+                "type": if is_folder { "folder" } else { "file" },
+                "size": e["size"].as_i64().unwrap_or(0),
+                "modified": e["server_modified"].as_str().unwrap_or(""),
+                "path": e["path_display"].as_str().unwrap_or(""),
+                "mime_type": e["media_info"]["metadata"]["mime_type"].as_str().unwrap_or(""),
+            })
         })
-    }).collect();
+        .collect();
     Ok(json!({
         "items": entries,
         "cursor": resp["cursor"].as_str(),
@@ -4642,7 +5325,12 @@ async fn browse_dropbox(client: &reqwest::Client, token: &str, folder_path: Opti
     }))
 }
 
-async fn browse_google_drive(client: &reqwest::Client, token: &str, folder_id: Option<&str>, cursor: Option<&str>) -> anyhow::Result<Value> {
+async fn browse_google_drive(
+    client: &reqwest::Client,
+    token: &str,
+    folder_id: Option<&str>,
+    cursor: Option<&str>,
+) -> anyhow::Result<Value> {
     let parent = folder_id.unwrap_or("root");
     let q = format!("'{}' in parents and trashed = false", parent);
     let mut req = client
@@ -4650,25 +5338,33 @@ async fn browse_google_drive(client: &reqwest::Client, token: &str, folder_id: O
         .bearer_auth(token)
         .query(&[
             ("q", q.as_str()),
-            ("fields", "files(id,name,mimeType,size,modifiedTime,parents),nextPageToken"),
+            (
+                "fields",
+                "files(id,name,mimeType,size,modifiedTime,parents),nextPageToken",
+            ),
             ("pageSize", "200"),
         ]);
     if let Some(page_token) = cursor {
         req = req.query(&[("pageToken", page_token)]);
     }
     let resp = req.send().await?.json::<serde_json::Value>().await?;
-    let items: Vec<Value> = resp["files"].as_array().unwrap_or(&vec![]).iter().map(|f| {
-        let mime = f["mimeType"].as_str().unwrap_or("");
-        let is_folder = mime == "application/vnd.google-apps.folder";
-        json!({
-            "id": f["id"].as_str().unwrap_or(""),
-            "name": f["name"].as_str().unwrap_or(""),
-            "type": if is_folder { "folder" } else { "file" },
-            "size": f["size"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0),
-            "modified": f["modifiedTime"].as_str().unwrap_or(""),
-            "mime_type": mime,
+    let items: Vec<Value> = resp["files"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|f| {
+            let mime = f["mimeType"].as_str().unwrap_or("");
+            let is_folder = mime == "application/vnd.google-apps.folder";
+            json!({
+                "id": f["id"].as_str().unwrap_or(""),
+                "name": f["name"].as_str().unwrap_or(""),
+                "type": if is_folder { "folder" } else { "file" },
+                "size": f["size"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0),
+                "modified": f["modifiedTime"].as_str().unwrap_or(""),
+                "mime_type": mime,
+            })
         })
-    }).collect();
+        .collect();
     Ok(json!({
         "items": items,
         "next_page_token": resp["nextPageToken"].as_str(),
@@ -4677,30 +5373,44 @@ async fn browse_google_drive(client: &reqwest::Client, token: &str, folder_id: O
     }))
 }
 
-async fn browse_onedrive(client: &reqwest::Client, token: &str, folder_id: Option<&str>, cursor: Option<&str>) -> anyhow::Result<Value> {
+async fn browse_onedrive(
+    client: &reqwest::Client,
+    token: &str,
+    folder_id: Option<&str>,
+    cursor: Option<&str>,
+) -> anyhow::Result<Value> {
     let req = if let Some(next_link) = cursor {
         client.get(next_link).bearer_auth(token)
     } else {
         let url = match folder_id {
             Some(id) => format!("https://graph.microsoft.com/v1.0/me/drive/items/{id}/children"),
-            None      => "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string(),
+            None => "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string(),
         };
-        client.get(&url)
-            .bearer_auth(token)
-            .query(&[("$top", "200"), ("$select", "id,name,file,folder,size,lastModifiedDateTime,@microsoft.graph.downloadUrl")])
+        client.get(&url).bearer_auth(token).query(&[
+            ("$top", "200"),
+            (
+                "$select",
+                "id,name,file,folder,size,lastModifiedDateTime,@microsoft.graph.downloadUrl",
+            ),
+        ])
     };
     let resp = req.send().await?.json::<serde_json::Value>().await?;
-    let items: Vec<Value> = resp["value"].as_array().unwrap_or(&vec![]).iter().map(|f| {
-        let is_folder = f["folder"].is_object();
-        json!({
-            "id": f["id"].as_str().unwrap_or(""),
-            "name": f["name"].as_str().unwrap_or(""),
-            "type": if is_folder { "folder" } else { "file" },
-            "size": f["size"].as_i64().unwrap_or(0),
-            "modified": f["lastModifiedDateTime"].as_str().unwrap_or(""),
-            "mime_type": f["file"]["mimeType"].as_str().unwrap_or(""),
+    let items: Vec<Value> = resp["value"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|f| {
+            let is_folder = f["folder"].is_object();
+            json!({
+                "id": f["id"].as_str().unwrap_or(""),
+                "name": f["name"].as_str().unwrap_or(""),
+                "type": if is_folder { "folder" } else { "file" },
+                "size": f["size"].as_i64().unwrap_or(0),
+                "modified": f["lastModifiedDateTime"].as_str().unwrap_or(""),
+                "mime_type": f["file"]["mimeType"].as_str().unwrap_or(""),
+            })
         })
-    }).collect();
+        .collect();
     Ok(json!({
         "items": items,
         "next_page_token": resp["@odata.nextLink"].as_str(),
@@ -4720,10 +5430,19 @@ pub(crate) async fn import_cloud_files(
     if body.files.len() > max_import_batch_files {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    let conn = state.db.get_cloud_connection(conn_id).map_err(internal)?
+    let conn = state
+        .db
+        .get_cloud_connection(conn_id)
+        .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    if conn.project_id != id { return Err(StatusCode::NOT_FOUND); }
-    state.db.get_project(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    if conn.project_id != id {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    state
+        .db
+        .get_project(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     if body.privileged && !is_privileged_upload_allowed(state.as_ref(), id) {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -4750,15 +5469,38 @@ pub(crate) async fn import_cloud_files(
         };
         let bytes = match bytes {
             Ok(b) => b,
-            Err(e) => { tracing::warn!("failed to download cloud file {}: {e}", file.name); continue; }
+            Err(e) => {
+                tracing::warn!("failed to download cloud file {}: {e}", file.name);
+                continue;
+            },
         };
-        if bytes.is_empty() { continue; }
+        if bytes.is_empty() {
+            continue;
+        }
         let file_size = bytes.len() as i64;
         if total_bytes + file_size > max_project_bytes {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
         let safe_name = sanitize_upload_name(&file.name);
-        let unique_name = format!("{}_{}_cloud_{}", Utc::now().timestamp_millis(), rand_suffix(), safe_name);
+        let source_path = sanitize_upload_relative_path(&file.name);
+        let content_hash = sha256_hex_bytes(&bytes);
+        if state
+            .db
+            .find_project_file_by_hash(id, &content_hash)
+            .map_err(internal)?
+            .is_some()
+        {
+            if body.privileged {
+                let _ = state.db.set_session_privileged(id);
+            }
+            continue;
+        }
+        let unique_name = format!(
+            "{}_{}_cloud_{}",
+            Utc::now().timestamp_millis(),
+            rand_suffix(),
+            safe_name
+        );
         let stored_path = state
             .file_storage
             .put_project_file(id, &unique_name, &bytes)
@@ -4768,7 +5510,16 @@ pub(crate) async fn import_cloud_files(
         let mime = guess_mime(&file.name);
         let file_id = state
             .db
-            .insert_project_file(id, &safe_name, &stored_path, &mime, file_size, "", body.privileged)
+            .insert_project_file(
+                id,
+                &safe_name,
+                &source_path,
+                &stored_path,
+                &mime,
+                file_size,
+                &content_hash,
+                body.privileged,
+            )
             .map_err(internal)?;
         if let Err(e) = state
             .ingestion_queue
@@ -4788,18 +5539,19 @@ pub(crate) async fn import_cloud_files(
             let bytes2 = bytes.clone();
             let proj_id = id;
             let fname = safe_name.clone();
+            let source_path2 = source_path.clone();
             tokio::spawn(async move {
                 if let Ok(text) = extract_text_from_bytes(&fname, &mime2, &bytes2).await {
                     if !text.is_empty() {
                         let _ = db2.update_project_file_text(file_id, &text);
-                        let _ = db2.fts_index_document(proj_id, 0, &fname, &fname, &text);
+                        let _ = db2.fts_index_document(proj_id, 0, &source_path2, &fname, &text);
                         if let Some(os) = &opensearch {
                             let _ = os
                                 .index_document(
                                     &format!("project-{}-file-{}", proj_id, file_id),
                                     proj_id,
                                     0,
-                                    &fname,
+                                    &source_path2,
                                     &fname,
                                     &text,
                                 )
@@ -4814,15 +5566,22 @@ pub(crate) async fn import_cloud_files(
     Ok(Json(json!({ "imported": imported })))
 }
 
-async fn download_dropbox_file(client: &reqwest::Client, token: &str, path: &str) -> anyhow::Result<Vec<u8>> {
+async fn download_dropbox_file(
+    client: &reqwest::Client,
+    token: &str,
+    path: &str,
+) -> anyhow::Result<Vec<u8>> {
     let mut last_err = String::new();
     for attempt in 0..3 {
         let arg = serde_json::json!({ "path": path }).to_string();
-        match client.post("https://content.dropboxapi.com/2/files/download")
+        match client
+            .post("https://content.dropboxapi.com/2/files/download")
             .header("Authorization", format!("Bearer {token}"))
             .header("Dropbox-API-Arg", &arg)
             .header("Content-Type", "")
-            .send().await {
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => return Ok(resp.bytes().await?.to_vec()),
             Ok(resp) => last_err = format!("Dropbox download failed: {}", resp.status()),
             Err(e) => last_err = e.to_string(),
@@ -4834,14 +5593,22 @@ async fn download_dropbox_file(client: &reqwest::Client, token: &str, path: &str
     anyhow::bail!("{last_err}")
 }
 
-async fn download_google_file(client: &reqwest::Client, token: &str, file_id: &str) -> anyhow::Result<Vec<u8>> {
+async fn download_google_file(
+    client: &reqwest::Client,
+    token: &str,
+    file_id: &str,
+) -> anyhow::Result<Vec<u8>> {
     let mut last_err = String::new();
     for attempt in 0..3 {
         match client
-            .get(format!("https://www.googleapis.com/drive/v3/files/{file_id}"))
+            .get(format!(
+                "https://www.googleapis.com/drive/v3/files/{file_id}"
+            ))
             .bearer_auth(token)
             .query(&[("alt", "media")])
-            .send().await {
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => return Ok(resp.bytes().await?.to_vec()),
             Ok(resp) => last_err = format!("Google Drive download failed: {}", resp.status()),
             Err(e) => last_err = e.to_string(),
@@ -4853,13 +5620,21 @@ async fn download_google_file(client: &reqwest::Client, token: &str, file_id: &s
     anyhow::bail!("{last_err}")
 }
 
-async fn download_onedrive_file(client: &reqwest::Client, token: &str, item_id: &str) -> anyhow::Result<Vec<u8>> {
+async fn download_onedrive_file(
+    client: &reqwest::Client,
+    token: &str,
+    item_id: &str,
+) -> anyhow::Result<Vec<u8>> {
     let mut last_err = String::new();
     for attempt in 0..3 {
         match client
-            .get(format!("https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"))
+            .get(format!(
+                "https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+            ))
             .bearer_auth(token)
-            .send().await {
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => return Ok(resp.bytes().await?.to_vec()),
             Ok(resp) => last_err = format!("OneDrive download failed: {}", resp.status()),
             Err(e) => last_err = e.to_string(),
@@ -4874,22 +5649,23 @@ async fn download_onedrive_file(client: &reqwest::Client, token: &str, item_id: 
 fn guess_mime(name: &str) -> String {
     let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
-        "pdf"  => "application/pdf",
+        "pdf" => "application/pdf",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "doc"  => "application/msword",
+        "doc" => "application/msword",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "xls"  => "application/vnd.ms-excel",
+        "xls" => "application/vnd.ms-excel",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "txt"  => "text/plain",
-        "md"   => "text/markdown",
-        "csv"  => "text/csv",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "csv" => "text/csv",
         "json" => "application/json",
-        "xml"  => "application/xml",
-        "png"  => "image/png",
+        "xml" => "application/xml",
+        "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
-        "zip"  => "application/zip",
+        "zip" => "application/zip",
         _ => "application/octet-stream",
-    }.to_string()
+    }
+    .to_string()
 }
 
 // ── Container inspection ──────────────────────────────────────────────────
@@ -4918,7 +5694,10 @@ mod percent_encode_tests {
     #[test]
     fn percent_encode_safe_chars_unchanged() {
         assert_eq!(percent_encode("src/main.rs"), "src/main.rs");
-        assert_eq!(percent_encode("refs/heads/my-branch"), "refs/heads/my-branch");
+        assert_eq!(
+            percent_encode("refs/heads/my-branch"),
+            "refs/heads/my-branch"
+        );
         assert_eq!(percent_encode("abc123_.-~"), "abc123_.-~");
     }
 
@@ -4956,14 +5735,24 @@ mod percent_encode_tests {
     fn percent_encode_url_construction() {
         let path = "file?raw=1";
         let ref_name = "branch&extra=1";
-        let url = format!("repos/owner/repo/contents/{}?ref={}", percent_encode(path), percent_encode(ref_name));
-        assert_eq!(url, "repos/owner/repo/contents/file%3Fraw=1?ref=branch%26extra=1");
+        let url = format!(
+            "repos/owner/repo/contents/{}?ref={}",
+            percent_encode(path),
+            percent_encode(ref_name)
+        );
+        assert_eq!(
+            url,
+            "repos/owner/repo/contents/file%3Fraw=1?ref=branch%26extra=1"
+        );
     }
 
     #[test]
     fn percent_encode_ref_with_hash() {
         let ref_name = "sha#abc";
-        let url = format!("repos/owner/repo/contents/file?ref={}", percent_encode(ref_name));
+        let url = format!(
+            "repos/owner/repo/contents/file?ref={}",
+            percent_encode(ref_name)
+        );
         assert_eq!(url, "repos/owner/repo/contents/file?ref=sha%23abc");
     }
 }
@@ -4985,7 +5774,9 @@ pub(crate) async fn get_task_container(
                 .and_then(|o| String::from_utf8(o.stdout).ok())
                 .map(|s| s.trim().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
-            Ok(Json(json!({ "task_id": task_id, "container_id": id, "status": status })))
+            Ok(Json(
+                json!({ "task_id": task_id, "container_id": id, "status": status }),
+            ))
         },
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -4998,25 +5789,40 @@ mod tests {
     #[test]
     fn percent_encode_unreserved_passthrough() {
         assert_eq!(percent_encode_allow_slash("main", false), "main");
-        assert_eq!(percent_encode_allow_slash("feature/my-branch", true), "feature/my-branch");
+        assert_eq!(
+            percent_encode_allow_slash("feature/my-branch", true),
+            "feature/my-branch"
+        );
         assert_eq!(percent_encode_allow_slash("v1.0.0~3", false), "v1.0.0~3");
     }
 
     #[test]
     fn percent_encode_ampersand_in_ref() {
         // & must be encoded so it doesn't inject a second query parameter
-        assert_eq!(percent_encode_allow_slash("bad&ref=injected", false), "bad%26ref%3Dinjected");
+        assert_eq!(
+            percent_encode_allow_slash("bad&ref=injected", false),
+            "bad%26ref%3Dinjected"
+        );
     }
 
     #[test]
     fn percent_encode_hash_and_question_mark() {
-        assert_eq!(percent_encode_allow_slash("ref#fragment", false), "ref%23fragment");
-        assert_eq!(percent_encode_allow_slash("ref?foo=1", false), "ref%3Ffoo%3D1");
+        assert_eq!(
+            percent_encode_allow_slash("ref#fragment", false),
+            "ref%23fragment"
+        );
+        assert_eq!(
+            percent_encode_allow_slash("ref?foo=1", false),
+            "ref%3Ffoo%3D1"
+        );
     }
 
     #[test]
     fn percent_encode_slash_in_path_allowed() {
-        assert_eq!(percent_encode_allow_slash("docs/spec.md", true), "docs/spec.md");
+        assert_eq!(
+            percent_encode_allow_slash("docs/spec.md", true),
+            "docs/spec.md"
+        );
     }
 
     #[test]
@@ -5026,13 +5832,22 @@ mod tests {
 
     #[test]
     fn percent_encode_space_and_plus() {
-        assert_eq!(percent_encode_allow_slash("my branch", false), "my%20branch");
+        assert_eq!(
+            percent_encode_allow_slash("my branch", false),
+            "my%20branch"
+        );
         assert_eq!(percent_encode_allow_slash("a+b", false), "a%2Bb");
     }
 
     #[test]
     fn percent_encode_path_with_special_chars() {
-        assert_eq!(percent_encode_allow_slash("docs/file#top", true), "docs/file%23top");
-        assert_eq!(percent_encode_allow_slash("docs/file?q=1", true), "docs/file%3Fq%3D1");
+        assert_eq!(
+            percent_encode_allow_slash("docs/file#top", true),
+            "docs/file%23top"
+        );
+        assert_eq!(
+            percent_encode_allow_slash("docs/file?q=1", true),
+            "docs/file%3Fq%3D1"
+        );
     }
 }

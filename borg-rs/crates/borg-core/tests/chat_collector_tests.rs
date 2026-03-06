@@ -40,7 +40,10 @@ async fn accumulates_messages_then_flushes_on_expiry() {
     // If m1 triggers inline dispatch that is also acceptable per spec (window_ms=0
     // would be used for that), but with window_ms=1 the first message always opens
     // a collection window and returns None.
-    assert!(r1.is_none(), "first message should open window, not dispatch");
+    assert!(
+        r1.is_none(),
+        "first message should open window, not dispatch"
+    );
 
     // After a short sleep the window has definitely expired.
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -171,7 +174,11 @@ async fn flush_expired_respects_concurrency_gate() {
 
     // flush_expired should dispatch at most one (limited by max_agents).
     let batches = c.flush_expired().await;
-    assert_eq!(batches.len(), 1, "only one batch should dispatch at the limit");
+    assert_eq!(
+        batches.len(),
+        1,
+        "only one batch should dispatch at the limit"
+    );
     assert_eq!(c.active_count().await, 1);
 }
 

@@ -69,25 +69,39 @@ fn test_count_unscored_proposals_returns_zero_on_empty_db() {
 #[test]
 fn test_count_unscored_proposals_returns_count_with_unscored() {
     let db = open_db();
-    db.insert_proposal(&make_proposal("proposed", 0)).expect("insert");
-    db.insert_proposal(&make_proposal("proposed", 0)).expect("insert");
+    db.insert_proposal(&make_proposal("proposed", 0))
+        .expect("insert");
+    db.insert_proposal(&make_proposal("proposed", 0))
+        .expect("insert");
     assert_eq!(db.count_unscored_proposals(), 2);
 }
 
 #[test]
 fn test_count_unscored_proposals_excludes_scored() {
     let db = open_db();
-    db.insert_proposal(&make_proposal("proposed", 5)).expect("insert scored");
-    db.insert_proposal(&make_proposal("proposed", 0)).expect("insert unscored");
-    assert_eq!(db.count_unscored_proposals(), 1, "scored proposal must not be counted");
+    db.insert_proposal(&make_proposal("proposed", 5))
+        .expect("insert scored");
+    db.insert_proposal(&make_proposal("proposed", 0))
+        .expect("insert unscored");
+    assert_eq!(
+        db.count_unscored_proposals(),
+        1,
+        "scored proposal must not be counted"
+    );
 }
 
 #[test]
 fn test_count_unscored_proposals_excludes_non_proposed_status() {
     let db = open_db();
-    db.insert_proposal(&make_proposal("approved", 0)).expect("insert approved");
-    db.insert_proposal(&make_proposal("dismissed", 0)).expect("insert dismissed");
-    assert_eq!(db.count_unscored_proposals(), 0, "non-proposed proposals must not be counted");
+    db.insert_proposal(&make_proposal("approved", 0))
+        .expect("insert approved");
+    db.insert_proposal(&make_proposal("dismissed", 0))
+        .expect("insert dismissed");
+    assert_eq!(
+        db.count_unscored_proposals(),
+        0,
+        "non-proposed proposals must not be counted"
+    );
 }
 
 // ── active_task_count ────────────────────────────────────────────────────────
@@ -109,8 +123,13 @@ fn test_active_task_count_includes_active_statuses() {
 fn test_active_task_count_excludes_terminal_statuses() {
     let db = open_db();
     let id = make_task(&db);
-    db.update_task_status(id, "done", None).expect("update status");
-    assert_eq!(db.active_task_count(), 0, "'done' tasks must not be counted as active");
+    db.update_task_status(id, "done", None)
+        .expect("update status");
+    assert_eq!(
+        db.active_task_count(),
+        0,
+        "'done' tasks must not be counted as active"
+    );
 }
 
 #[test]
@@ -120,7 +139,11 @@ fn test_active_task_count_excludes_all_terminal_statuses() {
         let id = make_task(&db);
         db.update_task_status(id, status, None).expect("update");
     }
-    assert_eq!(db.active_task_count(), 0, "all terminal statuses must be excluded");
+    assert_eq!(
+        db.active_task_count(),
+        0,
+        "all terminal statuses must be excluded"
+    );
 }
 
 // ── get_unknown_retries ──────────────────────────────────────────────────────

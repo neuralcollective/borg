@@ -1,14 +1,14 @@
-pub mod lexis;
-pub mod statenet;
-pub mod lexmachina;
-pub mod intelligize;
+pub mod citations;
+pub mod clio;
 pub mod cognitive;
 pub mod courtlistener;
-pub mod citations;
 pub mod edgar;
 pub mod federal_register;
+pub mod intelligize;
+pub mod lexis;
+pub mod lexmachina;
+pub mod statenet;
 pub mod westlaw;
-pub mod clio;
 
 use borg_core::types::{IntegrationType, PhaseConfig, PipelineMode, SeedConfig, SeedOutputType};
 
@@ -60,8 +60,17 @@ pub fn legal_mode() -> PipelineMode {
                     "",
                     LEGAL_REVIEW_INSTRUCTION,
                     "Read,Glob,Grep,Write,Edit",
-                    "purge",
+                    "human_review",
                 )
+            },
+            PhaseConfig {
+                name: "human_review".into(),
+                label: "Human Review".into(),
+                phase_type: borg_core::types::PhaseType::HumanReview,
+                instruction: LEGAL_HUMAN_REVIEW_INSTRUCTION.into(),
+                revision_target: "implement".into(),
+                next: "purge".into(),
+                ..Default::default()
             },
             PhaseConfig {
                 name: "purge".into(),
@@ -606,3 +615,14 @@ Fix all issues you can directly in the source documents. For issues requiring hu
 document them in review_notes.md under \"Requires Human Review\".";
 
 const LEGAL_REVIEW_RETRY: &str = "\n\nPrevious review found unresolved issues:\n{ERROR}\n\nAddress these issues in the documents and update review_notes.md.";
+
+const LEGAL_HUMAN_REVIEW_INSTRUCTION: &str = "\
+Human review gate.
+
+The agent draft and independent review are complete. A human reviewer must now:
+- approve to release the draft to the retention/purge window,
+- request revision to send the matter back through the full implement -> review loop, or
+- reject to stop the task.
+
+For legal work, request revision whenever the draft needs additional authority checking, factual correction, or substantive reframing. \
+Revision requests are intended to be repeatable; each request should trigger another full drafting-and-review cycle before this gate is passed.";

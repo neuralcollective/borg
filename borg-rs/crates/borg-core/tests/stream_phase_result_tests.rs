@@ -291,6 +291,12 @@ async fn test_subscribe_after_overflow_returns_exactly_max_history_lines() {
         10_000,
         "subscribe must return exactly 10,000 entries after overflow"
     );
-    assert_eq!(history[0], "line-5000", "oldest retained line must be line-5000");
-    assert_eq!(history[9_999], "line-14999", "newest line must be line-14999");
+    assert_eq!(
+        history[0], "line-5000",
+        "oldest retained line must be line-5000"
+    );
+    assert_eq!(
+        history[9_999], "line-14999",
+        "newest line must be line-14999"
+    );
 }

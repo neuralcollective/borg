@@ -1,5 +1,4 @@
-use std::path::Path;
-use std::process::Stdio;
+use std::{path::Path, process::Stdio};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -8,8 +7,10 @@ use borg_core::{
     sandbox::{Sandbox, SandboxMode},
     types::{ContainerTestResult, PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::Command,
+};
 use tracing::{debug, error, info, warn};
 
 const BORG_SIGNAL_MARKER: &str = "BORG_SIGNAL:";
@@ -120,7 +121,9 @@ impl ClaudeBackend {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let path = std::path::Path::new(data_dir).join("mirrors").join(format!("{repo_name}.git"));
+        let path = std::path::Path::new(data_dir)
+            .join("mirrors")
+            .join(format!("{repo_name}.git"));
         std::fs::canonicalize(path)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default()
@@ -227,10 +230,10 @@ impl AgentBackend for ClaudeBackend {
         };
 
         let real_home = std::env::var("HOME").unwrap_or_default();
-        let rustup_home = std::env::var("RUSTUP_HOME")
-            .unwrap_or_else(|_| format!("{real_home}/.rustup"));
-        let cargo_home = std::env::var("CARGO_HOME")
-            .unwrap_or_else(|_| format!("{real_home}/.cargo"));
+        let rustup_home =
+            std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{real_home}/.rustup"));
+        let cargo_home =
+            std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{real_home}/.cargo"));
 
         let gh_token = if is_docker {
             tokio::task::spawn_blocking(Self::resolve_gh_token)
@@ -252,18 +255,22 @@ impl AgentBackend for ClaudeBackend {
             SandboxMode::Bwrap => {
                 let git_dir = Path::new(&task.repo_path).join(".git");
                 let git_dir_str = git_dir.to_string_lossy().to_string();
-                let writable: Vec<&str> = vec![ctx.work_dir.as_str(), ctx.session_dir.as_str(), &git_dir_str];
+                let writable: Vec<&str> = vec![
+                    ctx.work_dir.as_str(),
+                    ctx.session_dir.as_str(),
+                    &git_dir_str,
+                ];
                 let mut cmd = Sandbox::bwrap_command(&writable, &ctx.work_dir, &full_cmd);
                 cmd.kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
                     .env("CARGO_HOME", &cargo_home)
                     .env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token);
-                
+
                 if !effective_base_url.is_empty() {
                     cmd.env("ANTHROPIC_BASE_URL", &effective_base_url);
                 }
-                
+
                 cmd.stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -290,8 +297,12 @@ impl AgentBackend for ClaudeBackend {
                 if !effective_base_url.is_empty() {
                     env_kv.push(("ANTHROPIC_BASE_URL".to_string(), effective_base_url));
                 }
-                
-                let host_ip = if ctx.isolated { "172.31.0.1" } else { "172.30.0.1" };
+
+                let host_ip = if ctx.isolated {
+                    "172.31.0.1"
+                } else {
+                    "172.30.0.1"
+                };
                 env_kv.push(("BORG_HOST_IP".to_string(), host_ip.to_string()));
 
                 let binds_ref: Vec<(&str, &str, bool)> = binds
@@ -339,7 +350,7 @@ impl AgentBackend for ClaudeBackend {
                     .stdin(Stdio::piped())
                     .spawn()
                     .context("failed to spawn docker")?
-            }
+            },
             SandboxMode::Direct => {
                 let augmented_path = format!(
                     "{}/bin:{}:{}",
@@ -464,7 +475,12 @@ impl AgentBackend for ClaudeBackend {
 
             let exit_status = child.wait().await.ok();
             let success = exit_status.map(|s| s.success()).unwrap_or(false);
-            (output_lines.join("\n"), signal_json, container_test_results, success)
+            (
+                output_lines.join("\n"),
+                signal_json,
+                container_test_results,
+                success,
+            )
         };
 
         let (raw_stream, signal_json, container_test_results, success) = if timeout_s > 0 {
@@ -473,7 +489,7 @@ impl AgentBackend for ClaudeBackend {
                 Err(_) => {
                     warn!("claude timed out after {}s", timeout_s);
                     (String::new(), None, Vec::new(), false)
-                }
+                },
             }
         } else {
             io_future.await

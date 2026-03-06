@@ -62,6 +62,7 @@ export interface Status {
   assistant_name: string;
   active_tasks: number;
   merged_tasks: number;
+  ai_requests: number;
   failed_tasks: number;
   total_tasks: number;
   dispatched_agents: number;
@@ -162,6 +163,7 @@ export interface PhaseConfigFull {
   allow_no_changes: boolean;
   next: string;
   fresh_session: boolean;
+  revision_target: string;
   fix_instruction: string;
   retry_phase: string;
   compliance_profile: string;
@@ -241,6 +243,7 @@ export interface ProjectFile {
   id: number;
   project_id: number;
   file_name: string;
+  source_path: string;
   mime_type: string;
   size_bytes: number;
   privileged?: boolean;
@@ -265,6 +268,7 @@ export interface ProjectFilePage {
   offset: number;
   limit: number;
   has_more: boolean;
+  next_cursor?: string | null;
   summary: ProjectFileSummary;
 }
 

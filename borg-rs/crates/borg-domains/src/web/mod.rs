@@ -1,7 +1,6 @@
 use borg_core::types::{IntegrationType, PhaseConfig, PipelineMode, SeedConfig, SeedOutputType};
 
-use crate::{agent_phase, lint_phase, rebase_phase, setup_phase, validate_phase};
-use crate::swe::swe_seeds;
+use crate::{agent_phase, lint_phase, rebase_phase, setup_phase, swe::swe_seeds, validate_phase};
 
 pub fn web_mode() -> PipelineMode {
     PipelineMode {

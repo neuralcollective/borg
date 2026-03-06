@@ -166,7 +166,8 @@ pub(crate) const SEED_SECURITY: &str =
 \ntheoretical risks that have no realistic exploit path.\
 \nOnly target code that actually exists. Verify file paths and function names by reading the source.";
 
-pub(crate) const SEED_TESTS: &str = "Identify gaps in test coverage that matter for correctness. Look for:\
+pub(crate) const SEED_TESTS: &str =
+    "Identify gaps in test coverage that matter for correctness. Look for:\
 \n- Core logic with no tests at all\
 \n- Edge cases not covered: empty input, zero, max values, error paths\
 \n- Functions that are tested only via integration, never in isolation\

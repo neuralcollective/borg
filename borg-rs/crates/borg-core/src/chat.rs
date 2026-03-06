@@ -96,7 +96,11 @@ impl ChatCollector {
         }
         inner.chats.insert(chat_key.clone(), ChatState::Running);
         inner.running += 1;
-        Some(MessageBatch { chat_key, sender_name, messages })
+        Some(MessageBatch {
+            chat_key,
+            sender_name,
+            messages,
+        })
     }
 
     /// Process an incoming message. Returns Some(batch) if ready to dispatch.
@@ -104,7 +108,11 @@ impl ChatCollector {
         let mut inner = self.state.lock().await;
         let chat_key = msg.chat_key.clone();
 
-        let current = inner.chats.get(&chat_key).cloned().unwrap_or(ChatState::Idle);
+        let current = inner
+            .chats
+            .get(&chat_key)
+            .cloned()
+            .unwrap_or(ChatState::Idle);
 
         match current {
             ChatState::Running => {
@@ -213,9 +221,7 @@ impl ChatCollector {
                 chat_key, self.cooldown_ms
             );
         } else {
-            inner
-                .chats
-                .insert(chat_key.to_string(), ChatState::Idle);
+            inner.chats.insert(chat_key.to_string(), ChatState::Idle);
             debug!("Chat {} returned to IDLE", chat_key);
         }
         inner.running = inner.running.saturating_sub(1);

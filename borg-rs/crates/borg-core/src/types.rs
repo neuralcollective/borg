@@ -241,6 +241,9 @@ pub struct PhaseConfig {
     pub next: String,
     /// Start with a fresh session (no resume).
     pub fresh_session: bool,
+    /// Phase to resume from when a human requests revisions from this phase.
+    #[serde(default)]
+    pub revision_target: String,
 
     /// Instruction passed to the fix agent when rebase fails (rebase phases only).
     pub fix_instruction: String,
@@ -325,6 +328,7 @@ impl Default for PhaseConfig {
             compile_check: false,
             next: "done".into(),
             fresh_session: false,
+            revision_target: String::new(),
             fix_instruction: String::new(),
             retry_phase: String::new(),
             compliance_profile: String::new(),

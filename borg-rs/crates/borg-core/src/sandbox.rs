@@ -197,10 +197,15 @@ impl Sandbox {
 
         // Linux-only security hardening and networking
         if cfg!(target_os = "linux") {
-            args.extend([
-                "--security-opt", "no-new-privileges:true",
-                "--cap-drop", "ALL",
-            ].map(str::to_string));
+            args.extend(
+                [
+                    "--security-opt",
+                    "no-new-privileges:true",
+                    "--cap-drop",
+                    "ALL",
+                ]
+                .map(str::to_string),
+            );
             if let Some(net) = network {
                 args.extend(["--network".to_string(), net.to_string()]);
                 args.extend(["--dns".to_string(), "8.8.8.8".to_string()]);
@@ -260,10 +265,13 @@ impl Sandbox {
 
         let ok = tokio::process::Command::new("docker")
             .args([
-                "network", "create",
-                "--driver", "bridge",
+                "network",
+                "create",
+                "--driver",
+                "bridge",
                 "--internal", // This is the key: no gateway to internet
-                "--subnet", "172.31.0.0/16",
+                "--subnet",
+                "172.31.0.0/16",
                 name,
             ])
             .stdout(Stdio::null())
@@ -303,15 +311,21 @@ impl Sandbox {
             .unwrap_or(false);
 
         if exists {
-            info!("sandbox: agent network {} already exists", Self::AGENT_NETWORK);
+            info!(
+                "sandbox: agent network {} already exists",
+                Self::AGENT_NETWORK
+            );
             return true;
         }
 
         let ok = tokio::process::Command::new("docker")
             .args([
-                "network", "create",
-                "--driver", "bridge",
-                "--subnet", Self::AGENT_SUBNET,
+                "network",
+                "create",
+                "--driver",
+                "bridge",
+                "--subnet",
+                Self::AGENT_SUBNET,
                 Self::AGENT_NETWORK,
             ])
             .stdout(Stdio::null())
@@ -324,7 +338,10 @@ impl Sandbox {
         if ok {
             info!("sandbox: created agent network {}", Self::AGENT_NETWORK);
         } else {
-            warn!("sandbox: failed to create agent network {}", Self::AGENT_NETWORK);
+            warn!(
+                "sandbox: failed to create agent network {}",
+                Self::AGENT_NETWORK
+            );
         }
         ok
     }
@@ -340,11 +357,11 @@ impl Sandbox {
         // (source, dest, action) — order matters: ACCEPT for 172.30/16 before DROP for 172.16/12
         let rules: &[(&str, &str, &str)] = &[
             (Self::AGENT_SUBNET, "172.30.0.0/16", "ACCEPT"),
-            (Self::AGENT_SUBNET, "127.0.0.0/8",   "DROP"),
-            (Self::AGENT_SUBNET, "10.0.0.0/8",    "DROP"),
+            (Self::AGENT_SUBNET, "127.0.0.0/8", "DROP"),
+            (Self::AGENT_SUBNET, "10.0.0.0/8", "DROP"),
             (Self::AGENT_SUBNET, "192.168.0.0/16", "DROP"),
             (Self::AGENT_SUBNET, "169.254.0.0/16", "DROP"),
-            (Self::AGENT_SUBNET, "172.16.0.0/12",  "DROP"),
+            (Self::AGENT_SUBNET, "172.16.0.0/12", "DROP"),
         ];
 
         let mut all_ok = true;
@@ -390,11 +407,11 @@ impl Sandbox {
 
         let rules: &[(&str, &str, &str)] = &[
             (Self::AGENT_SUBNET, "172.30.0.0/16", "ACCEPT"),
-            (Self::AGENT_SUBNET, "127.0.0.0/8",   "DROP"),
-            (Self::AGENT_SUBNET, "10.0.0.0/8",    "DROP"),
+            (Self::AGENT_SUBNET, "127.0.0.0/8", "DROP"),
+            (Self::AGENT_SUBNET, "10.0.0.0/8", "DROP"),
             (Self::AGENT_SUBNET, "192.168.0.0/16", "DROP"),
             (Self::AGENT_SUBNET, "169.254.0.0/16", "DROP"),
-            (Self::AGENT_SUBNET, "172.16.0.0/12",  "DROP"),
+            (Self::AGENT_SUBNET, "172.16.0.0/12", "DROP"),
         ];
 
         for (src, dst, action) in rules {
@@ -424,11 +441,18 @@ impl Sandbox {
     pub async fn prune_orphan_containers() {
         let Ok(out) = tokio::process::Command::new("docker")
             .args([
-                "ps", "-a", "--filter", "label=borg-agent=1",
-                "--filter", "status=exited",
-                "--filter", "status=dead",
-                "--filter", "status=created",
-                "--format", "{{.ID}}",
+                "ps",
+                "-a",
+                "--filter",
+                "label=borg-agent=1",
+                "--filter",
+                "status=exited",
+                "--filter",
+                "status=dead",
+                "--filter",
+                "status=created",
+                "--format",
+                "{{.ID}}",
             ])
             .output()
             .await
@@ -464,10 +488,7 @@ impl Sandbox {
             hash ^= b as u64;
             hash = hash.wrapping_mul(0x100000001b3);
         }
-        format!("{hash:016x}")
-            .chars()
-            .take(8)
-            .collect()
+        format!("{hash:016x}").chars().take(8).collect()
     }
 
     /// Return the per-branch cache volume name for a given repo + branch + cache type.
@@ -492,8 +513,10 @@ impl Sandbox {
         // `docker volume create` is idempotent — no-op if already exists.
         let _ = tokio::process::Command::new("docker")
             .args([
-                "volume", "create",
-                "--label", &format!("borg-last-used={now}"),
+                "volume",
+                "create",
+                "--label",
+                &format!("borg-last-used={now}"),
                 name,
             ])
             .stdout(std::process::Stdio::null())
@@ -548,11 +571,16 @@ impl Sandbox {
             // Mount both volumes and rsync/cp the contents.
             let status = tokio::process::Command::new("docker")
                 .args([
-                    "run", "--rm",
-                    "-v", &format!("{main_vol}:/src:ro"),
-                    "-v", &format!("{branch_vol}:/dst"),
+                    "run",
+                    "--rm",
+                    "-v",
+                    &format!("{main_vol}:/src:ro"),
+                    "-v",
+                    &format!("{branch_vol}:/dst"),
                     helper_image,
-                    "sh", "-c", "cp -a /src/. /dst/ 2>/dev/null || true",
+                    "sh",
+                    "-c",
+                    "cp -a /src/. /dst/ 2>/dev/null || true",
                 ])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -561,13 +589,19 @@ impl Sandbox {
             match status {
                 Ok(s) if s.success() => {
                     info!(repo, branch, cache_type, "warmed branch cache from main");
-                }
+                },
                 _ => {
-                    info!(repo, branch, cache_type, "cache warm skipped (copy failed or no main cache)");
-                }
+                    info!(
+                        repo,
+                        branch, cache_type, "cache warm skipped (copy failed or no main cache)"
+                    );
+                },
             }
         } else {
-            info!(repo, branch, cache_type, "no main cache to warm from — starting cold");
+            info!(
+                repo,
+                branch, cache_type, "no main cache to warm from — starting cold"
+            );
         }
     }
 
@@ -583,9 +617,12 @@ impl Sandbox {
 
         let Ok(out) = tokio::process::Command::new("docker")
             .args([
-                "volume", "ls",
-                "--filter", "name=borg-cache-",
-                "--format", "{{.Name}}",
+                "volume",
+                "ls",
+                "--filter",
+                "name=borg-cache-",
+                "--format",
+                "{{.Name}}",
             ])
             .output()
             .await
@@ -615,8 +652,11 @@ impl Sandbox {
     async fn volume_last_used(name: &str) -> Option<u64> {
         let out = tokio::process::Command::new("docker")
             .args([
-                "volume", "inspect", name,
-                "--format", "{{index .Labels \"borg-last-used\"}}",
+                "volume",
+                "inspect",
+                name,
+                "--format",
+                "{{index .Labels \"borg-last-used\"}}",
             ])
             .output()
             .await
@@ -629,7 +669,14 @@ impl Sandbox {
     /// Returns `(name, size_bytes, last_used_secs)` triples.
     pub async fn list_cache_volumes(prefix: &str) -> Vec<(String, Option<u64>, Option<u64>)> {
         let Ok(out) = tokio::process::Command::new("docker")
-            .args(["volume", "ls", "--filter", &format!("name={prefix}"), "--format", "{{.Name}}"])
+            .args([
+                "volume",
+                "ls",
+                "--filter",
+                &format!("name={prefix}"),
+                "--format",
+                "{{.Name}}",
+            ])
             .output()
             .await
         else {

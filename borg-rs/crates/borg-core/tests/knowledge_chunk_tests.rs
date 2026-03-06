@@ -4,7 +4,10 @@ const CHUNK_SIZE: usize = 512;
 const CHUNK_OVERLAP: usize = 64;
 
 fn words(n: usize) -> String {
-    (0..n).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ")
+    (0..n)
+        .map(|i| format!("w{i}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[test]
@@ -70,7 +73,10 @@ fn chunks_overlap_by_chunk_overlap_words() {
 
     let tail: Vec<&str> = c0_words[c0_words.len() - CHUNK_OVERLAP..].to_vec();
     let head: Vec<&str> = c1_words[..CHUNK_OVERLAP].to_vec();
-    assert_eq!(tail, head, "consecutive chunks must overlap by {CHUNK_OVERLAP} words");
+    assert_eq!(
+        tail, head,
+        "consecutive chunks must overlap by {CHUNK_OVERLAP} words"
+    );
 }
 
 #[test]

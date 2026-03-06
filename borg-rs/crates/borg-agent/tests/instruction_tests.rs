@@ -104,9 +104,16 @@ fn test_knowledge_section_prepended_when_non_empty() {
         result.starts_with("## Knowledge Base"),
         "knowledge section should be at start: {result}"
     );
-    let sep_pos = result.find("\n\n---\n\n").expect("separator must follow knowledge section");
-    let inst_pos = result.find("Do the thing.").expect("instruction must be present");
-    assert!(sep_pos < inst_pos, "separator must appear before the instruction");
+    let sep_pos = result
+        .find("\n\n---\n\n")
+        .expect("separator must follow knowledge section");
+    let inst_pos = result
+        .find("Do the thing.")
+        .expect("instruction must be present");
+    assert!(
+        sep_pos < inst_pos,
+        "separator must appear before the instruction"
+    );
 }
 
 #[test]
@@ -142,8 +149,14 @@ fn test_include_task_context_true_shows_title_and_description() {
 
     let result = build_instruction(&task, &phase, &ctx, None);
 
-    assert!(result.contains("Task: My Task Title"), "expected task title: {result}");
-    assert!(result.contains("Task description here."), "expected task description: {result}");
+    assert!(
+        result.contains("Task: My Task Title"),
+        "expected task title: {result}"
+    );
+    assert!(
+        result.contains("Task description here."),
+        "expected task description: {result}"
+    );
 }
 
 #[test]
@@ -158,8 +171,14 @@ fn test_include_task_context_false_omits_title_and_description() {
 
     let result = build_instruction(&task, &phase, &ctx, None);
 
-    assert!(!result.contains("My Task Title"), "title should be absent: {result}");
-    assert!(!result.contains("Task description here."), "description should be absent: {result}");
+    assert!(
+        !result.contains("My Task Title"),
+        "title should be absent: {result}"
+    );
+    assert!(
+        !result.contains("Task description here."),
+        "description should be absent: {result}"
+    );
 }
 
 // =============================================================================
@@ -237,10 +256,22 @@ fn test_revision_messages_include_header_and_count() {
 
     let result = build_instruction(&task, &phase, &ctx, None);
 
-    assert!(result.contains("Revision #3"), "expected revision header with count: {result}");
-    assert!(result.contains("Reviewer Feedback"), "expected reviewer feedback header: {result}");
-    assert!(result.contains("Fix section 2."), "expected message content: {result}");
-    assert!(result.contains("[reviewer]"), "expected role in message: {result}");
+    assert!(
+        result.contains("Revision #3"),
+        "expected revision header with count: {result}"
+    );
+    assert!(
+        result.contains("Reviewer Feedback"),
+        "expected reviewer feedback header: {result}"
+    );
+    assert!(
+        result.contains("Fix section 2."),
+        "expected message content: {result}"
+    );
+    assert!(
+        result.contains("[reviewer]"),
+        "expected role in message: {result}"
+    );
 }
 
 #[test]
@@ -256,7 +287,10 @@ fn test_revision_count_reflected_in_header() {
 
     let result = build_instruction(&task, &phase, &ctx, None);
 
-    assert!(result.contains("Revision #1"), "revision count should be 1: {result}");
+    assert!(
+        result.contains("Revision #1"),
+        "revision count should be 1: {result}"
+    );
 }
 
 // =============================================================================
@@ -280,7 +314,10 @@ fn test_queue_messages_use_simple_prefix_format() {
         result.contains("[user]: Please add more tests."),
         "expected queue message format: {result}"
     );
-    assert!(!result.contains("Revision #"), "no revision header for queue messages: {result}");
+    assert!(
+        !result.contains("Revision #"),
+        "no revision header for queue messages: {result}"
+    );
     assert!(
         !result.contains("Reviewer Feedback"),
         "no reviewer feedback header for queue messages: {result}"

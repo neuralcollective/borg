@@ -332,7 +332,7 @@ function AppInner() {
   );
 }
 
-function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks: number; failed_tasks: number; total_tasks: number } | null }) {
+function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.03] ring-1 ring-white/[0.06]">
@@ -346,6 +346,7 @@ function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks:
         <div className="flex gap-6 mt-2">
           <StatPill value={status.active_tasks} label="Active" color="text-blue-400" />
           <StatPill value={status.merged_tasks} label="Merged" color="text-emerald-400" />
+          <StatPill value={status.ai_requests} label="AI" color="text-cyan-400" />
           <StatPill value={status.failed_tasks} label="Failed" color="text-red-400" />
           <StatPill value={status.total_tasks} label="Total" color="text-zinc-400" />
         </div>

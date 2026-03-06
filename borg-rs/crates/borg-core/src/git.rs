@@ -1,4 +1,7 @@
-use std::{collections::HashMap, process::Command};
+use std::{
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
+};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -136,35 +139,62 @@ impl Git {
         max_entries: usize,
         max_bytes: usize,
     ) -> Result<String> {
-        let listing = self.ls_files(work_dir)?;
-        if listing.trim().is_empty() {
+        let top_level = self.exec(work_dir, &["ls-tree", "--name-only", "HEAD"])?;
+        if !top_level.success() {
+            return Err(anyhow!(
+                "git ls-tree HEAD failed in {work_dir}: {}",
+                top_level.combined_output()
+            ));
+        }
+
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(work_dir)
+            .args(["ls-files"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to spawn git -C {work_dir} ls-files"))?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("missing stdout for git ls-files in {work_dir}"))?;
+        let reader = BufReader::new(stdout);
+        let mut samples = Vec::new();
+        for line in reader.lines().take(max_entries.max(1)) {
+            let line =
+                line.with_context(|| format!("failed to read git ls-files output in {work_dir}"))?;
+            if !line.trim().is_empty() {
+                samples.push(line);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+
+        if samples.is_empty() && top_level.stdout.trim().is_empty() {
             return Ok(String::new());
         }
 
-        let files = listing.lines().collect::<Vec<_>>();
-        let total = files.len();
-        let mut top_dirs: HashMap<String, usize> = HashMap::new();
-        for file in &files {
-            let top = file.split('/').next().unwrap_or(*file).to_string();
-            *top_dirs.entry(top).or_insert(0) += 1;
-        }
-        let mut dir_counts = top_dirs.into_iter().collect::<Vec<_>>();
-        dir_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-        let mut out = format!("Repository manifest (bounded)\n- total_tracked_files: {total}\n");
-        if !dir_counts.is_empty() {
-            let dirs = dir_counts
-                .iter()
-                .take(12)
-                .map(|(dir, count)| format!("{dir} ({count})"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            out.push_str(&format!("- top_level_entries: {dirs}\n"));
+        let mut out = String::from("Repository manifest (sampled)\n");
+        out.push_str(
+            "- scope: sampled tracked files only; use Read/Glob/Grep for deeper discovery\n",
+        );
+        let top_entries = top_level
+            .stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(16)
+            .collect::<Vec<_>>();
+        if !top_entries.is_empty() {
+            out.push_str(&format!(
+                "- top_level_entries: {}\n",
+                top_entries.join(", ")
+            ));
         }
         out.push_str("- sample_paths:\n");
-
         let mut shown = 0usize;
-        for file in files.iter().take(max_entries.max(1)) {
+        for file in &samples {
             let line = format!("  - {file}\n");
             if out.len() + line.len() > max_bytes.max(256) {
                 break;
@@ -172,8 +202,9 @@ impl Git {
             out.push_str(&line);
             shown += 1;
         }
-        if shown < total {
-            out.push_str(&format!("- omitted_paths: {}\n", total - shown));
+        out.push_str(&format!("- sampled_entries: {shown}\n"));
+        if shown >= max_entries.max(1) {
+            out.push_str("- note: additional tracked files omitted from the manifest sample\n");
         }
         Ok(out)
     }
@@ -194,7 +225,10 @@ impl Git {
 
     /// Push a branch to origin.
     pub fn push_branch(&self, branch: &str) -> Result<()> {
-        let result = self.exec(&self.repo_path, &["push", "-u", "origin", branch, "--force-with-lease"])?;
+        let result = self.exec(
+            &self.repo_path,
+            &["push", "-u", "origin", branch, "--force-with-lease"],
+        )?;
         if !result.success() {
             return Err(anyhow!(
                 "git push origin {branch} failed: {}",
@@ -215,5 +249,4 @@ impl Git {
         }
         Ok(())
     }
-
 }

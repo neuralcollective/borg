@@ -15,7 +15,8 @@ fn total_knowledge_bytes_empty() {
 #[test]
 fn total_knowledge_bytes_single_file() {
     let db = open_db();
-    db.insert_knowledge_file("doc.pdf", "test doc", 1_000_000, false).unwrap();
+    db.insert_knowledge_file("doc.pdf", "test doc", 1_000_000, false)
+        .unwrap();
     assert_eq!(db.total_knowledge_file_bytes().unwrap(), 1_000_000);
 }
 
@@ -44,5 +45,8 @@ fn total_knowledge_bytes_after_delete() {
 fn knowledge_limits_are_ordered() {
     const MAX_FILE: i64 = 50 * 1024 * 1024;
     const MAX_TOTAL: i64 = 1024 * 1024 * 1024;
-    assert!(MAX_FILE < MAX_TOTAL, "per-file cap must be smaller than total cap");
+    assert!(
+        MAX_FILE < MAX_TOTAL,
+        "per-file cap must be smaller than total cap"
+    );
 }

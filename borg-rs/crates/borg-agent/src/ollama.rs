@@ -133,7 +133,10 @@ impl AgentBackend for OllamaBackend {
                 "ollama returned non-200: {}",
                 body
             );
-            return Ok(PhaseOutput::failed(format!("Ollama error {}: {}", status, body)));
+            return Ok(PhaseOutput::failed(format!(
+                "Ollama error {}: {}",
+                status, body
+            )));
         }
 
         let parsed: OllamaChatResponse = match response.json().await {

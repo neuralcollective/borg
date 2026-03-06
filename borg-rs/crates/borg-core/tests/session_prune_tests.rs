@@ -77,13 +77,10 @@ fn test_in_flight_dir_is_skipped() {
     let mut skip = HashSet::new();
     skip.insert(3i64);
 
-    let stale = collect_stale_session_dirs(
-        sessions.to_str().unwrap(),
-        now,
-        max_age,
-        &skip,
-        |_id| Some(created_at),
-    );
+    let stale =
+        collect_stale_session_dirs(sessions.to_str().unwrap(), now, max_age, &skip, |_id| {
+            Some(created_at)
+        });
 
     assert!(stale.is_empty(), "in-flight task dir must not be collected");
 }
@@ -165,7 +162,10 @@ fn test_multiple_tasks_only_stale_collected() {
         .collect();
 
     assert!(stale_names.contains("task-10"), "task-10 must be stale");
-    assert!(!stale_names.contains("task-11"), "task-11 must not be stale");
+    assert!(
+        !stale_names.contains("task-11"),
+        "task-11 must not be stale"
+    );
     assert!(stale_names.contains("task-12"), "task-12 must be stale");
     assert_eq!(stale.len(), 2);
 }

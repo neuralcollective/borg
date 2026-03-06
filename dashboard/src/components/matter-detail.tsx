@@ -636,10 +636,14 @@ function DocumentsTab({
 }) {
   const { data: docs = [], isLoading } = useProjectDocuments(projectId);
   const [fileSearch, setFileSearch] = useState("");
-  const [fileOffset, setFileOffset] = useState(0);
+  const [filePageStack, setFilePageStack] = useState<Array<{ cursor: string | null; offset: number }>>([
+    { cursor: null, offset: 0 },
+  ]);
+  const currentFilePage = filePageStack[filePageStack.length - 1] ?? { cursor: null, offset: 0 };
   const { data: filePage, refetch: refetchFiles, isLoading: filesLoading } = useProjectFiles(projectId, {
     limit: 50,
-    offset: fileOffset,
+    offset: currentFilePage.offset,
+    cursor: currentFilePage.cursor,
     q: fileSearch,
   });
   const files = filePage?.items ?? [];
@@ -649,7 +653,7 @@ function DocumentsTab({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setFileOffset(0);
+    setFilePageStack([{ cursor: null, offset: 0 }]);
     setFileSearch("");
   }, [projectId]);
 
@@ -659,6 +663,7 @@ function DocumentsTab({
     setUploadError(null);
     try {
       await uploadProjectFiles(projectId, selected, { privileged: privilegedUpload });
+      setFilePageStack([{ cursor: null, offset: 0 }]);
       await refetchFiles();
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (err) {
@@ -759,7 +764,7 @@ function DocumentsTab({
               value={fileSearch}
               onChange={(e) => {
                 setFileSearch(e.target.value);
-                setFileOffset(0);
+                setFilePageStack([{ cursor: null, offset: 0 }]);
               }}
               placeholder="Filter files"
               className="w-full max-w-xs rounded border border-white/[0.08] bg-black/20 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600"
@@ -768,7 +773,12 @@ function DocumentsTab({
           <div className="max-h-44 space-y-1 overflow-y-auto">
             {files.map((f) => (
               <div key={f.id} className="flex items-center gap-2 rounded border border-white/[0.05] px-2 py-1 text-[11px]">
-                <span className="truncate text-zinc-300">{f.file_name}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-zinc-300">{f.file_name}</div>
+                  {f.source_path && f.source_path !== f.file_name && (
+                    <div className="truncate text-[10px] text-zinc-600">{f.source_path}</div>
+                  )}
+                </div>
                 {f.privileged && (
                   <span className="rounded bg-rose-500/15 px-1 py-0.5 text-[9px] text-rose-300">privileged</span>
                 )}
@@ -784,19 +794,25 @@ function DocumentsTab({
           {filePage && filePage.total > filePage.limit && (
             <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-600">
               <span>
-                Showing {filePage.total === 0 ? 0 : filePage.offset + 1}-{Math.min(filePage.offset + files.length, filePage.total)} of {filePage.total}
+                Showing {filePage.total === 0 ? 0 : currentFilePage.offset + 1}-{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setFileOffset((prev) => Math.max(0, prev - filePage.limit))}
-                  disabled={filePage.offset === 0}
+                  onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
+                  disabled={filePageStack.length <= 1}
                   className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
                 >
                   Prev
                 </button>
                 <button
-                  onClick={() => setFileOffset((prev) => prev + filePage.limit)}
-                  disabled={!filePage.has_more}
+                  onClick={() => {
+                    if (!filePage.next_cursor) return;
+                    setFilePageStack((prev) => [
+                      ...prev,
+                      { cursor: filePage.next_cursor ?? null, offset: currentFilePage.offset + files.length },
+                    ]);
+                  }}
+                  disabled={!filePage.has_more || !filePage.next_cursor}
                   className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
                 >
                   Next

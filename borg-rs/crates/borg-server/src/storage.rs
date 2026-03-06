@@ -5,6 +5,7 @@ use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use borg_core::config::Config;
+use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub enum FileStorage {
@@ -19,10 +20,26 @@ pub enum FileStorage {
 }
 
 impl FileStorage {
+    fn sharded_local_project_path(
+        data_dir: &str,
+        project_id: i64,
+        object_name: &str,
+    ) -> (String, String) {
+        let digest = Sha256::digest(object_name.as_bytes());
+        let digest_hex = format!("{digest:x}");
+        let shard_a = &digest_hex[0..2];
+        let shard_b = &digest_hex[2..4];
+        let dir = format!("{data_dir}/projects/{project_id}/files/{shard_a}/{shard_b}");
+        let path = format!("{dir}/{object_name}");
+        (dir, path)
+    }
+
     pub async fn from_config(config: &Config) -> Result<Self> {
         if config.storage_backend.trim().eq_ignore_ascii_case("s3") {
             if config.s3_bucket.trim().is_empty() {
-                return Err(anyhow!("S3 storage backend selected but S3_BUCKET/s3_bucket is empty"));
+                return Err(anyhow!(
+                    "S3 storage backend selected but S3_BUCKET/s3_bucket is empty"
+                ));
             }
             let mut loader = aws_config::defaults(BehaviorVersion::latest())
                 .region(Region::new(config.s3_region.clone()));
@@ -73,16 +90,16 @@ impl FileStorage {
     ) -> Result<String> {
         match self {
             Self::Local { data_dir } => {
-                let files_dir = format!("{data_dir}/projects/{project_id}/files");
+                let (files_dir, stored_path) =
+                    Self::sharded_local_project_path(data_dir, project_id, object_name);
                 tokio::fs::create_dir_all(&files_dir)
                     .await
                     .with_context(|| format!("create project dir {files_dir}"))?;
-                let stored_path = format!("{files_dir}/{object_name}");
                 tokio::fs::write(&stored_path, bytes)
                     .await
                     .with_context(|| format!("write project file {stored_path}"))?;
                 Ok(stored_path)
-            }
+            },
             Self::S3 {
                 bucket,
                 prefix,
@@ -98,7 +115,7 @@ impl FileStorage {
                     .await
                     .context("s3 put_object project file")?;
                 Ok(format!("s3://{bucket}/{key}"))
-            }
+            },
         }
     }
 
@@ -110,16 +127,16 @@ impl FileStorage {
     ) -> Result<String> {
         match self {
             Self::Local { data_dir } => {
-                let files_dir = format!("{data_dir}/projects/{project_id}/files");
+                let (files_dir, stored_path) =
+                    Self::sharded_local_project_path(data_dir, project_id, object_name);
                 tokio::fs::create_dir_all(&files_dir)
                     .await
                     .with_context(|| format!("create project dir {files_dir}"))?;
-                let stored_path = format!("{files_dir}/{object_name}");
                 tokio::fs::copy(source_path, &stored_path)
                     .await
                     .with_context(|| format!("copy project file {source_path} -> {stored_path}"))?;
                 Ok(stored_path)
-            }
+            },
             Self::S3 {
                 bucket,
                 prefix,
@@ -138,7 +155,7 @@ impl FileStorage {
                     .await
                     .context("s3 put_object project file from path")?;
                 Ok(format!("s3://{bucket}/{key}"))
-            }
+            },
         }
     }
 
@@ -156,20 +173,18 @@ impl FileStorage {
                         .send()
                         .await
                         .context("s3 get_object")?;
-                    let data = out
-                        .body
-                        .collect()
-                        .await
-                        .context("s3 collect object body")?;
+                    let data = out.body.collect().await.context("s3 collect object body")?;
                     Ok(data.into_bytes().to_vec())
                 } else if Path::new(stored_path).exists() {
                     tokio::fs::read(stored_path)
                         .await
                         .with_context(|| format!("read fallback local file {stored_path}"))
                 } else {
-                    Err(anyhow!("unsupported stored path for S3 backend: {stored_path}"))
+                    Err(anyhow!(
+                        "unsupported stored path for S3 backend: {stored_path}"
+                    ))
                 }
-            }
+            },
         }
     }
 }

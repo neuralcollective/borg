@@ -32,34 +32,79 @@ impl WestlawClient {
     }
 
     pub async fn search(&self, params: &SearchParams) -> Result<serde_json::Value> {
-        Ok(self.http.post(format!("{}/search", self.base_url))
-            .bearer_auth(&self.api_key).json(params).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .post(format!("{}/search", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(params)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn get_document(&self, document_id: &str) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{}/documents/{document_id}", self.base_url))
-            .bearer_auth(&self.api_key).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!("{}/documents/{document_id}", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn keycite(&self, citation: &str) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{}/keycite/{}", self.base_url, urlencoding::encode(citation)))
-            .bearer_auth(&self.api_key).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!(
+                "{}/keycite/{}",
+                self.base_url,
+                urlencoding::encode(citation)
+            ))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn practical_law_search(&self, query: &str) -> Result<serde_json::Value> {
         let body = serde_json::json!({ "query": query });
-        Ok(self.http.post(format!("{}/practical-law/search", self.base_url))
-            .bearer_auth(&self.api_key).json(&body).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .post(format!("{}/practical-law/search", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
-    pub async fn litigation_analytics(&self, query_type: &str, query: &str) -> Result<serde_json::Value> {
+    pub async fn litigation_analytics(
+        &self,
+        query_type: &str,
+        query: &str,
+    ) -> Result<serde_json::Value> {
         let body = serde_json::json!({ "query": query });
-        Ok(self.http.post(format!("{}/analytics/{}", self.base_url, urlencoding::encode(query_type)))
-            .bearer_auth(&self.api_key).json(&body).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .post(format!(
+                "{}/analytics/{}",
+                self.base_url,
+                urlencoding::encode(query_type)
+            ))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 }

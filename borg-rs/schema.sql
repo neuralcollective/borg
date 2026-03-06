@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS project_files (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   file_name TEXT NOT NULL,
+  source_path TEXT NOT NULL DEFAULT '',
   stored_path TEXT NOT NULL,
   mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
   size_bytes INTEGER NOT NULL DEFAULT 0,
@@ -188,7 +189,14 @@ CREATE TABLE IF NOT EXISTS project_files (
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_files_project_name ON project_files(project_id, file_name);
-CREATE INDEX IF NOT EXISTS idx_project_files_project_created ON project_files(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_source_path ON project_files(project_id, source_path);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_name_id ON project_files(project_id, file_name, id DESC);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_source_path_id ON project_files(project_id, source_path, id DESC);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_hash ON project_files(project_id, content_hash);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_created ON project_files(project_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_project_files_created_global ON project_files(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_priv_created ON project_files(project_id, privileged, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_text_created ON project_files(project_id, created_at DESC, id DESC) WHERE extracted_text != '';
 
 CREATE TABLE IF NOT EXISTS project_corpus_stats (
   project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,

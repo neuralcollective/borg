@@ -44,6 +44,7 @@ export const DEFAULT_PHASE: PhaseConfigFull = {
   allow_no_changes: false,
   next: "done",
   fresh_session: false,
+  revision_target: "",
   fix_instruction: "",
   retry_phase: "",
   compliance_profile: "",

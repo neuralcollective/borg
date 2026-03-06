@@ -33,6 +33,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
       <div className="flex shrink-0 items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
         <Stat value={status?.active_tasks ?? 0} label="Active" color="text-blue-400" />
         <Stat value={status?.merged_tasks ?? 0} label="Merged" color="text-emerald-400" />
+        <Stat value={status?.ai_requests ?? 0} label="AI" color="text-cyan-400" />
         <Stat value={status?.failed_tasks ?? 0} label="Failed" color="text-red-400" />
         {(status?.failed_tasks ?? 0) > 0 && (
           <button

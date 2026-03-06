@@ -15,7 +15,10 @@ async fn test_ended_stream_history_available_before_prune() {
     manager.end_task(task_id).await;
 
     let (history, rx) = manager.subscribe(task_id).await;
-    assert!(!history.is_empty(), "history must be available before prune");
+    assert!(
+        !history.is_empty(),
+        "history must be available before prune"
+    );
     assert!(rx.is_none(), "ended stream must return no live receiver");
 }
 
@@ -63,7 +66,10 @@ async fn test_prune_ended_large_max_age_keeps_recent_streams() {
     manager.prune_ended(Duration::from_secs(3600)).await;
 
     let (history, _) = manager.subscribe(task_id).await;
-    assert!(!history.is_empty(), "recently-ended stream must survive large-TTL prune");
+    assert!(
+        !history.is_empty(),
+        "recently-ended stream must survive large-TTL prune"
+    );
 }
 
 // start() prunes stale ended streams as a side effect.
@@ -86,10 +92,16 @@ async fn test_start_triggers_prune_of_stale_ended_streams() {
     manager.start(new_task).await;
 
     let (old_history, _) = manager.subscribe(old_task).await;
-    assert!(old_history.is_empty(), "pruned ended stream must not reappear after start");
+    assert!(
+        old_history.is_empty(),
+        "pruned ended stream must not reappear after start"
+    );
 
     let (new_history, new_rx) = manager.subscribe(new_task).await;
-    assert!(new_history.is_empty(), "new task must start with empty history");
+    assert!(
+        new_history.is_empty(),
+        "new task must start with empty history"
+    );
     assert!(new_rx.is_some(), "new task must have live receiver");
 }
 
@@ -120,7 +132,9 @@ async fn test_prune_ended_only_removes_ended_streams_in_mixed_map() {
     let ended_id: i64 = 231;
 
     manager.start(active_id).await;
-    manager.push_line(active_id, "still running".to_string()).await;
+    manager
+        .push_line(active_id, "still running".to_string())
+        .await;
 
     manager.start(ended_id).await;
     manager.push_line(ended_id, "done".to_string()).await;

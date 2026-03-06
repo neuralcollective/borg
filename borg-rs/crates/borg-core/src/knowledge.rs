@@ -1,5 +1,7 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
@@ -46,7 +48,10 @@ impl BraveSearchClient {
         {
             for res in web {
                 let title = res.get("title").and_then(|v| v.as_str()).unwrap_or("");
-                let description = res.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let description = res
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let url = res.get("url").and_then(|v| v.as_str()).unwrap_or("");
                 results.push(format!("### {title}\nURL: {url}\n{description}"));
             }
@@ -79,8 +84,8 @@ impl EmbeddingClient {
     pub fn from_env() -> Self {
         let base_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let model = std::env::var("EMBEDDING_MODEL")
-            .unwrap_or_else(|_| "nomic-embed-text".to_string());
+        let model =
+            std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "nomic-embed-text".to_string());
         Self::new(&base_url, &model)
     }
 
@@ -263,16 +268,18 @@ pub async fn index_task_embeddings(
             }
             match embed_client.embed_single(chunk).await {
                 Ok(embedding) => {
-                    if let Err(e) = db.upsert_embedding(project_id, Some(task_id), chunk, file, &embedding) {
+                    if let Err(e) =
+                        db.upsert_embedding(project_id, Some(task_id), chunk, file, &embedding)
+                    {
                         warn!("failed to store embedding for task #{task_id}: {e}");
                     } else {
                         indexed += 1;
                     }
-                }
+                },
                 Err(e) => {
                     warn!("embedding failed for task #{task_id} chunk: {e}");
                     return;
-                }
+                },
             }
         }
     }
@@ -288,7 +295,10 @@ mod tests {
     use super::*;
 
     fn make_words(n: usize) -> String {
-        (0..n).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ")
+        (0..n)
+            .map(|i| format!("w{i}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[test]
@@ -335,7 +345,6 @@ mod tests {
     }
 }
 
-
 pub async fn get_prior_research(
     db: &Db,
     embed_client: &EmbeddingClient,
@@ -359,6 +368,6 @@ pub async fn get_prior_research(
         Err(e) => {
             warn!("failed to embed query for prior research: {e}");
             vec![]
-        }
+        },
     }
 }

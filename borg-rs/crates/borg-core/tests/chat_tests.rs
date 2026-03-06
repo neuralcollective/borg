@@ -18,10 +18,16 @@ async fn collecting_window_returns_none() {
     let collector = ChatCollector::new(10_000, 0, 0); // 10s window
 
     let r1 = collector.process(make_msg("chat1", "hello")).await;
-    assert!(r1.is_none(), "first message should start Collecting and return None");
+    assert!(
+        r1.is_none(),
+        "first message should start Collecting and return None"
+    );
 
     let r2 = collector.process(make_msg("chat1", "world")).await;
-    assert!(r2.is_none(), "second message within window should accumulate and return None");
+    assert!(
+        r2.is_none(),
+        "second message within window should accumulate and return None"
+    );
 }
 
 // AC2: flush_expired returns a MessageBatch once the window has elapsed
@@ -87,7 +93,10 @@ async fn mark_done_without_cooldown_returns_to_idle() {
 
     // Back to Idle: next message should dispatch again
     let batch2 = collector.process(make_msg("chat1", "second")).await;
-    assert!(batch2.is_some(), "after mark_done (no cooldown) should dispatch again");
+    assert!(
+        batch2.is_some(),
+        "after mark_done (no cooldown) should dispatch again"
+    );
 }
 
 // AC4: can_dispatch returns false when active_count reaches max_agents
@@ -95,12 +104,18 @@ async fn mark_done_without_cooldown_returns_to_idle() {
 async fn can_dispatch_false_at_max_agents() {
     let collector = ChatCollector::new(0, 1, 0); // max 1 agent
 
-    assert!(collector.can_dispatch().await, "should be dispatchable initially");
+    assert!(
+        collector.can_dispatch().await,
+        "should be dispatchable initially"
+    );
 
     let batch = collector.process(make_msg("chat1", "go")).await;
     assert!(batch.is_some());
 
-    assert!(!collector.can_dispatch().await, "at max_agents=1 must return false");
+    assert!(
+        !collector.can_dispatch().await,
+        "at max_agents=1 must return false"
+    );
     assert_eq!(collector.active_count().await, 1);
 }
 
@@ -114,7 +129,10 @@ async fn max_agents_zero_means_unlimited() {
     assert!(collector.process(make_msg("c2", "b")).await.is_some());
     assert!(collector.process(make_msg("c3", "c")).await.is_some());
 
-    assert!(collector.can_dispatch().await, "unlimited agents: can_dispatch must be true");
+    assert!(
+        collector.can_dispatch().await,
+        "unlimited agents: can_dispatch must be true"
+    );
     assert_eq!(collector.active_count().await, 3);
 }
 
@@ -143,11 +161,17 @@ async fn flush_expired_clears_cooldown_to_idle() {
     // Wait for cooldown to expire, then flush
     tokio::time::sleep(Duration::from_millis(20)).await;
     let batches = collector.flush_expired().await;
-    assert!(batches.is_empty(), "flush during cooldown expiry yields no new batches");
+    assert!(
+        batches.is_empty(),
+        "flush during cooldown expiry yields no new batches"
+    );
 
     // Now in Idle: next message should dispatch
     let r = collector.process(make_msg("chat1", "after cooldown")).await;
-    assert!(r.is_some(), "after cooldown flush chat should be Idle and dispatch");
+    assert!(
+        r.is_some(),
+        "after cooldown flush chat should be Idle and dispatch"
+    );
 }
 
 // flush_expired at max_agents does not dispatch additional batches
@@ -173,6 +197,9 @@ async fn window_zero_dispatches_immediately() {
     let collector = ChatCollector::new(0, 0, 0);
 
     let batch = collector.process(make_msg("chat1", "hi")).await;
-    assert!(batch.is_some(), "window=0 must dispatch on the first process call");
+    assert!(
+        batch.is_some(),
+        "window=0 must dispatch on the first process call"
+    );
     assert_eq!(batch.unwrap().messages, vec!["hi"]);
 }

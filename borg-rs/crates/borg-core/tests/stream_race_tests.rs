@@ -28,10 +28,7 @@ async fn test_late_subscriber_sees_stream_end_in_history() {
 
     let (history, rx) = mgr.subscribe(id).await;
 
-    assert!(
-        rx.is_none(),
-        "ended stream must return no live receiver"
-    );
+    assert!(rx.is_none(), "ended stream must return no live receiver");
     assert!(
         history.iter().any(|l| l.contains("stream_end")),
         "ended stream must have stream_end in history: {history:?}"
@@ -97,7 +94,10 @@ async fn test_concurrent_subscribe_and_end_no_hang() {
             .await
             .expect("timed out — subscriber hung without receiving stream_end")
             .expect("recv error");
-        assert!(msg.contains("stream_end"), "expected stream_end; got: {msg}");
+        assert!(
+            msg.contains("stream_end"),
+            "expected stream_end; got: {msg}"
+        );
     } else {
         // Subscriber arrived after end; history must contain stream_end.
         assert!(
@@ -128,7 +128,8 @@ async fn test_stream_end_survives_history_overflow() {
     assert!(rx.is_none(), "ended stream must return no live receiver");
     assert!(
         history.iter().any(|l| l.contains("stream_end")),
-        "stream_end must survive history overflow; history len={}", history.len()
+        "stream_end must survive history overflow; history len={}",
+        history.len()
     );
     assert_eq!(
         history.last().map(|s| s.as_str()),
@@ -187,5 +188,8 @@ async fn test_live_receiver_delivers_messages_in_order() {
 
     assert_eq!(m1, "msg1");
     assert_eq!(m2, "msg2");
-    assert!(end.contains("stream_end"), "last message must be stream_end");
+    assert!(
+        end.contains("stream_end"),
+        "last message must be stream_end"
+    );
 }

@@ -83,7 +83,7 @@ impl AgentBackend for GeminiBackend {
             .current_dir(&ctx.work_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        
+
         if !self.api_key.is_empty() {
             cmd.env("GEMINI_API_KEY", &self.api_key);
         }

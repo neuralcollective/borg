@@ -1,6 +1,7 @@
+use std::sync::LazyLock;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
 
 use super::courtlistener::CourtListenerClient;
 
@@ -156,8 +157,14 @@ async fn verify_case_citation(
     cl: &CourtListenerClient,
     now: &str,
 ) -> VerificationResult {
-    let cite_query = if !citation.volume.is_empty() && !citation.reporter.is_empty() && !citation.page.is_empty() {
-        format!("{} {} {}", citation.volume, citation.reporter, citation.page)
+    let cite_query = if !citation.volume.is_empty()
+        && !citation.reporter.is_empty()
+        && !citation.page.is_empty()
+    {
+        format!(
+            "{} {} {}",
+            citation.volume, citation.reporter, citation.page
+        )
     } else {
         citation.text.clone()
     };
@@ -196,7 +203,8 @@ mod tests {
 
     #[test]
     fn test_extract_us_cases() {
-        let text = "The court held in 550 U.S. 124 that something. See also 123 F.3d 456 (9th Cir. 1999).";
+        let text =
+            "The court held in 550 U.S. 124 that something. See also 123 F.3d 456 (9th Cir. 1999).";
         let cites = extract_citations(text);
         assert!(cites.len() >= 2);
         assert!(cites.iter().any(|c| c.text.contains("550 U.S. 124")));

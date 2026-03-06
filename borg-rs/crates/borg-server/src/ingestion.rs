@@ -4,20 +4,15 @@ use anyhow::{Context, Result};
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_sqs::Client;
-use borg_core::config::Config;
-use borg_core::db::Db;
+use borg_core::{config::Config, db::Db};
 use serde_json::json;
 
-use crate::storage::FileStorage;
-use crate::opensearch::OpenSearchClient;
+use crate::{opensearch::OpenSearchClient, storage::FileStorage};
 
 #[derive(Clone)]
 pub enum IngestionQueue {
     Disabled,
-    Sqs {
-        queue_url: String,
-        client: Client,
-    },
+    Sqs { queue_url: String, client: Client },
 }
 
 impl IngestionQueue {
@@ -31,10 +26,8 @@ impl IngestionQueue {
                 return Ok(Self::Disabled);
             }
 
-            let mut loader =
-                aws_config::defaults(BehaviorVersion::latest()).region(Region::new(
-                    config.sqs_region.clone(),
-                ));
+            let mut loader = aws_config::defaults(BehaviorVersion::latest())
+                .region(Region::new(config.sqs_region.clone()));
             if !config.s3_access_key.is_empty() && !config.s3_secret_key.is_empty() {
                 loader = loader.credentials_provider(Credentials::new(
                     config.s3_access_key.clone(),
@@ -87,7 +80,7 @@ impl IngestionQueue {
                     .await
                     .context("sqs send_message project_file_ingest")?;
                 Ok(())
-            }
+            },
         }
     }
 
@@ -170,7 +163,7 @@ async fn process_message(
         Err(e) => {
             tracing::warn!("ingestion worker db lookup failed: {e}");
             return false;
-        }
+        },
     };
     if !row.extracted_text.is_empty() {
         return true;
@@ -181,14 +174,14 @@ async fn process_message(
         Err(e) => {
             tracing::warn!("ingestion worker read failed: {e}");
             return false;
-        }
+        },
     };
     let text = match extract_text_from_bytes(&msg.file_name, &msg.mime_type, &bytes).await {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!("ingestion worker extract failed: {e}");
             return false;
-        }
+        },
     };
     if text.is_empty() {
         return true;
@@ -198,7 +191,8 @@ async fn process_message(
         tracing::warn!("ingestion worker update text failed: {e}");
         return false;
     }
-    if let Err(e) = db.fts_index_document(msg.project_id, 0, &msg.file_name, &msg.file_name, &text) {
+    if let Err(e) = db.fts_index_document(msg.project_id, 0, &msg.file_name, &msg.file_name, &text)
+    {
         tracing::warn!("ingestion worker fts index failed: {e}");
         return false;
     }
@@ -235,10 +229,16 @@ async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> R
     tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
         let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
         let is_pdf = mime.contains("pdf") || ext == "pdf";
-        let is_docx = mime.contains("wordprocessingml") || mime.contains("msword")
-            || ext == "docx" || ext == "doc";
-        let is_text = mime.starts_with("text/") || ext == "txt" || ext == "md"
-            || ext == "csv" || ext == "json" || ext == "xml";
+        let is_docx = mime.contains("wordprocessingml")
+            || mime.contains("msword")
+            || ext == "docx"
+            || ext == "doc";
+        let is_text = mime.starts_with("text/")
+            || ext == "txt"
+            || ext == "md"
+            || ext == "csv"
+            || ext == "json"
+            || ext == "xml";
 
         if is_pdf {
             let tmp = tempfile::NamedTempFile::new()?;
@@ -249,10 +249,17 @@ async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> R
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         } else if is_docx {
             let suffix = if ext.is_empty() { "docx" } else { &ext };
-            let tmp = tempfile::Builder::new().suffix(&format!(".{suffix}")).tempfile()?;
+            let tmp = tempfile::Builder::new()
+                .suffix(&format!(".{suffix}"))
+                .tempfile()?;
             std::fs::write(tmp.path(), &bytes)?;
             let out = std::process::Command::new("pandoc")
-                .args([tmp.path().to_str().unwrap_or(""), "-t", "plain", "--wrap=none"])
+                .args([
+                    tmp.path().to_str().unwrap_or(""),
+                    "-t",
+                    "plain",
+                    "--wrap=none",
+                ])
                 .output()?;
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         } else if is_text {

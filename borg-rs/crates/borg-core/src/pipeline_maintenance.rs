@@ -84,7 +84,9 @@ impl Pipeline {
                 info!("Health: created fix task #{id} for {repo_path} {kind} failure");
                 self.notify(
                     &self.config.pipeline_admin_chat,
-                    &format!("Health check: {kind} failing for {repo_path}, created fix task #{id}"),
+                    &format!(
+                        "Health check: {kind} failing for {repo_path}, created fix task #{id}"
+                    ),
                 );
             },
             Err(e) => warn!("Health: insert_task: {e}"),
@@ -171,15 +173,15 @@ impl Pipeline {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 warn!("Self-update: lock file exists, skipping");
                 return;
-            }
+            },
             Err(e) => {
                 warn!("Self-update: could not create lock file: {e}");
                 return;
-            }
+            },
             Ok(mut f) => {
                 use std::io::Write;
                 let _ = f.write_all(std::process::id().to_string().as_bytes());
-            }
+            },
         }
         struct LockGuard(String);
         impl Drop for LockGuard {
@@ -216,11 +218,11 @@ impl Pipeline {
                     String::from_utf8_lossy(&o.stderr).trim()
                 );
                 return;
-            }
+            },
             Err(e) => {
                 warn!("Self-update: git pull spawn failed: {e}");
                 return;
-            }
+            },
         };
 
         let startup = match self.startup_heads.get(repo_path) {
@@ -267,7 +269,7 @@ impl Pipeline {
                     &self.config.pipeline_admin_chat,
                     "Self-update: build FAILED (spawn error).",
                 );
-            }
+            },
             Ok(o) if !o.status.success() => {
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 warn!(
@@ -278,7 +280,7 @@ impl Pipeline {
                     &self.config.pipeline_admin_chat,
                     "Self-update: build FAILED, continuing with old binary.",
                 );
-            }
+            },
             Ok(_) => {
                 let mtime_after = std::fs::metadata(&binary_path)
                     .and_then(|m| m.modified())
@@ -303,7 +305,7 @@ impl Pipeline {
                     chrono::Utc::now().timestamp(),
                     std::sync::atomic::Ordering::Relaxed,
                 );
-            }
+            },
         }
     }
 

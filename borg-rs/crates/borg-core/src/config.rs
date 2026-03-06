@@ -83,7 +83,7 @@ pub struct Config {
     // Codex
     pub codex_api_key: String,
     pub codex_credentials_path: String,
-    
+
     // Gemini
     pub gemini_api_key: String,
 
@@ -278,9 +278,11 @@ pub fn refresh_oauth_token(credentials_path: &str, current: &str) -> String {
             .stderr(std::process::Stdio::null())
             .status()
         {
-            Ok(s) if !s.success() => tracing::warn!("OAuth refresh failed (exit {})", s.code().unwrap_or(-1)),
+            Ok(s) if !s.success() => {
+                tracing::warn!("OAuth refresh failed (exit {})", s.code().unwrap_or(-1))
+            },
             Err(e) => tracing::warn!("OAuth refresh command failed: {e}"),
-            _ => {}
+            _ => {},
         }
     }
 
@@ -395,7 +397,13 @@ mod tests {
 
     // Helper: call parse_watched_repos with sensible defaults for optional args.
     fn parse(watched_raw: &str, pipeline_repo: &str) -> Vec<RepoConfig> {
-        parse_watched_repos(watched_raw, pipeline_repo, "cargo test", "cargo clippy", "sweborg")
+        parse_watched_repos(
+            watched_raw,
+            pipeline_repo,
+            "cargo test",
+            "cargo clippy",
+            "sweborg",
+        )
     }
 
     #[test]
@@ -462,7 +470,10 @@ mod tests {
 
     #[test]
     fn entry_with_five_fields_captures_lint_cmd() {
-        let repos = parse("/watched:just test:.borg/prompt.md:legal:cargo clippy", "/primary");
+        let repos = parse(
+            "/watched:just test:.borg/prompt.md:legal:cargo clippy",
+            "/primary",
+        );
         assert_eq!(repos.len(), 2);
         let r = &repos[1];
         assert_eq!(r.lint_cmd, "cargo clippy");
@@ -471,7 +482,10 @@ mod tests {
 
     #[test]
     fn entry_with_six_fields_uses_slug_override() {
-        let repos = parse("/watched:just test:.borg/prompt.md:sweborg::owner/repo", "/primary");
+        let repos = parse(
+            "/watched:just test:.borg/prompt.md:sweborg::owner/repo",
+            "/primary",
+        );
         assert_eq!(repos.len(), 2);
         let r = &repos[1];
         assert_eq!(r.repo_slug, "owner/repo");
@@ -554,7 +568,10 @@ mod tests {
 
     #[test]
     fn manual_flag_with_six_fields_and_slug_override() {
-        let repos = parse("/watched:just test!manual:::cargo clippy:owner/repo", "/primary");
+        let repos = parse(
+            "/watched:just test!manual:::cargo clippy:owner/repo",
+            "/primary",
+        );
         assert_eq!(repos.len(), 2);
         let r = &repos[1];
         assert!(!r.auto_merge);
@@ -568,7 +585,10 @@ mod tests {
         let repos = parse("/repo1|/primary|/repo2", "/primary");
         assert_eq!(repos.len(), 3); // primary + repo1 + repo2 (/primary watched entry skipped)
         let paths: Vec<&str> = repos.iter().map(|r| r.path.as_str()).collect();
-        assert!(!paths.contains(&"/primary") || repos.iter().filter(|r| r.path == "/primary").count() == 1);
+        assert!(
+            !paths.contains(&"/primary")
+                || repos.iter().filter(|r| r.path == "/primary").count() == 1
+        );
         assert_eq!(repos[0].path, "/primary");
         assert_eq!(repos[1].path, "/repo1");
         assert_eq!(repos[2].path, "/repo2");
@@ -683,7 +703,10 @@ impl Config {
             ("opensearch_url", self.opensearch_url.clone()),
             ("opensearch_index", self.opensearch_index.clone()),
             ("opensearch_username", self.opensearch_username.clone()),
-            ("experimental_domains", self.experimental_domains.to_string()),
+            (
+                "experimental_domains",
+                self.experimental_domains.to_string(),
+            ),
         ];
         let conn_guard = db.raw_conn();
         let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
@@ -888,12 +911,9 @@ impl Config {
             dashboard_dist_dir: get_str("DASHBOARD_DIST_DIR", &dotenv, "dashboard/dist"),
             container_setup: get_str("CONTAINER_SETUP", &dotenv, ""),
             container_memory_mb: get_u64("CONTAINER_MEMORY_MB", &dotenv, 2048),
-            container_cpus: get(
-                "CONTAINER_CPUS",
-                &dotenv,
-            )
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(2.0),
+            container_cpus: get("CONTAINER_CPUS", &dotenv)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(2.0),
             sandbox_backend: get_str("SANDBOX_BACKEND", &dotenv, "auto"),
             pipeline_max_backlog: get_u32("PIPELINE_MAX_BACKLOG", &dotenv, 5),
             pipeline_seed_cooldown_s: get_i64("PIPELINE_SEED_COOLDOWN_S", &dotenv, 3600),
@@ -928,19 +948,15 @@ impl Config {
             s3_secret_key: get_str("AWS_SECRET_ACCESS_KEY", &dotenv, ""),
             s3_prefix: get_str("S3_PREFIX", &dotenv, "borg/"),
             project_max_bytes: get_i64("PROJECT_MAX_BYTES", &dotenv, 200 * 1024 * 1024 * 1024),
-            knowledge_max_bytes: get_i64(
-                "KNOWLEDGE_MAX_BYTES",
-                &dotenv,
-                500 * 1024 * 1024 * 1024,
-            ),
-            cloud_import_max_batch_files: get_i64(
-                "CLOUD_IMPORT_MAX_BATCH_FILES",
-                &dotenv,
-                1000,
-            ),
+            knowledge_max_bytes: get_i64("KNOWLEDGE_MAX_BYTES", &dotenv, 500 * 1024 * 1024 * 1024),
+            cloud_import_max_batch_files: get_i64("CLOUD_IMPORT_MAX_BATCH_FILES", &dotenv, 1000),
             ingestion_queue_backend: get_str("INGESTION_QUEUE_BACKEND", &dotenv, "disabled"),
             sqs_queue_url: get_str("SQS_QUEUE_URL", &dotenv, ""),
-            sqs_region: get_str("SQS_REGION", &dotenv, get_str("AWS_REGION", &dotenv, "us-east-1").as_str()),
+            sqs_region: get_str(
+                "SQS_REGION",
+                &dotenv,
+                get_str("AWS_REGION", &dotenv, "us-east-1").as_str(),
+            ),
             search_backend: get_str("SEARCH_BACKEND", &dotenv, "sqlite"),
             opensearch_url: get_str("OPENSEARCH_URL", &dotenv, ""),
             opensearch_index: get_str("OPENSEARCH_INDEX", &dotenv, "borg-project-files"),
@@ -967,10 +983,7 @@ mod resolve_tilde_tests {
 
     #[test]
     fn tilde_path_expands_nested() {
-        assert_eq!(
-            resolve_tilde_impl("~/a/b/c", Some("/root")),
-            "/root/a/b/c"
-        );
+        assert_eq!(resolve_tilde_impl("~/a/b/c", Some("/root")), "/root/a/b/c");
     }
 
     #[test]

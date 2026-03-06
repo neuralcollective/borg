@@ -656,6 +656,7 @@ export function useProjectFiles(
   options?: {
     limit?: number;
     offset?: number;
+    cursor?: string | null;
     q?: string;
     hasText?: boolean;
     privilegedOnly?: boolean;
@@ -667,6 +668,7 @@ export function useProjectFiles(
       projectId,
       options?.limit ?? 50,
       options?.offset ?? 0,
+      options?.cursor ?? "",
       options?.q ?? "",
       options?.hasText ?? null,
       options?.privilegedOnly ?? null,
@@ -675,6 +677,7 @@ export function useProjectFiles(
       const params = new URLSearchParams();
       params.set("limit", String(options?.limit ?? 50));
       if (options?.offset) params.set("offset", String(options.offset));
+      if (options?.cursor) params.set("cursor", options.cursor);
       if (options?.q?.trim()) params.set("q", options.q.trim());
       if (options?.hasText !== undefined) params.set("has_text", String(options.hasText));
       if (options?.privilegedOnly !== undefined) params.set("privileged_only", String(options.privilegedOnly));

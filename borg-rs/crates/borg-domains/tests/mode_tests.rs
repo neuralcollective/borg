@@ -5,7 +5,10 @@ fn test_swe_mode_has_implement_validate_flow() {
     let mode = borg_domains::swe::swe_mode();
     assert_eq!(mode.name, "sweborg");
     let names: Vec<&str> = mode.phases.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, &["backlog", "implement", "validate", "lint_fix", "rebase"]);
+    assert_eq!(
+        names,
+        &["backlog", "implement", "validate", "lint_fix", "rebase"]
+    );
 }
 
 #[test]
@@ -33,7 +36,10 @@ fn test_web_mode_has_implement_validate_flow() {
     let mode = borg_domains::web::web_mode();
     assert_eq!(mode.name, "webborg");
     let names: Vec<&str> = mode.phases.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, &["backlog", "implement", "validate", "lint_fix", "rebase"]);
+    assert_eq!(
+        names,
+        &["backlog", "implement", "validate", "lint_fix", "rebase"]
+    );
 }
 
 #[test]
@@ -79,7 +85,11 @@ fn test_data_mode_has_single_implement() {
 fn test_all_modes_have_backlog_first() {
     for mode in borg_domains::all_modes() {
         let first = &mode.phases[0];
-        assert_eq!(first.name, "backlog", "mode {} must start with backlog", mode.name);
+        assert_eq!(
+            first.name, "backlog",
+            "mode {} must start with backlog",
+            mode.name
+        );
         assert_eq!(first.phase_type, PhaseType::Setup);
     }
 }
@@ -87,10 +97,16 @@ fn test_all_modes_have_backlog_first() {
 #[test]
 fn test_all_modes_first_agent_phase_has_task_context() {
     for mode in borg_domains::all_modes() {
-        let first_agent = mode.phases.iter()
+        let first_agent = mode
+            .phases
+            .iter()
             .find(|p| p.phase_type == PhaseType::Agent)
             .unwrap_or_else(|| panic!("mode {} has no agent phase", mode.name));
-        assert!(first_agent.include_task_context, "mode {} first agent phase must include task context", mode.name);
+        assert!(
+            first_agent.include_task_context,
+            "mode {} first agent phase must include task context",
+            mode.name
+        );
     }
 }
 
@@ -98,10 +114,22 @@ fn test_all_modes_first_agent_phase_has_task_context() {
 fn test_no_mode_uses_old_spec_qa_impl_phases() {
     for mode in borg_domains::all_modes() {
         for phase in &mode.phases {
-            assert_ne!(phase.name, "spec", "mode {} still has spec phase", mode.name);
+            assert_ne!(
+                phase.name, "spec",
+                "mode {} still has spec phase",
+                mode.name
+            );
             assert_ne!(phase.name, "qa", "mode {} still has qa phase", mode.name);
-            assert_ne!(phase.name, "qa_fix", "mode {} still has qa_fix phase", mode.name);
-            assert_ne!(phase.name, "impl", "mode {} still has impl phase", mode.name);
+            assert_ne!(
+                phase.name, "qa_fix",
+                "mode {} still has qa_fix phase",
+                mode.name
+            );
+            assert_ne!(
+                phase.name, "impl",
+                "mode {} still has impl phase",
+                mode.name
+            );
         }
     }
 }

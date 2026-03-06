@@ -7,6 +7,7 @@
 //   T3: PhaseOutput::failed is returned (not an Err) when the timeout fires.
 
 use std::time::{Duration, Instant};
+
 use tokio::process::Command;
 
 // ── T1: timeout fires within deadline ────────────────────────────────────────

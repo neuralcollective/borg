@@ -207,13 +207,21 @@ export function ProjectsPanel() {
     projects.find((p) => p.id === selectedProjectId) ?? projects[0] ?? null;
   const activeProjectId = selectedProject?.id ?? null;
   const [fileSearch, setFileSearch] = useState("");
-  const [fileOffset, setFileOffset] = useState(0);
+  const [filePageStack, setFilePageStack] = useState<Array<{ cursor: string | null; offset: number }>>([
+    { cursor: null, offset: 0 },
+  ]);
+  const currentFilePage = filePageStack[filePageStack.length - 1] ?? { cursor: null, offset: 0 };
 
   const {
     data: filePage,
     refetch: refetchFiles,
     isFetching: filesLoading,
-  } = useProjectFiles(activeProjectId, { limit: 50, offset: fileOffset, q: fileSearch });
+  } = useProjectFiles(activeProjectId, {
+    limit: 50,
+    offset: currentFilePage.offset,
+    cursor: currentFilePage.cursor,
+    q: fileSearch,
+  });
   const files = filePage?.items ?? [];
   const fileSummary = filePage?.summary;
   const {
@@ -295,7 +303,7 @@ export function ProjectsPanel() {
   }, [selectedProjectId]);
 
   useEffect(() => {
-    setFileOffset(0);
+    setFilePageStack([{ cursor: null, offset: 0 }]);
     setFileSearch("");
   }, [activeProjectId]);
 
@@ -588,6 +596,7 @@ async function uploadChunkQueue(
           });
         }
       }
+      setFilePageStack([{ cursor: null, offset: 0 }]);
       await refetchFiles();
       await refreshUploadSessions();
       if (fileFailures.length > 0) {
@@ -712,6 +721,7 @@ async function uploadChunkQueue(
       setCloudMessage({ type: "success", text: `Imported ${filesToImport.length} file(s).` });
       setCloudModalOpen(false);
       setCloudSelected({});
+      setFilePageStack([{ cursor: null, offset: 0 }]);
       await refetchFiles();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "import failed";
@@ -894,7 +904,7 @@ async function uploadChunkQueue(
                   value={fileSearch}
                   onChange={(e) => {
                     setFileSearch(e.target.value);
-                    setFileOffset(0);
+                    setFilePageStack([{ cursor: null, offset: 0 }]);
                   }}
                   placeholder="Filter uploaded files"
                   className="w-full rounded border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600"
@@ -936,7 +946,12 @@ async function uploadChunkQueue(
               <div className="mt-3 max-h-28 overflow-y-auto rounded border border-white/[0.06] bg-black/20">
                 {files.map((f) => (
                   <div key={f.id} className="flex items-center justify-between border-b border-white/[0.04] px-2 py-1 text-[11px] text-zinc-400 last:border-0">
-                    <span className="truncate pr-2">{f.file_name}</span>
+                    <div className="min-w-0 pr-2">
+                      <div className="truncate">{f.file_name}</div>
+                      {f.source_path && f.source_path !== f.file_name && (
+                        <div className="truncate text-[10px] text-zinc-600">{f.source_path}</div>
+                      )}
+                    </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {f.has_text && (
                         <button
@@ -988,19 +1003,25 @@ async function uploadChunkQueue(
               {filePage && filePage.total > filePage.limit && (
                 <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-600">
                   <span>
-                    Showing {filePage.total === 0 ? 0 : filePage.offset + 1}-{Math.min(filePage.offset + files.length, filePage.total)} of {filePage.total}
+                    Showing {filePage.total === 0 ? 0 : currentFilePage.offset + 1}-{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
                   </span>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setFileOffset((prev) => Math.max(0, prev - filePage.limit))}
-                      disabled={filePage.offset === 0}
+                      onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
+                      disabled={filePageStack.length <= 1}
                       className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
                     >
                       Prev
                     </button>
                     <button
-                      onClick={() => setFileOffset((prev) => prev + filePage.limit)}
-                      disabled={!filePage.has_more}
+                      onClick={() => {
+                        if (!filePage.next_cursor) return;
+                        setFilePageStack((prev) => [
+                          ...prev,
+                          { cursor: filePage.next_cursor ?? null, offset: currentFilePage.offset + files.length },
+                        ]);
+                      }}
+                      disabled={!filePage.has_more || !filePage.next_cursor}
                       className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
                     >
                       Next

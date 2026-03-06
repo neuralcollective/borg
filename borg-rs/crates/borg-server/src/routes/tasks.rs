@@ -13,9 +13,39 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::{internal, TaskMessageJson, TaskOutputJson};
 use crate::AppState;
 
-use super::{internal, TaskMessageJson, TaskOutputJson};
+fn resolve_mode(state: &AppState, mode_name: &str) -> Option<PipelineMode> {
+    borg_core::modes::get_mode(mode_name).or_else(|| {
+        state
+            .db
+            .get_config("custom_modes")
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
+            .and_then(|modes| modes.into_iter().find(|m| m.name == mode_name))
+    })
+}
+
+fn revision_target_phase(
+    mode: &PipelineMode,
+    review_phase: &borg_core::types::PhaseConfig,
+) -> String {
+    if !review_phase.revision_target.trim().is_empty() {
+        return review_phase.revision_target.trim().to_string();
+    }
+    let current_idx = mode
+        .get_phase_index(&review_phase.name)
+        .unwrap_or(mode.phases.len());
+    mode.phases
+        .iter()
+        .take(current_idx)
+        .rev()
+        .find(|p| p.phase_type == PhaseType::Agent)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "implement".to_string())
+}
 
 #[derive(Deserialize)]
 pub(crate) struct CreateTaskBody {
@@ -69,7 +99,10 @@ pub(crate) async fn get_task(
         Some((task, outputs)) => {
             let outputs_json: Vec<TaskOutputJson> =
                 outputs.into_iter().map(TaskOutputJson::from).collect();
-            let structured = state.db.get_task_structured_data(task.id).unwrap_or_default();
+            let structured = state
+                .db
+                .get_task_structured_data(task.id)
+                .unwrap_or_default();
             let mut v = serde_json::to_value(&task).map_err(internal)?;
             if let Some(obj) = v.as_object_mut() {
                 obj.insert(
@@ -119,13 +152,14 @@ pub(crate) async fn get_task_diagnostics(
     Path(id): Path<i64>,
     Query(q): Query<TaskDiagnosticsQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let limit = q.limit.unwrap_or(40).clamp(10, 200);
     let outputs = state.db.get_task_outputs(id).map_err(internal)?;
-    let queue_entries = state
-        .db
-        .get_queue_entries_for_task(id)
-        .map_err(internal)?;
+    let queue_entries = state.db.get_queue_entries_for_task(id).map_err(internal)?;
     let events = state.db.list_task_events(id, limit).map_err(internal)?;
 
     let mut same_failure_streak = 0u32;
@@ -185,7 +219,13 @@ pub(crate) async fn create_task(
             .db
             .get_project(pid)
             .map_err(internal)?
-            .and_then(|p| if p.repo_path.is_empty() { None } else { Some(p.repo_path) })
+            .and_then(|p| {
+                if p.repo_path.is_empty() {
+                    None
+                } else {
+                    Some(p.repo_path)
+                }
+            })
             .unwrap_or_else(|| state.config.pipeline_repo.clone())
     } else {
         state.config.pipeline_repo.clone()
@@ -233,10 +273,17 @@ pub(crate) async fn patch_task(
     Path(id): Path<i64>,
     Json(body): Json<PatchTaskBody>,
 ) -> Result<StatusCode, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let title = body.title.as_deref().unwrap_or(&task.title);
     let desc = body.description.as_deref().unwrap_or(&task.description);
-    state.db.update_task_description(id, title, desc).map_err(internal)?;
+    state
+        .db
+        .update_task_description(id, title, desc)
+        .map_err(internal)?;
     Ok(StatusCode::OK)
 }
 
@@ -250,23 +297,36 @@ pub(crate) async fn approve_task(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
-    let mode = borg_core::modes::get_mode(&task.mode)
-        .or_else(|| {
-            state.db.get_config("custom_modes").ok().flatten()
-                .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
-                .and_then(|modes| modes.into_iter().find(|m| m.name == task.mode))
-        })
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let mode = resolve_mode(state.as_ref(), &task.mode).ok_or(StatusCode::BAD_REQUEST)?;
+    let phase = mode
+        .get_phase(&task.status)
         .ok_or(StatusCode::BAD_REQUEST)?;
-    let phase = mode.get_phase(&task.status).ok_or(StatusCode::BAD_REQUEST)?;
     if phase.phase_type != PhaseType::HumanReview {
         return Err(StatusCode::BAD_REQUEST);
     }
     let next = phase.next.clone();
-    state.db.set_review_status(id, "approved").map_err(internal)?;
-    state.db.update_task_status(id, &next, None).map_err(internal)?;
-    let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
-    let _ = state.db.log_event_full(Some(id), None, pid, "reviewer", "task.approved", &json!({}));
+    state
+        .db
+        .set_review_status(id, "approved")
+        .map_err(internal)?;
+    state
+        .db
+        .update_task_status(id, &next, None)
+        .map_err(internal)?;
+    let _ = state.db.mark_task_completed(id);
+    let pid = if task.project_id > 0 {
+        Some(task.project_id)
+    } else {
+        None
+    };
+    let _ = state
+        .db
+        .log_event_full(Some(id), None, pid, "reviewer", "task.approved", &json!({}));
     Ok(Json(json!({ "ok": true, "next_phase": next })))
 }
 
@@ -275,12 +335,35 @@ pub(crate) async fn reject_task(
     Path(id): Path<i64>,
     Json(body): Json<ReviewAction>,
 ) -> Result<Json<Value>, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
-    let reason = body.feedback.unwrap_or_else(|| "Rejected by reviewer".into());
-    state.db.set_review_status(id, "rejected").map_err(internal)?;
-    state.db.update_task_status(id, "failed", Some(&reason)).map_err(internal)?;
-    let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
-    let _ = state.db.log_event_full(Some(id), None, pid, "reviewer", "task.rejected", &json!({ "reason": reason }));
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let reason = body
+        .feedback
+        .unwrap_or_else(|| "Rejected by reviewer".into());
+    state
+        .db
+        .set_review_status(id, "rejected")
+        .map_err(internal)?;
+    state
+        .db
+        .update_task_status(id, "failed", Some(&reason))
+        .map_err(internal)?;
+    let pid = if task.project_id > 0 {
+        Some(task.project_id)
+    } else {
+        None
+    };
+    let _ = state.db.log_event_full(
+        Some(id),
+        None,
+        pid,
+        "reviewer",
+        "task.rejected",
+        &json!({ "reason": reason }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -289,33 +372,38 @@ pub(crate) async fn request_revision(
     Path(id): Path<i64>,
     Json(body): Json<ReviewAction>,
 ) -> Result<Json<Value>, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let feedback = body.feedback.unwrap_or_else(|| "Revision requested".into());
 
-    let mode = borg_core::modes::get_mode(&task.mode)
-        .or_else(|| {
-            state.db.get_config("custom_modes").ok().flatten()
-                .and_then(|raw| serde_json::from_str::<Vec<PipelineMode>>(&raw).ok())
-                .and_then(|modes| modes.into_iter().find(|m| m.name == task.mode))
-        })
+    let mode = resolve_mode(state.as_ref(), &task.mode).ok_or(StatusCode::BAD_REQUEST)?;
+    let phase = mode
+        .get_phase(&task.status)
         .ok_or(StatusCode::BAD_REQUEST)?;
-
-    let mut target_phase = "implement".to_string();
-    for p in &mode.phases {
-        if p.name == task.status {
-            break;
-        }
-        if p.phase_type == PhaseType::Agent {
-            target_phase = p.name.clone();
-        }
+    if phase.phase_type != PhaseType::HumanReview {
+        return Err(StatusCode::BAD_REQUEST);
     }
-
-    state.db.set_review_status(id, "revision_requested").map_err(internal)?;
-    state.db.increment_revision_count(id).map_err(internal)?;
-    state.db.insert_task_message(id, "user", &feedback).map_err(internal)?;
-    state.db.update_task_status(id, &target_phase, None).map_err(internal)?;
-    let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
-    let _ = state.db.log_event_full(Some(id), None, pid, "reviewer", "task.revision_requested", &json!({ "feedback": feedback }));
+    let target_phase = revision_target_phase(&mode, phase);
+    state
+        .db
+        .request_task_revision(id, &target_phase, &feedback)
+        .map_err(internal)?;
+    let pid = if task.project_id > 0 {
+        Some(task.project_id)
+    } else {
+        None
+    };
+    let _ = state.db.log_event_full(
+        Some(id),
+        None,
+        pid,
+        "reviewer",
+        "task.revision_requested",
+        &json!({ "feedback": feedback }),
+    );
     Ok(Json(json!({ "ok": true, "target_phase": target_phase })))
 }
 
@@ -323,7 +411,11 @@ pub(crate) async fn get_revision_history(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let messages = state.db.get_task_messages(id).map_err(internal)?;
     let outputs = state.db.get_task_outputs(id).map_err(internal)?;
 
@@ -398,7 +490,11 @@ pub(crate) async fn get_task_citations(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let citations = state.db.get_task_citations(id).map_err(internal)?;
     Ok(Json(json!(citations)))
 }
@@ -407,32 +503,54 @@ pub(crate) async fn verify_task_citations(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let task = state.db.get_task(id).map_err(internal)?.ok_or(StatusCode::NOT_FOUND)?;
+    let task = state
+        .db
+        .get_task(id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     state.db.delete_task_citations(id).map_err(internal)?;
 
     let repo_path = task.repo_path.clone();
     let branch = task.branch.clone();
+    let fallback_outputs = state.db.get_task_outputs(id).map_err(internal)?;
     let markdown_content = tokio::task::spawn_blocking(move || {
         let git = borg_core::git::Git::new(&repo_path);
-        let tree_result = git.exec(&repo_path, &["ls-tree", "-r", "--name-only", &branch]);
-        let files: Vec<String> = tree_result
-            .map(|r| r.stdout.lines().map(String::from).collect())
-            .unwrap_or_default();
-        files
+        let candidate_files = ["research.md", "analysis.md", "review_notes.md"];
+        let docs = candidate_files
             .into_iter()
-            .filter(|f| f.ends_with(".md"))
             .filter_map(|f| {
                 let ref_path = format!("{branch}:{f}");
                 git.exec(&repo_path, &["show", &ref_path])
                     .ok()
                     .map(|r| r.stdout)
             })
-            .collect::<Vec<String>>()
-            .join("\n\n")
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<String>>();
+        if !docs.is_empty() {
+            docs.join("\n\n")
+        } else {
+            String::new()
+        }
     })
     .await
-    .map_err(|e| { tracing::error!("spawn_blocking: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    .map_err(|e| {
+        tracing::error!("spawn_blocking: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let markdown_content = if markdown_content.trim().is_empty() {
+        fallback_outputs
+            .iter()
+            .rev()
+            .map(|o| o.output.trim())
+            .filter(|o| !o.is_empty())
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    } else {
+        markdown_content
+    };
 
     if markdown_content.is_empty() {
         return Ok(Json(json!({ "verified": 0, "citations": [] })));
@@ -459,7 +577,9 @@ pub(crate) async fn verify_task_citations(
     }
 
     let verified = results.iter().filter(|r| r.status == "verified").count();
-    Ok(Json(json!({ "verified": verified, "total": results.len(), "citations": results })))
+    Ok(Json(
+        json!({ "verified": verified, "total": results.len(), "citations": results }),
+    ))
 }
 
 pub(crate) async fn retry_task(
@@ -513,7 +633,8 @@ pub(crate) async fn unblock_task(
                 .map_err(internal)?;
             let next_phase = borg_core::modes::get_mode(&task.mode)
                 .map(|m| {
-                    m.phases.iter()
+                    m.phases
+                        .iter()
                         .find(|p| p.phase_type == PhaseType::Agent)
                         .map(|p| p.name.clone())
                         .unwrap_or_else(|| "implement".to_string())

@@ -3,7 +3,10 @@ use std::{
     ffi::CString,
     path::PathBuf,
     process::Command,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use anyhow::{Context, Result};
@@ -46,6 +49,7 @@ pub struct Pipeline {
     pub db: Arc<Db>,
     pub backends: HashMap<String, Arc<dyn AgentBackend>>,
     pub config: Arc<Config>,
+    pub ai_request_count: Arc<AtomicU64>,
     pub sandbox: Sandbox,
     pub sandbox_mode: SandboxMode,
     pub event_tx: broadcast::Sender<PipelineEvent>,
@@ -89,6 +93,25 @@ struct GithubIssue {
 }
 
 impl Pipeline {
+    fn task_ready_for_dispatch(&self, task: &Task) -> bool {
+        let Some(mode) = self.resolve_mode(&task.mode) else {
+            return false;
+        };
+        let Some(phase) = mode.get_phase(&task.status) else {
+            return false;
+        };
+        if phase.phase_type == PhaseType::HumanReview {
+            return false;
+        }
+        if let Some(wait_s) = phase.wait_s {
+            let ready_at = task.updated_at + chrono::Duration::seconds(wait_s.max(0));
+            if Utc::now() < ready_at {
+                return false;
+            }
+        }
+        true
+    }
+
     fn task_session_dir(task_id: i64) -> String {
         let rel = format!("store/sessions/task-{task_id}");
         std::fs::canonicalize(&rel)
@@ -125,6 +148,7 @@ impl Pipeline {
         sandbox_mode: SandboxMode,
         force_restart: Arc<std::sync::atomic::AtomicBool>,
         agent_network_available: bool,
+        ai_request_count: Arc<AtomicU64>,
     ) -> (Self, broadcast::Receiver<PipelineEvent>) {
         let (tx, rx) = broadcast::channel(256);
         // Capture git HEAD for each watched repo at startup (used for self-update detection)
@@ -141,6 +165,7 @@ impl Pipeline {
             db,
             backends,
             config,
+            ai_request_count,
             sandbox: Sandbox,
             sandbox_mode,
             event_tx: tx,
@@ -188,6 +213,17 @@ impl Pipeline {
             return Some(Arc::clone(b));
         }
         self.backends.values().next().map(Arc::clone)
+    }
+
+    async fn run_backend_phase(
+        &self,
+        backend: &Arc<dyn AgentBackend>,
+        task: &Task,
+        phase: &PhaseConfig,
+        ctx: PhaseContext,
+    ) -> Result<PhaseOutput> {
+        self.ai_request_count.fetch_add(1, Ordering::Relaxed);
+        backend.run_phase(task, phase, ctx).await
     }
 
     // ── Small helpers ─────────────────────────────────────────────────────
@@ -250,7 +286,9 @@ impl Pipeline {
 
     fn task_wall_timeout_s(&self) -> u64 {
         // Whole-task timeout should be materially above per-command timeouts.
-        (self.config.agent_timeout_s.max(300) as u64).saturating_mul(3).max(900)
+        (self.config.agent_timeout_s.max(300) as u64)
+            .saturating_mul(3)
+            .max(900)
     }
 
     fn retry_backoff_secs(&self, task_id: i64, attempt: i64, error: &str) -> Option<i64> {
@@ -385,17 +423,32 @@ impl Pipeline {
             &task.created_by
         };
         for provider in [
-            "lexisnexis", "lexmachina", "intelligize", "westlaw",
-            "clio", "imanage", "netdocuments", "congress", "openstates",
-            "canlii", "regulations_gov", "shovels",
-            "plaid_client_id", "plaid_secret", "plaid_env",
+            "lexisnexis",
+            "lexmachina",
+            "intelligize",
+            "westlaw",
+            "clio",
+            "imanage",
+            "netdocuments",
+            "congress",
+            "openstates",
+            "canlii",
+            "regulations_gov",
+            "shovels",
+            "plaid_client_id",
+            "plaid_secret",
+            "plaid_env",
         ] {
             if let Ok(Some(key)) = self.db.get_api_key(key_owner, provider) {
                 api_keys.insert(provider.to_string(), key);
             }
         }
-        let mut disallowed_tools = self.db.get_config("pipeline_disallowed_tools")
-            .ok().flatten().unwrap_or_default();
+        let mut disallowed_tools = self
+            .db
+            .get_config("pipeline_disallowed_tools")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let knowledge_query = format!("{} {} {}", task.title, task.description, task.task_type);
         let knowledge_files = self
             .db
@@ -404,7 +457,13 @@ impl Pipeline {
             .unwrap_or_default();
         let knowledge_dir = format!("{}/knowledge", self.config.data_dir);
         let isolated = task.mode == "lawborg" || task.mode == "legal";
-        if isolated && task.project_id > 0 && self.db.is_session_privileged(task.project_id).unwrap_or(false) {
+        if isolated
+            && task.project_id > 0
+            && self
+                .db
+                .is_session_privileged(task.project_id)
+                .unwrap_or(false)
+        {
             if !disallowed_tools.is_empty() {
                 disallowed_tools.push(',');
             }
@@ -452,7 +511,8 @@ impl Pipeline {
             let reason = format!(
                 "stuck loop detected in phase '{retry_status}' (same failure signature repeated {repeat_count}x): {error}"
             );
-            self.db.update_task_status(task.id, "blocked", Some(&reason))?;
+            self.db
+                .update_task_status(task.id, "blocked", Some(&reason))?;
             let project_id = if task.project_id > 0 {
                 Some(task.project_id)
             } else {
@@ -596,16 +656,16 @@ impl Pipeline {
             Some((prev_sig, count)) if *prev_sig == sig => {
                 *count += 1;
                 *count
-            }
+            },
             Some((prev_sig, count)) => {
                 *prev_sig = sig;
                 *count = 1;
                 1
-            }
+            },
             None => {
                 map.insert(key, (sig, 1));
                 1
-            }
+            },
         }
     }
 
@@ -623,7 +683,8 @@ impl Pipeline {
     /// Build a summary of previous failed attempts for fresh-session retries.
     fn build_retry_summary(&self, task_id: i64, current_error: &str) -> String {
         let outputs = self.db.get_task_outputs(task_id).unwrap_or_default();
-        let mut summary = String::from("FRESH RETRY — previous approaches failed. Summary of attempts:\n");
+        let mut summary =
+            String::from("FRESH RETRY — previous approaches failed. Summary of attempts:\n");
         for (i, output) in outputs.iter().rev().take(3).enumerate() {
             let truncated: String = output.output.chars().take(500).collect();
             summary.push_str(&format!(
@@ -669,9 +730,9 @@ impl Pipeline {
                 if let Some(mode) = self.resolve_mode(&task.mode) {
                     if mode.integration == IntegrationType::GitPr {
                         let branch = format!("task-{}", task.id);
-                        if let Err(e) = self
-                            .db
-                            .enqueue_or_requeue(task.id, &branch, &task.repo_path, 0)
+                        if let Err(e) =
+                            self.db
+                                .enqueue_or_requeue(task.id, &branch, &task.repo_path, 0)
                         {
                             warn!("re-enqueue orphaned done task #{}: {e}", task.id);
                         } else {
@@ -691,6 +752,9 @@ impl Pipeline {
         let mut dispatched = 0usize;
 
         for task in tasks {
+            if !self.task_ready_for_dispatch(&task) {
+                continue;
+            }
             let mut id_guard = self.in_flight.lock().await;
             if id_guard.len() >= max_agents {
                 break;
@@ -738,16 +802,14 @@ impl Pipeline {
                 };
 
                 let timeout_s = pipeline.task_wall_timeout_s();
-                let mut handle = tokio::spawn(async move {
-                    Arc::clone(&inner_pipeline).process_task(task).await
-                });
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout_s),
-                    &mut handle,
-                )
-                .await
+                let mut handle =
+                    tokio::spawn(
+                        async move { Arc::clone(&inner_pipeline).process_task(task).await },
+                    );
+                match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), &mut handle)
+                    .await
                 {
-                    Ok(Ok(Ok(()))) => {}
+                    Ok(Ok(Ok(()))) => {},
                     Ok(Ok(Err(e))) => error!("process_task #{task_id} error: {e}"),
                     Ok(Err(join_err)) => {
                         let msg = if join_err.is_panic() {
@@ -770,7 +832,7 @@ impl Pipeline {
                         ) {
                             error!("process_task #{task_id} panic recovery DB update failed: {e}");
                         }
-                    }
+                    },
                     Err(_) => {
                         handle.abort();
                         let msg = format!("task wall timeout after {timeout_s}s");
@@ -780,9 +842,11 @@ impl Pipeline {
                             &task_for_recovery.status,
                             &msg,
                         ) {
-                            error!("process_task #{task_id} timeout recovery DB update failed: {e}");
+                            error!(
+                                "process_task #{task_id} timeout recovery DB update failed: {e}"
+                            );
                         }
-                    }
+                    },
                 }
             });
         }
@@ -904,6 +968,13 @@ impl Pipeline {
             },
         };
 
+        if let Some(wait_s) = phase.wait_s {
+            let ready_at = task.updated_at + chrono::Duration::seconds(wait_s.max(0));
+            if Utc::now() < ready_at {
+                return Ok(());
+            }
+        }
+
         // Rate-limit only agent phases (spawns a Claude subprocess).
         // Setup, Validate, LintFix, and Rebase are local ops — no cooldown needed.
         if phase.phase_type == PhaseType::Agent {
@@ -946,13 +1017,14 @@ impl Pipeline {
             PhaseType::Rebase => self.run_rebase_phase(&task, &phase, &mode).await?,
             PhaseType::LintFix => self.run_lint_fix_phase(&task, &phase, &mode).await?,
             PhaseType::ComplianceCheck => {
-                self.run_compliance_check_phase(&task, &phase, &mode).await?
-            }
+                self.run_compliance_check_phase(&task, &phase, &mode)
+                    .await?
+            },
             PhaseType::HumanReview => {
                 // Task sits in this status until a human acts via the API.
                 // Do not dispatch to any backend — just return.
                 return Ok(());
-            }
+            },
             PhaseType::Purge => self.run_purge_phase(&task, &phase, &mode).await?,
         }
 
@@ -960,8 +1032,13 @@ impl Pipeline {
         if phase.next == "done" && !task.repo_path.is_empty() {
             let db = Arc::clone(&self.db);
             let embed = &self.embed_client;
-            let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
-            crate::knowledge::index_task_embeddings(&db, embed, task.id, pid, &task.repo_path).await;
+            let pid = if task.project_id > 0 {
+                Some(task.project_id)
+            } else {
+                None
+            };
+            crate::knowledge::index_task_embeddings(&db, embed, task.id, pid, &task.repo_path)
+                .await;
         }
 
         self.clear_failure_signatures(task.id);
@@ -1063,13 +1140,18 @@ impl Pipeline {
         let findings = run_compliance_pack(profile, latest_text);
         let mut report = String::new();
         report.push_str("# Compliance Check\n\n");
-        report.push_str(&format!("- Profile: `{profile}`\n- Enforcement: `{enforcement}`\n"));
+        report.push_str(&format!(
+            "- Profile: `{profile}`\n- Enforcement: `{enforcement}`\n"
+        ));
         if findings.is_empty() {
             report.push_str("\nResult: PASS. No compliance findings.\n");
         } else {
             report.push_str("\nResult: FINDINGS\n\n");
             for f in &findings {
-                report.push_str(&format!("- [{}] {} ({})\n", f.severity, f.issue, f.check_id));
+                report.push_str(&format!(
+                    "- [{}] {} ({})\n",
+                    f.severity, f.issue, f.check_id
+                ));
             }
             report.push_str("\nRecommended remediation: add a `Regulatory Considerations` section with source links and an as-of date.\n");
         }
@@ -1103,9 +1185,9 @@ impl Pipeline {
         let blocked = compliance_should_block(enforcement, &findings);
         let success = !blocked;
         let exit_code = if success { 0 } else { 1 };
-        if let Err(e) =
-            self.db
-                .insert_task_output(task.id, &phase.name, &report, "", exit_code)
+        if let Err(e) = self
+            .db
+            .insert_task_output(task.id, &phase.name, &report, "", exit_code)
         {
             warn!("task #{}: insert_task_output({}): {e}", task.id, phase.name);
         }
@@ -1159,14 +1241,19 @@ impl Pipeline {
 
         // Inject prior research from knowledge graph for lawborg tasks
         if task.mode == "lawborg" || task.mode == "legal" {
-            let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
+            let pid = if task.project_id > 0 {
+                Some(task.project_id)
+            } else {
+                None
+            };
             let query = format!("{} {}", task.title, task.description);
-            let results = crate::knowledge::get_prior_research(
-                &self.db, &self.embed_client, &query, pid, 5,
-            ).await;
-            ctx.prior_research = results.into_iter().map(|r| {
-                format!("[{}] {}", r.file_path, r.chunk_text)
-            }).collect();
+            let results =
+                crate::knowledge::get_prior_research(&self.db, &self.embed_client, &query, pid, 5)
+                    .await;
+            ctx.prior_research = results
+                .into_iter()
+                .map(|r| format!("[{}] {}", r.file_path, r.chunk_text))
+                .collect();
         }
 
         // Wire live NDJSON stream for the dashboard LiveTerminal.
@@ -1198,8 +1285,8 @@ impl Pipeline {
         {
             warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
         }
-        let result = backend
-            .run_phase(task, phase, ctx)
+        let result = self
+            .run_backend_phase(&backend, task, phase, ctx)
             .await
             .unwrap_or_else(|e| {
                 error!("backend.run_phase for task #{}: {e}", task.id);
@@ -1296,11 +1383,7 @@ impl Pipeline {
 
         if let Some(ref artifact) = phase.check_artifact {
             if !crate::ipc::check_artifact(&work_dir, artifact) {
-                self.fail_or_retry(
-                    task,
-                    &phase.name,
-                    &format!("missing artifact: {artifact}"),
-                )?;
+                self.fail_or_retry(task, &phase.name, &format!("missing artifact: {artifact}"))?;
                 return Ok(());
             }
         }
@@ -1308,10 +1391,7 @@ impl Pipeline {
         if phase.compile_check && !test_cmd.is_empty() {
             if let Some(check_cmd) = derive_compile_check(&test_cmd) {
                 let out = if result.ran_in_docker {
-                    container_result_as_test_output(
-                        &result.container_test_results,
-                        "compileCheck",
-                    )
+                    container_result_as_test_output(&result.container_test_results, "compileCheck")
                 } else {
                     match self
                         .run_test_command_for_task(task, &work_dir, &check_cmd)
@@ -1401,7 +1481,10 @@ impl Pipeline {
         let session_dir = format!("{}/sessions/task-{}", self.config.data_dir, task.id);
         if let Err(e) = std::fs::remove_dir_all(&session_dir) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("task #{} failed to remove session dir {}: {}", task.id, session_dir, e);
+                warn!(
+                    "task #{} failed to remove session dir {}: {}",
+                    task.id, session_dir, e
+                );
             }
         }
 
@@ -1409,7 +1492,10 @@ impl Pipeline {
         if task.repo_path.contains(".worktrees") {
             if let Err(e) = std::fs::remove_dir_all(&task.repo_path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    warn!("task #{} failed to remove worktree {}: {}", task.id, task.repo_path, e);
+                    warn!(
+                        "task #{} failed to remove worktree {}: {}",
+                        task.id, task.repo_path, e
+                    );
                 }
             }
         }
@@ -1442,7 +1528,8 @@ impl Pipeline {
             let out = if use_docker {
                 self.run_test_in_container(task, &check_cmd).await?
             } else {
-                self.run_test_command_for_task(task, &work_dir, &check_cmd).await?
+                self.run_test_command_for_task(task, &work_dir, &check_cmd)
+                    .await?
             };
             if out.exit_code != 0 {
                 let error_msg = format!("{}\n{}", out.stdout, out.stderr);
@@ -1519,7 +1606,12 @@ impl Pipeline {
     }
 
     /// Rebase: try GitHub update-branch API first; on conflict spawn a Docker agent.
-    async fn run_rebase_phase_docker(&self, task: &Task, phase: &PhaseConfig, mode: &PipelineMode) -> Result<()> {
+    async fn run_rebase_phase_docker(
+        &self,
+        task: &Task,
+        phase: &PhaseConfig,
+        mode: &PipelineMode,
+    ) -> Result<()> {
         let repo = self.repo_config(task);
         if repo.repo_slug.is_empty() {
             warn!("task #{} rebase: no repo_slug, skipping", task.id);
@@ -1531,20 +1623,25 @@ impl Pipeline {
         let slug = &repo.repo_slug;
 
         // Find the PR number for this branch
-        let pr_num_out = self.gh(&[
-            "pr", "view", &branch, "--repo", slug,
-            "--json", "number", "--jq", ".number",
-        ]).await;
+        let pr_num_out = self
+            .gh(&[
+                "pr", "view", &branch, "--repo", slug, "--json", "number", "--jq", ".number",
+            ])
+            .await;
         let pr_num = pr_num_out
             .ok()
             .filter(|o| o.exit_code == 0)
             .and_then(|o| o.stdout.trim().parse::<u64>().ok());
 
         if let Some(num) = pr_num {
-            let update_out = self.gh(&[
-                "api", "-X", "PUT",
-                &format!("repos/{slug}/pulls/{num}/update-branch"),
-            ]).await;
+            let update_out = self
+                .gh(&[
+                    "api",
+                    "-X",
+                    "PUT",
+                    &format!("repos/{slug}/pulls/{num}/update-branch"),
+                ])
+                .await;
             match update_out {
                 Ok(o) if o.exit_code == 0 => {
                     info!("task #{} rebase: update-branch succeeded", task.id);
@@ -1554,22 +1651,29 @@ impl Pipeline {
                 Ok(o) => {
                     let err = o.stderr.trim().chars().take(300).collect::<String>();
                     let err_lc = err.to_ascii_lowercase();
-                    if err_lc.contains("expected head sha")
-                        || err_lc.contains("head ref")
-                    {
+                    if err_lc.contains("expected head sha") || err_lc.contains("head ref") {
                         // GitHub branch-tip race; retry on next tick instead of spawning an agent.
-                        info!("task #{} rebase: head SHA race, will retry update-branch on next tick", task.id);
+                        info!(
+                            "task #{} rebase: head SHA race, will retry update-branch on next tick",
+                            task.id
+                        );
                         return Ok(());
                     }
                     if err_lc.contains("could not resolve host")
                         || err_lc.contains("temporary failure in name resolution")
                         || err_lc.contains("network is unreachable")
                     {
-                        warn!("task #{} rebase: GitHub DNS/network unavailable; skipping agent spawn", task.id);
+                        warn!(
+                            "task #{} rebase: GitHub DNS/network unavailable; skipping agent spawn",
+                            task.id
+                        );
                         self.fail_or_retry(task, "rebase", &err)?;
                         return Ok(());
                     }
-                    warn!("task #{} rebase: update-branch failed, spawning agent: {err}", task.id);
+                    warn!(
+                        "task #{} rebase: update-branch failed, spawning agent: {err}",
+                        task.id
+                    );
                 },
                 Err(e) => {
                     let es = e.to_string();
@@ -1578,11 +1682,17 @@ impl Pipeline {
                         || err_lc.contains("temporary failure in name resolution")
                         || err_lc.contains("network is unreachable")
                     {
-                        warn!("task #{} rebase: GitHub DNS/network unavailable; skipping agent spawn", task.id);
+                        warn!(
+                            "task #{} rebase: GitHub DNS/network unavailable; skipping agent spawn",
+                            task.id
+                        );
                         self.fail_or_retry(task, "rebase", &es)?;
                         return Ok(());
                     }
-                    warn!("task #{} rebase: update-branch error, spawning agent: {e}", task.id);
+                    warn!(
+                        "task #{} rebase: update-branch error, spawning agent: {e}",
+                        task.id
+                    );
                 },
             }
         } else {
@@ -1682,12 +1792,7 @@ impl Pipeline {
         let tmp_env = self.pipeline_tmp_dir().to_string_lossy().to_string();
 
         let clone = tokio::process::Command::new("git")
-            .args([
-                "clone",
-                "--no-tags",
-                &task.repo_path,
-                &work_dir_s,
-            ])
+            .args(["clone", "--no-tags", &task.repo_path, &work_dir_s])
             .env("TMPDIR", &tmp_env)
             .output()
             .await
@@ -1799,7 +1904,11 @@ impl Pipeline {
         }
 
         if let Err(e) = self.verify_rebased_branch(task, slug, branch).await {
-            self.fail_or_retry(task, "rebase", &format!("post-rebase verification failed: {e}"))?;
+            self.fail_or_retry(
+                task,
+                "rebase",
+                &format!("post-rebase verification failed: {e}"),
+            )?;
             return Ok(());
         }
 
@@ -1858,11 +1967,11 @@ and report what went wrong.",
                 warn!("task #{} rebase: no backend available", task.id);
                 self.fail_or_retry(task, "rebase", "no agent backend")?;
                 return Ok(());
-            }
+            },
         };
 
-        let result = backend
-            .run_phase(task, &rebase_phase, ctx)
+        let result = self
+            .run_backend_phase(&backend, task, &rebase_phase, ctx)
             .await
             .unwrap_or_else(|e| {
                 error!("rebase agent for task #{}: {e}", task.id);
@@ -1874,7 +1983,13 @@ and report what went wrong.",
         }
 
         self.db
-            .insert_task_output(task.id, "rebase_fix", &result.output, &result.raw_stream, if result.success { 0 } else { 1 })
+            .insert_task_output(
+                task.id,
+                "rebase_fix",
+                &result.output,
+                &result.raw_stream,
+                if result.success { 0 } else { 1 },
+            )
             .ok();
 
         if result.success {
@@ -1891,13 +2006,9 @@ and report what went wrong.",
                         "task #{} rebase: compile check failed after rebase, retrying",
                         task.id
                     );
-                    self.db.insert_task_output(
-                        task.id,
-                        "rebase_compile_fail",
-                        &errors,
-                        "",
-                        1,
-                    ).ok();
+                    self.db
+                        .insert_task_output(task.id, "rebase_compile_fail", &errors, "", 1)
+                        .ok();
                     self.fail_or_retry(
                         task,
                         "rebase",
@@ -1921,7 +2032,10 @@ and report what went wrong.",
             info!("task #{} rebase: agent resolved conflicts", task.id);
             self.advance_phase(task, phase, mode)?;
         } else {
-            warn!("task #{} rebase: agent failed to resolve conflicts", task.id);
+            warn!(
+                "task #{} rebase: agent failed to resolve conflicts",
+                task.id
+            );
             self.fail_or_retry(task, "rebase", &result.output)?;
         }
 
@@ -2004,7 +2118,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     {
                         warn!("task #{}: write_pipeline_state_snapshot: {e}", task.id);
                     }
-                    b.run_phase(task, &fix_phase, ctx)
+                    self.run_backend_phase(&b, task, &fix_phase, ctx)
                         .await
                         .unwrap_or_else(|e| {
                             error!("lint-fix agent for task #{}: {e}", task.id);
@@ -2072,16 +2186,14 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let mut errors = initial_errors.to_string();
 
         for attempt in 0..2u32 {
-            info!(
-                "task #{} compile_fix: attempt {}",
-                task.id,
-                attempt + 1
-            );
+            info!("task #{} compile_fix: attempt {}", task.id, attempt + 1);
 
             let fix_phase = PhaseConfig {
                 name: format!("compile_fix_{attempt}"),
                 label: "Compile Fix".into(),
-                system_prompt: "You are a compile-error fix agent. Fix compile errors with minimal changes.".into(),
+                system_prompt:
+                    "You are a compile-error fix agent. Fix compile errors with minimal changes."
+                        .into(),
                 instruction: format!(
                     "The code does not compile. Fix the compile errors below.\n\
                      Make only the minimal changes needed to fix the errors.\n\
@@ -2096,13 +2208,17 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 ..PhaseConfig::default()
             };
 
-            let ctx = self.make_context(task, work_dir.to_string(), session_dir.clone(), Vec::new());
+            let ctx =
+                self.make_context(task, work_dir.to_string(), session_dir.clone(), Vec::new());
 
             let result = match self.resolve_backend(task) {
-                Some(b) => b.run_phase(task, &fix_phase, ctx).await.unwrap_or_else(|e| {
-                    error!("compile-fix agent for task #{}: {e}", task.id);
-                    PhaseOutput::failed(String::new())
-                }),
+                Some(b) => self
+                    .run_backend_phase(&b, task, &fix_phase, ctx)
+                    .await
+                    .unwrap_or_else(|e| {
+                        error!("compile-fix agent for task #{}: {e}", task.id);
+                        PhaseOutput::failed(String::new())
+                    }),
                 None => return Ok(false),
             };
 
@@ -2124,9 +2240,16 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             let msg = Self::with_user_coauthor("fix: compile errors", &user_coauthor);
             let _ = git.commit_all(work_dir, &msg, self.git_author());
 
-            match self.run_test_command_for_task(task, work_dir, check_cmd).await {
+            match self
+                .run_test_command_for_task(task, work_dir, check_cmd)
+                .await
+            {
                 Ok(ref out) if out.exit_code == 0 => {
-                    info!("task #{} compile_fix: resolved after {} attempt(s)", task.id, attempt + 1);
+                    info!(
+                        "task #{} compile_fix: resolved after {} attempt(s)",
+                        task.id,
+                        attempt + 1
+                    );
                     return Ok(true);
                 },
                 Ok(ref out) => {
@@ -2155,8 +2278,19 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
             self.db.update_task_status(task.id, "done", Some(""))?;
             let _ = self.db.mark_task_completed(task.id);
-            let pid = if task.project_id > 0 { Some(task.project_id) } else { None };
-            let _ = self.db.log_event_full(Some(task.id), None, pid, "pipeline", "task.completed", &serde_json::json!({ "title": task.title }));
+            let pid = if task.project_id > 0 {
+                Some(task.project_id)
+            } else {
+                None
+            };
+            let _ = self.db.log_event_full(
+                Some(task.id),
+                None,
+                pid,
+                "pipeline",
+                "task.completed",
+                &serde_json::json!({ "title": task.title }),
+            );
             match mode.integration {
                 IntegrationType::GitPr => {
                     let branch = format!("task-{}", task.id);
@@ -2168,11 +2302,11 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     } else {
                         info!("task #{} done, queued for integration", task.id);
                     }
-                }
+                },
                 IntegrationType::GitBranch => {
                     info!("task #{} done, branch preserved", task.id);
-                }
-                IntegrationType::None => {}
+                },
+                IntegrationType::None => {},
             }
         } else {
             self.db.update_task_status(task.id, next, Some(""))?;
@@ -2223,12 +2357,21 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     }
 
     fn read_structured_output(&self, task: &Task) {
-        if task.repo_path.is_empty() { return; }
+        if task.repo_path.is_empty() {
+            return;
+        }
         let branch = format!("task-{}", task.id);
         let path = std::path::Path::new(&task.repo_path);
-        if !path.join(".git").exists() { return; }
+        if !path.join(".git").exists() {
+            return;
+        }
         let out = std::process::Command::new("git")
-            .args(["-C", &task.repo_path, "show", &format!("{branch}:structured.json")])
+            .args([
+                "-C",
+                &task.repo_path,
+                "show",
+                &format!("{branch}:structured.json"),
+            ])
             .stderr(std::process::Stdio::null())
             .output();
         if let Ok(output) = out {
@@ -2238,8 +2381,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 if !trimmed.is_empty() {
                     let merged = match self.db.get_task_structured_data(task.id) {
                         Ok(existing_raw) => {
-                            let mut existing = serde_json::from_str::<serde_json::Value>(&existing_raw)
-                                .unwrap_or_else(|_| serde_json::json!({}));
+                            let mut existing =
+                                serde_json::from_str::<serde_json::Value>(&existing_raw)
+                                    .unwrap_or_else(|_| serde_json::json!({}));
                             let fresh = serde_json::from_str::<serde_json::Value>(trimmed)
                                 .unwrap_or_else(|_| serde_json::json!({}));
                             if existing.is_object() && fresh.is_object() {
@@ -2249,20 +2393,25 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                                     for (k, v) in fresh_obj {
                                         existing_obj.insert(k.clone(), v.clone());
                                     }
-                                    serde_json::to_string(&existing).unwrap_or_else(|_| trimmed.to_string())
+                                    serde_json::to_string(&existing)
+                                        .unwrap_or_else(|_| trimmed.to_string())
                                 } else {
                                     trimmed.to_string()
                                 }
                             } else {
                                 trimmed.to_string()
                             }
-                        }
+                        },
                         Err(_) => trimmed.to_string(),
                     };
                     if let Err(e) = self.db.update_task_structured_data(task.id, &merged) {
                         tracing::warn!("task #{}: failed to save structured data: {e}", task.id);
                     } else {
-                        tracing::info!("task #{}: saved structured output ({} bytes)", task.id, trimmed.len());
+                        tracing::info!(
+                            "task #{}: saved structured output ({} bytes)",
+                            task.id,
+                            trimmed.len()
+                        );
                     }
                 }
             }
@@ -2270,12 +2419,21 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     }
 
     fn read_task_deadlines(&self, task: &Task) {
-        if task.repo_path.is_empty() || task.project_id == 0 { return; }
+        if task.repo_path.is_empty() || task.project_id == 0 {
+            return;
+        }
         let branch = format!("task-{}", task.id);
         let path = std::path::Path::new(&task.repo_path);
-        if !path.join(".git").exists() { return; }
+        if !path.join(".git").exists() {
+            return;
+        }
         let out = std::process::Command::new("git")
-            .args(["-C", &task.repo_path, "show", &format!("{branch}:deadlines.json")])
+            .args([
+                "-C",
+                &task.repo_path,
+                "show",
+                &format!("{branch}:deadlines.json"),
+            ])
             .stderr(std::process::Stdio::null())
             .output();
         if let Ok(output) = out {
@@ -2283,11 +2441,24 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 let data = String::from_utf8_lossy(&output.stdout);
                 if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(data.trim()) {
                     for item in items {
-                        let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("Deadline");
-                        let due = item.get("due_date").or_else(|| item.get("date")).and_then(|v| v.as_str()).unwrap_or("");
-                        let basis = item.get("rule_basis").and_then(|v| v.as_str()).unwrap_or("");
-                        if due.is_empty() { continue; }
-                        if let Err(e) = self.db.insert_deadline(task.project_id, label, due, basis) {
+                        let label = item
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Deadline");
+                        let due = item
+                            .get("due_date")
+                            .or_else(|| item.get("date"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let basis = item
+                            .get("rule_basis")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if due.is_empty() {
+                            continue;
+                        }
+                        if let Err(e) = self.db.insert_deadline(task.project_id, label, due, basis)
+                        {
                             tracing::warn!("task #{}: failed to insert deadline: {e}", task.id);
                         }
                     }
@@ -2298,13 +2469,24 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     }
 
     fn index_task_documents(&self, task: &Task) {
-        if task.repo_path.is_empty() || task.project_id == 0 { return; }
+        if task.repo_path.is_empty() || task.project_id == 0 {
+            return;
+        }
         let branch = format!("task-{}", task.id);
         let path = std::path::Path::new(&task.repo_path);
-        if !path.join(".git").exists() { return; }
+        if !path.join(".git").exists() {
+            return;
+        }
         // List .md files on the task branch
         let out = std::process::Command::new("git")
-            .args(["-C", &task.repo_path, "ls-tree", "-r", "--name-only", &branch])
+            .args([
+                "-C",
+                &task.repo_path,
+                "ls-tree",
+                "-r",
+                "--name-only",
+                &branch,
+            ])
             .stderr(std::process::Stdio::null())
             .output();
         let files = match out {
@@ -2315,7 +2497,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let _ = self.db.fts_remove_task(task.id);
         let mut count = 0;
         for file in files.lines() {
-            if !file.ends_with(".md") { continue; }
+            if !file.ends_with(".md") {
+                continue;
+            }
             let show = std::process::Command::new("git")
                 .args(["-C", &task.repo_path, "show", &format!("{branch}:{file}")])
                 .stderr(std::process::Stdio::null())
@@ -2323,8 +2507,16 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             if let Ok(o) = show {
                 if o.status.success() {
                     let content = String::from_utf8_lossy(&o.stdout);
-                    let title = content.lines().next().unwrap_or(file).trim_start_matches('#').trim();
-                    if let Err(e) = self.db.fts_index_document(task.project_id, task.id, file, title, &content) {
+                    let title = content
+                        .lines()
+                        .next()
+                        .unwrap_or(file)
+                        .trim_start_matches('#')
+                        .trim();
+                    if let Err(e) =
+                        self.db
+                            .fts_index_document(task.project_id, task.id, file, title, &content)
+                    {
                         tracing::warn!("task #{}: FTS index failed for {file}: {e}", task.id);
                     } else {
                         count += 1;
@@ -2449,7 +2641,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .output(),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("run_test_command timed out after {}s: {cmd}", timeout.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "run_test_command timed out after {}s: {cmd}",
+                timeout.as_secs()
+            )
+        })?
         .context("run test command")?;
 
         Ok(TestOutput {
@@ -2486,9 +2683,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 "git clone --depth 1 --single-branch --reference {container_mirror_q} {repo_url_q} /workspace/repo"
             )
         } else {
-            format!(
-                "git clone --depth 1 --single-branch {repo_url_q} /workspace/repo"
-            )
+            format!("git clone --depth 1 --single-branch {repo_url_q} /workspace/repo")
         };
         let bash_script = format!(
             "set -e; {clone_cmd} && cd /workspace/repo && git checkout {branch_q} && {cmd_q}"
@@ -2504,8 +2699,14 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             .map(|(h, c, ro)| (h.as_str(), c.as_str(), *ro))
             .collect();
         let volumes_owned: Vec<(String, String)> = vec![
-            (format!("borg-cache-{repo_name}-target"), "/workspace/repo/target".to_string()),
-            (format!("borg-cache-{repo_name}-cargo-registry"), "/home/bun/.cargo/registry".to_string()),
+            (
+                format!("borg-cache-{repo_name}-target"),
+                "/workspace/repo/target".to_string(),
+            ),
+            (
+                format!("borg-cache-{repo_name}-cargo-registry"),
+                "/home/bun/.cargo/registry".to_string(),
+            ),
         ];
         let volumes_ref: Vec<(&str, &str)> = volumes_owned
             .iter()
@@ -2534,7 +2735,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             .output(),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("run_test_in_container timed out after {}s", timeout.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "run_test_in_container timed out after {}s",
+                timeout.as_secs()
+            )
+        })?
         .context("run_test_in_container")?;
 
         Ok(TestOutput {
@@ -2543,8 +2749,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             exit_code: output.status.code().unwrap_or(1),
         })
     }
-
-
 
     // ── Integration merge ─────────────────────────────────────────────────
 
@@ -2592,8 +2796,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
 
     /// Run a `gh` command without a working directory.
     async fn gh(&self, args: &[&str]) -> Result<TestOutput> {
-        let timeout =
-            std::time::Duration::from_secs(self.config.agent_timeout_s.max(300) as u64);
+        let timeout = std::time::Duration::from_secs(self.config.agent_timeout_s.max(300) as u64);
         let output = tokio::time::timeout(
             timeout,
             tokio::process::Command::new("gh").args(args).output(),
@@ -2685,10 +2888,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                             ".status",
                         ])
                         .await;
-                    if cmp
-                        .map(|r| r.stdout.trim() == "identical")
-                        .unwrap_or(false)
-                    {
+                    if cmp.map(|r| r.stdout.trim() == "identical").unwrap_or(false) {
                         info!(
                             "Task #{} {}: identical to main, marking merged",
                             entry.task_id, entry.branch
@@ -2722,7 +2922,10 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                             .ok()
                             .filter(|o| o.exit_code == 0);
                         if reopened.is_some() {
-                            info!("Task #{} {}: reopened closed PR #{}", entry.task_id, entry.branch, num);
+                            info!(
+                                "Task #{} {}: reopened closed PR #{}",
+                                entry.task_id, entry.branch, num
+                            );
                             continue;
                         }
                     }
@@ -2745,7 +2948,10 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .await;
             let view_out = match view_out {
                 Ok(o) => o,
-                Err(e) => { warn!("gh pr view {}: {e}", entry.branch); continue; }
+                Err(e) => {
+                    warn!("gh pr view {}: {e}", entry.branch);
+                    continue;
+                },
             };
             if view_out.exit_code == 0 && !view_out.stdout.trim().is_empty() {
                 let mut parts = view_out.stdout.split_whitespace();
@@ -2795,7 +3001,10 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                 .await;
             let create_out = match create_out {
                 Ok(o) => o,
-                Err(e) => { warn!("gh pr create {}: {e}", entry.branch); continue; }
+                Err(e) => {
+                    warn!("gh pr create {}: {e}", entry.branch);
+                    continue;
+                },
             };
 
             if create_out.exit_code != 0 {
@@ -2839,16 +3048,23 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             // producing an identical file tree to what the compile check tested.
             // If any other PR was merged since the rebase, behind_by > 0 and we
             // send the branch back to rebase rather than risk a corrupted merge.
-            let candidate = live.iter().find(|e| {
-                !excluded_ids.contains(&e.id) && !freshly_created.contains(&e.id)
-            });
+            let candidate = live
+                .iter()
+                .find(|e| !excluded_ids.contains(&e.id) && !freshly_created.contains(&e.id));
 
             if let Some(entry) = candidate {
                 // Check if PR is already merged (picked up from a prior run)
                 let state_check = self
                     .gh(&[
-                        "pr", "view", &entry.branch, "--repo", slug,
-                        "--json", "state", "--jq", ".state",
+                        "pr",
+                        "view",
+                        &entry.branch,
+                        "--repo",
+                        slug,
+                        "--json",
+                        "state",
+                        "--jq",
+                        ".state",
                     ])
                     .await;
                 let pr_state = state_check
@@ -2869,11 +3085,9 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                     let compare = self
                         .gh(&[
                             "api",
-                            &format!(
-                                "repos/{slug}/compare/main...{}",
-                                entry.branch
-                            ),
-                            "--jq", ".behind_by",
+                            &format!("repos/{slug}/compare/main...{}", entry.branch),
+                            "--jq",
+                            ".behind_by",
                         ])
                         .await;
                     let behind_by: u64 = compare
@@ -2897,16 +3111,14 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         // behind_by == 0 → safe to fast-forward merge
                         self.db.update_queue_status(entry.id, "merging")?;
                         let merge_out = self
-                            .gh(&[
-                                "pr", "merge", &entry.branch, "--repo", slug, "--merge",
-                            ])
+                            .gh(&["pr", "merge", &entry.branch, "--repo", slug, "--merge"])
                             .await;
 
                         match merge_out {
                             Err(e) => {
                                 warn!("gh pr merge {}: {e}", entry.branch);
                                 self.db.update_queue_status(entry.id, "queued")?;
-                            }
+                            },
                             Ok(out) if out.exit_code != 0 => {
                                 let err = &out.stderr[..out.stderr.len().min(200)];
                                 warn!("gh pr merge {}: {}", entry.branch, err);
@@ -2918,36 +3130,22 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                                         "excluded",
                                         "merge conflict with main",
                                     )?;
-                                    self.db.update_task_status(
-                                        entry.task_id,
-                                        "rebase",
-                                        None,
-                                    )?;
-                                    info!(
-                                        "Task #{} has conflicts, sent to rebase",
-                                        entry.task_id
-                                    );
+                                    self.db.update_task_status(entry.task_id, "rebase", None)?;
+                                    info!("Task #{} has conflicts, sent to rebase", entry.task_id);
                                 } else {
                                     self.db.update_queue_status(entry.id, "queued")?;
                                 }
-                            }
+                            },
                             Ok(_) => {
                                 self.db.update_queue_status(entry.id, "merged")?;
-                                self.db.update_task_status(
-                                    entry.task_id,
-                                    "merged",
-                                    None,
-                                )?;
+                                self.db.update_task_status(entry.task_id, "merged", None)?;
                                 merged_branches.push(entry.branch.clone());
                                 let _ = self
                                     .gh(&[
                                         "api",
                                         "-X",
                                         "DELETE",
-                                        &format!(
-                                            "repos/{slug}/git/refs/heads/{}",
-                                            entry.branch
-                                        ),
+                                        &format!("repos/{slug}/git/refs/heads/{}", entry.branch),
                                     ])
                                     .await;
                                 if let Ok(Some(task)) = self.db.get_task(entry.task_id) {
@@ -2959,7 +3157,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                                         ),
                                     );
                                 }
-                            }
+                            },
                         }
                     }
                 }
@@ -3237,13 +3435,13 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             session_id: String::new(),
             mode: mode_name.to_string(),
             backend: String::new(),
-                project_id: 0,
-                task_type: String::new(),
-                started_at: None,
-                completed_at: None,
-                duration_secs: None,
-                review_status: None,
-                revision_count: 0,
+            project_id: 0,
+            task_type: String::new(),
+            started_at: None,
+            completed_at: None,
+            duration_secs: None,
+            review_status: None,
+            revision_count: 0,
         };
 
         let task_suffix =
@@ -3290,7 +3488,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let backend = self
             .resolve_backend(&task)
             .ok_or_else(|| anyhow::anyhow!("no backends configured for seed"))?;
-        let result = backend.run_phase(&task, &phase, ctx).await?;
+        let result = self.run_backend_phase(&backend, &task, &phase, ctx).await?;
 
         if !result.success {
             warn!(
@@ -3347,13 +3545,13 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         session_id: String::new(),
                         mode: mode_name.to_string(),
                         backend: String::new(),
-                project_id: 0,
-                task_type: String::new(),
-                started_at: None,
-                completed_at: None,
-                duration_secs: None,
-                review_status: None,
-                revision_count: 0,
+                        project_id: 0,
+                        task_type: String::new(),
+                        started_at: None,
+                        completed_at: None,
+                        duration_secs: None,
+                        review_status: None,
+                        revision_count: 0,
                     };
                     match self.db.insert_task(&task) {
                         Ok(id) => info!("seed created task #{id}: {}", task.title),
@@ -3433,8 +3631,7 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                         .output()
                         .await;
                     match out {
-                        Ok(o) if o.status.success() =>
-                            info!("mirrored {path} → {mirror}"),
+                        Ok(o) if o.status.success() => info!("mirrored {path} → {mirror}"),
                         Ok(o) => warn!(
                             "git clone --mirror failed for {path}: {}",
                             String::from_utf8_lossy(&o.stderr).trim()
@@ -3479,16 +3676,18 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             },
         };
         for p in proposals {
-            let repo_cfg = self.config.watched_repos.iter().find(|r| r.path == p.repo_path);
+            let repo_cfg = self
+                .config
+                .watched_repos
+                .iter()
+                .find(|r| r.path == p.repo_path);
             // Only auto-promote for repos that allow auto-merge
             if let Some(repo) = repo_cfg {
                 if !repo.auto_merge {
                     continue;
                 }
             }
-            let mode = repo_cfg
-                .map(|r| r.mode.as_str())
-                .unwrap_or("sweborg");
+            let mode = repo_cfg.map(|r| r.mode.as_str()).unwrap_or("sweborg");
             let task = crate::types::Task {
                 id: 0,
                 title: p.title.clone(),
@@ -3651,22 +3850,28 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     async fn maybe_prune_cache_volumes(&self) {
         const PRUNE_INTERVAL_S: i64 = 24 * 3600;
         let now = chrono::Utc::now().timestamp();
-        let last = self.last_cache_prune_secs.load(std::sync::atomic::Ordering::Relaxed);
+        let last = self
+            .last_cache_prune_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
         if now - last < PRUNE_INTERVAL_S {
             return;
         }
-        self.last_cache_prune_secs.store(now, std::sync::atomic::Ordering::Relaxed);
+        self.last_cache_prune_secs
+            .store(now, std::sync::atomic::Ordering::Relaxed);
         Sandbox::prune_stale_cache_volumes(7).await;
     }
 
     async fn maybe_prune_session_dirs(&self) {
         const PRUNE_INTERVAL_S: i64 = 3600;
         let now = chrono::Utc::now().timestamp();
-        let last = self.last_session_prune_secs.load(std::sync::atomic::Ordering::Relaxed);
+        let last = self
+            .last_session_prune_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
         if now - last < PRUNE_INTERVAL_S {
             return;
         }
-        self.last_session_prune_secs.store(now, std::sync::atomic::Ordering::Relaxed);
+        self.last_session_prune_secs
+            .store(now, std::sync::atomic::Ordering::Relaxed);
 
         let max_age_secs = self.config.session_max_age_hours * 3600;
         if max_age_secs <= 0 {
@@ -3841,11 +4046,14 @@ fn container_result_as_test_output(
     results: &[ContainerTestResult],
     phase: &str,
 ) -> Option<TestOutput> {
-    results.iter().find(|r| r.phase == phase).map(|r| TestOutput {
-        stdout: r.output.clone(),
-        stderr: String::new(),
-        exit_code: r.exit_code,
-    })
+    results
+        .iter()
+        .find(|r| r.phase == phase)
+        .map(|r| TestOutput {
+            stdout: r.output.clone(),
+            stderr: String::new(),
+            exit_code: r.exit_code,
+        })
 }
 
 fn extract_blocks(text: &str, start_marker: &str, end_marker: &str) -> Vec<String> {
@@ -4011,7 +4219,7 @@ fn run_compliance_pack(profile: &str, text: &str) -> Vec<ComplianceFinding> {
                     as_of: as_of.clone(),
                 });
             }
-        }
+        },
         "us_prof_resp" => {
             if !(lower.contains("model rule")
                 || lower.contains("professional conduct")
@@ -4025,7 +4233,7 @@ fn run_compliance_pack(profile: &str, text: &str) -> Vec<ComplianceFinding> {
                     as_of: as_of.clone(),
                 });
             }
-        }
+        },
         _ => {
             findings.push(ComplianceFinding {
                 check_id: "profile_supported".into(),
@@ -4036,7 +4244,7 @@ fn run_compliance_pack(profile: &str, text: &str) -> Vec<ComplianceFinding> {
                 source_url: "".into(),
                 as_of,
             });
-        }
+        },
     }
 
     findings
@@ -4071,7 +4279,9 @@ fn extract_field(block: &str, field: &str) -> Option<String> {
     None
 }
 
-fn parse_triage_item(item: &serde_json::Value) -> Option<(i64, i64, i64, i64, i64, i64, &str, bool)> {
+fn parse_triage_item(
+    item: &serde_json::Value,
+) -> Option<(i64, i64, i64, i64, i64, i64, &str, bool)> {
     let get_i64 = |k: &str| item.get(k).and_then(|v| v.as_i64());
     let p_id = get_i64("id")?;
     let impact = get_i64("impact")?;
@@ -4080,8 +4290,20 @@ fn parse_triage_item(item: &serde_json::Value) -> Option<(i64, i64, i64, i64, i6
     let effort = get_i64("effort")?;
     let score = get_i64("score")?;
     let reasoning = item.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
-    let should_dismiss = item.get("dismiss").and_then(|v| v.as_bool()).unwrap_or(false);
-    Some((p_id, impact, feasibility, risk, effort, score, reasoning, should_dismiss))
+    let should_dismiss = item
+        .get("dismiss")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Some((
+        p_id,
+        impact,
+        feasibility,
+        risk,
+        effort,
+        score,
+        reasoning,
+        should_dismiss,
+    ))
 }
 
 /// Collect session directory paths under `sessions_dir` that are stale and
@@ -4127,7 +4349,7 @@ pub fn collect_stale_session_dirs(
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| now_secs.saturating_sub(d.as_secs() as i64))
                     .unwrap_or(max_age_secs + 1) // unknown age → treat as stale
-            }
+            },
         };
         if age_secs >= max_age_secs {
             stale.push(entry.path());
@@ -4150,9 +4372,14 @@ fn looks_like_field_key(line: &str) -> bool {
 
 #[cfg(test)]
 mod seeding_toctou_tests {
-    use std::collections::HashSet;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::{
+        collections::HashSet,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+
     use tokio::sync::Mutex;
 
     /// Replicates the fixed "check-and-set" logic so we can test it in
@@ -4178,8 +4405,14 @@ mod seeding_toctou_tests {
 
         let activated = try_activate_seeding(&in_flight, &seeding_active).await;
 
-        assert!(!activated, "should not activate seeding while tasks are in-flight");
-        assert!(!seeding_active.load(Ordering::Acquire), "seeding_active must stay false");
+        assert!(
+            !activated,
+            "should not activate seeding while tasks are in-flight"
+        );
+        assert!(
+            !seeding_active.load(Ordering::Acquire),
+            "seeding_active must stay false"
+        );
     }
 
     #[tokio::test]
@@ -4189,8 +4422,14 @@ mod seeding_toctou_tests {
 
         let activated = try_activate_seeding(&in_flight, &seeding_active).await;
 
-        assert!(activated, "should activate seeding when no tasks are in-flight");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must be set to true");
+        assert!(
+            activated,
+            "should activate seeding when no tasks are in-flight"
+        );
+        assert!(
+            seeding_active.load(Ordering::Acquire),
+            "seeding_active must be set to true"
+        );
     }
 
     #[tokio::test]
@@ -4201,7 +4440,10 @@ mod seeding_toctou_tests {
         let activated = try_activate_seeding(&in_flight, &seeding_active).await;
 
         assert!(!activated, "CAS must fail when seeding is already active");
-        assert!(seeding_active.load(Ordering::Acquire), "seeding_active must remain true");
+        assert!(
+            seeding_active.load(Ordering::Acquire),
+            "seeding_active must remain true"
+        );
     }
 
     /// Regression: the in_flight lock must be held during the CAS.
@@ -4228,6 +4470,9 @@ mod seeding_toctou_tests {
         // seeding_active is already true; a second call must fail even though
         // in_flight is now non-empty (belt-and-suspenders).
         let activated2 = try_activate_seeding(&in_flight2, &seeding_active2).await;
-        assert!(!activated2, "must not activate again while seeding is running");
+        assert!(
+            !activated2,
+            "must not activate again while seeding is running"
+        );
     }
 }

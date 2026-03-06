@@ -123,7 +123,10 @@ impl OpenSearchClient {
             let text = resp.text().await.unwrap_or_default();
             anyhow::bail!("opensearch search failed ({status}): {text}");
         }
-        let json: Value = resp.json().await.context("parse opensearch search response")?;
+        let json: Value = resp
+            .json()
+            .await
+            .context("parse opensearch search response")?;
         let hits = json["hits"]["hits"].as_array().cloned().unwrap_or_default();
         let mut out = Vec::with_capacity(hits.len());
         for h in hits {

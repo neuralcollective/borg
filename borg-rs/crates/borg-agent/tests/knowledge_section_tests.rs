@@ -1,6 +1,7 @@
+use std::path::PathBuf;
+
 use borg_agent::instruction::build_knowledge_section;
 use borg_core::db::KnowledgeFile;
-use std::path::PathBuf;
 use tracing_test::traced_test;
 
 fn kf(id: i64, file_name: &str, description: &str, inline: bool) -> KnowledgeFile {

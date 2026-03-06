@@ -9,17 +9,20 @@ mod storage;
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{atomic::AtomicU64, Arc},
     time::Instant,
 };
 
 use axum::{
     extract::DefaultBodyLimit,
+    http::HeaderValue,
     middleware,
     routing::{delete, get, post, put},
     Router,
 };
-use borg_agent::{claude::ClaudeBackend, codex::CodexBackend, gemini::GeminiBackend, ollama::OllamaBackend};
+use borg_agent::{
+    claude::ClaudeBackend, codex::CodexBackend, gemini::GeminiBackend, ollama::OllamaBackend,
+};
 use borg_core::{
     chat::ChatCollector,
     config::Config,
@@ -34,7 +37,6 @@ use borg_core::{
 use chrono::Utc;
 use serde_json::json;
 use tokio::sync::{broadcast, Mutex as TokioMutex, Semaphore};
-use axum::http::HeaderValue;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     services::ServeDir,
@@ -46,6 +48,7 @@ use tracing::info;
 pub struct AppState {
     pub db: Arc<Db>,
     pub config: Arc<Config>,
+    pub ai_request_count: Arc<AtomicU64>,
     pub api_token: String,
     pub start_time: Instant,
     pub log_tx: broadcast::Sender<String>,
@@ -86,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
     let log_ring: Arc<std::sync::Mutex<VecDeque<String>>> =
         Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(500)));
     let (chat_event_tx, _) = broadcast::channel::<String>(256);
+    let ai_request_count = Arc::new(AtomicU64::new(0));
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         "borg_server=info,borg_core=info,borg_agent=info,tower_http=warn".into()
@@ -159,8 +163,16 @@ async fn main() -> anyhow::Result<()> {
             .filter(|t| {
                 matches!(
                     t.status.as_str(),
-                    "implement" | "validate" | "review" | "lint_fix" | "rebase"
-                        | "spec" | "qa" | "qa_fix" | "impl" | "retry"
+                    "implement"
+                        | "validate"
+                        | "review"
+                        | "lint_fix"
+                        | "rebase"
+                        | "spec"
+                        | "qa"
+                        | "qa_fix"
+                        | "impl"
+                        | "retry"
                 )
             })
             .count();
@@ -181,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
         ingestion::IngestionQueue::Disabled => info!("ingestion queue backend: disabled"),
         ingestion::IngestionQueue::Sqs { queue_url, .. } => {
             info!("ingestion queue backend: sqs ({queue_url})");
-        }
+        },
     }
 
     // Detect sandbox backend (bwrap preferred, docker fallback, configurable via SANDBOX_BACKEND)
@@ -252,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
             "gemini".into(),
             Arc::new(
                 GeminiBackend::new(config.gemini_api_key.clone())
-                    .with_timeout(config.agent_timeout_s as u64)
+                    .with_timeout(config.agent_timeout_s as u64),
             ),
         );
     }
@@ -277,6 +289,7 @@ async fn main() -> anyhow::Result<()> {
         sandbox_mode.clone(),
         Arc::clone(&force_restart),
         agent_network_available,
+        Arc::clone(&ai_request_count),
     );
     let pipeline_event_tx = pipeline.event_tx.clone();
     let pipeline = Arc::new(pipeline);
@@ -296,7 +309,7 @@ async fn main() -> anyhow::Result<()> {
                     Ok(Err(e)) => {
                         tracing::error!("Pipeline tick error: {e}");
                         consecutive_panics = 0;
-                    }
+                    },
                     Err(join_err) => {
                         consecutive_panics += 1;
                         tracing::error!(
@@ -306,7 +319,7 @@ async fn main() -> anyhow::Result<()> {
                             tracing::error!("5 consecutive tick panics — exiting for restart");
                             std::process::exit(1);
                         }
-                    }
+                    },
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(tick_secs)).await;
             }
@@ -322,6 +335,7 @@ async fn main() -> anyhow::Result<()> {
         let file_storage_tg = Arc::clone(&file_storage);
         let opensearch_tg = opensearch.clone();
         let tg_chat_event_tx = chat_event_tx.clone();
+        let tg_ai_request_count = Arc::clone(&ai_request_count);
         let tg_sessions: Arc<TokioMutex<HashMap<String, String>>> =
             Arc::new(TokioMutex::new(HashMap::new()));
         tokio::spawn(async move {
@@ -382,7 +396,8 @@ async fn main() -> anyhow::Result<()> {
                                     notify_chat: msg.chat_id.to_string(),
                                     created_at: Utc::now(),
                                     updated_at: Utc::now(),
-                                    session_id: String::new(),                                    mode,
+                                    session_id: String::new(),
+                                    mode,
                                     backend: String::new(),
                                     project_id: 0,
                                     task_type: String::new(),
@@ -414,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
                                 let opensearch2 = opensearch_tg.clone();
                                 let storage2 = Arc::clone(&file_storage_tg);
                                 let chat_tx2 = tg_chat_event_tx.clone();
+                                let ai_request_count2 = Arc::clone(&tg_ai_request_count);
                                 let sender_name = msg.sender_name.clone();
                                 let chat_id = msg.chat_id;
                                 let message_id = msg.message_id;
@@ -428,6 +444,7 @@ async fn main() -> anyhow::Result<()> {
                                         opensearch2.clone(),
                                         &storage2,
                                         &chat_tx2,
+                                        &ai_request_count2,
                                     )
                                     .await
                                     {
@@ -538,6 +555,7 @@ async fn main() -> anyhow::Result<()> {
                 let storage_flush = Arc::clone(&storage_sc);
                 let opensearch_flush = opensearch.clone();
                 let chat_tx_flush = sc_chat_event_tx.clone();
+                let flush_ai_request_count = Arc::clone(&ai_request_count);
                 tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
@@ -549,6 +567,7 @@ async fn main() -> anyhow::Result<()> {
                             let opensearch2 = opensearch_flush.clone();
                             let storage2 = Arc::clone(&storage_flush);
                             let chat_tx2 = chat_tx_flush.clone();
+                            let ai_request_count2 = Arc::clone(&flush_ai_request_count);
                             let collector2 = Arc::clone(&collector_flush);
                             let is_discord = batch.chat_key.starts_with("discord:");
                             let chat_id = batch
@@ -569,6 +588,7 @@ async fn main() -> anyhow::Result<()> {
                                     opensearch2.clone(),
                                     &storage2,
                                     &chat_tx2,
+                                    &ai_request_count2,
                                 )
                                 .await
                                 {
@@ -593,6 +613,7 @@ async fn main() -> anyhow::Result<()> {
                 let storage_events = Arc::clone(&storage_sc);
                 let opensearch_events = opensearch.clone();
                 let chat_tx_events = sc_chat_event_tx.clone();
+                let events_ai_request_count = Arc::clone(&ai_request_count);
                 tokio::spawn(async move {
                     loop {
                         let Some(event) = event_rx.recv().await else {
@@ -625,6 +646,7 @@ async fn main() -> anyhow::Result<()> {
                             let opensearch2 = opensearch_events.clone();
                             let storage2 = Arc::clone(&storage_events);
                             let chat_tx2 = chat_tx_events.clone();
+                            let ai_request_count2 = Arc::clone(&events_ai_request_count);
                             let collector2 = Arc::clone(&collector);
                             let is_discord = msg.source == Source::Discord;
                             let chat_id = msg.chat_id.clone();
@@ -646,6 +668,7 @@ async fn main() -> anyhow::Result<()> {
                                     opensearch2.clone(),
                                     &storage2,
                                     &chat_tx2,
+                                    &ai_request_count2,
                                 )
                                 .await
                                 {
@@ -670,8 +693,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Observer (log monitoring)
     if !config.observer_config.is_empty() {
-        let observer_api_key = std::env::var("ANTHROPIC_API_KEY")
-            .unwrap_or_else(|_| config.oauth_token.clone());
+        let observer_api_key =
+            std::env::var("ANTHROPIC_API_KEY").unwrap_or_else(|_| config.oauth_token.clone());
         let observer = Observer::load(
             &config.observer_config,
             &observer_api_key,
@@ -736,6 +759,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         db: Arc::clone(&db),
         config: Arc::clone(&config),
+        ai_request_count,
         api_token,
         start_time: Instant::now(),
         log_tx,
@@ -784,17 +808,35 @@ async fn main() -> anyhow::Result<()> {
         // Tasks
         .route("/api/tasks", get(routes::list_tasks))
         .route("/api/tasks/create", post(routes::create_task))
-        .route("/api/tasks/:id", get(routes::get_task).patch(routes::patch_task))
+        .route(
+            "/api/tasks/:id",
+            get(routes::get_task).patch(routes::patch_task),
+        )
         .route("/api/tasks/:id/approve", post(routes::approve_task))
         .route("/api/tasks/:id/reject", post(routes::reject_task))
-        .route("/api/tasks/:id/request-revision", post(routes::request_revision))
-        .route("/api/tasks/:id/revisions", get(routes::get_revision_history))
+        .route(
+            "/api/tasks/:id/request-revision",
+            post(routes::request_revision),
+        )
+        .route(
+            "/api/tasks/:id/revisions",
+            get(routes::get_revision_history),
+        )
         .route("/api/tasks/:id/citations", get(routes::get_task_citations))
-        .route("/api/tasks/:id/verify-citations", post(routes::verify_task_citations))
+        .route(
+            "/api/tasks/:id/verify-citations",
+            post(routes::verify_task_citations),
+        )
         .route("/api/tasks/:id/retry", post(routes::retry_task))
         .route("/api/tasks/:id/unblock", post(routes::unblock_task))
-        .route("/api/tasks/:id/diagnostics", get(routes::get_task_diagnostics))
-        .route("/api/tasks/retry-all-failed", post(routes::retry_all_failed))
+        .route(
+            "/api/tasks/:id/diagnostics",
+            get(routes::get_task_diagnostics),
+        )
+        .route(
+            "/api/tasks/retry-all-failed",
+            post(routes::retry_all_failed),
+        )
         .route(
             "/api/tasks/:id/outputs",
             get(routes::get_task_outputs_handler),
@@ -862,16 +904,33 @@ async fn main() -> anyhow::Result<()> {
             get(routes::get_project_chat_messages),
         )
         .route("/api/projects/:id/chat", post(routes::post_project_chat))
-        .route("/api/projects/:id", get(routes::get_project).put(routes::update_project).delete(routes::delete_project))
+        .route(
+            "/api/projects/:id",
+            get(routes::get_project)
+                .put(routes::update_project)
+                .delete(routes::delete_project),
+        )
         .route("/api/projects/:id/tasks", get(routes::list_project_tasks))
-        .route("/api/projects/:id/deadlines", get(routes::list_project_deadlines).post(routes::create_deadline))
-        .route("/api/projects/:id/deadlines/:did", put(routes::update_deadline).delete(routes::delete_deadline))
+        .route(
+            "/api/projects/:id/deadlines",
+            get(routes::list_project_deadlines).post(routes::create_deadline),
+        )
+        .route(
+            "/api/projects/:id/deadlines/:did",
+            put(routes::update_deadline).delete(routes::delete_deadline),
+        )
         .route("/api/deadlines", get(routes::list_upcoming_deadlines))
         .route("/api/search", get(routes::search_documents))
         .route("/api/themes", get(routes::summarize_workspace_themes))
-        .route("/api/projects/:id/themes", get(routes::summarize_project_themes))
+        .route(
+            "/api/projects/:id/themes",
+            get(routes::summarize_project_themes),
+        )
         .route("/api/projects/:id/audit", get(routes::list_project_audit))
-        .route("/api/projects/:id/documents", get(routes::list_project_documents))
+        .route(
+            "/api/projects/:id/documents",
+            get(routes::list_project_documents),
+        )
         .route(
             "/api/projects/:id/documents/:task_id/content",
             get(routes::get_project_document_content),
@@ -932,11 +991,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cache/:name", delete(routes::delete_cache_volume))
         // Cloud storage OAuth
         .route("/api/cloud/:provider/auth", get(routes::cloud_auth_init))
-        .route("/api/cloud/:provider/callback", get(routes::cloud_auth_callback))
-        .route("/api/projects/:id/cloud", get(routes::list_cloud_connections))
-        .route("/api/projects/:id/cloud/:conn_id", delete(routes::delete_cloud_connection))
-        .route("/api/projects/:id/cloud/:conn_id/browse", get(routes::browse_cloud_files))
-        .route("/api/projects/:id/cloud/:conn_id/import", post(routes::import_cloud_files))
+        .route(
+            "/api/cloud/:provider/callback",
+            get(routes::cloud_auth_callback),
+        )
+        .route(
+            "/api/projects/:id/cloud",
+            get(routes::list_cloud_connections),
+        )
+        .route(
+            "/api/projects/:id/cloud/:conn_id",
+            delete(routes::delete_cloud_connection),
+        )
+        .route(
+            "/api/projects/:id/cloud/:conn_id/browse",
+            get(routes::browse_cloud_files),
+        )
+        .route(
+            "/api/projects/:id/cloud/:conn_id/import",
+            post(routes::import_cloud_files),
+        )
         // Knowledge base
         .route("/api/knowledge", get(routes::list_knowledge))
         .route("/api/knowledge/templates", get(routes::list_templates))
@@ -946,7 +1020,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/knowledge/:id", put(routes::update_knowledge))
         .route("/api/knowledge/:id", delete(routes::delete_knowledge))
-        .route("/api/knowledge/:id/content", get(routes::get_knowledge_content))
+        .route(
+            "/api/knowledge/:id/content",
+            get(routes::get_knowledge_content),
+        )
         // Static dashboard
         .fallback_service(serve_dir)
         .layer(middleware::from_fn_with_state(
@@ -987,7 +1064,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    
+
     // Separate listener for the proxy (air-gapped agent access)
     let proxy_addr = format!("{}:3132", bind);
     let proxy_listener = tokio::net::TcpListener::bind(&proxy_addr).await?;
@@ -995,12 +1072,14 @@ async fn main() -> anyhow::Result<()> {
 
     let server = axum::serve(
         listener,
-        app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app.clone()
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
 
     let proxy_server = axum::serve(
         proxy_listener,
-        app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app.clone()
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

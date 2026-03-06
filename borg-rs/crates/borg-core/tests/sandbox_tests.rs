@@ -3,22 +3,34 @@ use tempfile::TempDir;
 
 #[test]
 fn bwrap_parses_to_bwrap() {
-    assert_eq!(SandboxMode::from_str_or_auto("bwrap"), Some(SandboxMode::Bwrap));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("bwrap"),
+        Some(SandboxMode::Bwrap)
+    );
 }
 
 #[test]
 fn docker_parses_to_docker() {
-    assert_eq!(SandboxMode::from_str_or_auto("docker"), Some(SandboxMode::Docker));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("docker"),
+        Some(SandboxMode::Docker)
+    );
 }
 
 #[test]
 fn direct_parses_to_direct() {
-    assert_eq!(SandboxMode::from_str_or_auto("direct"), Some(SandboxMode::Direct));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("direct"),
+        Some(SandboxMode::Direct)
+    );
 }
 
 #[test]
 fn none_parses_to_direct() {
-    assert_eq!(SandboxMode::from_str_or_auto("none"), Some(SandboxMode::Direct));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("none"),
+        Some(SandboxMode::Direct)
+    );
 }
 
 #[test]
@@ -38,20 +50,38 @@ fn empty_string_returns_none() {
 
 #[test]
 fn case_insensitive_bwrap() {
-    assert_eq!(SandboxMode::from_str_or_auto("BWRAP"), Some(SandboxMode::Bwrap));
-    assert_eq!(SandboxMode::from_str_or_auto("Bwrap"), Some(SandboxMode::Bwrap));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("BWRAP"),
+        Some(SandboxMode::Bwrap)
+    );
+    assert_eq!(
+        SandboxMode::from_str_or_auto("Bwrap"),
+        Some(SandboxMode::Bwrap)
+    );
 }
 
 #[test]
 fn case_insensitive_docker() {
-    assert_eq!(SandboxMode::from_str_or_auto("DOCKER"), Some(SandboxMode::Docker));
-    assert_eq!(SandboxMode::from_str_or_auto("Docker"), Some(SandboxMode::Docker));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("DOCKER"),
+        Some(SandboxMode::Docker)
+    );
+    assert_eq!(
+        SandboxMode::from_str_or_auto("Docker"),
+        Some(SandboxMode::Docker)
+    );
 }
 
 #[test]
 fn case_insensitive_direct() {
-    assert_eq!(SandboxMode::from_str_or_auto("DIRECT"), Some(SandboxMode::Direct));
-    assert_eq!(SandboxMode::from_str_or_auto("NONE"), Some(SandboxMode::Direct));
+    assert_eq!(
+        SandboxMode::from_str_or_auto("DIRECT"),
+        Some(SandboxMode::Direct)
+    );
+    assert_eq!(
+        SandboxMode::from_str_or_auto("NONE"),
+        Some(SandboxMode::Direct)
+    );
 }
 
 fn strs(args: &[String]) -> Vec<&str> {
@@ -96,7 +126,10 @@ fn bwrap_args_command_appended_after_separator() {
     let cmd = vec!["sh".to_string(), "-c".to_string(), "echo hello".to_string()];
     let args = Sandbox::bwrap_args(&[], "/work", &cmd);
     let s = strs(&args);
-    let sep = s.iter().position(|&a| a == "--").expect("-- separator must be present");
+    let sep = s
+        .iter()
+        .position(|&a| a == "--")
+        .expect("-- separator must be present");
     assert_eq!(&s[sep + 1..], &["sh", "-c", "echo hello"]);
 }
 
@@ -113,7 +146,10 @@ fn bwrap_args_zero_writable_dirs() {
 
     // Only /tmp should be bound (no extra writable dirs)
     let bind_count = s.windows(3).filter(|w| w[0] == "--bind").count();
-    assert_eq!(bind_count, 1, "zero writable dirs → only /tmp should be bound");
+    assert_eq!(
+        bind_count, 1,
+        "zero writable dirs → only /tmp should be bound"
+    );
 }
 
 #[test]
@@ -152,7 +188,10 @@ fn bwrap_args_multiple_writable_dirs_all_bound() {
     }
 
     // Command follows -- separator
-    let sep = s.iter().position(|&a| a == "--").expect("-- separator must be present");
+    let sep = s
+        .iter()
+        .position(|&a| a == "--")
+        .expect("-- separator must be present");
     assert_eq!(&s[sep + 1..], &["cargo", "test"]);
 }
 

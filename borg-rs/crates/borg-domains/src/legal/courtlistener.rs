@@ -29,29 +29,74 @@ impl CourtListenerClient {
         if let Some(c) = court {
             url.push_str(&format!("&court={}", urlencoding::encode(c)));
         }
-        Ok(self.http.get(&url).send().await?.error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn get_opinion(&self, id: u64) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{BASE}/clusters/{id}/")).send().await?.error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!("{BASE}/clusters/{id}/"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn search_dockets(&self, query: &str) -> Result<SearchResult> {
         let url = format!("{BASE}/search/?q={}&type=d", urlencoding::encode(query));
-        Ok(self.http.get(&url).send().await?.error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn get_docket(&self, id: u64) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{BASE}/dockets/{id}/")).send().await?.error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!("{BASE}/dockets/{id}/"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn search_judges(&self, query: &str) -> Result<SearchResult> {
         let url = format!("{BASE}/search/?q={}&type=p", urlencoding::encode(query));
-        Ok(self.http.get(&url).send().await?.error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn citation_lookup(&self, cite: &str) -> Result<SearchResult> {
-        let url = format!("{BASE}/search/?citation={}&type=o", urlencoding::encode(cite));
-        Ok(self.http.get(&url).send().await?.error_for_status()?.json().await?)
+        let url = format!(
+            "{BASE}/search/?citation={}&type=o",
+            urlencoding::encode(cite)
+        );
+        Ok(self
+            .http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 }

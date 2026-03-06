@@ -123,7 +123,8 @@ impl Sidecar {
     }
 
     pub fn send_discord_typing(&self, channel_id: &str) {
-        let cmd = serde_json::json!({"target": "discord", "cmd": "typing", "channel_id": channel_id});
+        let cmd =
+            serde_json::json!({"target": "discord", "cmd": "typing", "channel_id": channel_id});
         self.send_raw(cmd.to_string());
     }
 
@@ -356,5 +357,4 @@ mod tests {
         let line = r#"{"source":"signal","event":"message","text":"hi"}"#;
         assert!(parse_event(line).is_none());
     }
-
 }

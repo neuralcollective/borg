@@ -27,15 +27,31 @@ impl ClioClient {
     }
 
     pub async fn search_matters(&self, query: &str) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{}/matters?query={}", self.base_url, urlencoding::encode(query)))
-            .bearer_auth(&self.api_key).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!(
+                "{}/matters?query={}",
+                self.base_url,
+                urlencoding::encode(query)
+            ))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn get_matter(&self, id: u64) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{}/matters/{id}", self.base_url))
-            .bearer_auth(&self.api_key).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!("{}/matters/{id}", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn create_time_entry(&self, entry: &TimeEntry) -> Result<serde_json::Value> {
@@ -47,20 +63,47 @@ impl ClioClient {
                 "note": entry.description,
             }
         });
-        Ok(self.http.post(format!("{}/activities", self.base_url))
-            .bearer_auth(&self.api_key).json(&body).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .post(format!("{}/activities", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn search_contacts(&self, query: &str) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{}/contacts?query={}", self.base_url, urlencoding::encode(query)))
-            .bearer_auth(&self.api_key).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!(
+                "{}/contacts?query={}",
+                self.base_url,
+                urlencoding::encode(query)
+            ))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub async fn search_documents(&self, query: &str) -> Result<serde_json::Value> {
-        Ok(self.http.get(format!("{}/documents?query={}", self.base_url, urlencoding::encode(query)))
-            .bearer_auth(&self.api_key).send().await?
-            .error_for_status()?.json().await?)
+        Ok(self
+            .http
+            .get(format!(
+                "{}/documents?query={}",
+                self.base_url,
+                urlencoding::encode(query)
+            ))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 }
