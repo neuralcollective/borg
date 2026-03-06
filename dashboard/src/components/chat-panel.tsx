@@ -242,7 +242,7 @@ export function ChatPanel() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message the director..."
+            placeholder="Message Borg..."
             rows={1}
             className={cn(
               "flex-1 resize-none rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 md:py-2",

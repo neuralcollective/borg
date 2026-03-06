@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useModes, useStatus, createTask } from "@/lib/api";
 import { repoName, type PipelineMode } from "@/lib/types";
-import { Plus, X } from "lucide-react";
+import { Plus, X, ChevronRight } from "lucide-react";
 
 const LEGAL_TASK_TYPES = [
   { value: "", label: "General legal task" },
@@ -38,6 +38,9 @@ export function TaskCreator({
   const { data: status } = useStatus();
 
   const repos = status?.watched_repos ?? [];
+
+  const selectedMode = modes?.find((m) => m.name === mode);
+  const phases = selectedMode?.phases?.slice().sort((a, b) => a.priority - b.priority) ?? [];
 
   const groupedModes = useMemo(() => {
     if (!modes) return [];
@@ -165,6 +168,22 @@ export function TaskCreator({
               </div>
             )}
           </div>
+
+          {phases.length > 0 && (
+            <div>
+              <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Pipeline</label>
+              <div className="flex flex-wrap items-center gap-1">
+                {phases.map((p, i) => (
+                  <span key={p.name} className="flex items-center">
+                    <span className="rounded bg-white/[0.06] px-2 py-0.5 text-[11px] text-zinc-400">
+                      {p.label}
+                    </span>
+                    {i < phases.length - 1 && <ChevronRight className="mx-0.5 h-3 w-3 text-zinc-600" />}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {(mode === "lawborg" || mode === "legal") && (
             <div>

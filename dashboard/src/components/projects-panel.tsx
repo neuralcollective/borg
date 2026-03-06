@@ -1150,7 +1150,7 @@ async function uploadChunkQueue(
                       )}
                     >
                       {msg.role !== "user" && (
-                        <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "director"}</div>
+                        <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "Borg"}</div>
                       )}
                       {msg.role === "user" ? (
                         <div className="whitespace-pre-wrap break-words">{msg.text}</div>
@@ -1187,7 +1187,7 @@ async function uploadChunkQueue(
                         handleSendMessage();
                       }
                     }}
-                    placeholder="Message the director about this project..."
+                    placeholder="Message Borg about this project..."
                     rows={2}
                     className="flex-1 resize-none rounded border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
                   />

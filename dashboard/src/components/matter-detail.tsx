@@ -1582,7 +1582,7 @@ function ChatTab({ projectId }: { projectId: number }) {
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 && !sending && (
           <div className="py-8 text-center text-[12px] text-zinc-600">
-            Chat with the director about this matter.
+            Chat with Borg about this matter.
           </div>
         )}
         {messages.map((msg, idx) => (
@@ -1599,7 +1599,7 @@ function ChatTab({ projectId }: { projectId: number }) {
               )}
             >
               {msg.role !== "user" && (
-                <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "director"}</div>
+                <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "Borg"}</div>
               )}
               {msg.role === "user" ? (
                 <div className="whitespace-pre-wrap break-words">{msg.text}</div>
@@ -1624,7 +1624,7 @@ function ChatTab({ projectId }: { projectId: number }) {
                 handleSend();
               }
             }}
-            placeholder="Message the director about this matter..."
+            placeholder="Message Borg about this matter..."
             rows={2}
             className="flex-1 resize-none rounded border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
           />

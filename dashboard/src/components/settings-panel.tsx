@@ -117,9 +117,18 @@ export function SettingsPanel() {
 
         {user && (
           <Section title="Account">
-            <InfoRow label="Username" value={user.username} />
-            <InfoRow label="Role" value={isAdmin ? "Admin" : "User"} />
-            <ChangeOwnPassword userId={user.id} />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/15 text-[13px] font-semibold text-blue-400">
+                  {(user.username[0] ?? "?").toUpperCase()}
+                </div>
+                <div>
+                  <div className="text-[12px] font-medium text-zinc-200">{user.username}</div>
+                  <div className="text-[11px] text-zinc-500">{isAdmin ? "Admin" : "User"}</div>
+                </div>
+              </div>
+              <ChangeOwnPassword userId={user.id} />
+            </div>
           </Section>
         )}
 
@@ -550,13 +559,20 @@ function UserModelPicker() {
   if (!userSettings) return null;
 
   const overrideActive = userSettings.model_override_active;
-  const currentModel = overrideActive
-    ? userSettings.model_override
-    : (userSettings.model || "");
-
-  const match = MODEL_OPTIONS.find((o) => o.model === currentModel);
+  const overrideModel = userSettings.model_override;
+  const userModel = userSettings.model || "";
 
   async function handleChange(model: string) {
+    if (!model) {
+      setSaving(true);
+      try {
+        await updateUserSettings({ model: "", backend: "" });
+        await refetch();
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const opt = MODEL_OPTIONS.find((o) => o.model === model);
     if (!opt) return;
     setSaving(true);
@@ -568,31 +584,40 @@ function UserModelPicker() {
     }
   }
 
+  if (overrideActive) {
+    const label = MODEL_OPTIONS.find((o) => o.model === overrideModel)?.label ?? overrideModel;
+    return (
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <Label>Model</Label>
+          <Desc>Set by admin — cannot be changed.</Desc>
+        </div>
+        <span className="rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[12px] text-zinc-500">
+          {label}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0 flex-1">
         <Label>Model</Label>
-        <Desc>
-          {overrideActive
-            ? "Model is set by admin and cannot be changed."
-            : "Your preferred AI model for pipeline tasks."}
-        </Desc>
+        <Desc>Your preferred AI model. Leave blank to use the global default.</Desc>
       </div>
       <select
-        value={match?.model ?? currentModel}
+        value={userModel}
         onChange={(e) => handleChange(e.target.value)}
-        disabled={overrideActive || saving}
+        disabled={saving}
         className={cn(
           "rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40",
-          (overrideActive || saving) && "opacity-50 cursor-not-allowed"
+          saving && "opacity-50 cursor-not-allowed"
         )}
       >
+        <option value="">Global default</option>
         {MODEL_OPTIONS.map((o) => (
           <option key={o.model} value={o.model}>{o.label}</option>
         ))}
-        {!match && currentModel && (
-          <option value={currentModel}>{currentModel}</option>
-        )}
       </select>
     </div>
   );
@@ -608,7 +633,7 @@ function ChangeOwnPassword({ userId }: { userId: number }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+        className="rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-zinc-200"
       >
         Change Password
       </button>
@@ -622,7 +647,7 @@ function ChangeOwnPassword({ userId }: { userId: number }) {
         value={pw}
         onChange={(e) => setPw(e.target.value)}
         placeholder="New password (min 4)"
-        className="w-40 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
+        className="w-40 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
       />
       <button
         disabled={busy || pw.length < 4}
@@ -633,11 +658,14 @@ function ChangeOwnPassword({ userId }: { userId: number }) {
           setPw("");
           setBusy(false);
         }}
-        className="rounded-md bg-blue-500/20 px-2.5 py-1 text-[11px] text-blue-400 ring-1 ring-inset ring-blue-500/20 disabled:opacity-50"
+        className="rounded-md bg-blue-500/20 px-3 py-1.5 text-[11px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 disabled:opacity-50"
       >
         Save
       </button>
-      {msg && <span className="text-[10px] text-zinc-500">{msg}</span>}
+      <button onClick={() => { setOpen(false); setPw(""); setMsg(""); }} className="text-[11px] text-zinc-600 hover:text-zinc-400">
+        Cancel
+      </button>
+      {msg && <span className="text-[10px] text-emerald-400">{msg}</span>}
     </div>
   );
 }
