@@ -64,13 +64,20 @@ services:
       - borg-vespa:/opt/vespa/var
 
   vespa-init:
-    image: vespaengine/vespa-cli:latest
+    image: alpine:3.21
     depends_on:
       - vespa
     volumes:
       - ./vespa/application:/app:ro
     entrypoint: ["/bin/sh", "-lc"]
     command: >
+      apk add --no-cache curl jq tar gzip >/dev/null &&
+      ASSET_URL=$$(curl -fsSL https://api.github.com/repos/vespa-engine/vespa/releases/latest |
+        jq -r '.assets[] | select(.name | test("linux-amd64.tar.gz$$")) | .browser_download_url' |
+        head -n 1) &&
+      test -n "$$ASSET_URL" &&
+      curl -fsSL "$$ASSET_URL" | tar -xz -C /tmp &&
+      install "$$(find /tmp -maxdepth 3 -type f -name vespa | head -n 1)" /usr/local/bin/vespa &&
       until curl -fsS http://vespa:19071/state/v1/health >/dev/null 2>&1;
       do sleep 3; done;
       vespa config set target http://vespa:19071 &&
