@@ -175,6 +175,7 @@ export function SettingsPanel() {
             options={[
               { value: "claude", label: "Claude (Anthropic)" },
               { value: "codex", label: "Codex (OpenAI)" },
+              { value: "gemini", label: "Gemini (Google)" },
               { value: "local", label: "Local (Ollama)" },
             ]}
           />

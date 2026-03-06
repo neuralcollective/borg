@@ -1,4 +1,5 @@
 import type { PipelineModeFull, IntegrationType } from "@/lib/types";
+import type { CategoryProfile } from "./category-profiles";
 import { cn } from "@/lib/utils";
 
 export function ModeSettings({
@@ -6,11 +7,13 @@ export function ModeSettings({
   readOnly,
   onChange,
   onFork,
+  profile,
 }: {
   mode: PipelineModeFull;
   readOnly: boolean;
   onChange: (key: keyof PipelineModeFull, value: unknown) => void;
   onFork: () => void;
+  profile: CategoryProfile;
 }) {
   return (
     <div className="space-y-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
@@ -57,8 +60,13 @@ export function ModeSettings({
             disabled={readOnly}
             className={inputCls}
           >
-            <option value="git_pr">Git PR</option>
-            <option value="none">None</option>
+            {profile.integrations.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+            {/* Keep current value visible even if profile hides it */}
+            {!profile.integrations.some((o) => o.value === mode.integration) && (
+              <option value={mode.integration}>{mode.integration}</option>
+            )}
           </select>
         </Field>
         <Field label="Max Attempts" className="w-20">
@@ -82,13 +90,19 @@ export function ModeSettings({
         )}
       </div>
 
-      {/* Row 2: Flags */}
-      <div className="flex items-center gap-4">
-        <Toggle label="Docker" checked={mode.uses_docker} disabled={readOnly}
-          onChange={(v) => onChange("uses_docker", v)} />
-        <Toggle label="Test Cmd" checked={mode.uses_test_cmd} disabled={readOnly}
-          onChange={(v) => onChange("uses_test_cmd", v)} />
-      </div>
+      {/* Row 2: Flags — only show what's relevant for this category */}
+      {(profile.showDocker || profile.showTestCmd) && (
+        <div className="flex items-center gap-4">
+          {profile.showDocker && (
+            <Toggle label="Docker" checked={mode.uses_docker} disabled={readOnly}
+              onChange={(v) => onChange("uses_docker", v)} />
+          )}
+          {profile.showTestCmd && (
+            <Toggle label="Test Cmd" checked={mode.uses_test_cmd} disabled={readOnly}
+              onChange={(v) => onChange("uses_test_cmd", v)} />
+          )}
+        </div>
+      )}
     </div>
   );
 }

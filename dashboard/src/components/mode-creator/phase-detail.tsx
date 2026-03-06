@@ -3,21 +3,43 @@ import type { PhaseConfigFull, PhaseType } from "@/lib/types";
 import { AutoTextarea } from "./auto-textarea";
 import { ToolChips } from "./tool-chips";
 import { cn } from "@/lib/utils";
+import type { CategoryProfile } from "./category-profiles";
+
+const PHASE_TYPE_LABELS: Record<PhaseType, string> = {
+  setup: "Setup",
+  agent: "Agent",
+  validate: "Validate",
+  rebase: "Rebase",
+  lint_fix: "Lint Fix",
+  human_review: "Human Review",
+  compliance_check: "Compliance",
+};
+
+const FLAG_LABELS: Record<string, string> = {
+  commits: "Commits",
+  runs_tests: "Runs Tests",
+  use_docker: "Use Docker",
+  include_task_context: "Include Context",
+  include_file_listing: "File Listing",
+  allow_no_changes: "Allow No Changes",
+  fresh_session: "Fresh Session",
+};
 
 export function PhaseDetail({
   phase,
   phaseNames,
   readOnly,
   onChange,
+  profile,
 }: {
   phase: PhaseConfigFull;
   phaseNames: string[];
   readOnly: boolean;
   onChange: (patch: Partial<PhaseConfigFull>) => void;
+  profile: CategoryProfile;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Reset advanced panel when switching phases
   useEffect(() => {
     setShowAdvanced(false);
   }, [phase.name]);
@@ -59,13 +81,13 @@ export function PhaseDetail({
             disabled={readOnly}
             className={inputCls}
           >
-            <option value="setup">Setup</option>
-            <option value="agent">Agent</option>
-            <option value="validate">Validate</option>
-            <option value="rebase">Rebase</option>
-            <option value="lint_fix">Lint Fix</option>
-            <option value="human_review">Human Review</option>
-            <option value="compliance_check">Compliance</option>
+            {profile.phaseTypes.map((pt) => (
+              <option key={pt} value={pt}>{PHASE_TYPE_LABELS[pt]}</option>
+            ))}
+            {/* Keep current type visible even if profile hides it */}
+            {!profile.phaseTypes.includes(phase.phase_type) && (
+              <option value={phase.phase_type}>{PHASE_TYPE_LABELS[phase.phase_type]}</option>
+            )}
           </select>
         </Field>
         <Field label="Next" className="w-28">
@@ -155,24 +177,22 @@ export function PhaseDetail({
         </Section>
       )}
 
-      {/* Behavior — common flags inline, grouped logically */}
+      {/* Behavior — filtered by category profile */}
       {isAgent && (
         <Section title="Behavior">
           <div className="grid grid-cols-3 gap-x-4 gap-y-1.5">
-            <FlagToggle label="Commits" checked={phase.commits} disabled={readOnly}
-              onChange={(v) => onChange({ commits: v })} />
-            <FlagToggle label="Runs Tests" checked={phase.runs_tests} disabled={readOnly}
-              onChange={(v) => onChange({ runs_tests: v })} />
-            <FlagToggle label="Use Docker" checked={phase.use_docker} disabled={readOnly}
-              onChange={(v) => onChange({ use_docker: v })} />
-            <FlagToggle label="Include Context" checked={phase.include_task_context} disabled={readOnly}
-              onChange={(v) => onChange({ include_task_context: v })} />
-            <FlagToggle label="File Listing" checked={phase.include_file_listing} disabled={readOnly}
-              onChange={(v) => onChange({ include_file_listing: v })} />
-            <FlagToggle label="Allow No Changes" checked={phase.allow_no_changes} disabled={readOnly}
-              onChange={(v) => onChange({ allow_no_changes: v })} />
-            <FlagToggle label="Fresh Session" checked={phase.fresh_session} disabled={readOnly}
-              onChange={(v) => onChange({ fresh_session: v })} />
+            {profile.behaviorFlags.map((flag) => {
+              const key = flag as keyof PhaseConfigFull;
+              return (
+                <FlagToggle
+                  key={flag}
+                  label={FLAG_LABELS[flag] || flag}
+                  checked={!!phase[key]}
+                  disabled={readOnly}
+                  onChange={(v) => onChange({ [key]: v })}
+                />
+              );
+            })}
           </div>
           {/* Commit settings inline when enabled */}
           {phase.commits && (

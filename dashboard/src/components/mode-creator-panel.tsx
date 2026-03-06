@@ -8,6 +8,7 @@ import { PhaseStrip } from "./mode-creator/phase-strip";
 import { PhaseDetail } from "./mode-creator/phase-detail";
 import { SeedList } from "./mode-creator/seed-list";
 import { editorReducer, INITIAL_STATE, blankMode } from "./mode-creator/reducer";
+import { getProfile } from "./mode-creator/category-profiles";
 
 const TABS = ["phases", "seeds", "json"] as const;
 const CORE_MODES = new Set(["sweborg", "lawborg", "swe", "legal"]);
@@ -19,6 +20,7 @@ export function ModeCreatorPanel() {
   const [state, dispatch] = useReducer(editorReducer, INITIAL_STATE);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [showAllOptions, setShowAllOptions] = useState(false);
 
   const allowExperimental = settings?.experimental_domains === true;
 
@@ -102,6 +104,7 @@ export function ModeCreatorPanel() {
   const { mode, selectedPhaseIndex, expandedSeedIndex, activeTab, isDirty, isReadOnly } = state;
   const selectedPhase = selectedPhaseIndex !== null ? mode.phases[selectedPhaseIndex] : null;
   const phaseNames = mode.phases.map((p) => p.name);
+  const profile = useMemo(() => getProfile(mode.category || "", showAllOptions), [mode.category, showAllOptions]);
 
   return (
     <div className="flex h-full min-h-0">
@@ -123,6 +126,7 @@ export function ModeCreatorPanel() {
             readOnly={isReadOnly}
             onChange={(key, value) => dispatch({ type: "UPDATE_MODE", key, value })}
             onFork={handleFork}
+            profile={profile}
           />
         </div>
 
@@ -144,6 +148,19 @@ export function ModeCreatorPanel() {
               {tab === "seeds" && <span className="ml-1.5 text-zinc-600">{mode.seed_modes.length}</span>}
             </button>
           ))}
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              onClick={() => setShowAllOptions(!showAllOptions)}
+              className={cn(
+                "rounded-md px-2 py-1 text-[10px] transition-colors",
+                showAllOptions
+                  ? "bg-amber-500/15 text-amber-400 ring-1 ring-inset ring-amber-500/20"
+                  : "text-zinc-600 hover:text-zinc-400"
+              )}
+            >
+              {showAllOptions ? "All Options" : "Show All"}
+            </button>
+          </div>
         </div>
 
         {/* Tab content */}
@@ -159,7 +176,7 @@ export function ModeCreatorPanel() {
                 onRemove={(i) => dispatch({ type: "REMOVE_PHASE", index: i })}
                 onMove={(from, to) => dispatch({ type: "MOVE_PHASE", from, to })}
               />
-              {!isReadOnly && mode.phases.length > 0 && (
+              {!isReadOnly && mode.phases.length > 0 && profile.showComplianceButtons && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() =>
@@ -193,6 +210,7 @@ export function ModeCreatorPanel() {
                   phaseNames={phaseNames}
                   readOnly={isReadOnly}
                   onChange={(patch) => dispatch({ type: "UPDATE_PHASE", index: selectedPhaseIndex, patch })}
+                  profile={profile}
                 />
               )}
               {!selectedPhase && mode.phases.length > 0 && (
