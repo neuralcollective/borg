@@ -6,13 +6,11 @@ export function ModeSettings({
   mode,
   readOnly,
   onChange,
-  onFork,
   profile,
 }: {
   mode: PipelineModeFull;
   readOnly: boolean;
   onChange: (key: keyof PipelineModeFull, value: unknown) => void;
-  onFork: () => void;
   profile: CategoryProfile;
 }) {
   return (
@@ -80,14 +78,6 @@ export function ModeSettings({
             className={inputCls}
           />
         </Field>
-        {readOnly && (
-          <button
-            onClick={onFork}
-            className="shrink-0 rounded-md bg-blue-500/20 px-3 py-1.5 text-[12px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 hover:bg-blue-500/30"
-          >
-            Fork to Edit
-          </button>
-        )}
       </div>
 
       {/* Row 2: Flags — only show what's relevant for this category */}

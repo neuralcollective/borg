@@ -127,13 +127,32 @@ export function ModeCreatorPanel() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Fork banner for built-in modes */}
+        {isReadOnly && mode.name && (
+          <button
+            onClick={handleFork}
+            className="flex shrink-0 items-center justify-between border-b border-blue-500/20 bg-blue-500/[0.07] px-4 py-2.5 text-left transition-colors hover:bg-blue-500/[0.12]"
+          >
+            <div>
+              <div className="text-[12px] font-medium text-blue-400">
+                Viewing built-in template
+              </div>
+              <div className="text-[11px] text-blue-400/60">
+                Click to create an editable copy
+              </div>
+            </div>
+            <span className="rounded-md bg-blue-500/20 px-3 py-1.5 text-[12px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/30">
+              Fork &amp; Customize
+            </span>
+          </button>
+        )}
+
         {/* Mode settings */}
         <div className="shrink-0 border-b border-white/[0.06] p-3">
           <ModeSettings
             mode={mode}
             readOnly={isReadOnly}
             onChange={(key, value) => dispatch({ type: "UPDATE_MODE", key, value })}
-            onFork={handleFork}
             profile={profile}
           />
         </div>
