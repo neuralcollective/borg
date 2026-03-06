@@ -43,7 +43,9 @@ VPS (host)
 ├── systemd: cloudflared       tunnel to Cloudflare
 ├── docker daemon
 │   └── borg-agent containers  spawned per-task, isolated, ephemeral
-├── /opt/borg/store/           SQLite DB, sessions, mirrors
+├── PostgreSQL                 control-plane database
+├── SeaweedFS / S3 endpoint    object storage for files + active-work backups
+├── Vespa                      retrieval engine
 └── /opt/borg/dashboard/dist/  static dashboard files
 ```
 
@@ -176,27 +178,11 @@ systemctl restart borg
 cat ~/.claude/.credentials.json | jq -r '.oauthToken'
 ```
 
-## Automated Backups (Litestream)
+## Backups
 
-For robust, decoupled cloud backups, the deployment script installs [Litestream](https://litestream.io), which continuously streams your SQLite database changes (WAL) to an S3-compatible storage bucket.
+Use Borg's active-work backup path for in-progress task state, review state, and agent outputs. Uploaded source files remain opt-in via the upload-backup toggle because the default policy is to avoid backing up re-uploadable raw corpora.
 
-1. **Create an S3 bucket:** (AWS S3, Cloudflare R2, DigitalOcean Spaces, etc.)
-2. **Configure Litestream:** Copy `deploy/litestream.yml.template` to the server:
-   ```bash
-   scp deploy/litestream.yml.template root@$(hcloud server ip borg):/etc/litestream.yml
-   ```
-3. **Edit the configuration:** Add your credentials and bucket URL in `/etc/litestream.yml`.
-4. **Enable and start the service:**
-   ```bash
-   ssh root@$(hcloud server ip borg) "systemctl enable litestream && systemctl start litestream"
-   ```
-
-To restore from a backup:
-```bash
-systemctl stop borg
-litestream restore -if-replica-exists -o /opt/borg/store/borg.db s3://my-backup-bucket/borg-db
-systemctl start borg
-```
+For the control plane, back up PostgreSQL with regular dumps or WAL archiving to your offsite object store. For object storage, replicate or snapshot SeaweedFS/S3-compatible buckets separately from the app host.
 
 ## Useful commands
 
@@ -210,6 +196,6 @@ ssh root@$(hcloud server ip borg) systemctl restart borg
 # Rebuild agent image
 ssh root@$(hcloud server ip borg) 'cd /opt/borg && docker build -t borg-agent -f container/Dockerfile container/'
 
-# DB backup
-scp root@$(hcloud server ip borg):/opt/borg/store/borg.db ./borg-backup.db
+# Postgres dump
+ssh root@$(hcloud server ip borg) 'pg_dump "$DATABASE_URL"' > borg-backup.sql
 ```

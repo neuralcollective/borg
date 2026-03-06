@@ -1,16 +1,16 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Mutex,
 };
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use crate::pgcompat as pg;
+use crate::pgcompat::{params, Connection, Mutex, OptionalExtension};
 use serde_json;
 
 use crate::types::{Proposal, QueueEntry, Task};
 
-const SCHEMA_SQL: &str = include_str!("../../../schema.sql");
+const SCHEMA_SQL: &str = include_str!("../../../schema.pg.sql");
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -303,7 +303,7 @@ fn now_str() -> String {
     Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-fn row_to_knowledge(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeFile> {
+fn row_to_knowledge(row: &pg::Row<'_>) -> pg::Result<KnowledgeFile> {
     let inline_int: i64 = row.get(4)?;
     Ok(KnowledgeFile {
         id: row.get(0)?,
@@ -436,7 +436,7 @@ fn push_theme_term(out: &mut Vec<ThemeTerm>, term: String, occurrences: i64, doc
     });
 }
 
-fn row_to_cloud_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudConnection> {
+fn row_to_cloud_connection(row: &pg::Row<'_>) -> pg::Result<CloudConnection> {
     Ok(CloudConnection {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -450,7 +450,7 @@ fn row_to_cloud_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudCon
     })
 }
 
-fn row_to_upload_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<UploadSession> {
+fn row_to_upload_session(row: &pg::Row<'_>) -> pg::Result<UploadSession> {
     let is_zip: i64 = row.get(8)?;
     let privileged: i64 = row.get(9)?;
     Ok(UploadSession {
@@ -479,7 +479,7 @@ const TASK_COLS: &str = "id, title, description, repo_path, branch, status, atte
     session_id, mode, backend, project_id, task_type, started_at, completed_at, duration_secs, \
     review_status, revision_count, updated_at";
 
-fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
+fn row_to_task(row: &pg::Row<'_>) -> pg::Result<Task> {
     let created_at_str: String = row.get(11)?;
     let started_at: Option<String> = row.get(17)?;
     let completed_at: Option<String> = row.get(18)?;
@@ -511,7 +511,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     })
 }
 
-fn row_to_proposal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Proposal> {
+fn row_to_proposal(row: &pg::Row<'_>) -> pg::Result<Proposal> {
     let created_at_str: String = row.get(6)?;
     Ok(Proposal {
         id: row.get(0)?,
@@ -530,7 +530,7 @@ fn row_to_proposal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Proposal> {
     })
 }
 
-fn row_to_queue_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
+fn row_to_queue_entry(row: &pg::Row<'_>) -> pg::Result<QueueEntry> {
     let queued_at_str: String = row.get(5)?;
     Ok(QueueEntry {
         id: row.get(0)?,
@@ -543,7 +543,7 @@ fn row_to_queue_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
     })
 }
 
-fn row_to_task_output(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutput> {
+fn row_to_task_output(row: &pg::Row<'_>) -> pg::Result<TaskOutput> {
     let created_at_str: String = row.get(6)?;
     Ok(TaskOutput {
         id: row.get(0)?,
@@ -556,7 +556,7 @@ fn row_to_task_output(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskOutput> {
     })
 }
 
-fn row_to_task_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
+fn row_to_task_message(row: &pg::Row<'_>) -> pg::Result<TaskMessage> {
     let created_at_str: String = row.get(4)?;
     Ok(TaskMessage {
         id: row.get(0)?,
@@ -568,7 +568,7 @@ fn row_to_task_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage>
     })
 }
 
-fn row_to_repo(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRow> {
+fn row_to_repo(row: &pg::Row<'_>) -> pg::Result<RepoRow> {
     let auto_merge_int: i64 = row.get(7)?;
     Ok(RepoRow {
         id: row.get(0)?,
@@ -583,7 +583,7 @@ fn row_to_repo(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRow> {
     })
 }
 
-fn row_to_chat_agent_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatAgentRun> {
+fn row_to_chat_agent_run(row: &pg::Row<'_>) -> pg::Result<ChatAgentRun> {
     Ok(ChatAgentRun {
         id: row.get(0)?,
         jid: row.get(1)?,
@@ -600,7 +600,7 @@ fn row_to_chat_agent_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatAgentR
     })
 }
 
-fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent> {
+fn row_to_legacy_event(row: &pg::Row<'_>) -> pg::Result<LegacyEvent> {
     Ok(LegacyEvent {
         id: row.get(0)?,
         ts: row.get(1)?,
@@ -614,7 +614,7 @@ fn row_to_legacy_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<LegacyEvent>
 const PROJECT_COLS: &str = "id, name, mode, repo_path, client_name, case_number, jurisdiction, \
     matter_type, opposing_counsel, deadline, privilege_level, status, default_template_id, created_at, session_privileged";
 
-fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
+fn row_to_project(row: &pg::Row<'_>) -> pg::Result<ProjectRow> {
     let created_at_str: String = row.get(13)?;
     let session_privileged_int: i64 = row.get(14)?;
     Ok(ProjectRow {
@@ -639,7 +639,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
 const PROJECT_FILE_COLS: &str = "id, project_id, file_name, source_path, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at, privileged";
 const PROJECT_FILE_META_COLS: &str = "id, project_id, file_name, source_path, mime_type, size_bytes, privileged, created_at, length(extracted_text)";
 
-fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileRow> {
+fn row_to_project_file(row: &pg::Row<'_>) -> pg::Result<ProjectFileRow> {
     let created_at_str: String = row.get(9)?;
     let privileged_int: i64 = row.get(10)?;
     Ok(ProjectFileRow {
@@ -657,7 +657,7 @@ fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileR
     })
 }
 
-fn row_to_project_file_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileMetaRow> {
+fn row_to_project_file_meta(row: &pg::Row<'_>) -> pg::Result<ProjectFileMetaRow> {
     let created_at_str: String = row.get(7)?;
     let privileged_int: i64 = row.get(6)?;
     let text_chars: i64 = row.get::<_, Option<i64>>(8)?.unwrap_or(0);
@@ -678,15 +678,9 @@ fn row_to_project_file_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project
 // ── Db impl ───────────────────────────────────────────────────────────────
 
 impl Db {
-    pub fn raw_conn(&self) -> &std::sync::Mutex<Connection> {
-        &self.conn
-    }
-
-    pub fn open(path: &str) -> Result<Self> {
-        let conn = Connection::open(path)
-            .with_context(|| format!("failed to open SQLite database at {path:?}"))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .context("failed to set PRAGMAs")?;
+    pub fn open(database_url: &str) -> Result<Self> {
+        let conn = Connection::open(database_url)
+            .with_context(|| format!("failed to open Postgres database at {database_url:?}"))?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -697,174 +691,8 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        // Add compatibility columns before applying the canonical schema so index
-        // creation in `schema.sql` does not fail on older databases.
-        let alters = [
-            "ALTER TABLE pipeline_tasks ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
-            "ALTER TABLE pipeline_tasks ADD COLUMN backend TEXT",
-            "ALTER TABLE pipeline_tasks ADD COLUMN project_id INTEGER REFERENCES projects(id)",
-            "ALTER TABLE proposals ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
-            "ALTER TABLE repos ADD COLUMN repo_slug TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN repo_path TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN client_name TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN case_number TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN jurisdiction TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN matter_type TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN opposing_counsel TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN deadline TEXT",
-            "ALTER TABLE projects ADD COLUMN privilege_level TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
-            "ALTER TABLE pipeline_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE pipeline_tasks ADD COLUMN structured_data TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE pipeline_events ADD COLUMN project_id INTEGER REFERENCES projects(id)",
-            "ALTER TABLE pipeline_events ADD COLUMN actor TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE knowledge_files ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE knowledge_files ADD COLUMN category TEXT NOT NULL DEFAULT 'general'",
-            "ALTER TABLE knowledge_files ADD COLUMN jurisdiction TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE knowledge_files ADD COLUMN project_id INTEGER",
-            "ALTER TABLE pipeline_tasks ADD COLUMN started_at TEXT",
-            "ALTER TABLE pipeline_tasks ADD COLUMN completed_at TEXT",
-            "ALTER TABLE pipeline_tasks ADD COLUMN duration_secs INTEGER",
-            "ALTER TABLE pipeline_tasks ADD COLUMN review_status TEXT",
-            "ALTER TABLE pipeline_tasks ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE project_files ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE project_files ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE project_files ADD COLUMN privileged INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE upload_sessions ADD COLUMN privileged INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE projects ADD COLUMN default_template_id INTEGER",
-            "CREATE TABLE IF NOT EXISTS cloud_connections (\
-              id INTEGER PRIMARY KEY AUTOINCREMENT, \
-              project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, \
-              provider TEXT NOT NULL, \
-              access_token TEXT NOT NULL DEFAULT '', \
-              refresh_token TEXT NOT NULL DEFAULT '', \
-              token_expiry TEXT NOT NULL DEFAULT '', \
-              account_email TEXT NOT NULL DEFAULT '', \
-              account_id TEXT NOT NULL DEFAULT '', \
-              created_at TEXT NOT NULL DEFAULT (datetime('now')))",
-            "CREATE INDEX IF NOT EXISTS idx_cloud_connections_project ON cloud_connections(project_id)",
-        ];
-        for sql in alters {
-            let _ = conn.execute(sql, []);
-        }
-
         conn.execute_batch(SCHEMA_SQL)
-            .context("failed to apply schema migrations")?;
-
-        // Indexes on columns that may have been added via ALTER TABLE above.
-        // CREATE INDEX IF NOT EXISTS is safe to run unconditionally.
-        let post_alter_indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_tasks(project_id)",
-            "CREATE INDEX IF NOT EXISTS idx_pipeline_repo_status ON pipeline_tasks(repo_id, status)",
-            "CREATE INDEX IF NOT EXISTS idx_pipeline_events_project ON pipeline_events(project_id)",
-            "CREATE TABLE IF NOT EXISTS project_corpus_stats (\
-              project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, \
-              total_files INTEGER NOT NULL DEFAULT 0, \
-              total_bytes INTEGER NOT NULL DEFAULT 0, \
-              privileged_files INTEGER NOT NULL DEFAULT 0, \
-              text_files INTEGER NOT NULL DEFAULT 0, \
-              text_chars INTEGER NOT NULL DEFAULT 0, \
-              updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_name ON project_files(project_id, file_name)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_source_path ON project_files(project_id, source_path)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_name_id ON project_files(project_id, file_name, id DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_source_path_id ON project_files(project_id, source_path, id DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_hash ON project_files(project_id, content_hash)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_created ON project_files(project_id, created_at DESC, id DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_created_global ON project_files(created_at DESC, id DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_priv_created ON project_files(project_id, privileged, created_at DESC, id DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_project_files_project_text_created ON project_files(project_id, created_at DESC, id DESC) WHERE extracted_text != ''",
-            "CREATE INDEX IF NOT EXISTS idx_knowledge_files_category_created ON knowledge_files(category, jurisdiction, created_at)",
-        ];
-        for sql in post_alter_indexes {
-            let _ = conn.execute(sql, []);
-        }
-
-        let _ = conn.execute(
-            "UPDATE project_files SET source_path = file_name WHERE source_path = ''",
-            [],
-        );
-
-        let _ = conn.execute(
-            "INSERT INTO project_corpus_stats (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
-             SELECT p.id,
-                    COUNT(f.id),
-                    COALESCE(SUM(f.size_bytes), 0),
-                    COALESCE(SUM(CASE WHEN f.privileged != 0 THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN f.extracted_text != '' THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(length(f.extracted_text)), 0),
-                    datetime('now') \
-             FROM projects p
-             LEFT JOIN project_files f ON f.project_id = p.id
-             GROUP BY p.id
-             ON CONFLICT(project_id) DO UPDATE SET
-               total_files=excluded.total_files,
-               total_bytes=excluded.total_bytes,
-               privileged_files=excluded.privileged_files,
-               text_files=excluded.text_files,
-               text_chars=excluded.text_chars,
-               updated_at=excluded.updated_at",
-            [],
-        );
-
-        // Backfill deadlines from legacy projects.deadline column
-        let needs_deadline_backfill: bool = conn
-            .query_row("SELECT COUNT(*) = 0 FROM deadlines", [], |r| r.get(0))
-            .unwrap_or(true);
-        if needs_deadline_backfill {
-            let rows: Vec<(i64, String)> = conn
-                .prepare("SELECT id, deadline FROM projects WHERE deadline IS NOT NULL AND deadline != ''")
-                .ok()
-                .and_then(|mut s| {
-                    s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-                        .ok()
-                        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-                })
-                .unwrap_or_default();
-            let ts = now_str();
-            for (pid, due) in rows {
-                let _ = conn.execute(
-                    "INSERT INTO deadlines (project_id, label, due_date, created_at) VALUES (?1, 'Primary Deadline', ?2, ?3)",
-                    params![pid, due, ts],
-                );
-            }
-        }
-
-        // Backfill parties table from existing projects (idempotent)
-        let needs_backfill: bool = conn
-            .query_row("SELECT COUNT(*) = 0 FROM parties", [], |r| r.get(0))
-            .unwrap_or(true);
-        if needs_backfill {
-            let rows: Vec<(i64, String, String)> = conn
-                .prepare(
-                    "SELECT id, client_name, opposing_counsel FROM projects \
-                     WHERE client_name != '' OR opposing_counsel != ''",
-                )
-                .ok()
-                .and_then(|mut s| {
-                    s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-                        .ok()
-                        .map(|iter| iter.filter_map(|r| r.ok()).collect())
-                })
-                .unwrap_or_default();
-            let created_at = now_str();
-            for (pid, client, opposing) in rows {
-                for (name, role) in [(&client, "client"), (&opposing, "opposing_counsel")] {
-                    let trimmed = name.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let normalized = normalize_party_name(trimmed);
-                    let _ = conn.execute(
-                        "INSERT INTO parties (project_id, name, normalized_name, role, created_at) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
-                        params![pid, trimmed, normalized, role, created_at],
-                    );
-                }
-            }
-        }
-
+            .context("failed to apply clean-break Postgres schema")?;
         Ok(())
     }
 
@@ -908,7 +736,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
             .query_map([], row_to_task)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_active_tasks")?;
         Ok(tasks)
     }
@@ -993,8 +821,8 @@ impl Db {
         let now = now_str();
         conn.execute(
             "UPDATE pipeline_tasks SET completed_at = ?1, \
-             duration_secs = CASE WHEN started_at IS NOT NULL \
-               THEN CAST((julianday(?1) - julianday(started_at)) * 86400 AS INTEGER) \
+             duration_secs = CASE WHEN started_at IS NOT NULL AND started_at != '' \
+               THEN GREATEST(0, CAST(EXTRACT(EPOCH FROM ((?1)::timestamp - started_at::timestamp)) AS BIGINT)) \
                ELSE NULL END \
              WHERE id = ?2",
             params![now, id],
@@ -1017,7 +845,7 @@ impl Db {
     }
 
     pub fn request_task_revision(&self, id: i64, target_phase: &str, feedback: &str) -> Result<()> {
-        let mut conn = self
+        let conn = self
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
@@ -1060,7 +888,7 @@ impl Db {
         conn.query_row(
             "SELECT revision_count FROM pipeline_tasks WHERE id = ?1",
             params![id],
-            |r: &rusqlite::Row| r.get(0),
+            |r: &pg::Row| r.get(0),
         )
         .unwrap_or(0)
     }
@@ -1195,7 +1023,7 @@ impl Db {
         )?;
         let proposals = stmt
             .query_map(params![repo_path], row_to_proposal)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_proposals")?;
         Ok(proposals)
     }
@@ -1215,7 +1043,7 @@ impl Db {
         )?;
         let proposals = stmt
             .query_map(params![repo_path], row_to_proposal)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_all_proposals")?;
         Ok(proposals)
     }
@@ -1373,7 +1201,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let projects = stmt
             .query_map([], row_to_project)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_projects")?;
         Ok(projects)
     }
@@ -1393,7 +1221,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let projects = stmt
             .query_map(params![pattern], row_to_project)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("search_projects")?;
         Ok(projects)
     }
@@ -1464,7 +1292,7 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut sets = Vec::new();
-        let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut vals: Vec<Box<dyn pg::ToSql>> = Vec::new();
         let mut idx = 1;
 
         macro_rules! maybe_set {
@@ -1508,7 +1336,7 @@ impl Db {
             idx,
         );
         vals.push(Box::new(id));
-        let params: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|v| v.as_ref()).collect();
+        let params: Vec<&dyn pg::ToSql> = vals.iter().map(|v| v.as_ref()).collect();
         conn.execute(&sql, params.as_slice())
             .context("update_project")?;
         Ok(())
@@ -1632,7 +1460,7 @@ impl Db {
                     created_at: parse_ts(&ts),
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_project_deadlines")?;
         Ok(rows)
     }
@@ -1663,7 +1491,7 @@ impl Db {
                     r.get::<_, String>(7)?,
                 ))
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_upcoming_deadlines")?;
         Ok(rows)
     }
@@ -1735,7 +1563,7 @@ impl Db {
         Ok(())
     }
 
-    // ── FTS5 ──────────────────────────────────────────────────────────────
+    // ── Full-text search ──────────────────────────────────────────────────
 
     pub fn fts_index_document(
         &self,
@@ -1782,18 +1610,20 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let sql = if project_id.is_some() {
             "SELECT project_id, task_id, file_path, \
-                    snippet(legal_fts, 3, '<b>', '</b>', '…', 48) as title_snip, \
-                    snippet(legal_fts, 4, '<b>', '</b>', '…', 80) as content_snip, \
-                    rank \
-             FROM legal_fts WHERE legal_fts MATCH ?1 AND project_id = ?2 \
-             ORDER BY rank LIMIT ?3"
+                    left(title, 240) as title_snip, \
+                    left(content, 640) as content_snip, \
+                    ts_rank_cd(search_vector, websearch_to_tsquery('english', ?1)) as rank \
+             FROM legal_fts \
+             WHERE search_vector @@ websearch_to_tsquery('english', ?1) AND project_id = ?2 \
+             ORDER BY rank DESC, task_id DESC LIMIT ?3"
         } else {
             "SELECT project_id, task_id, file_path, \
-                    snippet(legal_fts, 3, '<b>', '</b>', '…', 48) as title_snip, \
-                    snippet(legal_fts, 4, '<b>', '</b>', '…', 80) as content_snip, \
-                    rank \
-             FROM legal_fts WHERE legal_fts MATCH ?1 \
-             ORDER BY rank LIMIT ?3"
+                    left(title, 240) as title_snip, \
+                    left(content, 640) as content_snip, \
+                    ts_rank_cd(search_vector, websearch_to_tsquery('english', ?1)) as rank \
+             FROM legal_fts \
+             WHERE search_vector @@ websearch_to_tsquery('english', ?1) \
+             ORDER BY rank DESC, task_id DESC LIMIT ?2"
         };
         let mut stmt = conn.prepare(sql)?;
         let results = if let Some(pid) = project_id {
@@ -1807,7 +1637,7 @@ impl Db {
                     rank: r.get(5)?,
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("fts_search")?
         } else {
             stmt.query_map(params![query, limit], |r| {
@@ -1820,7 +1650,7 @@ impl Db {
                     rank: r.get(5)?,
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("fts_search")?
         };
         Ok(results)
@@ -1837,7 +1667,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
             .query_map(params![project_id], row_to_task)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_project_tasks")?;
         Ok(tasks)
     }
@@ -1852,7 +1682,7 @@ impl Db {
         ))?;
         let files = stmt
             .query_map(params![project_id], row_to_project_file)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_project_files")?;
         Ok(files)
     }
@@ -1873,7 +1703,7 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let trimmed_query = query.map(str::trim).filter(|q| !q.is_empty());
         let mut base_where = vec!["project_id = ?".to_string()];
-        let mut base_params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(project_id)];
+        let mut base_params: Vec<Box<dyn pg::types::ToSql>> = vec![Box::new(project_id)];
 
         if let Some(q) = trimmed_query {
             base_where.push("(lower(file_name) LIKE ? OR lower(source_path) LIKE ?)".to_string());
@@ -1921,7 +1751,7 @@ impl Db {
             total
         } else {
             let total_sql = format!("SELECT COUNT(*) FROM project_files WHERE {base_where_sql}");
-            let total_params: Vec<&dyn rusqlite::types::ToSql> =
+            let total_params: Vec<&dyn pg::types::ToSql> =
                 base_params.iter().map(|p| p.as_ref()).collect();
             conn.query_row(&total_sql, total_params.as_slice(), |row| row.get(0))
                 .context("list_project_file_page count")?
@@ -1930,7 +1760,7 @@ impl Db {
         let lim = limit.clamp(1, 200);
         let off = offset.max(0);
         let mut page_where = base_where;
-        let mut page_params: Vec<Box<dyn rusqlite::types::ToSql>> = base_params;
+        let mut page_params: Vec<Box<dyn pg::types::ToSql>> = base_params;
         if let Some(cursor) = cursor {
             page_where.push("(created_at < ? OR (created_at = ? AND id < ?))".to_string());
             page_params.push(Box::new(cursor.created_at.clone()));
@@ -1941,7 +1771,7 @@ impl Db {
         if cursor.is_none() {
             page_params.push(Box::new(off));
         }
-        let page_refs: Vec<&dyn rusqlite::types::ToSql> =
+        let page_refs: Vec<&dyn pg::types::ToSql> =
             page_params.iter().map(|p| p.as_ref()).collect();
         let page_where_sql = page_where.join(" AND ");
         let sql = if cursor.is_some() {
@@ -1960,7 +1790,7 @@ impl Db {
             .context("list_project_file_page prepare")?;
         let items = stmt
             .query_map(page_refs.as_slice(), row_to_project_file_meta)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_project_file_page rows")?;
         Ok((items, total))
     }
@@ -1991,7 +1821,7 @@ impl Db {
             .context("search_project_file_name_hits prepare")?;
         let rows = stmt
             .query_map(params![project_id, like, lim], row_to_project_file_meta)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("search_project_file_name_hits rows")?;
         Ok(rows)
     }
@@ -2274,11 +2104,11 @@ impl Db {
         let mut stmt = conn.prepare(sql).context("list_upload_sessions prepare")?;
         let out = if let Some(pid) = project_id {
             stmt.query_map(params![pid, lim], row_to_upload_session)?
-                .collect::<rusqlite::Result<Vec<_>>>()
+                .collect::<pg::Result<Vec<_>>>()
                 .context("list_upload_sessions map")?
         } else {
             stmt.query_map(params![lim], row_to_upload_session)?
-                .collect::<rusqlite::Result<Vec<_>>>()
+                .collect::<pg::Result<Vec<_>>>()
                 .context("list_upload_sessions map")?
         };
         Ok(out)
@@ -2338,7 +2168,7 @@ impl Db {
         )?;
         let rows = stmt
             .query_map(params![session_id], |row| row.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_uploaded_chunks")?;
         Ok(rows)
     }
@@ -2610,7 +2440,7 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut where_clauses = vec!["1=1".to_string()];
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = Vec::new();
 
         if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
             where_clauses.push(
@@ -2633,7 +2463,7 @@ impl Db {
 
         let where_sql = where_clauses.join(" AND ");
         let total_sql = format!("SELECT COUNT(*) FROM knowledge_files WHERE {where_sql}");
-        let total_params: Vec<&dyn rusqlite::types::ToSql> =
+        let total_params: Vec<&dyn pg::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();
         let total: i64 = conn
             .query_row(&total_sql, total_params.as_slice(), |row| row.get(0))
@@ -2641,10 +2471,10 @@ impl Db {
 
         let lim = limit.clamp(1, 200);
         let off = offset.max(0);
-        let mut page_params: Vec<Box<dyn rusqlite::types::ToSql>> = params_vec;
+        let mut page_params: Vec<Box<dyn pg::types::ToSql>> = params_vec;
         page_params.push(Box::new(lim));
         page_params.push(Box::new(off));
-        let page_refs: Vec<&dyn rusqlite::types::ToSql> =
+        let page_refs: Vec<&dyn pg::types::ToSql> =
             page_params.iter().map(|p| p.as_ref()).collect();
         let sql = format!(
             "SELECT id, file_name, description, size_bytes, \"inline\", created_at, \
@@ -2657,7 +2487,7 @@ impl Db {
             .context("list_knowledge_file_page prepare")?;
         let items = stmt
             .query_map(page_refs.as_slice(), row_to_knowledge)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_knowledge_file_page rows")?;
         Ok((items, total))
     }
@@ -2827,10 +2657,10 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let cap = limit.max(1).min(5000);
-        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project_id {
+        let (sql, params_vec): (String, Vec<Box<dyn pg::types::ToSql>>) = match project_id {
             Some(pid) => (
                 "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1".to_string(),
-                vec![Box::new(pid) as Box<dyn rusqlite::types::ToSql>],
+                vec![Box::new(pid) as Box<dyn pg::types::ToSql>],
             ),
             None => (
                 "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings".to_string(),
@@ -2838,9 +2668,9 @@ impl Db {
             ),
         };
         let mut stmt = conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        let params_refs: Vec<&dyn pg::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt.query_map(params_refs.as_slice(), |row: &rusqlite::Row| {
+        let rows = stmt.query_map(params_refs.as_slice(), |row: &pg::Row| {
             Ok((
                 row.get::<_, Option<i64>>(1)?,
                 row.get::<_, Option<i64>>(2)?,
@@ -2910,7 +2740,7 @@ impl Db {
             .context("list_recent_project_files prepare")?;
         let files = stmt
             .query_map(params![project_id, lim], row_to_project_file)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_recent_project_files rows")?;
         Ok(files)
     }
@@ -2933,7 +2763,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
             .query_map(params![project_id, lim], row_to_task)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_recent_completed_project_tasks")?;
         Ok(tasks)
     }
@@ -2943,7 +2773,7 @@ impl Db {
         conn.query_row(
             "SELECT COUNT(*) FROM embeddings",
             [],
-            |r: &rusqlite::Row| r.get(0),
+            |r: &pg::Row| r.get(0),
         )
         .unwrap_or(0)
     }
@@ -2982,7 +2812,7 @@ impl Db {
              FROM citation_verifications WHERE task_id = ?1 ORDER BY id"
         )?;
         let rows = stmt
-            .query_map(params![task_id], |r: &rusqlite::Row| {
+            .query_map(params![task_id], |r: &pg::Row| {
                 Ok(CitationVerification {
                     id: r.get(0)?,
                     task_id: r.get(1)?,
@@ -3026,7 +2856,7 @@ impl Db {
         )?;
         let proposals = stmt
             .query_map(params![threshold, limit], row_to_proposal)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_top_scored_proposals")?;
         Ok(proposals)
     }
@@ -3054,7 +2884,7 @@ impl Db {
         )?;
         let proposals = stmt
             .query_map([], row_to_proposal)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_untriaged_proposals")?;
         Ok(proposals)
     }
@@ -3072,7 +2902,7 @@ impl Db {
         )?;
         let entries = stmt
             .query_map([], row_to_queue_entry)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_queue")?;
         Ok(entries)
     }
@@ -3181,7 +3011,7 @@ impl Db {
         )?;
         let entries = stmt
             .query_map(params![repo_path], row_to_queue_entry)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_queued_branches_for_repo")?;
         Ok(entries)
     }
@@ -3197,7 +3027,7 @@ impl Db {
         )?;
         let entries = stmt
             .query_map(params![task_id], row_to_queue_entry)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_queue_entries_for_task")?;
         Ok(entries)
     }
@@ -3296,7 +3126,7 @@ impl Db {
         )?;
         let outputs = stmt
             .query_map(params![task_id], row_to_task_output)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_task_outputs")?;
         Ok(outputs)
     }
@@ -3329,7 +3159,7 @@ impl Db {
         )?;
         let messages = stmt
             .query_map(params![task_id], row_to_task_message)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_task_messages")?;
         Ok(messages)
     }
@@ -3345,7 +3175,7 @@ impl Db {
         )?;
         let messages = stmt
             .query_map(params![task_id], row_to_task_message)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_pending_task_messages")?;
         Ok(messages)
     }
@@ -3426,7 +3256,7 @@ impl Db {
         )?;
         let repos = stmt
             .query_map([], row_to_repo)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_repos")?;
         Ok(repos)
     }
@@ -3527,7 +3357,7 @@ impl Db {
                     created_at: parse_ts(&ts),
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_project_events")?;
         Ok(rows)
     }
@@ -3552,7 +3382,7 @@ impl Db {
                     created_at: parse_ts(&ts),
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_task_events")?;
         Ok(rows)
     }
@@ -3573,6 +3403,13 @@ impl Db {
             .optional()
             .context("get_config")?;
         Ok(result)
+    }
+
+    pub fn ensure_config(&self, key: &str, value: &str) -> Result<()> {
+        if self.get_config(key)?.is_none() {
+            self.set_config(key, value)?;
+        }
+        Ok(())
     }
 
     pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
@@ -3624,7 +3461,7 @@ impl Db {
         )?;
         let events = stmt
             .query_map(params![limit], row_to_legacy_event)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_recent_events")?;
         Ok(events)
     }
@@ -3679,7 +3516,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
             .query_map([], row_to_task)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_done_tasks_without_queue")?;
         Ok(tasks)
     }
@@ -3720,7 +3557,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
             .query_map(params![limit], row_to_task)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_recent_merged_tasks")?;
         Ok(tasks)
     }
@@ -3782,7 +3619,7 @@ impl Db {
         let mut stmt = conn.prepare(&sql)?;
         let tasks = stmt
             .query_map(params![repo_path], row_to_task)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_all_tasks")?;
         Ok(tasks)
     }
@@ -3845,7 +3682,7 @@ impl Db {
                     row.get::<_, String>(2)?,
                 ))
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_chat_threads")?;
         Ok(rows)
     }
@@ -3873,7 +3710,7 @@ impl Db {
                     is_bot_message: row.get::<_, i32>(7)? != 0,
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_chat_messages")?;
         Ok(rows)
     }
@@ -3900,7 +3737,7 @@ impl Db {
                     requires_trigger: row.get::<_, i32>(4)? != 0,
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_all_groups")?;
         Ok(groups)
     }
@@ -4009,8 +3846,10 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let n = conn
             .execute(
-                "DELETE FROM sessions WHERE created_at < datetime('now', ?1)",
-                params![format!("-{max_age_hours} hours")],
+                "DELETE FROM sessions \
+                 WHERE NULLIF(created_at, '') IS NOT NULL \
+                   AND created_at::timestamp < (timezone('UTC', now()) - (?1 * INTERVAL '1 hour'))",
+                params![max_age_hours],
             )
             .context("expire_sessions")?;
         Ok(n)
@@ -4084,7 +3923,7 @@ impl Db {
         )?;
         let runs = stmt
             .query_map(params![jid], row_to_chat_agent_run)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_undelivered_runs")?;
         Ok(runs)
     }
@@ -4130,7 +3969,7 @@ impl Db {
                     is_bot_message: row.get::<_, i32>(7)? != 0,
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_messages_since")?;
         Ok(rows)
     }
@@ -4161,7 +4000,7 @@ impl Db {
                 params![category, level, since_ts, limit],
                 row_to_legacy_event,
             )?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("get_events_filtered")?;
         Ok(events)
     }
@@ -4375,7 +4214,7 @@ impl Db {
                     created_at: row.get(4)?,
                 })
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .collect::<pg::Result<Vec<_>>>()
             .context("list_api_keys")?;
         Ok(keys)
     }

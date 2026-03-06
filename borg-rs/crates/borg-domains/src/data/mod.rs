@@ -97,7 +97,7 @@ const DATA_IMPLEMENT_SYSTEM: &str = "\
 You are an autonomous data analysis agent. Explore datasets, build pipelines, \
 write queries, and produce analyses end-to-end. Be precise with numbers — \
 always show your methodology and verify aggregations. Use Bash for data \
-exploration (python, sqlite3, jq, csvkit, etc.). Do not fabricate data or statistics.";
+exploration (python, psql, jq, csvkit, etc.). Do not fabricate data or statistics.";
 
 const DATA_IMPLEMENT_INSTRUCTION: &str = "\
 Handle this data task end-to-end:

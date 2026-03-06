@@ -13,7 +13,9 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
-rusqlite = { workspace = true }
+tokio-postgres = { workspace = true }
+deadpool-postgres = { workspace = true }
+postgres-types = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
 libc = "0.2"

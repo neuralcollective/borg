@@ -1,10 +1,6 @@
-use borg_core::db::Db;
+mod support;
 
-fn open_db() -> Db {
-    let mut db = Db::open(":memory:").expect("open in-memory db");
-    db.migrate().expect("migrate");
-    db
-}
+use support::open_db;
 
 #[test]
 fn total_knowledge_bytes_empty() {

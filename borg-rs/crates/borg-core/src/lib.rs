@@ -9,6 +9,7 @@ pub mod modes;
 pub mod observer;
 pub mod pipeline;
 mod pipeline_maintenance;
+pub mod pgcompat;
 pub mod sandbox;
 pub mod sidecar;
 pub mod stream;

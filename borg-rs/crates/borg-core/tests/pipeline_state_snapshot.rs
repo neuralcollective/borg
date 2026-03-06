@@ -10,13 +10,11 @@ use borg_core::{
 };
 use chrono::Utc;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+mod support;
 
-fn open_db() -> Db {
-    let mut db = Db::open(":memory:").expect("open in-memory db");
-    db.migrate().expect("migrate");
-    db
-}
+use support::open_db;
+
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 fn make_task(db: &Db) -> i64 {
     let task = Task {

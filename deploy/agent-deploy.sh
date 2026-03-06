@@ -45,7 +45,7 @@ if command -v apt-get >/dev/null 2>&1; then
   apt-get install -y \
     ca-certificates curl git rsync jq unzip \
     build-essential pkg-config libssl-dev \
-    docker.io sqlite3 cloudflared
+    docker.io postgresql-client cloudflared
 else
   echo "only apt-based hosts are currently supported by agent-deploy.sh" >&2
   exit 1

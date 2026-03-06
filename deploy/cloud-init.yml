@@ -33,9 +33,5 @@ runcmd:
   - ufw allow ssh && ufw --force enable
   - systemctl enable fail2ban && systemctl start fail2ban
 
-  # Litestream (for SQLite DB streaming backups to S3)
-  - wget https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream_0.3.13_linux_amd64.deb
-  - dpkg -i litestream_0.3.13_linux_amd64.deb
-
   # Workspace
   - mkdir -p /opt/borg

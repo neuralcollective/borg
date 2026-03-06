@@ -98,6 +98,7 @@ pub struct Config {
     /// Public base URL for OAuth callbacks (e.g. "https://app.borg.legal").
     /// Falls back to http://localhost:{web_port} if unset.
     pub public_url: String,
+    pub database_url: String,
 
     // File storage backend
     pub storage_backend: String, // "local" | "s3"
@@ -728,13 +729,8 @@ impl Config {
                 self.experimental_domains.to_string(),
             ),
         ];
-        let conn_guard = db.raw_conn();
-        let conn = conn_guard.lock().unwrap_or_else(|e| e.into_inner());
         for (key, value) in entries {
-            conn.execute(
-                "INSERT OR IGNORE INTO config (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
-                rusqlite::params![key, value],
-            )?;
+            db.ensure_config(key, value)?;
         }
         Ok(())
     }
@@ -967,6 +963,9 @@ impl Config {
             wa_disabled: get_bool("WA_DISABLED", &dotenv, false),
             observer_config: get_str("OBSERVER_CONFIG", &dotenv, ""),
             public_url: get_str("PUBLIC_URL", &dotenv, ""),
+            database_url: get("DATABASE_URL", &dotenv)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("DATABASE_URL is required; SQLite is no longer supported"))?,
             storage_backend: get_str("STORAGE_BACKEND", &dotenv, "local"),
             s3_bucket: get_str("S3_BUCKET", &dotenv, ""),
             s3_region: get_str("AWS_REGION", &dotenv, "us-east-1"),

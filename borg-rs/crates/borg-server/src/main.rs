@@ -121,8 +121,7 @@ async fn main() -> anyhow::Result<()> {
     }
     info!("API token written to {token_path}");
 
-    let db_path = format!("{}/borg.db", env_config.data_dir);
-    let mut db = Db::open(&db_path)?;
+    let mut db = Db::open(&env_config.database_url)?;
     db.migrate()?;
 
     // Seed DB from env on first run, then load DB values (DB wins over env)

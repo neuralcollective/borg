@@ -4,7 +4,7 @@
 
 ### .env — secrets and bootstrap-only values
 
-These must be present before the process starts (before the DB is opened) or are sensitive credentials that should never be stored in SQLite.
+These must be present before the process starts (before the DB is opened) or are sensitive credentials that should never be stored in PostgreSQL config rows.
 
 | Key | Reason |
 |-----|--------|
@@ -13,7 +13,7 @@ These must be present before the process starts (before the DB is opened) or are
 | `ANTHROPIC_API_KEY` | Secret |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Secret, rotates from credentials file |
 | `PIPELINE_REPO` | Primary repo for self-update; parsed before DB is ready |
-| `DATA_DIR` | Needed to locate the DB file itself |
+| `DATA_DIR` | Needed to locate local runtime state such as API tokens and work directories |
 | `WA_AUTH_DIR` | Path to Baileys auth state; needed at sidecar start |
 | `WA_DISABLED` | Set `true` to disable WhatsApp bridge |
 | `PIPELINE_ADMIN_CHAT` | Used before DB is ready for startup notifications |
