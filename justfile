@@ -44,6 +44,8 @@ sidecar:
 setup: image sidecar dash b
 
 # Restart/start the service and verify API comes up.
+start: restart
+
 restart:
     #!/usr/bin/env bash
     set -euo pipefail
