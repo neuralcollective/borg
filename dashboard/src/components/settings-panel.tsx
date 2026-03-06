@@ -171,23 +171,13 @@ export function SettingsPanel() {
 
         {/* Agent Settings */}
         <Section title="Agent">
-          <SelectField
-            label="Backend"
-            desc="Default AI provider for pipeline tasks"
-            value={effective.backend}
-            onChange={(v) => update("backend", v)}
-            options={[
-              { value: "claude", label: "Claude (Anthropic)" },
-              { value: "codex", label: "Codex (OpenAI)" },
-              { value: "gemini", label: "Gemini (Google)" },
-              { value: "local", label: "Local (Ollama)" },
-            ]}
-          />
-          <TextField
-            label="Model"
-            desc="Claude model ID for agent tasks"
-            value={effective.model}
-            onChange={(v) => update("model", v)}
+          <ModelPicker
+            model={effective.model}
+            backend={effective.backend}
+            onChange={(model, backend) => {
+              update("model", model);
+              update("backend", backend);
+            }}
           />
           <NumberField
             label="Timeout (s)"
@@ -729,6 +719,47 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between">
       <span className="text-[12px] text-zinc-500">{label}</span>
       <span className="text-[12px] font-medium tabular-nums text-zinc-300">{value}</span>
+    </div>
+  );
+}
+
+const MODEL_OPTIONS = [
+  { model: "gpt-5.4", backend: "codex", label: "GPT 5.4 (OpenAI)" },
+  { model: "claude-opus-4-6", backend: "claude", label: "Claude Opus 4.6 (Anthropic)" },
+  { model: "claude-sonnet-4-6", backend: "claude", label: "Claude Sonnet 4.6 (Anthropic)" },
+];
+
+function ModelPicker({ model, backend, onChange }: {
+  model: string;
+  backend: string;
+  onChange: (model: string, backend: string) => void;
+}) {
+  const match = MODEL_OPTIONS.find((o) => o.model === model);
+  const value = match ? match.model : "__custom__";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <Label>Model</Label>
+          <Desc>AI model for pipeline and chat agents. Switching to GPT automatically uses the Codex backend.</Desc>
+        </div>
+        <select
+          value={value}
+          onChange={(e) => {
+            const opt = MODEL_OPTIONS.find((o) => o.model === e.target.value);
+            if (opt) onChange(opt.model, opt.backend);
+          }}
+          className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+        >
+          {MODEL_OPTIONS.map((o) => (
+            <option key={o.model} value={o.model}>{o.label}</option>
+          ))}
+          {!match && (
+            <option value="__custom__">{model} ({backend})</option>
+          )}
+        </select>
+      </div>
     </div>
   );
 }
