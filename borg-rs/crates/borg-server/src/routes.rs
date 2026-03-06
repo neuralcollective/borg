@@ -3140,8 +3140,7 @@ pub(crate) async fn retry_upload_session(
     let sem = Arc::clone(&state.upload_processing_sem);
     let assembled_path = session.stored_path.clone();
     tokio::spawn(async move {
-        let permit = sem.acquire_owned().await;
-        if permit.is_err() {
+        let Ok(_permit) = sem.acquire_owned().await else {
             let _ = state_cloned.db.set_upload_session_state(
                 session_id,
                 "failed",
@@ -3149,8 +3148,7 @@ pub(crate) async fn retry_upload_session(
                 Some("upload processing semaphore unavailable"),
             );
             return;
-        }
-        let _permit = permit.unwrap();
+        };
         process_completed_upload_session(state_cloned, project_id, session_id, assembled_path)
             .await;
     });
@@ -3383,8 +3381,7 @@ pub(crate) async fn complete_upload_session(
     let state_cloned = state.clone();
     let sem = Arc::clone(&state.upload_processing_sem);
     tokio::spawn(async move {
-        let permit = sem.acquire_owned().await;
-        if permit.is_err() {
+        let Ok(_permit) = sem.acquire_owned().await else {
             let _ = state_cloned.db.set_upload_session_state(
                 session_id,
                 "failed",
@@ -3392,8 +3389,7 @@ pub(crate) async fn complete_upload_session(
                 Some("upload processing semaphore unavailable"),
             );
             return;
-        }
-        let _permit = permit.unwrap();
+        };
         process_completed_upload_session(state_cloned, project_id, session_id, assembled_path)
             .await;
     });
@@ -4416,7 +4412,7 @@ pub(crate) async fn post_chat(
     let rate = state.config.chat_rate_limit.max(1) as u64;
     let cooldown = std::time::Duration::from_secs(60 / rate);
     {
-        let mut map = state.chat_rate.lock().unwrap();
+        let mut map = state.chat_rate.lock().unwrap_or_else(|e| e.into_inner());
         let now = std::time::Instant::now();
         if let Some(last) = map.get(&thread) {
             if now.duration_since(*last) < cooldown {

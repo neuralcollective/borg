@@ -1049,7 +1049,7 @@ async fn main() -> anyhow::Result<()> {
                 "http://localhost:3131",
             ]
             .iter()
-            .map(|o| o.parse().unwrap())
+            .filter_map(|o| o.parse().ok())
             .collect();
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(origins))
