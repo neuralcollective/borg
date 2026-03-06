@@ -50,6 +50,8 @@ export function SettingsPanel() {
   const effective = settings ? { ...settings, ...draft } : null;
   const hasDraft = Object.keys(draft).length > 0;
   const publicUrlInvalid = !!effective?.public_url && !isValidHttpUrl(effective.public_url);
+  const visibleCats = (effective?.visible_categories ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const hasCodeMode = visibleCats.length === 0 || visibleCats.some((c) => c.toLowerCase().includes("engineering") || c.toLowerCase().includes("data"));
 
   async function handleSave() {
     if (!hasDraft) return;
@@ -203,21 +205,23 @@ export function SettingsPanel() {
           />
         </Section>
 
-        {/* Git Attribution */}
-        <Section title="Git Attribution">
-          <ToggleField
-            label="Claude Co-author"
-            desc="Include Claude as Co-Authored-By in pipeline commits"
-            value={effective.git_claude_coauthor}
-            onChange={(v) => update("git_claude_coauthor", v)}
-          />
-          <TextField
-            label="User Co-author"
-            desc="Add as Co-Authored-By in commits (e.g. username <email@example.com>)"
-            value={effective.git_user_coauthor}
-            onChange={(v) => update("git_user_coauthor", v)}
-          />
-        </Section>
+        {/* Git Attribution — only relevant for code modes */}
+        {hasCodeMode && (
+          <Section title="Git Attribution">
+            <ToggleField
+              label="Claude Co-author"
+              desc="Include Claude as Co-Authored-By in pipeline commits"
+              value={effective.git_claude_coauthor}
+              onChange={(v) => update("git_claude_coauthor", v)}
+            />
+            <TextField
+              label="User Co-author"
+              desc="Add as Co-Authored-By in commits (e.g. username <email@example.com>)"
+              value={effective.git_user_coauthor}
+              onChange={(v) => update("git_user_coauthor", v)}
+            />
+          </Section>
+        )}
 
         {/* Permissions */}
         <Section title="Permissions">
@@ -441,11 +445,11 @@ export function SettingsPanel() {
           />
         </Section>
 
-        {/* Per-Repo Settings */}
-        <ReposSection />
+        {/* Per-Repo Settings — only for code modes */}
+        {hasCodeMode && <ReposSection />}
 
-        {/* Docker Cache Volumes */}
-        <CacheSection />
+        {/* Docker Cache Volumes — only for code modes */}
+        {hasCodeMode && <CacheSection />}
 
         {/* System Info (read-only) */}
         <Section title="System">
@@ -541,24 +545,56 @@ function CacheSection() {
     }
   }
 
+  async function handleDeleteAll() {
+    if (!confirm(`Delete all ${volumes.length} Docker cache volumes?`)) return;
+    setDeleting("__all__");
+    try {
+      for (const vol of volumes) {
+        await deleteCacheVolume(vol.name);
+      }
+      await refetch();
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  const totalSize = volumes.reduce((sum, v) => sum + v.size, 0);
+
   return (
-    <Section title="Docker Cache Volumes">
-      {volumes.map((vol) => (
-        <div key={vol.name} className="flex items-center justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-mono text-zinc-300 truncate">{vol.name}</div>
-            <div className="text-[11px] text-zinc-600">{formatBytes(vol.size)}</div>
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+          Docker Cache Volumes
+          <span className="ml-2 font-normal normal-case text-zinc-600">
+            {volumes.length} volumes · {formatBytes(totalSize)}
+          </span>
+        </h3>
+        <button
+          onClick={handleDeleteAll}
+          disabled={deleting !== null}
+          className="rounded-md border border-red-500/20 px-2.5 py-1 text-[11px] font-medium text-red-400/70 hover:border-red-500/40 hover:text-red-400 disabled:opacity-40 transition-colors"
+        >
+          {deleting === "__all__" ? "Deleting..." : "Delete All"}
+        </button>
+      </div>
+      <div className="max-h-[240px] space-y-3 overflow-y-auto rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+        {volumes.map((vol) => (
+          <div key={vol.name} className="flex items-center justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] font-mono text-zinc-300 truncate">{vol.name}</div>
+              <div className="text-[11px] text-zinc-600">{formatBytes(vol.size)}</div>
+            </div>
+            <button
+              onClick={() => handleDelete(vol.name)}
+              disabled={deleting !== null}
+              className="shrink-0 rounded-md border border-red-500/20 px-2.5 py-1 text-[11px] font-medium text-red-400/70 hover:border-red-500/40 hover:text-red-400 disabled:opacity-40 transition-colors"
+            >
+              {deleting === vol.name ? "Deleting..." : "Delete"}
+            </button>
           </div>
-          <button
-            onClick={() => handleDelete(vol.name)}
-            disabled={deleting === vol.name}
-            className="shrink-0 rounded-md border border-red-500/20 px-2.5 py-1 text-[11px] font-medium text-red-400/70 hover:border-red-500/40 hover:text-red-400 disabled:opacity-40 transition-colors"
-          >
-            {deleting === vol.name ? "Deleting..." : "Delete"}
-          </button>
-        </div>
-      ))}
-    </Section>
+        ))}
+      </div>
+    </div>
   );
 }
 
