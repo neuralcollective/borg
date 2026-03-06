@@ -637,7 +637,7 @@ fn row_to_project(row: &pg::Row<'_>) -> pg::Result<ProjectRow> {
 }
 
 const PROJECT_FILE_COLS: &str = "id, project_id, file_name, source_path, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at, privileged";
-const PROJECT_FILE_META_COLS: &str = "id, project_id, file_name, source_path, mime_type, size_bytes, privileged, created_at, length(extracted_text)";
+const PROJECT_FILE_META_COLS: &str = "id, project_id, file_name, source_path, mime_type, size_bytes, privileged, created_at, length(extracted_text)::BIGINT";
 
 fn row_to_project_file(row: &pg::Row<'_>) -> pg::Result<ProjectFileRow> {
     let created_at_str: String = row.get(9)?;
@@ -3654,11 +3654,11 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let ts = now_str();
         conn.execute(
-            "INSERT OR IGNORE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT DO NOTHING",
             params![id, chat_jid, sender, sender_name, content, ts,
-                    if is_from_me { 1i32 } else { 0 },
-                    if is_bot_message { 1i32 } else { 0 }],
+                    if is_from_me { 1i64 } else { 0i64 },
+                    if is_bot_message { 1i64 } else { 0i64 }],
         )
         .context("insert_chat_message")?;
         Ok(())
@@ -3706,8 +3706,8 @@ impl Db {
                     sender_name: row.get(3)?,
                     content: row.get(4)?,
                     timestamp: row.get(5)?,
-                    is_from_me: row.get::<_, i32>(6)? != 0,
-                    is_bot_message: row.get::<_, i32>(7)? != 0,
+                    is_from_me: row.get::<_, i64>(6)? != 0,
+                    is_bot_message: row.get::<_, i64>(7)? != 0,
                 })
             })?
             .collect::<pg::Result<Vec<_>>>()
@@ -3734,7 +3734,7 @@ impl Db {
                     trigger_pattern: row
                         .get::<_, Option<String>>(3)?
                         .unwrap_or_else(|| "@Borg".into()),
-                    requires_trigger: row.get::<_, i32>(4)? != 0,
+                    requires_trigger: row.get::<_, i64>(4)? != 0,
                 })
             })?
             .collect::<pg::Result<Vec<_>>>()
@@ -3759,7 +3759,7 @@ impl Db {
              VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT(jid) DO UPDATE SET name=excluded.name, folder=excluded.folder, \
                trigger_pattern=excluded.trigger_pattern, requires_trigger=excluded.requires_trigger",
-            params![jid, name, folder, trigger_pattern, if requires_trigger { 1i32 } else { 0 }],
+            params![jid, name, folder, trigger_pattern, if requires_trigger { 1i64 } else { 0i64 }],
         )
         .context("register_group")?;
         Ok(())
@@ -3797,9 +3797,10 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
-            "INSERT INTO sessions (folder, session_id) VALUES (?1, ?2) \
-             ON CONFLICT(folder) DO UPDATE SET session_id=excluded.session_id, created_at=datetime('now')",
-            params![folder, session_id],
+            "INSERT INTO sessions (folder, session_id, created_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(folder) DO UPDATE SET session_id=excluded.session_id, created_at=excluded.created_at",
+
+            params![folder, session_id, now_str()],
         )
         .context("set_session")?;
         Ok(())
@@ -3848,7 +3849,7 @@ impl Db {
             .execute(
                 "DELETE FROM sessions \
                  WHERE NULLIF(created_at, '') IS NOT NULL \
-                   AND created_at::timestamp < (timezone('UTC', now()) - (?1 * INTERVAL '1 hour'))",
+                   AND created_at::timestamp < (timezone('UTC', now()) - make_interval(hours => ?1::int))",
                 params![max_age_hours],
             )
             .context("expire_sessions")?;
@@ -3891,8 +3892,8 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE chat_agent_runs SET status='completed', output=?1, new_session_id=?2, \
-             last_msg_timestamp=?3, completed_at=datetime('now') WHERE id=?4",
-            params![output, new_session_id, last_msg_timestamp, id],
+             last_msg_timestamp=?3, completed_at=?4 WHERE id=?5",
+            params![output, new_session_id, last_msg_timestamp, now_str(), id],
         )
         .context("complete_chat_agent_run")?;
         Ok(())
@@ -3965,8 +3966,8 @@ impl Db {
                     sender_name: row.get(3)?,
                     content: row.get(4)?,
                     timestamp: row.get(5)?,
-                    is_from_me: row.get::<_, i32>(6)? != 0,
-                    is_bot_message: row.get::<_, i32>(7)? != 0,
+                    is_from_me: row.get::<_, i64>(6)? != 0,
+                    is_bot_message: row.get::<_, i64>(7)? != 0,
                 })
             })?
             .collect::<pg::Result<Vec<_>>>()

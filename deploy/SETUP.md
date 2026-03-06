@@ -126,6 +126,7 @@ cd /opt/borg
 # Create .env
 cat > .env << 'EOF'
 CLAUDE_CODE_OAUTH_TOKEN=<your-oauth-token>
+DATABASE_URL=postgres://borg:borg@127.0.0.1:5432/borg
 SANDBOX_BACKEND=docker
 CONTAINER_IMAGE=borg-agent
 CONTINUOUS_MODE=true

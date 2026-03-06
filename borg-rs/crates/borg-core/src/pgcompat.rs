@@ -12,8 +12,6 @@ use tokio_postgres::{
     Row as PgRow,
 };
 
-const PG_NOW_TEXT_SQL: &str = "to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')";
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -554,24 +552,7 @@ fn is_insert_statement(sql: &str) -> bool {
 }
 
 fn translate_sql(sql: &str) -> String {
-    let sql = translate_insert_or_ignore(sql);
-    let sql = sql.replace("datetime('now')", PG_NOW_TEXT_SQL);
-    replace_placeholders(&sql)
-}
-
-fn translate_insert_or_ignore(sql: &str) -> String {
-    let trimmed = sql.trim_start();
-    const PREFIX: &str = "INSERT OR IGNORE";
-    if !trimmed
-        .get(..PREFIX.len())
-        .map(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
-        .unwrap_or(false)
-    {
-        return sql.to_string();
-    }
-    let leading = &sql[..sql.len() - trimmed.len()];
-    let rest = &trimmed[PREFIX.len()..];
-    format!("{leading}INSERT{rest} ON CONFLICT DO NOTHING")
+    replace_placeholders(sql)
 }
 
 fn replace_placeholders(sql: &str) -> String {

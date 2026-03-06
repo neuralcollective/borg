@@ -239,8 +239,6 @@ CREATE TABLE IF NOT EXISTS upload_session_chunks (
   created_at TEXT NOT NULL DEFAULT (to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')),
   PRIMARY KEY(session_id, chunk_index)
 );
-CREATE INDEX IF NOT EXISTS idx_upload_chunks_session ON upload_session_chunks(session_id, chunk_index);
-
 -- ── Parties (conflict checking) ──────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS parties (

@@ -126,20 +126,4 @@ All `payload` values are JSON objects. Unknown keys are ignored for forward comp
 
 ## Migration strategy
 
-All migrations are additive — no columns are dropped, no tables are renamed. The existing Zig borg process and the Rust rewrite can share the same DB file during a rolling transition.
-
-**Order of operations:**
-
-1. Run `001_initial.sql` on a fresh DB, or verify all tables exist on an existing DB (the Zig process already created them).
-2. Run `002_repos_table.sql` to add the `repos` table and `repo_id` columns. The Zig process ignores the new columns. After running, populate `repos` from the WATCHED_REPOS / PIPELINE_REPO config, then backfill `repo_id` on existing rows:
-   ```sql
-   UPDATE pipeline_tasks SET repo_id = (SELECT id FROM repos WHERE path = repo_path);
-   UPDATE proposals SET repo_id = (SELECT id FROM repos WHERE path = repo_path);
-   ```
-3. Run `003_events_table.sql` to add `pipeline_events`. The Zig process continues writing to the legacy `events` table; borg-rs writes to `pipeline_events`. Both can coexist.
-4. Run `004_task_messages.sql`. The Zig process has no task_messages concept; rows only appear from borg-rs.
-5. Run `005_config_table.sql`. Seed from .env defaults on first start.
-
-**Never remove `repo_path` from `pipeline_tasks` or `proposals`** until the Zig process is fully retired and all reads have been migrated to JOIN through `repos`.
-
-The `state` table's `schema_version` key is maintained by the Zig process. Borg-rs uses its own migration tracking (e.g., a `_migrations` table or embedded version in `state`) and does not rely on the Zig schema_version value.
+Clean-break: the full schema lives in `schema.pg.sql` and is applied via `CREATE TABLE IF NOT EXISTS` on every startup. No incremental migrations, no SQLite compatibility. Future schema changes should be expressed as idempotent DDL added to `schema.pg.sql` (e.g. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
