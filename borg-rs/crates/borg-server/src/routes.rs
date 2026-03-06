@@ -12,7 +12,7 @@ use axum::{
 };
 use borg_core::{
     config::{refresh_oauth_token, Config},
-    db::{Db, LegacyEvent, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
+    db::{Db, LegacyEvent, ProjectFileMetaRow, ProjectFileRow, ProjectRow, TaskMessage, TaskOutput},
     types::{PhaseConfig, PhaseContext, RepoConfig, Task},
 };
 use chrono::Utc;
@@ -337,6 +337,52 @@ impl From<ProjectFileRow> for ProjectFileJson {
     }
 }
 
+impl From<ProjectFileMetaRow> for ProjectFileJson {
+    fn from(f: ProjectFileMetaRow) -> Self {
+        Self {
+            id: f.id,
+            project_id: f.project_id,
+            file_name: f.file_name,
+            mime_type: f.mime_type,
+            size_bytes: f.size_bytes,
+            privileged: f.privileged,
+            has_text: f.has_text,
+            text_chars: f.text_chars.max(0) as usize,
+            created_at: f.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ListProjectFilesQuery {
+    #[serde(default = "default_project_file_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    has_text: Option<bool>,
+    #[serde(default)]
+    privileged_only: Option<bool>,
+}
+
+fn default_project_file_limit() -> i64 { 50 }
+
+#[derive(Deserialize)]
+pub(crate) struct ListKnowledgeQuery {
+    #[serde(default = "default_project_file_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    jurisdiction: Option<String>,
+}
+
 // ── Settings constants ────────────────────────────────────────────────────
 
 pub(crate) const SETTINGS_KEYS: &[&str] = &[
@@ -505,140 +551,298 @@ fn is_binary_mime(mime: &str) -> bool {
         || mime.starts_with("application/octet-stream")
 }
 
-async fn stage_project_files(session_dir: &str, files: &[ProjectFileRow], storage: &FileStorage) {
-    let dest_dir = format!("{session_dir}/project_files");
-    let _ = std::fs::create_dir_all(&dest_dir);
-    for file in files {
-        let safe_name = std::path::Path::new(&file.stored_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unnamed");
-        let dest = format!("{dest_dir}/{safe_name}");
-        if let Ok(bytes) = storage.read_all(&file.stored_path).await {
-            let _ = tokio::fs::write(&dest, bytes).await;
+fn format_compact_bytes(n: i64) -> String {
+    if n < 1024 {
+        format!("{n} B")
+    } else if n < 1024 * 1024 {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    } else if n < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB", n as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn normalized_retrieval_query(query: &str) -> String {
+    let tokens = query
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
+        .map(str::trim)
+        .filter(|t| t.len() >= 2)
+        .take(20)
+        .collect::<Vec<_>>();
+    tokens.join(" ")
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
+    if input.chars().count() <= max_chars {
+        return (input.to_string(), false);
+    }
+    let clipped = input.chars().take(max_chars).collect::<String>();
+    (clipped, true)
+}
+
+#[derive(Clone)]
+struct ProjectContextHit {
+    file_name: String,
+    snippet: String,
+    score: f64,
+    source: &'static str,
+}
+
+#[derive(Clone)]
+struct StagedProjectFile {
+    file: ProjectFileRow,
+    staged_path: String,
+    snippet: String,
+    source: &'static str,
+    score: f64,
+    clipped: bool,
+}
+
+async fn search_project_context_hits(
+    db: &Db,
+    opensearch: Option<&crate::opensearch::OpenSearchClient>,
+    project_id: i64,
+    query: &str,
+    limit: i64,
+) -> Vec<ProjectContextHit> {
+    let mut hits = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(search) = opensearch {
+        match search.search(query, Some(project_id), limit.max(1)).await {
+            Ok(results) => {
+                for r in results {
+                    if seen.insert(r.file_path.clone()) {
+                        hits.push(ProjectContextHit {
+                            file_name: r.file_path,
+                            snippet: r.content_snippet,
+                            score: r.score,
+                            source: "opensearch",
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("project context opensearch query failed, falling back to sqlite fts: {e}");
+            }
         }
     }
+
+    let fts_query = normalized_retrieval_query(query);
+    if hits.is_empty() && !fts_query.is_empty() {
+        if let Ok(results) = db.fts_search(&fts_query, Some(project_id), limit.max(1)) {
+            for r in results {
+                if seen.insert(r.file_path.clone()) {
+                    hits.push(ProjectContextHit {
+                        file_name: r.file_path,
+                        snippet: r.content_snippet,
+                        score: (-r.rank).max(0.0),
+                        source: "keyword",
+                    });
+                }
+            }
+        }
+    }
+
+    if let Ok((meta_rows, _)) = db.list_project_file_page(project_id, Some(query), limit, 0, None, None) {
+        for row in meta_rows {
+            if seen.insert(row.file_name.clone()) {
+                hits.push(ProjectContextHit {
+                    file_name: row.file_name,
+                    snippet: "Filename matched the current request.".to_string(),
+                    score: 0.0,
+                    source: "filename",
+                });
+            }
+        }
+    }
+
+    hits.truncate(limit.max(1) as usize);
+    hits
+}
+
+async fn stage_project_files(
+    session_dir: &str,
+    files: &[(ProjectFileRow, ProjectContextHit)],
+    storage: &FileStorage,
+) -> Vec<StagedProjectFile> {
+    const MAX_STAGE_FILES: usize = 8;
+    const MAX_STAGE_CHARS_PER_FILE: usize = 160_000;
+    const MAX_STAGE_CHARS_TOTAL: usize = 600_000;
+
+    let dest_dir = format!("{session_dir}/project_files");
+    let _ = std::fs::remove_dir_all(&dest_dir);
+    let _ = std::fs::create_dir_all(&dest_dir);
+    let mut staged = Vec::new();
+    let mut remaining_chars = MAX_STAGE_CHARS_TOTAL;
+
+    for (idx, (file, hit)) in files.iter().take(MAX_STAGE_FILES).enumerate() {
+        if remaining_chars < 512 {
+            break;
+        }
+
+        let source_text = if !file.extracted_text.trim().is_empty() {
+            file.extracted_text.replace('\0', "")
+        } else if !is_binary_mime(&file.mime_type) {
+            match storage.read_all(&file.stored_path).await {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).replace('\0', ""),
+                Err(_) => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        if source_text.trim().is_empty() {
+            continue;
+        }
+
+        let per_file_budget = MAX_STAGE_CHARS_PER_FILE.min(remaining_chars);
+        let (clipped_text, clipped) = truncate_chars(&source_text, per_file_budget);
+        let base_name = sanitize_upload_name(&file.file_name);
+        let stage_name = if is_binary_mime(&file.mime_type) || !file.mime_type.starts_with("text/") {
+            format!("{:02}-{}.extracted.txt", idx + 1, base_name)
+        } else {
+            format!("{:02}-{}", idx + 1, base_name)
+        };
+        let dest = format!("{dest_dir}/{stage_name}");
+        if tokio::fs::write(&dest, clipped_text.as_bytes()).await.is_err() {
+            continue;
+        }
+        remaining_chars = remaining_chars.saturating_sub(clipped_text.chars().count());
+        staged.push(StagedProjectFile {
+            file: file.clone(),
+            staged_path: dest,
+            snippet: hit.snippet.clone(),
+            source: hit.source,
+            score: hit.score,
+            clipped,
+        });
+    }
+    staged
 }
 
 async fn build_project_context(
     project: &ProjectRow,
-    files: &[ProjectFileRow],
+    retrieval_query: &str,
     session_dir: &str,
     db: &Db,
+    opensearch: Option<&crate::opensearch::OpenSearchClient>,
     storage: &FileStorage,
 ) -> String {
-    let tasks = db.list_project_tasks(project.id).unwrap_or_default();
-    let completed_tasks: Vec<_> = tasks.iter()
-        .filter(|t| t.status == "merged" || t.status == "done" || t.status == "complete")
-        .collect();
+    let stats = db.get_project_file_stats(project.id).unwrap_or_default();
+    let completed_tasks = db
+        .list_recent_completed_project_tasks(project.id, 3)
+        .unwrap_or_default();
 
-    if files.is_empty() && completed_tasks.is_empty() {
+    if stats.total_files == 0 && completed_tasks.is_empty() {
         return String::new();
     }
 
-    if !files.is_empty() {
-        stage_project_files(session_dir, files, storage).await;
-    }
-
     const MAX_CONTEXT_BYTES: usize = 120_000;
-    const MAX_FILE_PREVIEW_BYTES: usize = 12_000;
     let mut remaining = MAX_CONTEXT_BYTES;
-
     let files_dir = format!("{session_dir}/project_files");
+    let raw_query = retrieval_query.trim();
+    let hits = if raw_query.is_empty() {
+        Vec::new()
+    } else {
+        search_project_context_hits(db, opensearch, project.id, raw_query, 12).await
+    };
+    let mut selected = Vec::new();
+    for hit in hits {
+        if let Ok(Some(file)) = db.find_latest_project_file_by_name(project.id, &hit.file_name) {
+            selected.push((file, hit));
+        }
+    }
+    if selected.is_empty() && !project.session_privileged && stats.total_files <= 50 {
+        for file in db.list_recent_project_files(project.id, 4, true).unwrap_or_default() {
+            let file_name = file.file_name.clone();
+            selected.push((
+                file,
+                ProjectContextHit {
+                    file_name,
+                    snippet: "Recent project document selected as a small-corpus fallback.".to_string(),
+                    score: 0.0,
+                    source: "recent",
+                },
+            ));
+        }
+    }
+    let staged_files = stage_project_files(session_dir, &selected, storage).await;
 
     let mut context = format!(
-        "Project context:\nProject: {} (mode: {})\nFiles: {} (available in {}/)\n\n",
-        project.name, project.mode, files.len(), files_dir,
+        "Project context:\nProject: {} (mode: {})\nCorpus: {} files, {} extracted-text files, {} privileged files, {} total\nSession privileged: {}\nStaged working set: {} file(s) in {}/\n",
+        project.name,
+        project.mode,
+        stats.total_files,
+        stats.text_files,
+        stats.privileged_files,
+        format_compact_bytes(stats.total_bytes),
+        if project.session_privileged { "yes" } else { "no" },
+        staged_files.len(),
+        files_dir,
     );
+    if !project.client_name.trim().is_empty()
+        || !project.jurisdiction.trim().is_empty()
+        || !project.matter_type.trim().is_empty()
+    {
+        context.push_str(&format!(
+            "Matter details: client={}, jurisdiction={}, type={}\n",
+            if project.client_name.trim().is_empty() { "n/a" } else { project.client_name.trim() },
+            if project.jurisdiction.trim().is_empty() { "n/a" } else { project.jurisdiction.trim() },
+            if project.matter_type.trim().is_empty() { "n/a" } else { project.matter_type.trim() },
+        ));
+    }
+    if !raw_query.is_empty() {
+        context.push_str(&format!("Retrieval query: {}\n", raw_query));
+    }
+    context.push_str("Selection policy: only the staged working set was materialized for this request. Do not assume unstaged corpus documents were reviewed.\n");
+    if project.session_privileged {
+        context.push_str("Legal handling: this matter is privileged. Prefer staged matter files and existing internal knowledge only. If the staged set is insufficient, say which documents are missing instead of guessing.\n");
+    }
+    context.push('\n');
     if context.len() >= remaining {
         return context;
     }
     remaining -= context.len();
 
-    if let Ok(themes) = db.summarize_themes(Some(project.id), 12, 2) {
-        if !themes.keywords.is_empty() || !themes.phrases.is_empty() {
-            let kw = themes
-                .keywords
-                .iter()
-                .take(8)
-                .map(|k| k.term.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let ph = themes
-                .phrases
-                .iter()
-                .take(6)
-                .map(|p| p.term.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let summary = format!(
-                "Corpus theme summary (precomputed):\n- documents_scanned: {}\n- keywords: {}\n- phrases: {}\n\n",
-                themes.documents_scanned,
-                if kw.is_empty() { "n/a" } else { &kw },
-                if ph.is_empty() { "n/a" } else { &ph },
-            );
-            if summary.len() < remaining {
-                context.push_str(&summary);
-                remaining -= summary.len();
-            }
+    if !staged_files.is_empty() {
+        let heading = "Retrieved matter files:\n";
+        if heading.len() < remaining {
+            context.push_str(heading);
+            remaining -= heading.len();
         }
     }
-
-    for file in files {
+    for staged in &staged_files {
         if remaining < 256 {
             break;
         }
-
-        let staged_name = std::path::Path::new(&file.stored_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unnamed");
-        let file_path = format!("{files_dir}/{staged_name}");
-
-        if is_binary_mime(&file.mime_type) {
-            let note = format!(
-                "--- FILE: {} ({} bytes, {}) ---\n[Binary file — use Read tool on: {}]\n\n",
-                file.file_name, file.size_bytes, file.mime_type, file_path,
-            );
-            if note.len() >= remaining {
-                break;
+        let entry = format!(
+            "- {} [{}; {}; privileged={}; score={:.3}; source={}]\n  staged at: {}\n  snippet: {}\n{}",
+            staged.file.file_name,
+            staged.file.mime_type,
+            format_compact_bytes(staged.file.size_bytes),
+            if staged.file.privileged { "yes" } else { "no" },
+            staged.score,
+            staged.source,
+            staged.staged_path,
+            staged.snippet.replace('\n', " "),
+            if staged.clipped {
+                "  note: staged text was clipped to keep the working set bounded.\n"
+            } else {
+                ""
             }
-            context.push_str(&note);
-            remaining -= note.len();
-            continue;
-        }
-
-        let header = format!(
-            "--- FILE: {} ({} bytes, {}) ---\n",
-            file.file_name, file.size_bytes, file.mime_type
         );
-        if header.len() >= remaining {
+        if entry.len() >= remaining {
             break;
         }
-        context.push_str(&header);
-        remaining -= header.len();
-
-        let preview_budget = remaining.min(MAX_FILE_PREVIEW_BYTES);
-        let preview = match storage.read_all(&file.stored_path).await {
-            Ok(raw) => {
-                let clipped = &raw[..raw.len().min(preview_budget)];
-                String::from_utf8_lossy(clipped).to_string()
-            },
-            Err(_) => "[file unavailable]\n".to_string(),
-        };
-        let preview = preview.replace('\0', "");
-        if preview.len() > remaining {
-            context.push_str(&preview[..remaining]);
-            break;
-        } else {
-            context.push_str(&preview);
-            remaining -= preview.len();
-        }
-
-        if remaining >= 2 {
-            context.push('\n');
-            context.push('\n');
-            remaining -= 2;
+        context.push_str(&entry);
+        remaining -= entry.len();
+    }
+    if staged_files.is_empty() && stats.total_files > 0 && remaining > 256 {
+        let note = "No corpus files were auto-staged for this request. Work from project metadata and ask for a narrower document target if document-specific analysis is required.\n";
+        if note.len() < remaining {
+            context.push_str(note);
+            remaining -= note.len();
         }
     }
 
@@ -672,6 +876,7 @@ pub(crate) async fn run_chat_agent(
     sessions: &Arc<TokioMutex<HashMap<String, String>>>,
     config: &Config,
     db: &Arc<Db>,
+    opensearch: Option<Arc<crate::opensearch::OpenSearchClient>>,
     storage: &Arc<FileStorage>,
     chat_event_tx: &broadcast::Sender<String>,
 ) -> anyhow::Result<String> {
@@ -706,24 +911,29 @@ pub(crate) async fn run_chat_agent(
         let _ = chat_event_tx.send(event);
     }
 
+    let retrieval_query = messages.join("\n");
+    let project_for_chat = parse_project_chat_key(chat_key)
+        .and_then(|pid| db.get_project(pid).ok().flatten());
     let prompt = if messages.len() == 1 {
         format!("{} says: {}", sender_name, messages[0])
     } else {
         let joined: Vec<String> = messages.iter().map(|m| format!("- {m}")).collect();
         format!("{} says:\n{}", sender_name, joined.join("\n"))
     };
-    let prompt = if let Some(project_id) = parse_project_chat_key(chat_key) {
-        match db.get_project(project_id) {
-            Ok(Some(project)) => {
-                let files = db.list_project_files(project_id).unwrap_or_default();
-                let ctx = build_project_context(&project, &files, &session_dir, db, storage).await;
-                if ctx.is_empty() {
-                    prompt
-                } else {
-                    format!("{ctx}\n\nUser request:\n{prompt}")
-                }
-            },
-            _ => prompt,
+    let prompt = if let Some(project) = project_for_chat.as_ref() {
+        let ctx = build_project_context(
+            project,
+            &retrieval_query,
+            &session_dir,
+            db,
+            opensearch.as_deref(),
+            storage,
+        )
+        .await;
+        if ctx.is_empty() {
+            prompt
+        } else {
+            format!("{ctx}\n\nUser request:\n{prompt}")
         }
     } else {
         prompt
@@ -732,19 +942,34 @@ pub(crate) async fn run_chat_agent(
     let mut system_prompt = config.chat_system_prompt();
 
     // Detect project mode for MCP wiring
-    let project_mode = parse_project_chat_key(chat_key)
-        .and_then(|pid| db.get_project(pid).ok().flatten())
-        .map(|p| p.mode);
+    let project_mode = project_for_chat.as_ref().map(|p| p.mode.clone());
     let is_legal = matches!(project_mode.as_deref(), Some("lawborg" | "legal"));
 
     if is_legal {
         system_prompt.push_str(borg_domains::legal::legal_chat_system_suffix());
     }
 
-    let knowledge_files = db.list_knowledge_files().unwrap_or_default();
+    let knowledge_files = db
+        .list_knowledge_file_page(
+            Some(&retrieval_query),
+            None,
+            project_for_chat.as_ref().map(|p| p.jurisdiction.as_str()),
+            80,
+            0,
+        )
+        .map(|(files, _)| files)
+        .unwrap_or_default();
     if !knowledge_files.is_empty() {
         let knowledge_dir = format!("{}/knowledge", config.data_dir);
-        let kb = borg_agent::instruction::build_knowledge_section(&knowledge_files, &knowledge_dir);
+        let selected = borg_agent::instruction::select_relevant_knowledge_files(
+            &knowledge_files,
+            &retrieval_query,
+            project_mode.as_deref(),
+            project_for_chat.as_ref().map(|p| p.jurisdiction.as_str()),
+            project_for_chat.as_ref().map(|p| p.id),
+            24,
+        );
+        let kb = borg_agent::instruction::build_knowledge_section(&selected, &knowledge_dir);
         if !kb.is_empty() {
             system_prompt.push('\n');
             system_prompt.push_str(&kb);
@@ -1751,8 +1976,7 @@ pub(crate) async fn export_project_document(
     // Resolve template: explicit template_id takes priority, then project default
     let effective_template_id = q.template_id.or(project.default_template_id);
     let template_info = if let Some(tid) = effective_template_id {
-        let kf = state.db.list_knowledge_files().map_err(internal)?;
-        kf.iter().find(|f| f.id == tid).map(|f| {
+        state.db.get_knowledge_file(tid).map_err(internal)?.map(|f| {
             let p = format!("{}/knowledge/{}", state.config.data_dir, f.file_name);
             let is_docx = f.file_name.to_lowercase().ends_with(".docx");
             (p, is_docx)
@@ -1930,12 +2154,10 @@ pub(crate) async fn export_all_project_documents(
 
     let effective_tid = q.template_id.or(project.default_template_id);
     let template_info = effective_tid.and_then(|tid| {
-        state.db.list_knowledge_files().ok().and_then(|kf| {
-            kf.iter().find(|f| f.id == tid).map(|f| {
-                let p = format!("{}/knowledge/{}", state.config.data_dir, f.file_name);
-                let is_docx = f.file_name.to_lowercase().ends_with(".docx");
-                (p, is_docx)
-            })
+        state.db.get_knowledge_file(tid).ok().flatten().map(|f| {
+            let p = format!("{}/knowledge/{}", state.config.data_dir, f.file_name);
+            let is_docx = f.file_name.to_lowercase().ends_with(".docx");
+            (p, is_docx)
         })
     });
     let use_docxtemplater = format == "docx"
@@ -2102,13 +2324,34 @@ pub(crate) async fn delete_project_document(
 pub(crate) async fn list_project_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
+    Query(q): Query<ListProjectFilesQuery>,
 ) -> Result<Json<Value>, StatusCode> {
     if state.db.get_project(id).map_err(internal)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
-    let files = state.db.list_project_files(id).map_err(internal)?;
+    let (files, total) = state
+        .db
+        .list_project_file_page(
+            id,
+            Some(&q.q),
+            q.limit,
+            q.offset,
+            q.has_text,
+            q.privileged_only,
+        )
+        .map_err(internal)?;
     let out: Vec<ProjectFileJson> = files.into_iter().map(ProjectFileJson::from).collect();
-    Ok(Json(json!(out)))
+    let stats = state.db.get_project_file_stats(id).map_err(internal)?;
+    let limit = q.limit.clamp(1, 200);
+    let offset = q.offset.max(0);
+    Ok(Json(json!({
+        "items": out,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "summary": stats,
+    })))
 }
 
 pub(crate) async fn get_project_file_content(
@@ -2558,6 +2801,11 @@ async fn process_uploaded_single_file(
     {
         tracing::warn!("failed to enqueue uploaded file ingest: {e}");
     }
+    if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) {
+        if let Ok(Some(row)) = state.db.get_project_file(project_id, file_id) {
+            extract_and_index_project_file(state.as_ref(), &row).await;
+        }
+    }
     Ok(stored_path)
 }
 
@@ -2653,6 +2901,11 @@ async fn process_uploaded_zip(
         {
             tracing::warn!("failed to enqueue zip file ingest: {e}");
         }
+        if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) {
+            if let Ok(Some(row)) = state.db.get_project_file(project_id, file_id) {
+                extract_and_index_project_file(state.as_ref(), &row).await;
+            }
+        }
         imported += 1;
     }
     let _ = tokio::fs::remove_dir_all(&extract_dir).await;
@@ -2742,6 +2995,7 @@ pub(crate) async fn upload_project_files(
     let mut total_bytes = state.db.total_project_file_bytes(id).map_err(internal)?;
     let mut uploaded: Vec<ProjectFileJson> = Vec::new();
     let mut deduped = 0i64;
+    let mut uploaded_rows: Vec<ProjectFileRow> = Vec::new();
     while let Some(field) = multipart.next_field().await.map_err(internal)? {
         let raw_name = field
             .file_name()
@@ -2809,47 +3063,20 @@ pub(crate) async fn upload_project_files(
 
         let inserted = state
             .db
-            .list_project_files(id)
+            .get_project_file(id, file_id)
             .map_err(internal)?
-            .into_iter()
-            .find(|f| f.id == file_id);
-        if let Some(row) = inserted {
-            uploaded.push(ProjectFileJson::from(row));
-        }
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        uploaded_rows.push(inserted.clone());
+        uploaded.push(ProjectFileJson::from(inserted));
     }
 
-    if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) {
+    if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) && !uploaded_rows.is_empty() {
         // Extract text from uploaded files in background (legacy mode when queue is disabled)
-        let db = state.db.clone();
-        let storage = state.file_storage.clone();
-        let opensearch = state.opensearch.clone();
-        let project_id = id;
+        let state2 = Arc::clone(&state);
+        let rows = uploaded_rows;
         tokio::spawn(async move {
-            for file in db.list_project_files(project_id).unwrap_or_default() {
-                if !file.extracted_text.is_empty() { continue; }
-                let bytes = match storage.read_all(&file.stored_path).await {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-                if let Ok(text) = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await {
-                    if !text.is_empty() {
-                        let _ = db.update_project_file_text(file.id, &text);
-                        let _ = db.fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text);
-                        if let Some(os) = &opensearch {
-                            let _ = os
-                                .index_document(
-                                    &format!("project-{}-file-{}", project_id, file.id),
-                                    project_id,
-                                    0,
-                                    &file.file_name,
-                                    &file.file_name,
-                                    &text,
-                                )
-                                .await;
-                        }
-                        tracing::info!("extracted {} chars from {}", text.len(), file.file_name);
-                    }
-                }
+            for file in rows {
+                extract_and_index_project_file(state2.as_ref(), &file).await;
             }
         });
     }
@@ -2891,6 +3118,57 @@ async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> R
         }
     }).await.map_err(internal)?.map_err(internal)?;
     Ok(text)
+}
+
+async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow) {
+    if !file.extracted_text.is_empty() {
+        return;
+    }
+    let bytes = match state.file_storage.read_all(&file.stored_path).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("project file read failed for {}: {e}", file.file_name);
+            return;
+        }
+    };
+    let text = match extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("project file extract failed for {}: {e}", file.file_name);
+            return;
+        }
+    };
+    if text.is_empty() {
+        return;
+    }
+    if let Err(e) = state.db.update_project_file_text(file.id, &text) {
+        tracing::warn!("project file text update failed for {}: {e}", file.file_name);
+        return;
+    }
+    if let Err(e) = state
+        .db
+        .fts_index_document(file.project_id, 0, &file.file_name, &file.file_name, &text)
+    {
+        tracing::warn!("project file fts index failed for {}: {e}", file.file_name);
+        return;
+    }
+    if let Some(os) = &state.opensearch {
+        let doc_id = format!("project-{}-file-{}", file.project_id, file.id);
+        if let Err(e) = os
+            .index_document(
+                &doc_id,
+                file.project_id,
+                0,
+                &file.file_name,
+                &file.file_name,
+                &text,
+            )
+            .await
+        {
+            tracing::warn!("project file opensearch index failed for {}: {e}", file.file_name);
+        }
+    }
+    tracing::info!("extracted {} chars from {}", text.len(), file.file_name);
 }
 
 pub(crate) async fn get_project_file_text(
@@ -3606,6 +3884,7 @@ pub(crate) async fn post_project_chat(
             &state2.web_sessions,
             &state2.config,
             &state2.db,
+            state2.opensearch.clone(),
             &state2.file_storage,
             &state2.chat_event_tx,
         )
@@ -3688,6 +3967,7 @@ pub(crate) async fn post_chat(
             &state2.web_sessions,
             &state2.config,
             &state2.db,
+            state2.opensearch.clone(),
             &state2.file_storage,
             &state2.chat_event_tx,
         )
@@ -3837,9 +4117,28 @@ pub(crate) async fn delete_cache_volume(
 
 pub(crate) async fn list_knowledge(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<ListKnowledgeQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let files = state.db.list_knowledge_files().map_err(internal)?;
-    Ok(Json(json!({ "files": files })))
+    let (files, total) = state
+        .db
+        .list_knowledge_file_page(
+            Some(&q.q),
+            q.category.as_deref(),
+            q.jurisdiction.as_deref(),
+            q.limit,
+            q.offset,
+        )
+        .map_err(internal)?;
+    let limit = q.limit.clamp(1, 200);
+    let offset = q.offset.max(0);
+    Ok(Json(json!({
+        "files": files,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "total_bytes": state.db.total_knowledge_file_bytes().map_err(internal)?,
+    })))
 }
 
 pub(crate) async fn upload_knowledge(

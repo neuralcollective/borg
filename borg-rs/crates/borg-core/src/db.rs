@@ -148,6 +148,30 @@ pub struct ProjectFileRow {
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
+pub struct ProjectFileMetaRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub file_name: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub privileged: bool,
+    pub has_text: bool,
+    pub text_chars: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, serde::Serialize, Clone, Default)]
+pub struct ProjectFileStats {
+    pub project_id: i64,
+    pub total_files: i64,
+    pub total_bytes: i64,
+    pub privileged_files: i64,
+    pub text_files: i64,
+    pub text_chars: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct KnowledgeFile {
     pub id: i64,
     pub file_name: String,
@@ -543,6 +567,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
 }
 
 const PROJECT_FILE_COLS: &str = "id, project_id, file_name, stored_path, mime_type, size_bytes, extracted_text, content_hash, created_at, privileged";
+const PROJECT_FILE_META_COLS: &str = "id, project_id, file_name, mime_type, size_bytes, privileged, created_at, length(extracted_text)";
 
 fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileRow> {
     let created_at_str: String = row.get(8)?;
@@ -557,6 +582,23 @@ fn row_to_project_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileR
         extracted_text: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
         content_hash: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
         privileged: privileged_int != 0,
+        created_at: parse_ts(&created_at_str),
+    })
+}
+
+fn row_to_project_file_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectFileMetaRow> {
+    let created_at_str: String = row.get(6)?;
+    let privileged_int: i64 = row.get(5)?;
+    let text_chars: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(0);
+    Ok(ProjectFileMetaRow {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        file_name: row.get(2)?,
+        mime_type: row.get(3)?,
+        size_bytes: row.get(4)?,
+        privileged: privileged_int != 0,
+        has_text: text_chars > 0,
+        text_chars,
         created_at: parse_ts(&created_at_str),
     })
 }
@@ -638,10 +680,43 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_pipeline_project ON pipeline_tasks(project_id)",
             "CREATE INDEX IF NOT EXISTS idx_pipeline_repo_status ON pipeline_tasks(repo_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_pipeline_events_project ON pipeline_events(project_id)",
+            "CREATE TABLE IF NOT EXISTS project_corpus_stats (\
+              project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, \
+              total_files INTEGER NOT NULL DEFAULT 0, \
+              total_bytes INTEGER NOT NULL DEFAULT 0, \
+              privileged_files INTEGER NOT NULL DEFAULT 0, \
+              text_files INTEGER NOT NULL DEFAULT 0, \
+              text_chars INTEGER NOT NULL DEFAULT 0, \
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            "CREATE INDEX IF NOT EXISTS idx_project_files_project_name ON project_files(project_id, file_name)",
+            "CREATE INDEX IF NOT EXISTS idx_project_files_project_created ON project_files(project_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_files_category_created ON knowledge_files(category, jurisdiction, created_at)",
         ];
         for sql in post_alter_indexes {
             let _ = conn.execute(sql, []);
         }
+
+        let _ = conn.execute(
+            "INSERT INTO project_corpus_stats (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
+             SELECT p.id,
+                    COUNT(f.id),
+                    COALESCE(SUM(f.size_bytes), 0),
+                    COALESCE(SUM(CASE WHEN f.privileged != 0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN f.extracted_text != '' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(length(f.extracted_text)), 0),
+                    datetime('now') \
+             FROM projects p
+             LEFT JOIN project_files f ON f.project_id = p.id
+             GROUP BY p.id
+             ON CONFLICT(project_id) DO UPDATE SET
+               total_files=excluded.total_files,
+               total_bytes=excluded.total_bytes,
+               privileged_files=excluded.privileged_files,
+               text_files=excluded.text_files,
+               text_chars=excluded.text_chars,
+               updated_at=excluded.updated_at",
+            [],
+        );
 
         // Backfill deadlines from legacy projects.deadline column
         let needs_deadline_backfill: bool = conn
@@ -1459,6 +1534,59 @@ impl Db {
         Ok(files)
     }
 
+    pub fn list_project_file_page(
+        &self,
+        project_id: i64,
+        query: Option<&str>,
+        limit: i64,
+        offset: i64,
+        has_text: Option<bool>,
+        privileged_only: Option<bool>,
+    ) -> Result<(Vec<ProjectFileMetaRow>, i64)> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut where_clauses = vec!["project_id = ?".to_string()];
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(project_id)];
+
+        if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+            where_clauses.push("lower(file_name) LIKE ?".to_string());
+            params_vec.push(Box::new(format!("%{}%", q.to_lowercase())));
+        }
+        if let Some(flag) = has_text {
+            where_clauses.push("CASE WHEN extracted_text != '' THEN 1 ELSE 0 END = ?".to_string());
+            params_vec.push(Box::new(if flag { 1_i64 } else { 0_i64 }));
+        }
+        if let Some(flag) = privileged_only {
+            where_clauses.push("privileged = ?".to_string());
+            params_vec.push(Box::new(if flag { 1_i64 } else { 0_i64 }));
+        }
+
+        let where_sql = where_clauses.join(" AND ");
+        let total_sql = format!("SELECT COUNT(*) FROM project_files WHERE {where_sql}");
+        let total_params: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let total: i64 = conn
+            .query_row(&total_sql, total_params.as_slice(), |row| row.get(0))
+            .context("list_project_file_page count")?;
+
+        let lim = limit.clamp(1, 200);
+        let off = offset.max(0);
+        let mut page_params: Vec<Box<dyn rusqlite::types::ToSql>> = params_vec;
+        page_params.push(Box::new(lim));
+        page_params.push(Box::new(off));
+        let page_refs: Vec<&dyn rusqlite::types::ToSql> =
+            page_params.iter().map(|p| p.as_ref()).collect();
+        let sql = format!(
+            "SELECT {PROJECT_FILE_META_COLS} FROM project_files \
+             WHERE {where_sql} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        );
+        let mut stmt = conn.prepare(&sql).context("list_project_file_page prepare")?;
+        let items = stmt
+            .query_map(page_refs.as_slice(), row_to_project_file_meta)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_project_file_page rows")?;
+        Ok((items, total))
+    }
+
     pub fn get_project_file(
         &self,
         project_id: i64,
@@ -1472,6 +1600,24 @@ impl Db {
         )
         .optional()
         .context("get_project_file")
+    }
+
+    pub fn find_latest_project_file_by_name(
+        &self,
+        project_id: i64,
+        file_name: &str,
+    ) -> Result<Option<ProjectFileRow>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.query_row(
+            &format!(
+                "SELECT {PROJECT_FILE_COLS} FROM project_files \
+                 WHERE project_id=?1 AND file_name=?2 ORDER BY id DESC LIMIT 1"
+            ),
+            params![project_id, file_name],
+            row_to_project_file,
+        )
+        .optional()
+        .context("find_latest_project_file_by_name")
     }
 
     pub fn insert_project_file(
@@ -1503,6 +1649,23 @@ impl Db {
         )
         .context("insert_project_file")?;
         let id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO project_corpus_stats \
+             (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
+             VALUES (?1, 1, ?2, ?3, 0, 0, ?4) \
+             ON CONFLICT(project_id) DO UPDATE SET
+               total_files = total_files + 1,
+               total_bytes = total_bytes + excluded.total_bytes,
+               privileged_files = privileged_files + excluded.privileged_files,
+               updated_at = excluded.updated_at",
+            params![
+                project_id,
+                size_bytes,
+                if privileged { 1_i64 } else { 0_i64 },
+                created_at,
+            ],
+        )
+        .context("insert_project_file stats")?;
         if privileged {
             conn.execute(
                 "UPDATE projects SET session_privileged = 1 WHERE id = ?1",
@@ -1552,23 +1715,64 @@ impl Db {
 
     pub fn update_project_file_text(&self, file_id: i64, text: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let (project_id, old_chars): (i64, i64) = conn.query_row(
+            "SELECT project_id, length(extracted_text) FROM project_files WHERE id = ?1",
+            params![file_id],
+            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?;
         conn.execute(
             "UPDATE project_files SET extracted_text = ?1 WHERE id = ?2",
             params![text, file_id],
         )?;
+        let new_chars = text.len() as i64;
+        conn.execute(
+            "INSERT INTO project_corpus_stats \
+             (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
+             VALUES (?1, 0, 0, 0, ?2, ?3, ?4) \
+             ON CONFLICT(project_id) DO UPDATE SET
+               text_files = text_files + excluded.text_files,
+               text_chars = text_chars + excluded.text_chars,
+               updated_at = excluded.updated_at",
+            params![
+                project_id,
+                if old_chars == 0 && new_chars > 0 { 1_i64 } else { 0_i64 },
+                new_chars - old_chars,
+                now_str(),
+            ],
+        )
+        .context("update_project_file_text stats")?;
         Ok(())
     }
 
     pub fn total_project_file_bytes(&self, project_id: i64) -> Result<i64> {
+        Ok(self.get_project_file_stats(project_id)?.total_bytes)
+    }
+
+    pub fn get_project_file_stats(&self, project_id: i64) -> Result<ProjectFileStats> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let total = conn
+        let stats = conn
             .query_row(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM project_files WHERE project_id=?1",
+                "SELECT project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at \
+                 FROM project_corpus_stats WHERE project_id=?1",
                 params![project_id],
-                |r| r.get(0),
+                |row| {
+                    Ok(ProjectFileStats {
+                        project_id: row.get(0)?,
+                        total_files: row.get(1)?,
+                        total_bytes: row.get(2)?,
+                        privileged_files: row.get(3)?,
+                        text_files: row.get(4)?,
+                        text_chars: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    })
+                },
             )
-            .context("total_project_file_bytes")?;
-        Ok(total)
+            .optional()
+            .context("get_project_file_stats")?;
+        Ok(stats.unwrap_or(ProjectFileStats {
+            project_id,
+            ..ProjectFileStats::default()
+        }))
     }
 
     pub fn create_upload_session(
@@ -1950,6 +2154,65 @@ impl Db {
         Ok(out)
     }
 
+    pub fn list_knowledge_file_page(
+        &self,
+        query: Option<&str>,
+        category: Option<&str>,
+        jurisdiction: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<KnowledgeFile>, i64)> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut where_clauses = vec!["1=1".to_string()];
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+            where_clauses.push(
+                "(lower(file_name) LIKE ? OR lower(description) LIKE ? OR lower(tags) LIKE ?)".to_string(),
+            );
+            let pattern = format!("%{}%", q.to_ascii_lowercase());
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern));
+        }
+        if let Some(cat) = category.map(str::trim).filter(|c| !c.is_empty()) {
+            where_clauses.push("category = ?".to_string());
+            params_vec.push(Box::new(cat.to_string()));
+        }
+        if let Some(jur) = jurisdiction.map(str::trim).filter(|j| !j.is_empty()) {
+            where_clauses.push("(jurisdiction = ? OR jurisdiction = '')".to_string());
+            params_vec.push(Box::new(jur.to_string()));
+        }
+
+        let where_sql = where_clauses.join(" AND ");
+        let total_sql = format!("SELECT COUNT(*) FROM knowledge_files WHERE {where_sql}");
+        let total_params: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let total: i64 = conn
+            .query_row(&total_sql, total_params.as_slice(), |row| row.get(0))
+            .context("list_knowledge_file_page count")?;
+
+        let lim = limit.clamp(1, 200);
+        let off = offset.max(0);
+        let mut page_params: Vec<Box<dyn rusqlite::types::ToSql>> = params_vec;
+        page_params.push(Box::new(lim));
+        page_params.push(Box::new(off));
+        let page_refs: Vec<&dyn rusqlite::types::ToSql> =
+            page_params.iter().map(|p| p.as_ref()).collect();
+        let sql = format!(
+            "SELECT id, file_name, description, size_bytes, \"inline\", created_at, \
+                    tags, category, jurisdiction, project_id \
+             FROM knowledge_files WHERE {where_sql} \
+             ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        );
+        let mut stmt = conn.prepare(&sql).context("list_knowledge_file_page prepare")?;
+        let items = stmt
+            .query_map(page_refs.as_slice(), row_to_knowledge)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_knowledge_file_page rows")?;
+        Ok((items, total))
+    }
+
     pub fn get_knowledge_file(&self, id: i64) -> Result<Option<KnowledgeFile>> {
         let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
@@ -2062,47 +2325,100 @@ impl Db {
         let cap = limit.max(1).min(5000);
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project_id {
             Some(pid) => (
-                format!("SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1 ORDER BY rowid DESC LIMIT {cap}"),
+                "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings WHERE project_id = ?1".to_string(),
                 vec![Box::new(pid) as Box<dyn rusqlite::types::ToSql>],
             ),
             None => (
-                format!("SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings ORDER BY rowid DESC LIMIT {cap}"),
+                "SELECT id, project_id, task_id, chunk_text, file_path, embedding FROM embeddings".to_string(),
                 vec![],
             ),
         };
         let mut stmt = conn.prepare(&sql)?;
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(params_refs.as_slice(), |row: &rusqlite::Row| {
-                Ok((
-                    row.get::<_, Option<i64>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Vec<u8>>(5)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .context("search_embeddings query")?;
+        let rows = stmt.query_map(params_refs.as_slice(), |row: &rusqlite::Row| {
+            Ok((
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            ))
+        })?;
 
-        let mut results: Vec<crate::knowledge::EmbeddingSearchResult> = rows
-            .into_iter()
-            .map(|(pid, tid, text, path, blob)| {
-                let emb = crate::knowledge::bytes_to_embedding(&blob);
-                let score = crate::knowledge::cosine_similarity(query_embedding, &emb);
-                crate::knowledge::EmbeddingSearchResult {
-                    chunk_text: text,
-                    file_path: path,
-                    project_id: pid,
-                    task_id: tid,
-                    score,
-                }
-            })
-            .collect();
+        let mut results = Vec::with_capacity(cap.min(128));
+        let flush_at = cap.saturating_mul(4).max(cap + 8);
+        for row in rows {
+            let (pid, tid, text, path, blob) = row.context("search_embeddings row")?;
+            let emb = crate::knowledge::bytes_to_embedding(&blob);
+            let score = crate::knowledge::cosine_similarity(query_embedding, &emb);
+            results.push(crate::knowledge::EmbeddingSearchResult {
+                chunk_text: text,
+                file_path: path,
+                project_id: pid,
+                task_id: tid,
+                score,
+            });
+            if results.len() >= flush_at {
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                results.truncate(cap);
+            }
+        }
 
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(limit);
+        results.truncate(cap);
         Ok(results)
+    }
+
+    pub fn list_recent_project_files(
+        &self,
+        project_id: i64,
+        limit: i64,
+        require_text: bool,
+    ) -> Result<Vec<ProjectFileRow>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let lim = limit.clamp(1, 100);
+        let sql = if require_text {
+            format!(
+                "SELECT {PROJECT_FILE_COLS} FROM project_files \
+                 WHERE project_id=?1 AND extracted_text != '' \
+                 ORDER BY created_at DESC, id DESC LIMIT ?2"
+            )
+        } else {
+            format!(
+                "SELECT {PROJECT_FILE_COLS} FROM project_files \
+                 WHERE project_id=?1 ORDER BY created_at DESC, id DESC LIMIT ?2"
+            )
+        };
+        let mut stmt = conn.prepare(&sql).context("list_recent_project_files prepare")?;
+        let files = stmt
+            .query_map(params![project_id, lim], row_to_project_file)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_recent_project_files rows")?;
+        Ok(files)
+    }
+
+    pub fn list_recent_completed_project_tasks(
+        &self,
+        project_id: i64,
+        limit: i64,
+    ) -> Result<Vec<Task>> {
+        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let lim = limit.clamp(1, 50);
+        let sql = format!(
+            "SELECT {TASK_COLS} FROM pipeline_tasks \
+             WHERE project_id = ?1 AND status IN ('merged','done','complete') \
+             ORDER BY id DESC LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let tasks = stmt
+            .query_map(params![project_id, lim], row_to_task)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("list_recent_completed_project_tasks")?;
+        Ok(tasks)
     }
 
     pub fn embedding_count(&self) -> i64 {

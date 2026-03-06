@@ -320,6 +320,7 @@ async fn main() -> anyhow::Result<()> {
         let repos = config.watched_repos.clone();
         let config_tg = Arc::clone(&config);
         let file_storage_tg = Arc::clone(&file_storage);
+        let opensearch_tg = opensearch.clone();
         let tg_chat_event_tx = chat_event_tx.clone();
         let tg_sessions: Arc<TokioMutex<HashMap<String, String>>> =
             Arc::new(TokioMutex::new(HashMap::new()));
@@ -410,6 +411,7 @@ async fn main() -> anyhow::Result<()> {
                                 let sessions2 = Arc::clone(&tg_sessions);
                                 let config2 = Arc::clone(&config_tg);
                                 let db2 = Arc::clone(&db_tg);
+                                let opensearch2 = opensearch_tg.clone();
                                 let storage2 = Arc::clone(&file_storage_tg);
                                 let chat_tx2 = tg_chat_event_tx.clone();
                                 let sender_name = msg.sender_name.clone();
@@ -423,6 +425,7 @@ async fn main() -> anyhow::Result<()> {
                                         &sessions2,
                                         &config2,
                                         &db2,
+                                        opensearch2.clone(),
                                         &storage2,
                                         &chat_tx2,
                                     )
@@ -533,6 +536,7 @@ async fn main() -> anyhow::Result<()> {
                 let config_flush = Arc::clone(&config_sc);
                 let db_flush = Arc::clone(&db_sc);
                 let storage_flush = Arc::clone(&storage_sc);
+                let opensearch_flush = opensearch.clone();
                 let chat_tx_flush = sc_chat_event_tx.clone();
                 tokio::spawn(async move {
                     loop {
@@ -542,6 +546,7 @@ async fn main() -> anyhow::Result<()> {
                             let sessions2 = Arc::clone(&sessions_flush);
                             let config2 = Arc::clone(&config_flush);
                             let db2 = Arc::clone(&db_flush);
+                            let opensearch2 = opensearch_flush.clone();
                             let storage2 = Arc::clone(&storage_flush);
                             let chat_tx2 = chat_tx_flush.clone();
                             let collector2 = Arc::clone(&collector_flush);
@@ -561,6 +566,7 @@ async fn main() -> anyhow::Result<()> {
                                     &sessions2,
                                     &config2,
                                     &db2,
+                                    opensearch2.clone(),
                                     &storage2,
                                     &chat_tx2,
                                 )
@@ -585,6 +591,7 @@ async fn main() -> anyhow::Result<()> {
                 // Process incoming sidecar events
                 let db_events = Arc::clone(&db_sc);
                 let storage_events = Arc::clone(&storage_sc);
+                let opensearch_events = opensearch.clone();
                 let chat_tx_events = sc_chat_event_tx.clone();
                 tokio::spawn(async move {
                     loop {
@@ -615,6 +622,7 @@ async fn main() -> anyhow::Result<()> {
                             let sessions2 = Arc::clone(&sc_sessions);
                             let config2 = Arc::clone(&config_sc);
                             let db2 = Arc::clone(&db_events);
+                            let opensearch2 = opensearch_events.clone();
                             let storage2 = Arc::clone(&storage_events);
                             let chat_tx2 = chat_tx_events.clone();
                             let collector2 = Arc::clone(&collector);
@@ -635,6 +643,7 @@ async fn main() -> anyhow::Result<()> {
                                     &sessions2,
                                     &config2,
                                     &db2,
+                                    opensearch2.clone(),
                                     &storage2,
                                     &chat_tx2,
                                 )

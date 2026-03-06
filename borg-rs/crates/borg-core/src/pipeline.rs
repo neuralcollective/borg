@@ -396,7 +396,12 @@ impl Pipeline {
         }
         let mut disallowed_tools = self.db.get_config("pipeline_disallowed_tools")
             .ok().flatten().unwrap_or_default();
-        let knowledge_files = self.db.list_knowledge_files().unwrap_or_default();
+        let knowledge_query = format!("{} {} {}", task.title, task.description, task.task_type);
+        let knowledge_files = self
+            .db
+            .list_knowledge_file_page(Some(&knowledge_query), None, None, 80, 0)
+            .map(|(files, _)| files)
+            .unwrap_or_default();
         let knowledge_dir = format!("{}/knowledge", self.config.data_dir);
         let isolated = task.mode == "lawborg" || task.mode == "legal";
         if isolated && task.project_id > 0 && self.db.is_session_privileged(task.project_id).unwrap_or(false) {

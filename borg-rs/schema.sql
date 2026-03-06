@@ -187,6 +187,18 @@ CREATE TABLE IF NOT EXISTS project_files (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_name ON project_files(project_id, file_name);
+CREATE INDEX IF NOT EXISTS idx_project_files_project_created ON project_files(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_corpus_stats (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  total_files INTEGER NOT NULL DEFAULT 0,
+  total_bytes INTEGER NOT NULL DEFAULT 0,
+  privileged_files INTEGER NOT NULL DEFAULT 0,
+  text_files INTEGER NOT NULL DEFAULT 0,
+  text_chars INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Durable resumable uploads for large file and zip ingestion.
 CREATE TABLE IF NOT EXISTS upload_sessions (
@@ -354,6 +366,7 @@ CREATE TABLE IF NOT EXISTS knowledge_files (
   project_id INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_knowledge_files_category_created ON knowledge_files(category, jurisdiction, created_at);
 
 -- ── Vector embeddings (knowledge graph) ────────────────────────────────
 

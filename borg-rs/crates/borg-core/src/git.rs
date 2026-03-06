@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{collections::HashMap, process::Command};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -128,6 +128,54 @@ impl Git {
             ));
         }
         Ok(result.stdout)
+    }
+
+    pub fn ls_files_manifest(
+        &self,
+        work_dir: &str,
+        max_entries: usize,
+        max_bytes: usize,
+    ) -> Result<String> {
+        let listing = self.ls_files(work_dir)?;
+        if listing.trim().is_empty() {
+            return Ok(String::new());
+        }
+
+        let files = listing.lines().collect::<Vec<_>>();
+        let total = files.len();
+        let mut top_dirs: HashMap<String, usize> = HashMap::new();
+        for file in &files {
+            let top = file.split('/').next().unwrap_or(*file).to_string();
+            *top_dirs.entry(top).or_insert(0) += 1;
+        }
+        let mut dir_counts = top_dirs.into_iter().collect::<Vec<_>>();
+        dir_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        let mut out = format!("Repository manifest (bounded)\n- total_tracked_files: {total}\n");
+        if !dir_counts.is_empty() {
+            let dirs = dir_counts
+                .iter()
+                .take(12)
+                .map(|(dir, count)| format!("{dir} ({count})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("- top_level_entries: {dirs}\n"));
+        }
+        out.push_str("- sample_paths:\n");
+
+        let mut shown = 0usize;
+        for file in files.iter().take(max_entries.max(1)) {
+            let line = format!("  - {file}\n");
+            if out.len() + line.len() > max_bytes.max(256) {
+                break;
+            }
+            out.push_str(&line);
+            shown += 1;
+        }
+        if shown < total {
+            out.push_str(&format!("- omitted_paths: {}\n", total - shown));
+        }
+        Ok(out)
     }
 
     /// Create and checkout a new branch from a given start point.

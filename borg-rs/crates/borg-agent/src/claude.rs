@@ -145,7 +145,7 @@ impl AgentBackend for ClaudeBackend {
     ) -> Result<PhaseOutput> {
         let file_listing = if phase.include_file_listing {
             let git = borg_core::git::Git::new(&ctx.work_dir);
-            git.ls_files(&ctx.work_dir).ok()
+            git.ls_files_manifest(&ctx.work_dir, 200, 16_000).ok()
         } else {
             None
         };

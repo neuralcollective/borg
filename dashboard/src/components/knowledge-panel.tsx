@@ -189,7 +189,10 @@ function FileRow({
 }
 
 export function KnowledgePanel() {
-  const { data: files, isLoading } = useKnowledgeFiles();
+  const [search, setSearch] = useState("");
+  const [offset, setOffset] = useState(0);
+  const { data: page, isLoading } = useKnowledgeFiles({ limit: 50, offset, q: search });
+  const files = page?.files ?? [];
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState("");
@@ -233,6 +236,24 @@ export function KnowledgePanel() {
           Files available to all agents at <code className="text-zinc-300">/knowledge/</code>.
           Inline files are embedded directly in the prompt; listed files are mentioned by name.
         </p>
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setOffset(0);
+            }}
+            placeholder="Filter knowledge files"
+            className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
+          />
+          <span className="shrink-0 text-xs text-zinc-500">{page?.total ?? files.length} files</span>
+        </div>
+        {page && (
+          <div className="mt-2 text-xs text-zinc-500">
+            Showing {page.total === 0 ? 0 : page.offset + 1}-{Math.min(page.offset + files.length, page.total)} of {page.total} · {(page.total_bytes / (1024 * 1024)).toFixed(1)} MB total
+          </div>
+        )}
       </div>
 
       {/* Upload form */}
@@ -295,12 +316,12 @@ export function KnowledgePanel() {
       {/* File list */}
       <div className="space-y-3">
         {isLoading && <div className="text-sm text-zinc-500">Loading...</div>}
-        {!isLoading && (!files || files.length === 0) && (
+        {!isLoading && files.length === 0 && (
           <div className="text-sm text-zinc-500 text-center py-8">
-            No knowledge files uploaded yet.
+            {page && page.total > 0 ? "No files match the current filter." : "No knowledge files uploaded yet."}
           </div>
         )}
-        {files?.map((file) => (
+        {files.map((file) => (
           <FileRow
             key={file.id}
             file={file}
@@ -320,6 +341,24 @@ export function KnowledgePanel() {
             }}
           />
         ))}
+        {page && page.total > page.limit && (
+          <div className="flex items-center justify-between text-xs text-zinc-500">
+            <button
+              onClick={() => setOffset((prev) => Math.max(0, prev - page.limit))}
+              disabled={page.offset === 0}
+              className="rounded border border-zinc-700 px-2 py-1 disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <button
+              onClick={() => setOffset((prev) => prev + page.limit)}
+              disabled={!page.has_more}
+              className="rounded border border-zinc-700 px-2 py-1 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
       {previewFile && (

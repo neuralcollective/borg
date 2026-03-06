@@ -635,11 +635,23 @@ function DocumentsTab({
   onDocumentSelect?: (doc: ProjectDocument) => void;
 }) {
   const { data: docs = [], isLoading } = useProjectDocuments(projectId);
-  const { data: files = [], refetch: refetchFiles } = useProjectFiles(projectId);
+  const [fileSearch, setFileSearch] = useState("");
+  const [fileOffset, setFileOffset] = useState(0);
+  const { data: filePage, refetch: refetchFiles, isLoading: filesLoading } = useProjectFiles(projectId, {
+    limit: 50,
+    offset: fileOffset,
+    q: fileSearch,
+  });
+  const files = filePage?.items ?? [];
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [privilegedUpload, setPrivilegedUpload] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setFileOffset(0);
+    setFileSearch("");
+  }, [projectId]);
 
   async function handleUpload(selected: FileList | null) {
     if (!selected || selected.length === 0 || uploading) return;
@@ -661,11 +673,11 @@ function DocumentsTab({
     }
   }
 
-  if (isLoading) {
+  if (isLoading || filesLoading) {
     return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
   }
 
-  if (docs.length === 0 && files.length === 0) {
+  if (docs.length === 0 && (filePage?.summary.total_files ?? 0) === 0) {
     return (
       <div className="space-y-2 p-4">
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
@@ -736,9 +748,23 @@ function DocumentsTab({
         {uploadError && <div className="mt-1 text-[10px] text-red-400">{uploadError}</div>}
       </div>
 
-      {files.length > 0 && (
+      {(filePage?.summary.total_files ?? 0) > 0 && (
         <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-          <div className="mb-2 text-[11px] font-medium text-zinc-400">Source Files ({files.length})</div>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="text-[11px] font-medium text-zinc-400">
+              Source Files ({filePage?.summary.total_files ?? files.length})
+            </div>
+            <input
+              type="text"
+              value={fileSearch}
+              onChange={(e) => {
+                setFileSearch(e.target.value);
+                setFileOffset(0);
+              }}
+              placeholder="Filter files"
+              className="w-full max-w-xs rounded border border-white/[0.08] bg-black/20 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600"
+            />
+          </div>
           <div className="max-h-44 space-y-1 overflow-y-auto">
             {files.map((f) => (
               <div key={f.id} className="flex items-center gap-2 rounded border border-white/[0.05] px-2 py-1 text-[11px]">
@@ -749,7 +775,35 @@ function DocumentsTab({
                 <span className="ml-auto text-zinc-600">{Math.max(1, Math.round(f.size_bytes / 1024))} KB</span>
               </div>
             ))}
+            {files.length === 0 && (
+              <div className="rounded border border-dashed border-white/[0.06] px-2 py-2 text-[11px] text-zinc-600">
+                No files match the current filter.
+              </div>
+            )}
           </div>
+          {filePage && filePage.total > filePage.limit && (
+            <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-600">
+              <span>
+                Showing {filePage.total === 0 ? 0 : filePage.offset + 1}-{Math.min(filePage.offset + files.length, filePage.total)} of {filePage.total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setFileOffset((prev) => Math.max(0, prev - filePage.limit))}
+                  disabled={filePage.offset === 0}
+                  className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <button
+                  onClick={() => setFileOffset((prev) => prev + filePage.limit)}
+                  disabled={!filePage.has_more}
+                  className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

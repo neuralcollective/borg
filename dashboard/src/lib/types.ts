@@ -249,6 +249,25 @@ export interface ProjectFile {
   created_at: string;
 }
 
+export interface ProjectFileSummary {
+  project_id: number;
+  total_files: number;
+  total_bytes: number;
+  privileged_files: number;
+  text_files: number;
+  text_chars: number;
+  updated_at: string;
+}
+
+export interface ProjectFilePage {
+  items: ProjectFile[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  summary: ProjectFileSummary;
+}
+
 export interface KnowledgeFile {
   id: number;
   file_name: string;
@@ -260,6 +279,15 @@ export interface KnowledgeFile {
   jurisdiction: string;
   project_id: number | null;
   created_at: string;
+}
+
+export interface KnowledgeFilePage {
+  files: KnowledgeFile[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  total_bytes: number;
 }
 
 // sweborg phases (default fallback)

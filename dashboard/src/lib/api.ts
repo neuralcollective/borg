@@ -12,10 +12,12 @@ import type {
   TaskMessage,
   Project,
   ProjectFile,
+  ProjectFilePage,
   ProjectTask,
   ProjectDocument,
   PipelineModeFull,
   KnowledgeFile,
+  KnowledgeFilePage,
 } from "./types";
 import {
   MAX_LOG_BUFFER,
@@ -649,10 +651,35 @@ export async function checkConflicts(
   return data.conflicts || [];
 }
 
-export function useProjectFiles(projectId: number | null) {
-  return useQuery<ProjectFile[]>({
-    queryKey: ["project_files", projectId],
-    queryFn: () => fetchJson(`/api/projects/${projectId}/files`),
+export function useProjectFiles(
+  projectId: number | null,
+  options?: {
+    limit?: number;
+    offset?: number;
+    q?: string;
+    hasText?: boolean;
+    privilegedOnly?: boolean;
+  }
+) {
+  return useQuery<ProjectFilePage>({
+    queryKey: [
+      "project_files",
+      projectId,
+      options?.limit ?? 50,
+      options?.offset ?? 0,
+      options?.q ?? "",
+      options?.hasText ?? null,
+      options?.privilegedOnly ?? null,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("limit", String(options?.limit ?? 50));
+      if (options?.offset) params.set("offset", String(options.offset));
+      if (options?.q?.trim()) params.set("q", options.q.trim());
+      if (options?.hasText !== undefined) params.set("has_text", String(options.hasText));
+      if (options?.privilegedOnly !== undefined) params.set("privileged_only", String(options.privilegedOnly));
+      return fetchJson(`/api/projects/${projectId}/files?${params}`);
+    },
     enabled: projectId !== null,
     refetchInterval: REFETCH_PROJECTS,
   });
@@ -1219,10 +1246,31 @@ export function useTaskStream(taskId: number | null, active: boolean) {
 
 // ── Knowledge base ─────────────────────────────────────────────────────────
 
-export function useKnowledgeFiles() {
-  return useQuery<KnowledgeFile[]>({
-    queryKey: ["knowledge"],
-    queryFn: () => fetchJson<{ files: KnowledgeFile[] }>("/api/knowledge").then((r) => r.files),
+export function useKnowledgeFiles(options?: {
+  limit?: number;
+  offset?: number;
+  q?: string;
+  category?: string;
+  jurisdiction?: string;
+}) {
+  return useQuery<KnowledgeFilePage>({
+    queryKey: [
+      "knowledge",
+      options?.limit ?? 50,
+      options?.offset ?? 0,
+      options?.q ?? "",
+      options?.category ?? "",
+      options?.jurisdiction ?? "",
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("limit", String(options?.limit ?? 50));
+      if (options?.offset) params.set("offset", String(options.offset));
+      if (options?.q?.trim()) params.set("q", options.q.trim());
+      if (options?.category?.trim()) params.set("category", options.category.trim());
+      if (options?.jurisdiction?.trim()) params.set("jurisdiction", options.jurisdiction.trim());
+      return fetchJson(`/api/knowledge?${params}`);
+    },
     staleTime: 30_000,
   });
 }

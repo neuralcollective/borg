@@ -206,12 +206,16 @@ export function ProjectsPanel() {
   const selectedProject =
     projects.find((p) => p.id === selectedProjectId) ?? projects[0] ?? null;
   const activeProjectId = selectedProject?.id ?? null;
+  const [fileSearch, setFileSearch] = useState("");
+  const [fileOffset, setFileOffset] = useState(0);
 
   const {
-    data: files = [],
+    data: filePage,
     refetch: refetchFiles,
     isFetching: filesLoading,
-  } = useProjectFiles(activeProjectId);
+  } = useProjectFiles(activeProjectId, { limit: 50, offset: fileOffset, q: fileSearch });
+  const files = filePage?.items ?? [];
+  const fileSummary = filePage?.summary;
   const {
     data: cloudConnections = [],
     refetch: refetchCloudConnections,
@@ -248,10 +252,7 @@ export function ProjectsPanel() {
   const dictation = useDictation(messageInput, setMessageInput);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const totalBytes = useMemo(
-    () => files.reduce((sum, f) => sum + f.size_bytes, 0),
-    [files]
-  );
+  const totalBytes = fileSummary?.total_bytes ?? 0;
   const currentCloudFolderId = cloudBreadcrumbs[cloudBreadcrumbs.length - 1]?.id;
   const publicUrl = settings?.public_url?.trim() || "";
   const publicUrlValid = useMemo(() => {
@@ -292,6 +293,11 @@ export function ProjectsPanel() {
     setSelectedDoc(null);
     setDocViewMode("view");
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    setFileOffset(0);
+    setFileSearch("");
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (!activeProjectId) {
@@ -863,7 +869,7 @@ async function uploadChunkQueue(
             <div className="border-b border-white/[0.06] p-3">
               <div className="text-[13px] font-semibold text-zinc-200">{selectedProject.name}</div>
               <div className="mt-1 text-[11px] text-zinc-500">
-                Files {files.length} · {formatBytes(totalBytes)} / {formatBytes(projectMaxBytes)}
+                Files {fileSummary?.total_files ?? 0} · {formatBytes(totalBytes)} / {formatBytes(projectMaxBytes)}
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <input
@@ -881,6 +887,21 @@ async function uploadChunkQueue(
                   {uploading ? "Uploading..." : "Upload Files"}
                 </button>
                 {filesLoading && <span className="text-[11px] text-zinc-600">refreshing…</span>}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  type="text"
+                  value={fileSearch}
+                  onChange={(e) => {
+                    setFileSearch(e.target.value);
+                    setFileOffset(0);
+                  }}
+                  placeholder="Filter uploaded files"
+                  className="w-full rounded border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600"
+                />
+                <span className="shrink-0 text-[10px] text-zinc-600">
+                  {filePage?.total ?? files.length} match
+                </span>
               </div>
               {uploadError && (
                 <div className="mt-2 text-[11px] text-red-400">{uploadError}</div>
@@ -964,6 +985,29 @@ async function uploadChunkQueue(
                   <div className="px-2 py-2 text-[11px] text-zinc-600">No files uploaded yet.</div>
                 )}
               </div>
+              {filePage && filePage.total > filePage.limit && (
+                <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-600">
+                  <span>
+                    Showing {filePage.total === 0 ? 0 : filePage.offset + 1}-{Math.min(filePage.offset + files.length, filePage.total)} of {filePage.total}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setFileOffset((prev) => Math.max(0, prev - filePage.limit))}
+                      disabled={filePage.offset === 0}
+                      className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      onClick={() => setFileOffset((prev) => prev + filePage.limit)}
+                      disabled={!filePage.has_more}
+                      className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="mt-3 rounded border border-white/[0.06] bg-black/20 p-2">
                 <div className="mb-2 text-[11px] font-medium text-zinc-400">Upload Sessions</div>
                 <div className="mb-2 text-[11px] text-zinc-500">

@@ -4,6 +4,11 @@ use borg_core::{
 };
 use tracing::warn;
 
+const MAX_KNOWLEDGE_FILES_IN_PROMPT: usize = 24;
+const MAX_INLINE_KNOWLEDGE_FILES: usize = 3;
+const MAX_INLINE_KNOWLEDGE_CHARS_TOTAL: usize = 20_000;
+const MAX_INLINE_KNOWLEDGE_CHARS_PER_FILE: usize = 8_000;
+
 /// Build the instruction string passed to any agent backend.
 ///
 /// Composes task context, the phase instruction, an optional file listing,
@@ -12,7 +17,15 @@ use tracing::warn;
 pub fn build_instruction(task: &Task, phase: &PhaseConfig, ctx: &PhaseContext, file_listing: Option<&str>) -> String {
     let mut s = String::new();
 
-    let kb = build_knowledge_section(&ctx.knowledge_files, &ctx.knowledge_dir);
+    let kb_files = select_relevant_knowledge_files(
+        &ctx.knowledge_files,
+        &format!("{} {} {}", task.title, task.description, task.task_type),
+        Some(&task.mode),
+        None,
+        (task.project_id > 0).then_some(task.project_id),
+        MAX_KNOWLEDGE_FILES_IN_PROMPT,
+    );
+    let kb = build_knowledge_section(&kb_files, &ctx.knowledge_dir);
     if !kb.is_empty() {
         s.push_str(&kb);
         s.push_str("\n\n---\n\n");
@@ -42,7 +55,7 @@ pub fn build_instruction(task: &Task, phase: &PhaseConfig, ctx: &PhaseContext, f
     s.push_str(&phase.instruction);
 
     if let Some(files) = file_listing.filter(|f| !f.is_empty()) {
-        s.push_str("\n\n---\n\nFiles in repository:\n```\n");
+        s.push_str("\n\n---\n\nRepository manifest:\n```\n");
         s.push_str(files);
         s.push_str("```\n");
     }
@@ -91,11 +104,25 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
     if files.is_empty() {
         return String::new();
     }
+    let visible = files.len().min(MAX_KNOWLEDGE_FILES_IN_PROMPT);
+    let hidden = files.len().saturating_sub(visible);
     let mut s = String::from(
         "## Knowledge Base\nYou have access to the following knowledge files at /knowledge/:\n",
     );
-    for file in files {
-        if file.inline {
+    if hidden > 0 {
+        s.push_str(&format!(
+            "(Showing {} of {} candidate files selected for this run. Search /knowledge/ if you need additional material.)\n",
+            visible,
+            files.len(),
+        ));
+    }
+    let mut inline_files_used = 0usize;
+    let mut inline_chars_used = 0usize;
+    for file in files.iter().take(visible) {
+        let allow_inline = file.inline
+            && inline_files_used < MAX_INLINE_KNOWLEDGE_FILES
+            && inline_chars_used < MAX_INLINE_KNOWLEDGE_CHARS_TOTAL;
+        if allow_inline {
             let path = format!("{}/{}", knowledge_dir, file.file_name);
             let content = match std::fs::read_to_string(&path) {
                 Ok(s) => s,
@@ -112,23 +139,151 @@ pub fn build_knowledge_section(files: &[KnowledgeFile], knowledge_dir: &str) -> 
                 }
                 s.push('\n');
             } else {
+                let remaining_inline = MAX_INLINE_KNOWLEDGE_CHARS_TOTAL.saturating_sub(inline_chars_used);
+                let file_cap = remaining_inline.min(MAX_INLINE_KNOWLEDGE_CHARS_PER_FILE);
+                let (content, clipped) = truncate_chars(content, file_cap);
                 s.push_str(&format!("- **{}**", file.file_name));
                 if !file.description.is_empty() {
                     s.push_str(&format!(" ({})", file.description));
                 }
                 s.push_str(":\n```\n");
                 s.push_str(content);
+                if clipped {
+                    s.push_str("\n[...clipped for prompt budget...]");
+                }
                 s.push_str("\n```\n");
+                inline_files_used += 1;
+                inline_chars_used += content.chars().count();
             }
         } else {
             s.push_str(&format!("- `/knowledge/{}`", file.file_name));
             if !file.description.is_empty() {
                 s.push_str(&format!(": {}", file.description));
             }
+            if file.inline {
+                s.push_str(" (listed only; inline content omitted for prompt budget)");
+            }
             s.push('\n');
         }
     }
     s
+}
+
+pub fn select_relevant_knowledge_files(
+    files: &[KnowledgeFile],
+    topic: &str,
+    mode_hint: Option<&str>,
+    jurisdiction_hint: Option<&str>,
+    project_id: Option<i64>,
+    max_files: usize,
+) -> Vec<KnowledgeFile> {
+    if files.is_empty() || max_files == 0 {
+        return Vec::new();
+    }
+
+    let topic_tokens = tokenize_query(topic);
+    let jurisdiction_hint = jurisdiction_hint.unwrap_or("").trim().to_ascii_lowercase();
+    let mode_hint = mode_hint.unwrap_or("").trim().to_ascii_lowercase();
+
+    let mut scored = files
+        .iter()
+        .cloned()
+        .map(|file| {
+            let mut score = 0i64;
+            let haystack = format!(
+                "{} {} {} {} {}",
+                file.file_name, file.description, file.tags, file.category, file.jurisdiction
+            )
+            .to_ascii_lowercase();
+
+            if let Some(pid) = project_id {
+                match file.project_id {
+                    Some(file_pid) if file_pid == pid => score += 60,
+                    Some(_) => score -= 30,
+                    None => score += 2,
+                }
+            } else if file.project_id.is_none() {
+                score += 2;
+            }
+
+            if !jurisdiction_hint.is_empty() {
+                let file_jurisdiction = file.jurisdiction.trim().to_ascii_lowercase();
+                if !file_jurisdiction.is_empty() {
+                    if file_jurisdiction == jurisdiction_hint {
+                        score += 20;
+                    } else if file_jurisdiction.contains(&jurisdiction_hint)
+                        || jurisdiction_hint.contains(&file_jurisdiction)
+                    {
+                        score += 10;
+                    }
+                }
+            }
+
+            for token in &topic_tokens {
+                if haystack.contains(token) {
+                    score += 5;
+                }
+            }
+
+            if mode_hint == "lawborg" || mode_hint == "legal" {
+                match file.category.as_str() {
+                    "template" | "clause" | "policy" | "reference" => score += 8,
+                    _ => score += 2,
+                }
+            } else if mode_hint == "sweborg" || mode_hint == "swe" {
+                if file.category == "reference" {
+                    score += 6;
+                }
+            }
+
+            if file.inline && file.size_bytes > 200_000 {
+                score -= 2;
+            }
+
+            (score, file)
+        })
+        .collect::<Vec<_>>();
+
+    scored.sort_by(|(score_a, file_a), (score_b, file_b)| {
+        score_b
+            .cmp(score_a)
+            .then_with(|| file_a.project_id.is_some().cmp(&file_b.project_id.is_some()).reverse())
+            .then_with(|| file_a.file_name.cmp(&file_b.file_name))
+    });
+
+    let mut out = Vec::new();
+    for (score, file) in scored.into_iter() {
+        if out.len() >= max_files {
+            break;
+        }
+        if score < 0 {
+            continue;
+        }
+        out.push(file);
+    }
+    out
+}
+
+fn tokenize_query(input: &str) -> Vec<String> {
+    input
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
+        .map(str::trim)
+        .filter(|t| t.len() >= 2)
+        .take(24)
+        .map(|t| t.to_ascii_lowercase())
+        .collect()
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> (&str, bool) {
+    if input.chars().count() <= max_chars {
+        return (input, false);
+    }
+    let idx = input
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(input.len());
+    (&input[..idx], true)
 }
 
 /// Read the per-repo prompt from the explicit prompt_file config, or by
