@@ -47,7 +47,10 @@ fn test_legal_mode_has_implement_review() {
     let mode = borg_domains::legal::legal_mode();
     assert_eq!(mode.name, "lawborg");
     let names: Vec<&str> = mode.phases.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, &["backlog", "implement", "review", "purge"]);
+    assert_eq!(
+        names,
+        &["backlog", "implement", "review", "human_review", "purge"]
+    );
 }
 
 #[test]
@@ -55,6 +58,14 @@ fn test_legal_review_is_fresh_session() {
     let mode = borg_domains::legal::legal_mode();
     let review = mode.get_phase("review").unwrap();
     assert!(review.fresh_session);
+}
+
+#[test]
+fn test_legal_human_review_loops_back_to_implement() {
+    let mode = borg_domains::legal::legal_mode();
+    let human_review = mode.get_phase("human_review").unwrap();
+    assert_eq!(human_review.revision_target, "implement");
+    assert_eq!(human_review.next, "purge");
 }
 
 #[test]

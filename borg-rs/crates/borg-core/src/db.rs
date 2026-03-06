@@ -694,10 +694,8 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute_batch(SCHEMA_SQL)
-            .context("failed to apply schema migrations")?;
-        // Idempotent column additions for DBs created before these columns existed.
-        // ALTER TABLE fails if the column already exists; ignore that error.
+        // Add compatibility columns before applying the canonical schema so index
+        // creation in `schema.sql` does not fail on older databases.
         let alters = [
             "ALTER TABLE pipeline_tasks ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
             "ALTER TABLE pipeline_tasks ADD COLUMN backend TEXT",
@@ -729,6 +727,7 @@ impl Db {
             "ALTER TABLE project_files ADD COLUMN extracted_text TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE project_files ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE project_files ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE project_files ADD COLUMN privileged INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE upload_sessions ADD COLUMN privileged INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE projects ADD COLUMN default_template_id INTEGER",
             "CREATE TABLE IF NOT EXISTS cloud_connections (\
@@ -746,6 +745,9 @@ impl Db {
         for sql in alters {
             let _ = conn.execute(sql, []);
         }
+
+        conn.execute_batch(SCHEMA_SQL)
+            .context("failed to apply schema migrations")?;
 
         // Indexes on columns that may have been added via ALTER TABLE above.
         // CREATE INDEX IF NOT EXISTS is safe to run unconditionally.

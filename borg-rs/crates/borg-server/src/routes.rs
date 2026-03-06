@@ -5784,7 +5784,7 @@ pub(crate) async fn get_task_container(
 
 #[cfg(test)]
 mod tests {
-    use super::{percent_encode, percent_encode_allow_slash};
+    use super::percent_encode_allow_slash;
 
     #[test]
     fn percent_encode_unreserved_passthrough() {

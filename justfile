@@ -40,12 +40,20 @@ restart:
         systemctl --user restart borg 2>/dev/null || systemctl --user start borg
     fi
     for i in $(seq 1 20); do
-      TOKEN=$(cat store/.api-token 2>/dev/null || true)
-      curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3131/api/status >/dev/null 2>&1 && break
+      curl -sf http://127.0.0.1:3131/api/health >/dev/null 2>&1 && break
       sleep 1
     done
-    TOKEN=$(cat store/.api-token 2>/dev/null || true)
-    curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3131/api/status >/dev/null 2>&1 || (echo "borg did not come up on :3131"; exit 1)
+    if ! curl -sf http://127.0.0.1:3131/api/health >/dev/null 2>&1; then
+      echo "borg did not come up on :3131"
+      if [ "$(uname)" = "Darwin" ]; then
+        launchctl list com.borg.agent 2>/dev/null || true
+        tail -n 80 store/borg-server.log 2>/dev/null || true
+      else
+        systemctl --user --no-pager --full status borg 2>/dev/null || true
+        journalctl --user -u borg -n 80 --no-pager 2>/dev/null || true
+      fi
+      exit 1
+    fi
 
 # Stop the service
 stop:

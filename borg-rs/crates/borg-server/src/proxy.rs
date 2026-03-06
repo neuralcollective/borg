@@ -136,22 +136,15 @@ impl ProxyAuditLogger {
 pub struct ProxyState {
     pub bedrock: BedrockClient,
     pub db: Arc<borg_core::db::Db>,
-    pub region: String,
     pub audit: ProxyAuditLogger,
 }
 
 impl ProxyState {
     pub async fn new(db: Arc<borg_core::db::Db>) -> Self {
-        let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
         let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let bedrock = BedrockClient::new(&config);
         let audit = ProxyAuditLogger::from_env().await;
-        Self {
-            bedrock,
-            db,
-            region,
-            audit,
-        }
+        Self { bedrock, db, audit }
     }
 }
 

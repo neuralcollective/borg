@@ -1,6 +1,6 @@
 use std::{path::Path, process::Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use borg_core::{
     agent::AgentBackend,
@@ -11,7 +11,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 const BORG_SIGNAL_MARKER: &str = "BORG_SIGNAL:";
 
@@ -114,27 +114,6 @@ impl ClaudeBackend {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
             .unwrap_or_default()
-    }
-
-    fn host_mirror_path(task: &Task, data_dir: &str) -> String {
-        let repo_name = std::path::Path::new(&task.repo_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let path = std::path::Path::new(data_dir)
-            .join("mirrors")
-            .join(format!("{repo_name}.git"));
-        std::fs::canonicalize(path)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
-    }
-
-    fn container_mirror_path(task: &Task) -> String {
-        let repo_name = std::path::Path::new(&task.repo_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        format!("/mirrors/{repo_name}.git")
     }
 }
 
@@ -377,7 +356,6 @@ impl AgentBackend for ClaudeBackend {
                     .spawn()
                     .with_context(|| format!("failed to spawn claude: {}", self.claude_bin))?
             },
-            _ => bail!("unsupported sandbox mode"),
         };
 
         if is_docker {
