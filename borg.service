@@ -10,6 +10,7 @@ Restart=always
 RestartSec=5
 Environment=HOME=/home/shulgin
 Environment=PATH=/home/shulgin/.local/bin:/home/shulgin/go/bin:/home/shulgin/.cargo/bin:/home/shulgin/.bun/bin:/home/shulgin/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
+Environment=DATABASE_URL=postgres://borg:borg@127.0.0.1:5432/borg
 
 [Install]
 WantedBy=default.target

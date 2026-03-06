@@ -81,13 +81,31 @@ stop:
         systemctl --user is-active borg || true
     fi
 
+# Ensure Postgres (and other deps) are running
+ensure-stack:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! docker ps --format '{{"{{"}}{{".Names"}}{{"}}"}}' 2>/dev/null | grep -q borg-postgres; then
+        echo "starting dependency stack (postgres, seaweedfs, vespa)..."
+        docker compose -f deploy/docker-compose.stack.yml up -d
+        echo "waiting for postgres..."
+        for i in $(seq 1 30); do
+            docker exec borg-postgres pg_isready -U borg -d borg >/dev/null 2>&1 && break
+            sleep 1
+        done
+    fi
+
 # Build release and restart service
-deploy: b restart
+deploy: ensure-stack b restart
 
 # Test, build, and restart service
 s: t b install-service restart
 
-ship: dash s
+ship: ensure-stack dash s
+
+# Connect to borg postgres
+db:
+    docker exec -it borg-postgres psql -U borg -d borg
 
 # Full remote bootstrap + deploy (requires BORG_HOST env var).
 agent-deploy:
