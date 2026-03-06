@@ -52,6 +52,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub ai_request_count: Arc<AtomicU64>,
     pub api_token: String,
+    pub jwt_secret: String,
     pub start_time: Instant,
     pub log_tx: broadcast::Sender<String>,
     pub log_ring: Arc<std::sync::Mutex<VecDeque<String>>>,
@@ -760,6 +761,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::clone(&config),
         ai_request_count,
         api_token,
+        jwt_secret: auth::generate_token(),
         start_time: Instant::now(),
         log_tx,
         log_ring,
@@ -811,8 +813,20 @@ async fn main() -> anyhow::Result<()> {
         .merge(proxy_router)
         // Health (unauthenticated)
         .route("/api/health", get(routes::health))
-        // Token endpoint (localhost-only, no bearer required)
+        // Auth endpoints (unauthenticated)
         .route("/api/auth/token", get(auth::get_token))
+        .route("/api/auth/status", get(auth::auth_status))
+        .route("/api/auth/setup", post(auth::setup))
+        .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/me", get(auth::get_me))
+        // User management (admin-only, enforced in handlers)
+        .route("/api/users", get(routes::list_users))
+        .route("/api/users", post(routes::create_user))
+        .route("/api/users/:id", delete(routes::delete_user))
+        .route("/api/users/:id/password", put(routes::change_password))
+        // Per-user settings
+        .route("/api/user/settings", get(routes::get_user_settings))
+        .route("/api/user/settings", put(routes::put_user_settings))
         // Tasks
         .route("/api/tasks", get(routes::list_tasks))
         .route("/api/tasks/create", post(routes::create_task))

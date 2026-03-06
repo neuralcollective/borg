@@ -491,6 +491,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "vespa_document_type",
     "experimental_domains",
     "visible_categories",
+    "model_override",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -542,6 +543,7 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("vespa_document_type", "project_file"),
     ("experimental_domains", "false"),
     ("visible_categories", "Professional Services"),
+    ("model_override", ""),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────
@@ -4094,8 +4096,12 @@ pub(crate) async fn get_settings(
 
 pub(crate) async fn put_settings(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    if !user.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let map = body.as_object().ok_or(StatusCode::BAD_REQUEST)?;
     let mut updated = 0usize;
     for (key, val) in map {
@@ -4109,6 +4115,144 @@ pub(crate) async fn put_settings(
             _ => continue,
         };
         state.db.set_config(key, &s).map_err(internal)?;
+        updated += 1;
+    }
+    Ok(Json(json!({ "updated": updated })))
+}
+
+// ── User management (admin-only) ────────────────────────────────────────
+
+pub(crate) async fn list_users(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+) -> Result<Json<Value>, StatusCode> {
+    if !user.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let users = state.db.list_users().map_err(internal)?;
+    let arr: Vec<Value> = users
+        .into_iter()
+        .map(|(id, username, display_name, is_admin, created_at)| {
+            json!({ "id": id, "username": username, "display_name": display_name, "is_admin": is_admin, "created_at": created_at })
+        })
+        .collect();
+    Ok(Json(json!(arr)))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CreateUserBody {
+    pub username: String,
+    pub password: String,
+    pub display_name: Option<String>,
+    pub is_admin: Option<bool>,
+}
+
+pub(crate) async fn create_user(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    Json(body): Json<CreateUserBody>,
+) -> Result<Json<Value>, StatusCode> {
+    if !user.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if body.username.trim().is_empty() || body.password.len() < 4 {
+        return Ok(Json(json!({"error": "username required, password min 4 chars"})));
+    }
+    let hash = crate::auth::hash_password(&body.password).map_err(|e| {
+        tracing::error!("hash_password: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let display = body.display_name.as_deref().unwrap_or(&body.username);
+    let is_admin = body.is_admin.unwrap_or(false);
+    let id = state.db.create_user(&body.username, display, &hash, is_admin).map_err(internal)?;
+    Ok(Json(json!({ "id": id, "username": body.username, "display_name": display, "is_admin": is_admin })))
+}
+
+pub(crate) async fn delete_user(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    if !user.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if id == user.id {
+        return Ok(Json(json!({"error": "cannot delete yourself"})));
+    }
+    state.db.delete_user(id).map_err(internal)?;
+    Ok(Json(json!({ "deleted": id })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ChangePasswordBody {
+    pub password: String,
+}
+
+pub(crate) async fn change_password(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    Path(id): Path<i64>,
+    Json(body): Json<ChangePasswordBody>,
+) -> Result<Json<Value>, StatusCode> {
+    if !user.is_admin && user.id != id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if body.password.len() < 4 {
+        return Ok(Json(json!({"error": "password min 4 chars"})));
+    }
+    let hash = crate::auth::hash_password(&body.password).map_err(|e| {
+        tracing::error!("hash_password: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    state.db.update_user_password(id, &hash).map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ── Per-user settings ────────────────────────────────────────────────────
+
+const USER_SETTINGS_KEYS: &[&str] = &["model", "backend"];
+
+pub(crate) async fn get_user_settings(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+) -> Result<Json<Value>, StatusCode> {
+    let settings = state.db.get_all_user_settings(user.id).map_err(internal)?;
+
+    // Check for global model override
+    let model_override = state.db.get_config("model_override").map_err(internal)?;
+    let has_override = model_override.as_ref().map_or(false, |v| !v.is_empty());
+
+    let mut obj = serde_json::Map::new();
+    for key in USER_SETTINGS_KEYS {
+        let val = settings.get(*key).cloned().unwrap_or_default();
+        obj.insert(key.to_string(), json!(val));
+    }
+    obj.insert("model_override".to_string(), json!(model_override.unwrap_or_default()));
+    obj.insert("model_override_active".to_string(), json!(has_override));
+
+    Ok(Json(Value::Object(obj)))
+}
+
+pub(crate) async fn put_user_settings(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    let map = body.as_object().ok_or(StatusCode::BAD_REQUEST)?;
+    let mut updated = 0usize;
+    for (key, val) in map {
+        if !USER_SETTINGS_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let s = match val {
+            Value::String(s) => s.clone(),
+            _ => continue,
+        };
+        if s.is_empty() {
+            state.db.delete_user_setting(user.id, key).map_err(internal)?;
+        } else {
+            state.db.set_user_setting(user.id, key, &s).map_err(internal)?;
+        }
         updated += 1;
     }
     Ok(Json(json!({ "updated": updated })))

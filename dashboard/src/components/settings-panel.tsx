@@ -7,8 +7,15 @@ import {
   setRepoBackend,
   useCacheVolumes,
   deleteCacheVolume,
+  useUserSettings,
+  updateUserSettings,
+  useUsers,
+  createUser,
+  deleteUser,
+  changeUserPassword,
   type Settings,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -34,6 +41,7 @@ function isValidHttpUrl(url: string): boolean {
 }
 
 export function SettingsPanel() {
+  const { user } = useAuth();
   const { data: settings, isLoading } = useSettings();
   const { data: status } = useStatus();
   const { mode: uiMode, setMode: setUIMode } = useUIMode();
@@ -41,7 +49,10 @@ export function SettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Partial<Settings>>({});
   const [saved, setSaved] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isAdmin = user?.is_admin ?? false;
 
   useEffect(() => {
     return () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); };
@@ -85,12 +96,12 @@ export function SettingsPanel() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl space-y-8 p-6">
-        {/* Dashboard Preferences */}
-        <Section title="Dashboard">
+        {/* ── Your Settings ──────────────────────────────────────── */}
+        <Section title="Your Settings">
           <div className="flex items-center justify-between">
             <div>
               <Label>Interface Mode</Label>
-              <Desc>Minimal hides technical details (logs, queue, git info). Advanced shows everything.</Desc>
+              <Desc>Minimal hides technical details. Advanced shows everything.</Desc>
             </div>
             <ToggleGroup
               value={uiMode}
@@ -101,146 +112,188 @@ export function SettingsPanel() {
               ]}
             />
           </div>
+          <UserModelPicker />
         </Section>
 
-        {/* Pipeline Settings */}
-        <Section title="Pipeline">
-          <ToggleField
-            label="Continuous Mode"
-            desc="Auto-seed new tasks when pipeline is idle"
-            value={effective.continuous_mode}
-            onChange={(v) => update("continuous_mode", v)}
-          />
-          <ToggleField
-            label="Experimental Domains"
-            desc="Enable non-core mode presets and runtime integrations."
-            value={effective.experimental_domains}
-            onChange={(v) => update("experimental_domains", v)}
-          />
-          <CategoryPicker
-            value={effective.visible_categories}
-            onChange={(v) => update("visible_categories", v)}
-          />
-          <NumberField
-            label="Max Backlog"
-            desc="Maximum concurrent pipeline tasks"
-            value={effective.pipeline_max_backlog}
-            onChange={(v) => update("pipeline_max_backlog", v)}
-            min={1}
-            max={20}
-          />
-          <NumberField
-            label="Max Agents"
-            desc="Maximum concurrent agent processes"
-            value={effective.pipeline_max_agents}
-            onChange={(v) => update("pipeline_max_agents", v)}
-            min={1}
-            max={10}
-          />
-          <NumberField
-            label="Release Interval (min)"
-            desc="Minutes between release cycles"
-            value={effective.release_interval_mins}
-            onChange={(v) => update("release_interval_mins", v)}
-            min={1}
-            max={1440}
-          />
-          <NumberField
-            label="Seed Cooldown (s)"
-            desc="Minimum seconds between seed scans"
-            value={effective.pipeline_seed_cooldown_s}
-            onChange={(v) => update("pipeline_seed_cooldown_s", v)}
-            min={60}
-            max={86400}
-          />
-          <NumberField
-            label="Tick Interval (s)"
-            desc="Main pipeline loop interval"
-            value={effective.pipeline_tick_s}
-            onChange={(v) => update("pipeline_tick_s", v)}
-            min={5}
-            max={300}
-          />
-          <NumberField
-            label="Proposal Threshold"
-            desc="Minimum triage score (1–10) to auto-promote a proposal to a task"
-            value={effective.proposal_promote_threshold}
-            onChange={(v) => update("proposal_promote_threshold", v)}
-            min={1}
-            max={10}
-          />
-        </Section>
-
-        {/* Agent Settings */}
-        <Section title="Agent">
-          <ModelPicker
-            model={effective.model}
-            backend={effective.backend}
-            onChange={(model, backend) => {
-              update("model", model);
-              update("backend", backend);
-            }}
-          />
-          <NumberField
-            label="Timeout (s)"
-            desc="Max seconds per agent run"
-            value={effective.agent_timeout_s}
-            onChange={(v) => update("agent_timeout_s", v)}
-            min={60}
-            max={7200}
-          />
-          <NumberField
-            label="Container Memory (MB)"
-            desc="Memory limit for Docker containers"
-            value={effective.container_memory_mb}
-            onChange={(v) => update("container_memory_mb", v)}
-            min={256}
-            max={16384}
-          />
-          <TextField
-            label="Assistant Name"
-            desc="Name used in chat responses"
-            value={effective.assistant_name}
-            onChange={(v) => update("assistant_name", v)}
-          />
-        </Section>
-
-        {/* Git Attribution — only relevant for code modes */}
-        {hasCodeMode && (
-          <Section title="Git Attribution">
-            <ToggleField
-              label="Claude Co-author"
-              desc="Include Claude as Co-Authored-By in pipeline commits"
-              value={effective.git_claude_coauthor}
-              onChange={(v) => update("git_claude_coauthor", v)}
-            />
-            <TextField
-              label="User Co-author"
-              desc="Add as Co-Authored-By in commits (e.g. username <email@example.com>)"
-              value={effective.git_user_coauthor}
-              onChange={(v) => update("git_user_coauthor", v)}
-            />
+        {user && (
+          <Section title="Account">
+            <InfoRow label="Username" value={user.username} />
+            <InfoRow label="Role" value={isAdmin ? "Admin" : "User"} />
+            <ChangeOwnPassword userId={user.id} />
           </Section>
         )}
 
-        {/* Permissions */}
-        <Section title="Permissions">
-          <TextField
-            label="Chat Disallowed Tools"
-            desc="Comma-separated tools to block for chat agents (empty = all allowed)"
-            value={effective.chat_disallowed_tools}
-            onChange={(v) => update("chat_disallowed_tools", v)}
-          />
-          <TextField
-            label="Pipeline Disallowed Tools"
-            desc="Comma-separated tools to block for pipeline agents (empty = all allowed)"
-            value={effective.pipeline_disallowed_tools}
-            onChange={(v) => update("pipeline_disallowed_tools", v)}
-          />
-        </Section>
+        {/* ── Admin Settings ─────────────────────────────────────── */}
+        {isAdmin && !showAdmin && (
+          <button
+            onClick={() => setShowAdmin(true)}
+            className="w-full rounded-lg border border-white/[0.08] bg-white/[0.02] py-3 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.05] hover:text-zinc-200"
+          >
+            Show Admin Settings
+          </button>
+        )}
 
-        {/* Cloud Storage */}
-        <Section title="Cloud Storage">
+        {isAdmin && showAdmin && (
+          <>
+            {/* User Management */}
+            <UserManagement />
+
+            {/* Pipeline Settings */}
+            <Section title="Pipeline">
+              <ToggleField
+                label="Continuous Mode"
+                desc="Auto-seed new tasks when pipeline is idle"
+                value={effective.continuous_mode}
+                onChange={(v) => update("continuous_mode", v)}
+              />
+              <ToggleField
+                label="Experimental Domains"
+                desc="Enable non-core mode presets and runtime integrations."
+                value={effective.experimental_domains}
+                onChange={(v) => update("experimental_domains", v)}
+              />
+              <CategoryPicker
+                value={effective.visible_categories}
+                onChange={(v) => update("visible_categories", v)}
+              />
+              <NumberField
+                label="Max Backlog"
+                desc="Maximum concurrent pipeline tasks"
+                value={effective.pipeline_max_backlog}
+                onChange={(v) => update("pipeline_max_backlog", v)}
+                min={1}
+                max={20}
+              />
+              <NumberField
+                label="Max Agents"
+                desc="Maximum concurrent agent processes"
+                value={effective.pipeline_max_agents}
+                onChange={(v) => update("pipeline_max_agents", v)}
+                min={1}
+                max={10}
+              />
+              <NumberField
+                label="Release Interval (min)"
+                desc="Minutes between release cycles"
+                value={effective.release_interval_mins}
+                onChange={(v) => update("release_interval_mins", v)}
+                min={1}
+                max={1440}
+              />
+              <NumberField
+                label="Seed Cooldown (s)"
+                desc="Minimum seconds between seed scans"
+                value={effective.pipeline_seed_cooldown_s}
+                onChange={(v) => update("pipeline_seed_cooldown_s", v)}
+                min={60}
+                max={86400}
+              />
+              <NumberField
+                label="Tick Interval (s)"
+                desc="Main pipeline loop interval"
+                value={effective.pipeline_tick_s}
+                onChange={(v) => update("pipeline_tick_s", v)}
+                min={5}
+                max={300}
+              />
+              <NumberField
+                label="Proposal Threshold"
+                desc="Minimum triage score (1–10) to auto-promote a proposal to a task"
+                value={effective.proposal_promote_threshold}
+                onChange={(v) => update("proposal_promote_threshold", v)}
+                min={1}
+                max={10}
+              />
+            </Section>
+
+            {/* Agent Settings (global defaults) */}
+            <Section title="Agent (Global Defaults)">
+              <ModelPicker
+                model={effective.model}
+                backend={effective.backend}
+                onChange={(model, backend) => {
+                  update("model", model);
+                  update("backend", backend);
+                }}
+              />
+              <div className="mt-2">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <Label>Global Model Override</Label>
+                    <Desc>When set, forces this model for all users (disables per-user model choice)</Desc>
+                  </div>
+                  <select
+                    value={effective.model_override}
+                    onChange={(e) => update("model_override", e.target.value)}
+                    className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+                  >
+                    <option value="">Disabled (users choose)</option>
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.model} value={o.model}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <NumberField
+                label="Timeout (s)"
+                desc="Max seconds per agent run"
+                value={effective.agent_timeout_s}
+                onChange={(v) => update("agent_timeout_s", v)}
+                min={60}
+                max={7200}
+              />
+              <NumberField
+                label="Container Memory (MB)"
+                desc="Memory limit for Docker containers"
+                value={effective.container_memory_mb}
+                onChange={(v) => update("container_memory_mb", v)}
+                min={256}
+                max={16384}
+              />
+              <TextField
+                label="Assistant Name"
+                desc="Name used in chat responses"
+                value={effective.assistant_name}
+                onChange={(v) => update("assistant_name", v)}
+              />
+            </Section>
+
+            {/* Git Attribution — only relevant for code modes */}
+            {hasCodeMode && (
+              <Section title="Git Attribution">
+                <ToggleField
+                  label="Claude Co-author"
+                  desc="Include Claude as Co-Authored-By in pipeline commits"
+                  value={effective.git_claude_coauthor}
+                  onChange={(v) => update("git_claude_coauthor", v)}
+                />
+                <TextField
+                  label="User Co-author"
+                  desc="Add as Co-Authored-By in commits (e.g. username <email@example.com>)"
+                  value={effective.git_user_coauthor}
+                  onChange={(v) => update("git_user_coauthor", v)}
+                />
+              </Section>
+            )}
+
+            {/* Permissions */}
+            <Section title="Permissions">
+              <TextField
+                label="Chat Disallowed Tools"
+                desc="Comma-separated tools to block for chat agents (empty = all allowed)"
+                value={effective.chat_disallowed_tools}
+                onChange={(v) => update("chat_disallowed_tools", v)}
+              />
+              <TextField
+                label="Pipeline Disallowed Tools"
+                desc="Comma-separated tools to block for pipeline agents (empty = all allowed)"
+                value={effective.pipeline_disallowed_tools}
+                onChange={(v) => update("pipeline_disallowed_tools", v)}
+              />
+            </Section>
+
+            {/* Cloud Storage */}
+            <Section title="Cloud Storage">
           <TextField
             label="Public URL"
             desc="Public app URL used for OAuth callbacks (for example: https://app.borg.legal)"
@@ -445,20 +498,22 @@ export function SettingsPanel() {
           />
         </Section>
 
-        {/* Per-Repo Settings — only for code modes */}
-        {hasCodeMode && <ReposSection />}
+            {/* Per-Repo Settings — only for code modes */}
+            {hasCodeMode && <ReposSection />}
 
-        {/* Docker Cache Volumes — only for code modes */}
-        {hasCodeMode && <CacheSection />}
+            {/* Docker Cache Volumes — only for code modes */}
+            {hasCodeMode && <CacheSection />}
 
-        {/* System Info (read-only) */}
-        <Section title="System">
-          <InfoRow label="Version" value={status?.version ?? "--"} />
-          <InfoRow label="Uptime" value={status ? formatUptime(status.uptime_s) : "--"} />
-          <InfoRow label="Watched Repos" value={String(status?.watched_repos?.length ?? 0)} />
-          <InfoRow label="Active Tasks" value={String(status?.active_tasks ?? 0)} />
-          <InfoRow label="Total Tasks" value={String(status?.total_tasks ?? 0)} />
-        </Section>
+            {/* System Info (read-only) */}
+            <Section title="System">
+              <InfoRow label="Version" value={status?.version ?? "--"} />
+              <InfoRow label="Uptime" value={status ? formatUptime(status.uptime_s) : "--"} />
+              <InfoRow label="Watched Repos" value={String(status?.watched_repos?.length ?? 0)} />
+              <InfoRow label="Active Tasks" value={String(status?.active_tasks ?? 0)} />
+              <InfoRow label="Total Tasks" value={String(status?.total_tasks ?? 0)} />
+            </Section>
+          </>
+        )}
 
         {/* Save bar */}
         {(hasDraft || saved) && (
@@ -485,6 +540,220 @@ export function SettingsPanel() {
         )}
       </div>
     </div>
+  );
+}
+
+function UserModelPicker() {
+  const { data: userSettings, refetch } = useUserSettings();
+  const [saving, setSaving] = useState(false);
+
+  if (!userSettings) return null;
+
+  const overrideActive = userSettings.model_override_active;
+  const currentModel = overrideActive
+    ? userSettings.model_override
+    : (userSettings.model || "");
+
+  const match = MODEL_OPTIONS.find((o) => o.model === currentModel);
+
+  async function handleChange(model: string) {
+    const opt = MODEL_OPTIONS.find((o) => o.model === model);
+    if (!opt) return;
+    setSaving(true);
+    try {
+      await updateUserSettings({ model: opt.model, backend: opt.backend });
+      await refetch();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <Label>Model</Label>
+        <Desc>
+          {overrideActive
+            ? "Model is set by admin and cannot be changed."
+            : "Your preferred AI model for pipeline tasks."}
+        </Desc>
+      </div>
+      <select
+        value={match?.model ?? currentModel}
+        onChange={(e) => handleChange(e.target.value)}
+        disabled={overrideActive || saving}
+        className={cn(
+          "rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40",
+          (overrideActive || saving) && "opacity-50 cursor-not-allowed"
+        )}
+      >
+        {MODEL_OPTIONS.map((o) => (
+          <option key={o.model} value={o.model}>{o.label}</option>
+        ))}
+        {!match && currentModel && (
+          <option value={currentModel}>{currentModel}</option>
+        )}
+      </select>
+    </div>
+  );
+}
+
+function ChangeOwnPassword({ userId }: { userId: number }) {
+  const [open, setOpen] = useState(false);
+  const [pw, setPw] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+      >
+        Change Password
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="password"
+        value={pw}
+        onChange={(e) => setPw(e.target.value)}
+        placeholder="New password (min 4)"
+        className="w-40 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
+      />
+      <button
+        disabled={busy || pw.length < 4}
+        onClick={async () => {
+          setBusy(true);
+          const res = await changeUserPassword(userId, pw);
+          setMsg(res.error ?? "Password changed");
+          setPw("");
+          setBusy(false);
+        }}
+        className="rounded-md bg-blue-500/20 px-2.5 py-1 text-[11px] text-blue-400 ring-1 ring-inset ring-blue-500/20 disabled:opacity-50"
+      >
+        Save
+      </button>
+      {msg && <span className="text-[10px] text-zinc-500">{msg}</span>}
+    </div>
+  );
+}
+
+function UserManagement() {
+  const { data: users, refetch } = useUsers();
+  const { user: currentUser, logout } = useAuth();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newUser, setNewUser] = useState({ username: "", password: "", display_name: "", is_admin: false });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  return (
+    <Section title="Users">
+      {users?.map((u) => (
+        <div key={u.id} className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] font-medium text-zinc-300">
+              {u.username}
+              {u.is_admin && <span className="ml-1.5 text-[10px] text-amber-400/70">admin</span>}
+            </div>
+            {u.display_name && u.display_name !== u.username && (
+              <div className="text-[11px] text-zinc-600">{u.display_name}</div>
+            )}
+          </div>
+          {u.id !== currentUser?.id && (
+            <button
+              onClick={async () => {
+                if (!confirm(`Delete user "${u.username}"?`)) return;
+                await deleteUser(u.id);
+                await refetch();
+              }}
+              className="text-[11px] text-red-400/60 hover:text-red-400 transition-colors"
+            >
+              Delete
+            </button>
+          )}
+        </div>
+      ))}
+
+      {!showCreate ? (
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowCreate(true)}
+            className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors"
+          >
+            + Add User
+          </button>
+          <button
+            onClick={logout}
+            className="ml-auto text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+          >
+            Sign Out
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2 rounded-md border border-white/[0.06] bg-white/[0.02] p-3">
+          <input
+            value={newUser.username}
+            onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+            placeholder="Username"
+            className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+          />
+          <input
+            value={newUser.display_name}
+            onChange={(e) => setNewUser({ ...newUser, display_name: e.target.value })}
+            placeholder="Display Name (optional)"
+            className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+          />
+          <input
+            type="password"
+            value={newUser.password}
+            onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+            placeholder="Password (min 4)"
+            className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+          />
+          <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+            <input
+              type="checkbox"
+              checked={newUser.is_admin}
+              onChange={(e) => setNewUser({ ...newUser, is_admin: e.target.checked })}
+              className="rounded"
+            />
+            Admin
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={busy || !newUser.username.trim() || newUser.password.length < 4}
+              onClick={async () => {
+                setBusy(true);
+                setMsg("");
+                const res = await createUser(newUser);
+                if (res.error) {
+                  setMsg(res.error);
+                } else {
+                  setNewUser({ username: "", password: "", display_name: "", is_admin: false });
+                  setShowCreate(false);
+                  await refetch();
+                }
+                setBusy(false);
+              }}
+              className="rounded-md bg-blue-500/20 px-3 py-1 text-[11px] text-blue-400 ring-1 ring-inset ring-blue-500/20 disabled:opacity-50"
+            >
+              Create
+            </button>
+            <button
+              onClick={() => setShowCreate(false)}
+              className="text-[11px] text-zinc-500 hover:text-zinc-300"
+            >
+              Cancel
+            </button>
+            {msg && <span className="text-[10px] text-red-400">{msg}</span>}
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -655,23 +924,40 @@ function NumberField({ label, desc, value, onChange, min, max }: {
   min?: number;
   max?: number;
 }) {
+  const clamp = (v: number) => Math.max(min ?? -Infinity, Math.min(max ?? Infinity, v));
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0 flex-1">
         <Label>{label}</Label>
         <Desc>{desc}</Desc>
       </div>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        onChange={(e) => {
-          const v = parseInt(e.target.value);
-          if (!isNaN(v)) onChange(v);
-        }}
-        className="w-24 rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-right text-[12px] tabular-nums text-zinc-200 outline-none focus:border-blue-500/40"
-      />
+      <div className="flex items-center gap-0 rounded-md border border-white/[0.08] bg-white/[0.04]">
+        <button
+          type="button"
+          onClick={() => onChange(clamp(value - 1))}
+          className="flex h-7 w-7 items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors"
+        >
+          −
+        </button>
+        <input
+          type="number"
+          value={value}
+          min={min}
+          max={max}
+          onChange={(e) => {
+            const v = parseInt(e.target.value);
+            if (!isNaN(v)) onChange(clamp(v));
+          }}
+          className="w-14 bg-transparent px-1 py-1 text-center text-[12px] tabular-nums text-zinc-200 outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
+        />
+        <button
+          type="button"
+          onClick={() => onChange(clamp(value + 1))}
+          className="flex h-7 w-7 items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors"
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }

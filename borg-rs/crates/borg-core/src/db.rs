@@ -3388,6 +3388,177 @@ impl Db {
         Ok(rows)
     }
 
+    // ── Users ─────────────────────────────────────────────────────────────
+
+    pub fn count_users(&self) -> Result<i64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", params![], |row| row.get(0))
+            .context("count_users")?;
+        Ok(count)
+    }
+
+    pub fn create_user(
+        &self,
+        username: &str,
+        display_name: &str,
+        password_hash: &str,
+        is_admin: bool,
+    ) -> Result<i64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO users (username, display_name, password_hash, is_admin) \
+                 VALUES (?1, ?2, ?3, ?4) RETURNING id",
+                params![username, display_name, password_hash, is_admin],
+                |row| row.get(0),
+            )
+            .context("create_user")?;
+        Ok(id)
+    }
+
+    pub fn get_user_by_username(&self, username: &str) -> Result<Option<(i64, String, String, String, bool)>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let result = conn
+            .query_row(
+                "SELECT id, username, display_name, password_hash, is_admin FROM users WHERE username = ?1",
+                params![username],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .optional()
+            .context("get_user_by_username")?;
+        Ok(result)
+    }
+
+    pub fn get_user_by_id(&self, id: i64) -> Result<Option<(i64, String, String, bool)>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let result = conn
+            .query_row(
+                "SELECT id, username, display_name, is_admin FROM users WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .context("get_user_by_id")?;
+        Ok(result)
+    }
+
+    pub fn list_users(&self) -> Result<Vec<(i64, String, String, bool, String)>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, username, display_name, is_admin, created_at FROM users ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map(params![], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_users")?;
+        Ok(rows)
+    }
+
+    pub fn delete_user(&self, id: i64) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute("DELETE FROM users WHERE id = ?1", params![id])
+            .context("delete_user")?;
+        Ok(())
+    }
+
+    pub fn update_user_password(&self, id: i64, password_hash: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+            params![password_hash, id],
+        )
+        .context("update_user_password")?;
+        Ok(())
+    }
+
+    // ── User Settings ────────────────────────────────────────────────────
+
+    pub fn get_user_setting(&self, user_id: i64, key: &str) -> Result<Option<String>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let result = conn
+            .query_row(
+                "SELECT value FROM user_settings WHERE user_id = ?1 AND key = ?2",
+                params![user_id, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("get_user_setting")?;
+        Ok(result)
+    }
+
+    pub fn set_user_setting(&self, user_id: i64, key: &str, value: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "INSERT INTO user_settings (user_id, key, value) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            params![user_id, key, value],
+        )
+        .context("set_user_setting")?;
+        Ok(())
+    }
+
+    pub fn get_all_user_settings(&self, user_id: i64) -> Result<HashMap<String, String>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT key, value FROM user_settings WHERE user_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![user_id], |row| {
+                let k: String = row.get(0)?;
+                let v: String = row.get(1)?;
+                Ok((k, v))
+            })?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("get_all_user_settings")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    pub fn delete_user_setting(&self, user_id: i64, key: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "DELETE FROM user_settings WHERE user_id = ?1 AND key = ?2",
+            params![user_id, key],
+        )
+        .context("delete_user_setting")?;
+        Ok(())
+    }
+
     // ── Config ────────────────────────────────────────────────────────────
 
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {

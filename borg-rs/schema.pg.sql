@@ -296,6 +296,24 @@ CREATE TABLE IF NOT EXISTS task_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_task_messages_task_id ON task_messages(task_id);
 
+-- ── Users ────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS users (
+  id BIGSERIAL PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TEXT NOT NULL DEFAULT (to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS'))
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+
 -- ── Runtime config ────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS config (

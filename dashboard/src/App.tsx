@@ -4,6 +4,7 @@ import { useLogs, useStatus } from "@/lib/api";
 import { UIModeProvider, useUIMode } from "@/lib/ui-mode";
 import type { UIMode } from "@/lib/ui-mode";
 import { DomainProvider, useDomain } from "@/lib/domain";
+import { AuthProvider, useAuth } from "@/lib/auth";
 import { Header } from "@/components/header";
 import { TaskList } from "@/components/task-list";
 import { TaskDetail } from "@/components/task-detail";
@@ -15,6 +16,7 @@ import { ProjectsPanel } from "@/components/projects-panel";
 import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { SettingsPanel } from "@/components/settings-panel";
 import { KnowledgePanel } from "@/components/knowledge-panel";
+import { LoginPage } from "@/components/login-page";
 import { BorgLogo } from "@/components/borg-logo";
 import { ListTodo, Terminal, GitMerge, MessageSquare, Lightbulb, Settings, FolderOpen, Wrench, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -97,10 +99,32 @@ function detectDefaultView(domain: { defaultView: "tasks" | "projects" }, repos?
 export default function App() {
   return (
     <ErrorBoundary>
-      <DomainProvider>
-        <AppWithDomain />
-      </DomainProvider>
+      <AuthProvider>
+        <AuthGate />
+      </AuthProvider>
     </ErrorBoundary>
+  );
+}
+
+function AuthGate() {
+  const { ready, user, needsSetup } = useAuth();
+
+  if (!ready) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#09090b]">
+        <div className="h-8 w-8 animate-pulse rounded-full bg-white/[0.06]" />
+      </div>
+    );
+  }
+
+  if (needsSetup || !user) {
+    return <LoginPage />;
+  }
+
+  return (
+    <DomainProvider>
+      <AppWithDomain />
+    </DomainProvider>
   );
 }
 

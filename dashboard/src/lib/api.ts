@@ -37,17 +37,152 @@ export function apiBase(): string {
   return (window as any).__BORG_API_URL__ || "";
 }
 
-// Fetched once at module load; null if server doesn't require auth or unreachable
+// Auth token — JWT from login, or shared token for backward compat
 let authToken: string | null = null;
-export const tokenReady: Promise<void> = fetch(`${apiBase()}/api/auth/token`)
-  .then((r) => (r.ok ? r.json() : null))
-  .then((data: { token: string } | null) => {
-    if (data?.token) authToken = data.token;
-  })
-  .catch(() => {});
+
+// Try to restore JWT from localStorage, then fall back to shared token
+export const tokenReady: Promise<void> = (async () => {
+  const stored = localStorage.getItem("borg_jwt");
+  if (stored) {
+    authToken = stored;
+    return;
+  }
+  try {
+    const r = await fetch(`${apiBase()}/api/auth/token`);
+    if (r.ok) {
+      const data = await r.json();
+      if (data?.token) authToken = data.token;
+    }
+  } catch {}
+})();
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+  if (token) {
+    localStorage.setItem("borg_jwt", token);
+  } else {
+    localStorage.removeItem("borg_jwt");
+  }
+}
+
+export function getAuthToken(): string | null {
+  return authToken;
+}
 
 export function authHeaders(): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+// ── Auth API ─────────────────────────────────────────────────────────────
+
+export interface AuthStatus {
+  needs_setup: boolean;
+  user_count: number;
+}
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  display_name: string;
+  is_admin: boolean;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: AuthUser;
+  error?: string;
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const r = await fetch(`${apiBase()}/api/auth/status`);
+  return r.json();
+}
+
+export async function loginUser(username: string, password: string): Promise<LoginResponse> {
+  const r = await fetch(`${apiBase()}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  return r.json();
+}
+
+export async function setupAdmin(username: string, password: string, display_name?: string): Promise<LoginResponse> {
+  const r = await fetch(`${apiBase()}/api/auth/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password, display_name }),
+  });
+  return r.json();
+}
+
+export async function fetchMe(): Promise<AuthUser | null> {
+  try {
+    const r = await apiFetch("/api/auth/me");
+    if (!r.ok) return null;
+    return r.json();
+  } catch {
+    return null;
+  }
+}
+
+// ── User management ──────────────────────────────────────────────────────
+
+export function useUsers() {
+  return useQuery<AuthUser[]>({
+    queryKey: ["users"],
+    queryFn: () => fetchJson("/api/users"),
+    staleTime: 30_000,
+  });
+}
+
+export async function createUser(body: { username: string; password: string; display_name?: string; is_admin?: boolean }) {
+  const r = await apiFetch("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+export async function deleteUser(id: number) {
+  const r = await apiFetch(`/api/users/${id}`, { method: "DELETE" });
+  return r.json();
+}
+
+export async function changeUserPassword(id: number, password: string) {
+  const r = await apiFetch(`/api/users/${id}/password`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  return r.json();
+}
+
+// ── Per-user settings ────────────────────────────────────────────────────
+
+export interface UserSettings {
+  model: string;
+  backend: string;
+  model_override: string;
+  model_override_active: boolean;
+}
+
+export function useUserSettings() {
+  return useQuery<UserSettings>({
+    queryKey: ["user-settings"],
+    queryFn: () => fetchJson("/api/user/settings"),
+    staleTime: 30_000,
+  });
+}
+
+export async function updateUserSettings(settings: Partial<UserSettings>): Promise<{ updated: number }> {
+  const r = await apiFetch("/api/user/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  return r.json();
 }
 
 // AuthEventSource replaces native EventSource with a fetch-based connection
@@ -314,6 +449,7 @@ export interface Settings {
   vespa_document_type: string;
   experimental_domains: boolean;
   visible_categories: string;
+  model_override: string;
 }
 
 export function useSettings() {
