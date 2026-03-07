@@ -307,11 +307,12 @@ export function KnowledgePanel() {
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
           className={cn(
-            "rounded-xl border-2 border-dashed p-6 transition-colors",
+            "rounded-xl border-2 border-dashed p-6 transition-colors cursor-pointer",
             dragOver
               ? "border-blue-500/40 bg-amber-500/[0.04]"
-              : "border-[#2a2520] bg-[#151412]"
+              : "border-[#2a2520] bg-[#151412] hover:border-amber-500/20"
           )}
         >
           <div className="flex flex-col items-center gap-3 text-center">
@@ -329,7 +330,7 @@ export function KnowledgePanel() {
             ) : (
               <>
                 <div>
-                  <p className="text-[14px] font-medium text-[#e8e0d4]">Drop a file here or <button onClick={() => fileInputRef.current?.click()} className="text-amber-400 hover:text-amber-300">browse</button></p>
+                  <p className="text-[14px] font-medium text-[#e8e0d4]">Drop a file here or <span className="text-amber-400">browse</span></p>
                   <p className="mt-1 text-[12px] text-[#6b6459]">Supports any file type. Inline files are embedded in agent prompts.</p>
                 </div>
               </>

@@ -45,10 +45,12 @@ export function FilePreviewModal({
   file,
   projectId,
   onClose,
+  isActive,
 }: {
   file: ProjectFile;
   projectId: number;
   onClose: () => void;
+  isActive?: boolean;
 }) {
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,6 +91,12 @@ export function FilePreviewModal({
             <span className="truncate text-[14px] font-medium text-zinc-200">
               {file.file_name}
             </span>
+            {isActive && (
+              <span className="flex items-center gap-1.5 shrink-0 rounded-full bg-amber-500/10 px-2.5 py-1 ring-1 ring-amber-500/20">
+                <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                <span className="text-[11px] font-medium text-amber-400">Agent editing</span>
+              </span>
+            )}
           </div>
           <button
             onClick={onClose}

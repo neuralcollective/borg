@@ -11,7 +11,7 @@ import { editorReducer, INITIAL_STATE, blankMode } from "./mode-creator/reducer"
 import { getProfile } from "./mode-creator/category-profiles";
 
 const TABS = ["phases", "seeds", "json"] as const;
-const CORE_MODES = new Set(["sweborg", "lawborg", "swe", "legal"]);
+const CORE_MODES = new Set(["sweborg", "lawborg", "swe", "legal", "knowledge"]);
 
 export function ModeCreatorPanel() {
   const { data: allModes = [], refetch: refetchAll } = useFullModes();

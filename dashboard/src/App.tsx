@@ -85,8 +85,8 @@ const MOBILE_TABS = [
 function detectDefaultMode(domain: { defaultMode: "minimal" | "advanced" }, repos?: { mode: string; is_self: boolean }[]): UIMode {
   if (!repos || repos.length === 0) return domain.defaultMode;
   const primary = repos.find((r) => r.is_self) ?? repos[0];
-  if (primary.mode === "lawborg" || primary.mode === "legal") return "minimal";
-  return domain.defaultMode;
+  if (primary.mode === "sweborg" || primary.mode === "swe") return domain.defaultMode;
+  return "minimal";
 }
 
 function detectDefaultView(_domain: { defaultView: "tasks" | "projects" }, _repos?: { mode: string; is_self: boolean }[]): View {
@@ -132,11 +132,11 @@ function AuthGate() {
 function AppWithDomain() {
   const domain = useDomain();
   const { data: status } = useStatus();
-  const { isLegal } = useDashboardMode();
+  const { isSWE } = useDashboardMode();
   const defaultMode = useMemo(() => {
-    if (isLegal) return "minimal" as UIMode;
+    if (!isSWE) return "minimal" as UIMode;
     return detectDefaultMode(domain, status?.watched_repos);
-  }, [domain, status, isLegal]);
+  }, [domain, status, isSWE]);
 
   return (
     <UIModeProvider defaultMode={defaultMode}>
@@ -159,27 +159,26 @@ function AppInner() {
   const isMobile = useIsMobile();
   const defaultView = useMemo(() => detectDefaultView(domain, status?.watched_repos), [domain, status]);
   const sidebarAlert = !!status?.guardrail_alert;
-
   useEffect(() => {
     setView((curr) => (curr === "projects" || curr === "tasks" ? defaultView : curr));
   }, [defaultView]);
 
-  const { isLegal: isGlobalLawMode } = useDashboardMode();
+  const { isSWE } = useDashboardMode();
 
   const navLabelOverrides: Record<string, string> = useMemo(() => ({
     projects: vocab.projectsLabel,
     tasks: vocab.tasksLabel,
   }), [vocab]);
 
-  const LAW_HIDDEN_KEYS = ["queue", "proposals", "logs"];
+  const SWE_ONLY_KEYS = ["queue", "proposals", "logs"];
 
   const navItems = useMemo(
     () => ALL_NAV_ITEMS.filter((item) => {
       if (domain.hiddenNavKeys.includes(item.key)) return false;
-      if (isGlobalLawMode && LAW_HIDDEN_KEYS.includes(item.key)) return false;
+      if (!isSWE && SWE_ONLY_KEYS.includes(item.key)) return false;
       return uiMode === "advanced" || item.minimalVisible;
     }),
-    [uiMode, domain, isGlobalLawMode]
+    [uiMode, domain, isSWE]
   );
 
   const handleSelectTask = useCallback((id: number) => setSelectedTaskId(id), []);
@@ -244,7 +243,7 @@ function AppInner() {
           className="flex shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
-          {MOBILE_TABS.filter((t) => !(isGlobalLawMode && t.key === "queue")).map(({ key, label: defaultLabel, Icon }) => {
+          {MOBILE_TABS.filter((t) => isSWE || t.key !== "queue").map(({ key, label: defaultLabel, Icon }) => {
             const label = navLabelOverrides[key] ?? defaultLabel;
             return (
             <button
@@ -271,7 +270,8 @@ function AppInner() {
       {/* Sidebar nav — slim icon bar, expands on hover pushing content */}
       <nav
         className={cn(
-          "group/nav flex h-full w-[2.2vw] hover:w-[7vw] shrink-0 flex-col items-start border-r pb-4 transition-[width] duration-200 ease-out overflow-hidden",
+          "group/nav flex h-full shrink-0 flex-col items-start border-r pb-4 overflow-hidden transition-[width] duration-200 ease-out",
+          "w-[2.2vw] hover:w-[7vw]",
           sidebarAlert
             ? "border-red-500/30 bg-red-950/35"
             : "border-[#2a2520] bg-gradient-to-b from-[#1c1a17] to-[#151412]"
@@ -322,27 +322,33 @@ function AppInner() {
         </div>
 
         {/* Status indicator at bottom */}
-        <div className="mt-auto flex flex-col items-center gap-3 w-[2.2vw] shrink-0">
+        <div className="mt-auto flex w-full flex-col items-center gap-3 shrink-0 px-2">
           {(status?.dispatched_agents ?? 0) > 0 && (
             <div className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20" title={`${status?.dispatched_agents} active agent(s)`}>
               <span className="text-[11px] font-bold tabular-nums text-amber-400">{status?.dispatched_agents}</span>
             </div>
           )}
-          <div
-            className={cn(
-              "h-2.5 w-2.5 rounded-full transition-colors",
-              connected
-                ? "bg-emerald-500 shadow-[0_0_8px_rgba(200,160,80,0.3)]"
-                : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
-            )}
-            title={connected ? "Connected" : "Disconnected"}
-          />
+          <div className="flex w-full items-center gap-3 px-[10px] py-1" title={connected ? "Server connected" : "Server disconnected"}>
+            <div className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+              <div
+                className={cn(
+                  "h-2.5 w-2.5 rounded-full transition-colors",
+                  connected
+                    ? "bg-emerald-500 shadow-[0_0_8px_rgba(200,160,80,0.3)]"
+                    : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
+                )}
+              />
+            </div>
+            <span className="truncate text-[11px] text-[#6b6459] opacity-0 group-hover/nav:opacity-100 transition-opacity duration-200">
+              {connected ? "Connected" : "Offline"}
+            </span>
+          </div>
         </div>
       </nav>
 
       {/* Main content */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {!isGlobalLawMode && (
+        {isSWE && (
           <Header connected={connected} view={view} repoFilter={repoFilter} onRepoFilterChange={setRepoFilter} />
         )}
 
@@ -361,7 +367,7 @@ function AppInner() {
                   {selectedTaskId !== null ? (
                     <TaskDetail taskId={selectedTaskId} onBack={handleBackFromTask} />
                   ) : (
-                    <EmptyState status={status} isLawMode={isGlobalLawMode} />
+                    <EmptyState status={status} isSWE={isSWE} />
                   )}
                 </div>
               </div>
@@ -383,7 +389,7 @@ function AppInner() {
   );
 }
 
-function EmptyState({ status, isLawMode }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null; isLawMode?: boolean }) {
+function EmptyState({ status, isSWE }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null; isSWE?: boolean }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-amber-500/[0.04] to-amber-500/[0.02] ring-1 ring-amber-900/15">
@@ -393,7 +399,7 @@ function EmptyState({ status, isLawMode }: { status?: { active_tasks: number; me
         <p className="text-[15px] font-medium text-[#9c9486]">Select a task to view details</p>
         <p className="mt-2 text-[13px] text-[#6b6459]">or create a new one from the header</p>
       </div>
-      {status && !isLawMode && (
+      {status && isSWE && (
         <div className="flex gap-8 mt-2">
           <StatPill value={status.active_tasks} label="Active" color="text-blue-400" />
           <StatPill value={status.merged_tasks} label="Merged" color="text-emerald-400" />

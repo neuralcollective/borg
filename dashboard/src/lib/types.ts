@@ -291,7 +291,7 @@ const SWE_PHASE_LABELS: Record<string, string> = {
   lint_fix: "Lint Fix", rebase: "Rebase", done: "Done", merged: "Merged",
 };
 
-// lawborg phases — task-type-specific display
+// knowledge work phases (legal, knowledge modes)
 const LEGAL_DISPLAY_PHASES = ["backlog", "implement", "review", "done"] as const;
 const LEGAL_PHASE_LABELS: Record<string, string> = {
   backlog: "Backlog", implement: "Research & Draft", review: "Review", done: "Complete",
@@ -317,19 +317,21 @@ const WEB_PHASE_LABELS: Record<string, string> = {
   done: "Done", merged: "Merged",
 };
 
+const SWE_MODES = new Set(["sweborg", "swe", "webborg"]);
+
 export function getDisplayPhases(mode?: string, _taskType?: string): readonly string[] {
-  if (mode === "lawborg" || mode === "legal") return LEGAL_DISPLAY_PHASES;
   if (mode === "webborg") return WEB_DISPLAY_PHASES;
+  if (mode && !SWE_MODES.has(mode)) return LEGAL_DISPLAY_PHASES;
   return SWE_DISPLAY_PHASES;
 }
 
 export function getPhaseLabel(phase: string, mode?: string, taskType?: string): string {
-  if (mode === "lawborg" || mode === "legal") {
+  if (mode === "webborg") return WEB_PHASE_LABELS[phase] ?? phase;
+  if (mode && !SWE_MODES.has(mode)) {
     const typeLabels = taskType ? LEGAL_TASK_TYPE_LABELS[taskType] : undefined;
     if (typeLabels?.[phase]) return typeLabels[phase];
     return LEGAL_PHASE_LABELS[phase] ?? phase;
   }
-  if (mode === "webborg") return WEB_PHASE_LABELS[phase] ?? phase;
   return SWE_PHASE_LABELS[phase] ?? phase;
 }
 

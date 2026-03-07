@@ -174,7 +174,7 @@ export function ProjectsPanel() {
   const [newProjectMode, setNewProjectMode] = useState("");
   const [newProjectJurisdiction, setNewProjectJurisdiction] = useState("");
   const [creating, setCreating] = useState(false);
-  const { isLegal: isLegalMode } = useDashboardMode();
+  const { isSWE, isLegal } = useDashboardMode();
 
   const filteredProjects = useMemo(() => {
     if (!searchQuery.trim()) return projects;
@@ -386,7 +386,7 @@ export function ProjectsPanel() {
       const opts = newProjectJurisdiction.trim()
         ? { jurisdiction: newProjectJurisdiction.trim() }
         : {};
-      const effectiveMode = isLegalMode ? "lawborg" : (newProjectMode || "general");
+      const effectiveMode = !isSWE ? "lawborg" : (newProjectMode || "general");
       const created = await createProject(name, effectiveMode, opts);
       setNewProjectName("");
       setNewProjectJurisdiction("");
@@ -694,7 +694,7 @@ async function uploadChunkQueue(
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="group/matters flex w-[10.5vw] hover:w-[21vw] shrink-0 flex-col border-r border-[#2a2520] bg-[#0f0e0c] p-4 transition-[width] duration-200 ease-out">
+      <div className="flex w-[12vw] shrink-0 flex-col border-r border-[#2a2520] bg-[#0f0e0c] p-4">
         <div className="mb-3">
           <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b6459]">
             {vocab.projectsLabel}
@@ -769,7 +769,7 @@ async function uploadChunkQueue(
             placeholder={vocab.newProjectPlaceholder}
             className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
-          {!isLegalMode && (
+          {isSWE && (
             <select
               value={newProjectMode}
               onChange={(e) => setNewProjectMode(e.target.value)}
@@ -785,7 +785,7 @@ async function uploadChunkQueue(
               ))}
             </select>
           )}
-          {(isLegalMode || ["lawborg", "legal"].includes(newProjectMode)) && (
+          {(isLegal || ["lawborg", "legal"].includes(newProjectMode)) && (
             <input
               value={newProjectJurisdiction}
               onChange={(e) => setNewProjectJurisdiction(e.target.value)}
@@ -828,7 +828,7 @@ async function uploadChunkQueue(
               </div>
             </div>
           </div>
-        ) : (selectedProject.mode === "lawborg" || selectedProject.mode === "legal") ? (
+        ) : !isSWE ? (
           selectedDoc ? (
             <DocumentViewWrapper
               projectId={selectedProject.id}
@@ -884,11 +884,12 @@ async function uploadChunkQueue(
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
                 className={cn(
-                  "rounded-xl border-2 border-dashed p-6 transition-colors",
+                  "rounded-xl border-2 border-dashed p-6 transition-colors cursor-pointer",
                   dragOver
                     ? "border-amber-500/40 bg-amber-500/[0.04]"
-                    : "border-[#2a2520] bg-[#151412]"
+                    : "border-[#2a2520] bg-[#151412] hover:border-amber-500/20"
                 )}
               >
                 <div className="flex flex-col items-center gap-3 text-center">
@@ -898,9 +899,7 @@ async function uploadChunkQueue(
                   <div>
                     <p className="text-[14px] font-medium text-[#e8e0d4]">
                       Drop files here or{" "}
-                      <button onClick={() => fileInputRef.current?.click()} className="text-amber-400 hover:text-amber-300">
-                        browse
-                      </button>
+                      <span className="text-amber-400">browse</span>
                     </p>
                     <p className="mt-1 text-[12px] text-[#6b6459]">Supports any file type. Multiple files allowed.</p>
                   </div>

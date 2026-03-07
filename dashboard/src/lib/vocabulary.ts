@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useSettings } from "./api";
 
 export interface Vocabulary {
-  mode: "swe" | "law" | "general";
+  mode: "swe" | "law" | "knowledge" | "general";
 
   // Navigation
   projectsLabel: string;
@@ -74,10 +74,22 @@ const LAW_VOCAB: Vocabulary = {
   hideRetryAll: true,
 };
 
+const KNOWLEDGE_VOCAB: Vocabulary = {
+  ...LAW_VOCAB,
+  mode: "knowledge",
+  projectsLabel: "Projects",
+  projectSingular: "project",
+  projectPlural: "projects",
+  newProjectPlaceholder: "New project name",
+  projectDocsLabel: "Project Documents",
+  projectDocsDescription: "Documents for this project. Chat via the bottom bar.",
+};
+
 const GENERAL_VOCAB: Vocabulary = { ...SWE_VOCAB, mode: "general" };
 
 export function getVocabulary(mode: string): Vocabulary {
   if (mode === "lawborg" || mode === "legal") return LAW_VOCAB;
+  if (mode === "knowledge") return KNOWLEDGE_VOCAB;
   if (mode === "sweborg" || mode === "swe") return SWE_VOCAB;
   return GENERAL_VOCAB;
 }

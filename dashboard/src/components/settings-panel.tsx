@@ -170,13 +170,14 @@ export function SettingsPanel() {
               <div className="flex items-center justify-between">
                 <div>
                   <Label>Dashboard Mode</Label>
-                  <Desc>Legal mode adjusts vocabulary, hides engineering UI, and shows legal task types.</Desc>
+                  <Desc>Controls layout and vocabulary. Knowledge and Legal hide engineering UI.</Desc>
                 </div>
                 <ToggleGroup
                   value={effective.dashboard_mode ?? "general"}
                   onChange={(v) => update("dashboard_mode", v)}
                   options={[
-                    { value: "general", label: "General" },
+                    { value: "general", label: "SWE" },
+                    { value: "knowledge", label: "Knowledge" },
                     { value: "legal", label: "Legal" },
                   ]}
                 />

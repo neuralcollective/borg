@@ -9,8 +9,9 @@ import {
   useTaskStream,
   getTaskStructuredData,
   uploadProjectFiles,
+  type StreamEvent,
 } from "@/lib/api";
-import type { Project, ProjectDocument } from "@/lib/types";
+import type { Project, ProjectDocument, ProjectTask } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { PhaseTracker } from "./phase-tracker";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,37 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Edit2, Eye, FileText, RotateCcw, Search, Trash2, Upload } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile } from "@/lib/types";
+
+const AGENT_WORKING_STATUSES = new Set(["implement", "review", "validate", "lint_fix", "rebase", "spec", "qa", "qa_fix", "retry"]);
+
+function extractFilePaths(events: StreamEvent[]): Set<string> {
+  const paths = new Set<string>();
+  for (const ev of events) {
+    if (ev.type !== "assistant" || !ev.message?.content || !Array.isArray(ev.message.content)) continue;
+    for (const block of ev.message.content) {
+      if (block.type !== "tool_use") continue;
+      const name = block.name || "";
+      if (name === "Edit" || name === "Write" || name === "Read") {
+        const fp = (block.input as Record<string, unknown>)?.file_path;
+        if (typeof fp === "string") {
+          const basename = fp.split("/").pop() || fp;
+          paths.add(basename);
+        }
+      }
+    }
+  }
+  return paths;
+}
+
+function useActiveFiles(tasks: ProjectTask[]): { activeFiles: Set<string>; activeTaskId: number | null } {
+  const activeTask = useMemo(
+    () => tasks.find((t) => AGENT_WORKING_STATUSES.has(t.status)) ?? null,
+    [tasks]
+  );
+  const { events } = useTaskStream(activeTask?.id ?? null, !!activeTask);
+  const activeFiles = useMemo(() => extractFilePaths(events), [events]);
+  return { activeFiles, activeTaskId: activeTask?.id ?? null };
+}
 
 interface MatterDetailProps {
   projectId: number;
@@ -65,7 +97,7 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   const [exportMenu, setExportMenu] = useState(false);
   const [exportTemplateId, setExportTemplateId] = useState<number | null>(null);
   const { data: templates = [] } = useTemplates("template");
-  const { isLegal } = useDashboardMode();
+  const { isSWE } = useDashboardMode();
 
   async function exportAll(format: "pdf" | "docx") {
     setExportMenu(false);
@@ -107,7 +139,7 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
                 {project.jurisdiction}
               </span>
             )}
-            {project.mode && !isLegal && (
+            {project.mode && isSWE && (
               <span className="rounded-lg bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400">
                 {project.mode}
               </span>
@@ -295,6 +327,8 @@ function DocumentsTab({
   onDocumentSelect?: (doc: ProjectDocument) => void;
 }) {
   const { data: docs = [], isLoading } = useProjectDocuments(projectId);
+  const { data: tasks = [] } = useProjectTasks(projectId);
+  const { activeFiles } = useActiveFiles(tasks);
   const [fileSearch, setFileSearch] = useState("");
   const [filePageStack, setFilePageStack] = useState<Array<{ cursor: string | null; offset: number }>>([
     { cursor: null, offset: 0 },
@@ -355,9 +389,10 @@ function DocumentsTab({
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); void handleUpload(Array.from(e.dataTransfer.files)); }}
+        onClick={() => fileInputRef.current?.click()}
         className={cn(
-          "rounded-xl border-2 border-dashed p-5 transition-colors",
-          dragOver ? "border-amber-500/40 bg-amber-500/[0.04]" : "border-[#2a2520] bg-[#151412]"
+          "rounded-xl border-2 border-dashed p-5 transition-colors cursor-pointer",
+          dragOver ? "border-amber-500/40 bg-amber-500/[0.04]" : "border-[#2a2520] bg-[#151412] hover:border-amber-500/20"
         )}
       >
         <div className="flex flex-col items-center gap-2 text-center">
@@ -365,9 +400,7 @@ function DocumentsTab({
           <div>
             <p className="text-[13px] text-[#e8e0d4]">
               Drop files here or{" "}
-              <button onClick={() => fileInputRef.current?.click()} className="text-amber-400 hover:text-amber-300">
-                browse
-              </button>
+              <span className="text-amber-400">browse</span>
             </p>
             <p className="mt-0.5 text-[11px] text-[#6b6459]">Upload source documents for this project</p>
           </div>
@@ -383,6 +416,47 @@ function DocumentsTab({
         {uploading && <p className="mt-2 text-center text-[12px] text-amber-400">Uploading...</p>}
         {uploadError && <p className="mt-2 text-center text-[12px] text-red-400">{uploadError}</p>}
       </div>
+
+      {/* Agent work */}
+      {hasDocs && (
+        <div>
+          <div className="mb-3 text-[13px] font-medium text-[#e8e0d4]">
+            Agent Work
+            <span className="ml-1.5 text-[12px] text-[#6b6459]">({docs.length})</span>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {docs.map((doc) => {
+              const docBasename = doc.file_name.split("/").pop() || doc.file_name;
+              const isActive = activeFiles.has(docBasename);
+              return (
+                <button
+                  key={`${doc.task_id}-${doc.file_name}`}
+                  onClick={() => onDocumentSelect?.(doc)}
+                  className={cn(
+                    "flex flex-col gap-2 rounded-xl border p-4 text-left transition-colors hover:border-amber-900/30 hover:bg-[#1c1a17]",
+                    isActive ? "border-amber-500/30 bg-[#1a1814]" : "border-[#2a2520] bg-[#151412]"
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 shrink-0 text-blue-400/60" />
+                    <span className="text-[13px] font-medium text-[#e8e0d4] truncate">{doc.file_name}</span>
+                    {isActive && (
+                      <span className="flex items-center gap-1 shrink-0">
+                        <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                        <span className="text-[10px] text-amber-400">editing</span>
+                      </span>
+                    )}
+                    <StatusBadge status={doc.task_status} />
+                  </div>
+                  <div className="text-[12px] text-[#6b6459] truncate">
+                    #{doc.task_id} · {doc.task_title}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Source files */}
       {hasFiles && (
@@ -409,20 +483,34 @@ function DocumentsTab({
           <div className="space-y-2">
             {files.map((f) => {
               const canPreview = isPreviewable(f);
+              const fileBasename = f.file_name.split("/").pop() || f.file_name;
+              const isFileActive = activeFiles.has(fileBasename);
               return (
                 <div
                   key={f.id}
                   onClick={() => canPreview && setPreviewFile(f)}
                   className={cn(
-                    "group flex items-start gap-3 rounded-xl border border-[#2a2520] bg-[#151412] p-3 transition-colors hover:border-amber-900/30",
+                    "group flex items-start gap-3 rounded-xl border p-3 transition-colors hover:border-amber-900/30",
+                    isFileActive ? "border-amber-500/30 bg-[#1a1814]" : "border-[#2a2520] bg-[#151412]",
                     canPreview && "cursor-pointer"
                   )}
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#1c1a17] ring-1 ring-amber-900/20">
-                    <FileText className="h-4 w-4 text-[#6b6459]" />
+                  <div className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                    isFileActive ? "bg-amber-500/10 ring-1 ring-amber-500/30" : "bg-[#1c1a17] ring-1 ring-amber-900/20"
+                  )}>
+                    <FileText className={cn("h-4 w-4", isFileActive ? "text-amber-400" : "text-[#6b6459]")} />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-medium text-[#e8e0d4] truncate">{f.file_name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-[#e8e0d4] truncate">{f.file_name}</span>
+                      {isFileActive && (
+                        <span className="flex items-center gap-1 shrink-0">
+                          <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                          <span className="text-[10px] text-amber-400">editing</span>
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b6459]">
                       <span>{formatFileSize(f.size_bytes)}</span>
                       {f.source_path && f.source_path !== f.file_name && (
@@ -481,37 +569,6 @@ function DocumentsTab({
         </div>
       )}
 
-      {/* Generated documents */}
-      {hasDocs && (
-        <div>
-          <div className="mb-3 text-[13px] font-medium text-[#e8e0d4]">
-            Generated Documents
-            <span className="ml-1.5 text-[12px] text-[#6b6459]">({docs.length})</span>
-          </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {docs.map((doc) => (
-              <button
-                key={`${doc.task_id}-${doc.file_name}`}
-                onClick={() => onDocumentSelect?.(doc)}
-                className="flex flex-col gap-2 rounded-xl border border-[#2a2520] bg-[#151412] p-4 text-left transition-colors hover:border-amber-900/30 hover:bg-[#1c1a17]"
-              >
-                <div className="flex items-center gap-2">
-                  <FileText className="h-4 w-4 shrink-0 text-blue-400/60" />
-                  <span className="text-[13px] font-medium text-[#e8e0d4] truncate">{doc.file_name}</span>
-                  <StatusBadge status={doc.task_status} />
-                </div>
-                <div className="text-[12px] text-[#6b6459] truncate">
-                  #{doc.task_id} · {doc.task_title}
-                </div>
-                {doc.branch && (
-                  <div className="font-mono text-[11px] text-[#6b6459] truncate">{doc.branch}</div>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {!hasFiles && !hasDocs && (
         <div className="flex flex-col items-center py-12 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1c1a17] ring-1 ring-amber-900/20">
@@ -528,6 +585,7 @@ function DocumentsTab({
           file={previewFile}
           projectId={projectId}
           onClose={() => setPreviewFile(null)}
+          isActive={activeFiles.has(previewFile.file_name.split("/").pop() || previewFile.file_name)}
         />
       )}
     </div>
@@ -736,7 +794,7 @@ const ACTIVE_STATUSES = new Set(["implement", "review", "validate", "lint_fix", 
 function TasksTab({ projectId }: { projectId: number }) {
   const { data: tasks = [], isLoading } = useProjectTasks(projectId);
   const { data: fullModes = [] } = useFullModes();
-  const { isLegal } = useDashboardMode();
+  const { isSWE } = useDashboardMode();
   const queryClient = useQueryClient();
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [expandedStream, setExpandedStream] = useState<number | null>(null);
@@ -822,7 +880,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                       purged
                     </span>
                   )}
-                  {task.mode && !isLegal && (
+                  {task.mode && isSWE && (
                     <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
                       {task.mode}
                     </span>

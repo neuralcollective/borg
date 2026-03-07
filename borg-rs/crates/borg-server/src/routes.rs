@@ -1883,7 +1883,7 @@ pub(crate) async fn list_project_documents(
 
         for line in file_list.lines() {
             let name = line.trim();
-            if name.ends_with(".md") && !name.starts_with('.') {
+            if !name.is_empty() && !name.starts_with('.') {
                 documents.push(json!({
                     "task_id": task.id,
                     "branch": task.branch,
