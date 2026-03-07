@@ -3916,6 +3916,8 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 revision_count: 0,
                 experimental_domains: state.config.experimental_domains,
                 isolated: true, // Triage is always secure/isolated
+                borg_api_url: format!("http://127.0.0.1:{}", state.config.web_port),
+                borg_api_token: state.api_token.clone(),
             };
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();

@@ -66,6 +66,8 @@ fn make_ctx() -> PhaseContext {
         revision_count: 0,
         experimental_domains: false,
         isolated: false,
+        borg_api_url: String::new(),
+        borg_api_token: String::new(),
     }
 }
 

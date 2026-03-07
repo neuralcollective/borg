@@ -472,6 +472,10 @@ pub struct PhaseContext {
     pub experimental_domains: bool,
     /// Whether to run in a network-isolated environment (air-gapped).
     pub isolated: bool,
+    /// Borg API URL for agent search endpoints (e.g. http://127.0.0.1:3131).
+    pub borg_api_url: String,
+    /// Borg API bearer token for agent search endpoints.
+    pub borg_api_token: String,
 }
 
 /// A single in-container test/lint/compile result emitted by the entrypoint.

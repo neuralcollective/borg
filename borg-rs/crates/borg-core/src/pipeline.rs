@@ -491,6 +491,11 @@ impl Pipeline {
             revision_count: task.revision_count,
             experimental_domains: self.config.experimental_domains,
             isolated,
+            borg_api_url: format!("http://127.0.0.1:{}", self.config.web_port),
+            borg_api_token: std::fs::read_to_string(format!("{}/.api-token", self.config.data_dir))
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         }
     }
 
