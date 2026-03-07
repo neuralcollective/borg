@@ -47,7 +47,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-type View = "tasks" | "projects" | "creator" | "proposals" | "logs" | "queue" | "chat" | "knowledge" | "settings";
+type View = "tasks" | "projects" | "creator" | "proposals" | "logs" | "queue" | "knowledge" | "settings";
 type MobileTab = "tasks" | "projects" | "queue" | "chat";
 
 function useIsMobile() {
@@ -344,8 +344,8 @@ function AppInner() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Header connected={connected} view={view} repoFilter={repoFilter} onRepoFilterChange={setRepoFilter} />
 
-        <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-hidden">
+        <div className="min-h-0 flex-1 flex overflow-hidden">
+          <div className="min-w-0 flex-1 overflow-hidden">
             {view === "tasks" && (
               <div className="flex h-full">
                 <div className="w-[420px] shrink-0 overflow-hidden border-r border-[#2a2520]">

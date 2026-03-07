@@ -7,31 +7,19 @@ import {
   useProjectAudit,
   useDeleteProject,
   useTaskStream,
-  getProjectChatMessages,
-  sendProjectChat,
   getTaskStructuredData,
   uploadProjectFiles,
 } from "@/lib/api";
-import type { Project, ProjectTask, ProjectDocument } from "@/lib/types";
+import type { Project, ProjectDocument } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { PhaseTracker } from "./phase-tracker";
-import { BorgingIndicator } from "./borging";
-import { ChatMarkdown } from "./chat-markdown";
-import { useDictation } from "@/lib/dictation";
 import { cn } from "@/lib/utils";
 import { retryTask, patchTask, approveTask, rejectTask, requestRevision, getRevisionHistory, useFullModes, useTemplates } from "@/lib/api";
 import type { RevisionHistory } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { Edit2, FileText, RotateCcw, Mic, MicOff, Trash2 } from "lucide-react";
-import { useChatEvents } from "@/lib/use-chat-events";
-
-type ChatMessage = {
-  role: "user" | "assistant";
-  sender?: string;
-  text: string;
-  ts: string | number;
-  thread?: string;
-};
+import { Edit2, Eye, FileText, RotateCcw, Trash2, Upload } from "lucide-react";
+import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
+import type { ProjectFile } from "@/lib/types";
 
 interface MatterDetailProps {
   projectId: number;
@@ -39,42 +27,6 @@ interface MatterDetailProps {
   onDelete?: () => void;
 }
 
-// ── Timeline item ─────────────────────────────────────────────────────────────
-
-type TimelineItem = {
-  id: string;
-  ts: string;
-  label: string;
-  sub?: string;
-  kind: "task_created" | "status_change" | "document";
-};
-
-function buildTimeline(tasks: ProjectTask[], docs: ProjectDocument[]): TimelineItem[] {
-  const items: TimelineItem[] = [];
-
-  for (const t of tasks) {
-    items.push({
-      id: `task-${t.id}`,
-      ts: t.created_at,
-      label: t.title,
-      sub: `Task #${t.id} created`,
-      kind: "task_created",
-    });
-  }
-
-  for (const d of docs) {
-    items.push({
-      id: `doc-${d.task_id}-${d.file_name}`,
-      ts: d.created_at,
-      label: d.file_name,
-      sub: `from task #${d.task_id} · ${d.task_title}`,
-      kind: "document",
-    });
-  }
-
-  items.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  return items;
-}
 
 function fmtDateTime(ts: string): string {
   if (!ts) return "";
@@ -215,12 +167,79 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   );
 }
 
-// ── Timeline tab ──────────────────────────────────────────────────────────────
+// ── Activity tab (merged timeline + audit) ───────────────────────────────────
 
-function TimelineTab({ projectId }: { projectId: number }) {
+const AUDIT_KIND_LABELS: Record<string, string> = {
+  "matter.created": "Matter created",
+  "matter.updated": "Matter updated",
+  "matter.deleted": "Matter deleted",
+  "task.created": "Task created",
+  "task.completed": "Task completed",
+  "task.failed": "Task failed",
+  "deadline.created": "Deadline added",
+  "document.exported": "Document exported",
+  "file.uploaded": "File uploaded",
+  "conflict.acknowledged": "Conflict acknowledged",
+};
+
+function ActivityTab({ projectId }: { projectId: number }) {
   const { data: tasks = [] } = useProjectTasks(projectId);
   const { data: docs = [] } = useProjectDocuments(projectId);
-  const items = useMemo(() => buildTimeline(tasks, docs), [tasks, docs]);
+  const { data: auditEvents = [] } = useProjectAudit(projectId);
+
+  type ActivityItem = {
+    id: string;
+    ts: string;
+    label: string;
+    sub?: string;
+    kind: "task" | "document" | "audit";
+    dotColor: string;
+  };
+
+  const items = useMemo(() => {
+    const list: ActivityItem[] = [];
+
+    for (const t of tasks) {
+      list.push({
+        id: `task-${t.id}`,
+        ts: t.created_at,
+        label: t.title,
+        sub: `Task #${t.id} created`,
+        kind: "task",
+        dotColor: "bg-emerald-400/60",
+      });
+    }
+
+    for (const d of docs) {
+      list.push({
+        id: `doc-${d.task_id}-${d.file_name}`,
+        ts: d.created_at,
+        label: d.file_name,
+        sub: `from task #${d.task_id} · ${d.task_title}`,
+        kind: "document",
+        dotColor: "bg-blue-400/60",
+      });
+    }
+
+    for (const ev of auditEvents) {
+      let detail = "";
+      try {
+        const p = JSON.parse(ev.payload);
+        detail = p.title || p.name || p.label || "";
+      } catch { /* skip */ }
+      list.push({
+        id: `audit-${ev.id}`,
+        ts: ev.created_at,
+        label: AUDIT_KIND_LABELS[ev.kind] || ev.kind,
+        sub: [detail, ev.actor, ev.task_id ? `#${ev.task_id}` : ""].filter(Boolean).join(" · "),
+        kind: "audit",
+        dotColor: ev.kind.startsWith("file.") ? "bg-amber-400/60" : "bg-zinc-500/60",
+      });
+    }
+
+    list.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+    return list;
+  }, [tasks, docs, auditEvents]);
 
   if (items.length === 0) {
     return (
@@ -236,25 +255,21 @@ function TimelineTab({ projectId }: { projectId: number }) {
       {items.map((item, idx) => (
         <div key={item.id} className="flex gap-3">
           <div className="flex flex-col items-center">
-            <div
-              className={cn(
-                "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
-                item.kind === "document"
-                  ? "bg-blue-400/60"
-                  : item.kind === "task_created"
-                    ? "bg-emerald-400/60"
-                    : "bg-zinc-500/60"
-              )}
-            />
+            <div className={cn("mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full", item.dotColor)} />
             {idx < items.length - 1 && (
               <div className="mt-1 w-px flex-1 bg-white/[0.07]" style={{ minHeight: "28px" }} />
             )}
           </div>
           <div className="pb-4 min-w-0">
             <div className="text-[13px] font-medium text-zinc-300 truncate">{item.label}</div>
-            <div className="mt-0.5 text-[12px] text-zinc-400">
-              {item.sub} · {fmtDateTime(item.ts)}
-            </div>
+            {item.sub && (
+              <div className="mt-0.5 text-[12px] text-zinc-400">
+                {item.sub} · {fmtDateTime(item.ts)}
+              </div>
+            )}
+            {!item.sub && (
+              <div className="mt-0.5 text-[12px] text-zinc-400">{fmtDateTime(item.ts)}</div>
+            )}
           </div>
         </div>
       ))}
@@ -263,6 +278,12 @@ function TimelineTab({ projectId }: { projectId: number }) {
 }
 
 // ── Documents tab ─────────────────────────────────────────────────────────────
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function DocumentsTab({
   projectId,
@@ -286,15 +307,18 @@ function DocumentsTab({
   const files = filePage?.items ?? [];
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<ProjectFile | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setFilePageStack([{ cursor: null, offset: 0 }]);
     setFileSearch("");
   }, [projectId]);
 
-  async function handleUpload(selected: FileList | null) {
-    if (!selected || selected.length === 0 || uploading) return;
+  async function handleUpload(selected: FileList | File[] | null) {
+    if (!selected || (selected instanceof FileList && selected.length === 0) || uploading) return;
     setUploading(true);
     setUploadError(null);
     try {
@@ -318,98 +342,120 @@ function DocumentsTab({
     return <div className="flex h-32 items-center justify-center text-[13px] text-zinc-400">Loading...</div>;
   }
 
-  if (docs.length === 0 && (filePage?.summary.total_files ?? 0) === 0) {
-    return (
-      <div className="space-y-3 p-4">
-        <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
-          <div className="mb-2.5 text-[13px] font-semibold text-zinc-300">Document Intake</div>
-          <div className="flex items-center gap-3">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              onChange={(e) => void handleUpload(e.target.files)}
-              disabled={uploading}
-              className="block w-full text-[12px] text-zinc-400 file:mr-3 file:rounded-lg file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-3 file:py-1.5 file:text-[12px] file:text-zinc-300"
-            />
-          </div>
-          {uploadError && <div className="mt-1.5 text-[11px] text-red-400">{uploadError}</div>}
-        </div>
-        <div className="flex h-28 flex-col items-center justify-center text-center">
-          <FileText className="h-6 w-6 text-zinc-600 mb-2" />
-          <div className="text-[13px] text-zinc-400">No documents yet</div>
-          <div className="text-[12px] text-zinc-500 mt-0.5">Upload sources or run a task to generate drafts</div>
-        </div>
-      </div>
-    );
-  }
+  const hasFiles = (filePage?.summary.total_files ?? 0) > 0;
+  const hasDocs = docs.length > 0;
 
   return (
-    <div className="space-y-3 p-4">
-      <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
-        <div className="mb-2.5 text-[13px] font-semibold text-zinc-300">Document Intake</div>
-        <div className="flex items-center gap-3">
+    <div className="space-y-4 p-5">
+      {/* Upload area */}
+      <div
+        ref={dropRef}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); void handleUpload(Array.from(e.dataTransfer.files)); }}
+        className={cn(
+          "rounded-xl border-2 border-dashed p-5 transition-colors",
+          dragOver ? "border-amber-500/40 bg-amber-500/[0.04]" : "border-[#2a2520] bg-[#151412]"
+        )}
+      >
+        <div className="flex flex-col items-center gap-2 text-center">
+          <Upload className="h-5 w-5 text-[#6b6459]" />
+          <div>
+            <p className="text-[13px] text-[#e8e0d4]">
+              Drop files here or{" "}
+              <button onClick={() => fileInputRef.current?.click()} className="text-amber-400 hover:text-amber-300">
+                browse
+              </button>
+            </p>
+            <p className="mt-0.5 text-[11px] text-[#6b6459]">Upload source documents for this project</p>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
             multiple
             onChange={(e) => void handleUpload(e.target.files)}
             disabled={uploading}
-            className="block w-full text-[12px] text-zinc-400 file:mr-3 file:rounded-lg file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-3 file:py-1.5 file:text-[12px] file:text-zinc-300"
+            className="hidden"
           />
         </div>
-        {uploadError && <div className="mt-1.5 text-[11px] text-red-400">{uploadError}</div>}
+        {uploading && <p className="mt-2 text-center text-[12px] text-amber-400">Uploading...</p>}
+        {uploadError && <p className="mt-2 text-center text-[12px] text-red-400">{uploadError}</p>}
       </div>
 
-      {(filePage?.summary.total_files ?? 0) > 0 && (
-        <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
-          <div className="mb-2.5 flex items-center justify-between gap-3">
-            <div className="text-[13px] font-semibold text-zinc-300">
-              Source Files ({filePage?.summary.total_files ?? files.length})
+      {/* Source files */}
+      {hasFiles && (
+        <div>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-[13px] font-medium text-[#e8e0d4]">
+              Source Files
+              <span className="ml-1.5 text-[12px] text-[#6b6459]">({filePage?.summary.total_files ?? files.length})</span>
             </div>
-            <input
-              type="text"
-              value={fileSearch}
-              onChange={(e) => {
-                setFileSearch(e.target.value);
-                setFilePageStack([{ cursor: null, offset: 0 }]);
-              }}
-              placeholder="Filter files"
-              className="w-full max-w-xs rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={fileSearch}
+                onChange={(e) => {
+                  setFileSearch(e.target.value);
+                  setFilePageStack([{ cursor: null, offset: 0 }]);
+                }}
+                placeholder="Filter..."
+                className="w-48 rounded-xl border border-[#2a2520] bg-[#151412] px-3 py-1.5 text-[12px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
+              />
+            </div>
           </div>
-          <div className="max-h-48 space-y-1.5 overflow-y-auto">
-            {files.map((f) => (
-              <div key={f.id} className="flex items-center gap-2 rounded-lg border border-white/[0.07] px-3 py-2 text-[12px]">
-                <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-zinc-300">{f.file_name}</div>
-                  {f.source_path && f.source_path !== f.file_name && (
-                    <div className="truncate text-[11px] text-zinc-500">{f.source_path}</div>
+          <div className="space-y-2">
+            {files.map((f) => {
+              const canPreview = isPreviewable(f);
+              return (
+                <div
+                  key={f.id}
+                  onClick={() => canPreview && setPreviewFile(f)}
+                  className={cn(
+                    "group flex items-start gap-3 rounded-xl border border-[#2a2520] bg-[#151412] p-3 transition-colors hover:border-amber-900/30",
+                    canPreview && "cursor-pointer"
                   )}
+                >
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#1c1a17] ring-1 ring-amber-900/20">
+                    <FileText className="h-4 w-4 text-[#6b6459]" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13px] font-medium text-[#e8e0d4] truncate">{f.file_name}</div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[#6b6459]">
+                      <span>{formatFileSize(f.size_bytes)}</span>
+                      {f.source_path && f.source_path !== f.file_name && (
+                        <span className="truncate">{f.source_path}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {f.privileged && (
+                      <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20">
+                        privileged
+                      </span>
+                    )}
+                    {canPreview && (
+                      <Eye className="h-3.5 w-3.5 text-[#6b6459] opacity-0 group-hover:opacity-100 transition-opacity" />
+                    )}
+                  </div>
                 </div>
-                {f.privileged && (
-                  <span className="rounded-lg bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-300">privileged</span>
-                )}
-                <span className="ml-auto text-zinc-500">{Math.max(1, Math.round(f.size_bytes / 1024))} KB</span>
-              </div>
-            ))}
+              );
+            })}
             {files.length === 0 && (
-              <div className="rounded-lg border border-dashed border-white/[0.07] px-3 py-3 text-[12px] text-zinc-500 text-center">
+              <div className="rounded-xl border border-dashed border-[#2a2520] px-4 py-4 text-[12px] text-[#6b6459] text-center">
                 No files match the current filter.
               </div>
             )}
           </div>
           {filePage && filePage.total > filePage.limit && (
-            <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
+            <div className="mt-3 flex items-center justify-between text-[11px] text-[#6b6459]">
               <span>
-                Showing {filePage.total === 0 ? 0 : currentFilePage.offset + 1}-{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
+                {filePage.total === 0 ? 0 : currentFilePage.offset + 1}–{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
               </span>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
                   disabled={filePageStack.length <= 1}
-                  className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
+                  className="rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#9c9486] disabled:opacity-40 hover:border-amber-900/30"
                 >
                   Prev
                 </button>
@@ -422,7 +468,7 @@ function DocumentsTab({
                     ]);
                   }}
                   disabled={!filePage.has_more || !filePage.next_cursor}
-                  className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
+                  className="rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#9c9486] disabled:opacity-40 hover:border-amber-900/30"
                 >
                   Next
                 </button>
@@ -432,27 +478,55 @@ function DocumentsTab({
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {docs.map((doc) => (
-        <button
-          key={`${doc.task_id}-${doc.file_name}`}
-          onClick={() => onDocumentSelect?.(doc)}
-          className="flex flex-col gap-2 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 text-left transition-colors hover:border-white/[0.12] hover:bg-white/[0.05]"
-        >
-          <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 shrink-0 text-blue-400/60" />
-            <span className="text-[13px] font-medium text-zinc-200 truncate">{doc.file_name}</span>
-            <StatusBadge status={doc.task_status} />
+      {/* Generated documents */}
+      {hasDocs && (
+        <div>
+          <div className="mb-3 text-[13px] font-medium text-[#e8e0d4]">
+            Generated Documents
+            <span className="ml-1.5 text-[12px] text-[#6b6459]">({docs.length})</span>
           </div>
-          <div className="text-[12px] text-zinc-400 truncate">
-            #{doc.task_id} · {doc.task_title}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {docs.map((doc) => (
+              <button
+                key={`${doc.task_id}-${doc.file_name}`}
+                onClick={() => onDocumentSelect?.(doc)}
+                className="flex flex-col gap-2 rounded-xl border border-[#2a2520] bg-[#151412] p-4 text-left transition-colors hover:border-amber-900/30 hover:bg-[#1c1a17]"
+              >
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 shrink-0 text-blue-400/60" />
+                  <span className="text-[13px] font-medium text-[#e8e0d4] truncate">{doc.file_name}</span>
+                  <StatusBadge status={doc.task_status} />
+                </div>
+                <div className="text-[12px] text-[#6b6459] truncate">
+                  #{doc.task_id} · {doc.task_title}
+                </div>
+                {doc.branch && (
+                  <div className="font-mono text-[11px] text-[#6b6459] truncate">{doc.branch}</div>
+                )}
+              </button>
+            ))}
           </div>
-          {doc.branch && (
-            <div className="font-mono text-[11px] text-zinc-500 truncate">{doc.branch}</div>
-          )}
-        </button>
-      ))}
-      </div>
+        </div>
+      )}
+
+      {!hasFiles && !hasDocs && (
+        <div className="flex flex-col items-center py-12 text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1c1a17] ring-1 ring-amber-900/20">
+            <FileText className="h-6 w-6 text-[#6b6459]" />
+          </div>
+          <p className="text-[14px] text-[#9c9486]">No documents yet</p>
+          <p className="mt-1 text-[12px] text-[#6b6459]">Upload sources or run a task to generate drafts</p>
+        </div>
+      )}
+
+      {/* File preview modal */}
+      {previewFile && (
+        <FilePreviewModal
+          file={previewFile}
+          projectId={projectId}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1089,200 +1163,22 @@ function RevisionHistoryPanel({ taskId }: { taskId: number }) {
   );
 }
 
-// ── Activity tab ──────────────────────────────────────────────────────────────
-
-const AUDIT_KIND_LABELS: Record<string, string> = {
-  "matter.created": "Matter created",
-  "matter.updated": "Matter updated",
-  "matter.deleted": "Matter deleted",
-  "task.created": "Task created",
-  "task.completed": "Task completed",
-  "task.failed": "Task failed",
-  "deadline.created": "Deadline added",
-  "document.exported": "Document exported",
-  "file.uploaded": "File uploaded",
-  "conflict.acknowledged": "Conflict acknowledged",
-};
-
-function ActivityTab({ projectId }: { projectId: number }) {
-  const { data: events = [], isLoading } = useProjectAudit(projectId);
-
-  if (isLoading) return <div className="flex h-32 items-center justify-center text-[13px] text-zinc-400">Loading...</div>;
-  if (events.length === 0) return <div className="flex h-32 flex-col items-center justify-center text-center"><FileText className="h-6 w-6 text-zinc-600 mb-2" /><div className="text-[13px] text-zinc-400">No activity logged yet</div></div>;
-
-  return (
-    <div className="space-y-0 overflow-y-auto p-5">
-      {events.map((ev, idx) => {
-        let detail = "";
-        try {
-          const p = JSON.parse(ev.payload);
-          if (p.title) detail = p.title;
-          else if (p.name) detail = p.name;
-          else if (p.label) detail = p.label;
-        } catch {
-          // ignore malformed payload
-        }
-        return (
-          <div key={ev.id} className="flex gap-3">
-            <div className="flex flex-col items-center">
-              <div className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-zinc-500/60" />
-              {idx < events.length - 1 && <div className="mt-1 w-px flex-1 bg-white/[0.07]" style={{ minHeight: "28px" }} />}
-            </div>
-            <div className="pb-4 min-w-0">
-              <div className="text-[13px] font-medium text-zinc-300">
-                {AUDIT_KIND_LABELS[ev.kind] || ev.kind}
-              </div>
-              {detail && <div className="text-[12px] text-zinc-400 truncate">{detail}</div>}
-              <div className="mt-0.5 text-[11px] text-zinc-500">
-                {ev.actor && <span>{ev.actor} · </span>}
-                {fmtDateTime(ev.created_at)}
-                {ev.task_id && <span className="ml-1 font-mono">#{ev.task_id}</span>}
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Chat tab ──────────────────────────────────────────────────────────────────
-
-function ChatTab({ projectId }: { projectId: number }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [messageInput, setMessageInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const dictation = useDictation(messageInput, setMessageInput);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const threadKey = `project:${projectId}`;
-
-  useEffect(() => {
-    getProjectChatMessages(projectId)
-      .then(setMessages)
-      .catch(() => setMessages([]));
-  }, [projectId]);
-
-  useChatEvents<ChatMessage>(threadKey, (msg) => {
-    setMessages((prev) => [...prev, msg]);
-    if (msg.role === "assistant") setSending(false);
-  }, () => setSending(false));
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [messages.length]);
-
-  async function handleSend() {
-    if (sending) return;
-    const text = messageInput.trim();
-    if (!text) return;
-    setMessageInput("");
-    setSending(true);
-    const timeout = setTimeout(() => setSending(false), 60_000);
-    try {
-      await sendProjectChat(projectId, text);
-    } catch {
-      setSending(false);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-1 overflow-y-auto p-5">
-        {messages.length === 0 && !sending && (
-          <div className="py-12 text-center">
-            <FileText className="mx-auto h-8 w-8 text-zinc-600 mb-3" />
-            <div className="text-[14px] text-zinc-400">Chat with Borg about this matter</div>
-          </div>
-        )}
-        {messages.map((msg, idx) => (
-          <div
-            key={`${msg.ts}-${msg.role}-${idx}`}
-            className={cn("mb-3 flex", msg.role === "user" ? "justify-end" : "justify-start")}
-          >
-            <div
-              className={cn(
-                "max-w-[85%] rounded-2xl px-4 py-3 text-[14px] leading-relaxed",
-                msg.role === "user"
-                  ? "bg-blue-500/[0.15] text-zinc-200"
-                  : "bg-white/[0.05] text-zinc-300"
-              )}
-            >
-              {msg.role !== "user" && (
-                <div className="mb-1.5 text-[11px] font-medium text-zinc-400">{msg.sender ?? "Borg"}</div>
-              )}
-              {msg.role === "user" ? (
-                <div className="whitespace-pre-wrap break-words">{msg.text}</div>
-              ) : (
-                <ChatMarkdown text={msg.text} />
-              )}
-            </div>
-          </div>
-        ))}
-        {sending && <BorgingIndicator />}
-        <div ref={bottomRef} />
-      </div>
-
-      <div className="shrink-0 border-t border-white/[0.07] p-4">
-        <div className="flex gap-2">
-          <textarea
-            value={messageInput}
-            onChange={(e) => setMessageInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Message Borg about this matter..."
-            rows={2}
-            className="flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500"
-          />
-          {dictation.supported && (
-            <button
-              onClick={dictation.toggle}
-              title={dictation.listening ? "Stop dictation" : "Start dictation"}
-              className={cn(
-                "shrink-0 rounded-lg px-3 py-2.5 transition-colors",
-                dictation.listening
-                  ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06]"
-              )}
-            >
-              {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </button>
-          )}
-          <button
-            onClick={handleSend}
-            disabled={sending || !messageInput.trim()}
-            className="rounded-lg bg-blue-500/20 px-4 py-2.5 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
-          >
-            Send
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
 
-type TabKey = "timeline" | "documents" | "tasks" | "activity" | "chat";
+type TabKey = "activity" | "documents" | "tasks";
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: "timeline", label: "Timeline" },
+  { key: "activity", label: "Activity" },
   { key: "documents", label: "Documents" },
   { key: "tasks", label: "Tasks" },
-  { key: "activity", label: "Activity" },
-  { key: "chat", label: "Chat" },
 ];
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDetailProps) {
   const { data: project, isLoading } = useProjectDetail(projectId);
-  const [activeTab, setActiveTab] = useState<TabKey>("timeline");
+  const [activeTab, setActiveTab] = useState<TabKey>("activity");
   const deleteMut = useDeleteProject();
 
   const handleDelete = () => {
@@ -1318,9 +1214,9 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab === "timeline" && (
+        {activeTab === "activity" && (
           <div className="h-full overflow-y-auto">
-            <TimelineTab projectId={projectId} />
+            <ActivityTab projectId={projectId} />
           </div>
         )}
         {activeTab === "documents" && (
@@ -1331,16 +1227,6 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
         {activeTab === "tasks" && (
           <div className="h-full overflow-y-auto">
             <TasksTab projectId={projectId} />
-          </div>
-        )}
-        {activeTab === "activity" && (
-          <div className="h-full overflow-y-auto">
-            <ActivityTab projectId={projectId} />
-          </div>
-        )}
-        {activeTab === "chat" && (
-          <div className="flex h-full flex-col">
-            <ChatTab projectId={projectId} />
           </div>
         )}
       </div>

@@ -28,7 +28,9 @@ export function PdfViewer({ buffer }: { buffer: ArrayBuffer }) {
           canvas.height = viewport.height;
           canvas.className = "mx-auto shadow-lg";
 
-          await page.render({ canvas, viewport }).promise;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
+          await page.render({ canvasContext: ctx, viewport } as any).promise;
           container.appendChild(canvas);
         }
       } catch {

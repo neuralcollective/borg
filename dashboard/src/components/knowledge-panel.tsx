@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Search, Upload, FileText, Eye, Pencil, Trash2, ChevronLeft, ChevronRight, BookOpen, X } from "lucide-react";
 
 const DocxViewer = lazy(() => import("./viewers/docx-viewer").then(m => ({ default: m.DocxViewer })));
+const PdfViewer = lazy(() => import("./viewers/pdf-viewer").then(m => ({ default: m.PdfViewer })));
 
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -484,10 +485,9 @@ export function KnowledgePanel() {
                 </Suspense>
               )}
               {!previewLoading && previewBuffer && /\.pdf$/i.test(previewFile.file_name) && (
-                <iframe
-                  src={URL.createObjectURL(new Blob([previewBuffer], { type: "application/pdf" }))}
-                  className="w-full h-[70vh] rounded-lg"
-                />
+                <Suspense fallback={<div className="flex items-center justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" /></div>}>
+                  <PdfViewer buffer={previewBuffer} />
+                </Suspense>
               )}
               {!previewLoading && previewBuffer && /\.(png|jpg|jpeg|gif|svg)$/i.test(previewFile.file_name) && (
                 <img

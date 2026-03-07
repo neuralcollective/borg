@@ -307,6 +307,12 @@ export function ProjectsPanel() {
   }, [selectedProjectId]);
 
   useEffect(() => {
+    if (activeProjectId) {
+      window.dispatchEvent(new CustomEvent("borg:project-selected", { detail: activeProjectId }));
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => {
     setFilePageStack([{ cursor: null, offset: 0 }]);
     setFileSearch("");
   }, [activeProjectId]);
