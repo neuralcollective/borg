@@ -24,7 +24,7 @@ import {
 } from "@/lib/api";
 import type { CloudBrowseItem, CloudConnection, FtsSearchResult } from "@/lib/api";
 import type { UploadSession } from "@/lib/api";
-import { Eye, FileText, Mic, MicOff, ArrowLeft, Search, RotateCw, Folder } from "lucide-react";
+import { Eye, FileText, Mic, MicOff, ArrowLeft, Search, RotateCw, Folder, Upload, X } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -278,6 +278,8 @@ export function ProjectsPanel() {
   const [uploadSessionCounts, setUploadSessionCounts] = useState<Record<string, number>>({});
   const [uploadSessionsLoading, setUploadSessionsLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<FileUploadProgress[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageInput, setMessageInput] = useState("");
@@ -648,6 +650,13 @@ async function uploadChunkQueue(
     }
   }
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const droppedFiles = e.dataTransfer.files;
+    if (droppedFiles.length > 0) handleUpload(droppedFiles);
+  }, [activeProjectId, uploading]);
+
   async function handleSendMessage() {
     if (!activeProjectId || sending) return;
     const text = messageInput.trim();
@@ -763,16 +772,16 @@ async function uploadChunkQueue(
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-[270px] shrink-0 border-r border-white/[0.07] p-4">
+      <div className="w-[270px] shrink-0 border-r border-[#2a2520] bg-[#0f0e0c] p-4">
         <div className="mb-3 flex items-center justify-between">
-          <span className="text-[12px] font-semibold uppercase tracking-wide text-zinc-400">
+          <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b6459]">
             Projects
           </span>
           {jurisdictions.length > 0 && (
             <select
               value={jurisdictionFilter}
               onChange={(e) => setJurisdictionFilter(e.target.value)}
-              className="rounded-lg border border-white/[0.07] bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 outline-none focus:border-blue-500/40"
+              className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-2 py-1 text-[11px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
             >
               <option value="all">All jurisdictions</option>
               {jurisdictions.map((j) => (
@@ -782,33 +791,33 @@ async function uploadChunkQueue(
           )}
         </div>
         <div className="relative mb-3">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6b6459]" />
           <input
             value={ftsQuery}
             onChange={(e) => handleFtsSearch(e.target.value)}
             placeholder="Search all documents..."
-            className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] pl-8 pr-3 py-2.5 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
+            className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] pl-8 pr-3 py-2.5 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
         </div>
         {ftsQuery.trim() && (ftsSearching || ftsResults.length > 0) ? (
           <div className="space-y-1.5 overflow-y-auto mb-3" style={{ maxHeight: "calc(100vh - 280px)" }}>
-            {ftsSearching && <div className="text-[11px] text-zinc-500 px-1">Searching…</div>}
+            {ftsSearching && <div className="text-[11px] text-[#6b6459] px-1">Searching…</div>}
             {ftsResults.map((r, i) => (
               <button
                 key={`${r.task_id}-${r.file_path}-${i}`}
                 onClick={() => { setSelectedProjectId(r.project_id); setFtsQuery(""); setFtsResults([]); }}
-                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2.5 text-left hover:bg-white/[0.06] transition-colors"
+                className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2.5 text-left hover:bg-[#232019] transition-colors"
               >
-                <div className="text-[11px] text-zinc-400 truncate flex items-center gap-1.5">
+                <div className="text-[11px] text-[#6b6459] truncate flex items-center gap-1.5">
                   {r.project_name}
                   {r.source === "semantic" && <span className="px-1.5 py-0.5 rounded-lg bg-violet-900/50 text-violet-300 text-[10px]">semantic</span>}
                 </div>
-                {r.title_snippet && <div className="text-[12px] text-zinc-300 truncate mt-0.5" dangerouslySetInnerHTML={{ __html: r.title_snippet }} />}
-                <div className="text-[11px] text-zinc-400 line-clamp-2 mt-0.5" dangerouslySetInnerHTML={{ __html: r.content_snippet }} />
+                {r.title_snippet && <div className="text-[12px] text-[#e8e0d4] truncate mt-0.5" dangerouslySetInnerHTML={{ __html: r.title_snippet }} />}
+                <div className="text-[11px] text-[#9c9486] line-clamp-2 mt-0.5" dangerouslySetInnerHTML={{ __html: r.content_snippet }} />
               </button>
             ))}
             {!ftsSearching && ftsResults.length === 0 && (
-              <div className="text-[11px] text-zinc-500 px-1">No results.</div>
+              <div className="text-[11px] text-[#6b6459] px-1">No results.</div>
             )}
           </div>
         ) : (
@@ -817,8 +826,8 @@ async function uploadChunkQueue(
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter matters..."
-            className="mb-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
+            placeholder="Filter projects..."
+            className="mb-3 w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
         )}
         <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 300px)" }}>
@@ -829,39 +838,39 @@ async function uploadChunkQueue(
               className={cn(
                 "w-full rounded-xl px-3 py-2.5 text-left text-[13px] transition-colors",
                 p.id === activeProjectId
-                  ? "bg-white/[0.08] text-zinc-100 font-medium"
-                  : "text-zinc-400 hover:bg-white/[0.04]"
+                  ? "bg-amber-500/[0.08] text-[#e8e0d4] font-medium"
+                  : "text-[#9c9486] hover:bg-[#1c1a17]"
               )}
             >
               <span className="truncate">{p.name}</span>
               {p.jurisdiction?.trim() && jurisdictionFilter === "all" && (
-                <span className="mt-0.5 block truncate text-[10px] text-zinc-500">{p.jurisdiction}</span>
+                <span className="mt-0.5 block truncate text-[10px] text-[#6b6459]">{p.jurisdiction}</span>
               )}
             </button>
           ))}
           {projects.length === 0 && (
-            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] px-4 py-6 text-center">
-              <Folder className="h-6 w-6 text-zinc-600 mb-2" />
-              <div className="text-[12px] text-zinc-400">No projects yet</div>
-              <div className="text-[11px] text-zinc-500 mt-0.5">Create one below to get started</div>
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#2a2520] px-4 py-6 text-center">
+              <Folder className="h-6 w-6 text-[#6b6459] mb-2" />
+              <div className="text-[12px] text-[#9c9486]">No projects yet</div>
+              <div className="text-[11px] text-[#6b6459] mt-0.5">Create one below to get started</div>
             </div>
           )}
         </div>
           </>
         )}
-        <div className="mt-4 border-t border-white/[0.07] pt-4">
+        <div className="mt-4 border-t border-[#2a2520] pt-4">
           <input
             value={newProjectName}
             onChange={(e) => setNewProjectName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
             placeholder="New project name"
-            className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
+            className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
           {!isLegalMode && (
             <select
               value={newProjectMode}
               onChange={(e) => setNewProjectMode(e.target.value)}
-              className="mt-2.5 w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none"
+              className="mt-2.5 w-full rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none"
             >
               <option value="general">general</option>
               {modes.map((mode) => (
@@ -878,13 +887,13 @@ async function uploadChunkQueue(
               value={newProjectJurisdiction}
               onChange={(e) => setNewProjectJurisdiction(e.target.value)}
               placeholder="Jurisdiction (e.g. England & Wales)"
-              className="mt-2.5 w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
+              className="mt-2.5 w-full rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
             />
           )}
           <button
             onClick={handleCreateProject}
             disabled={creating || !newProjectName.trim()}
-            className="mt-2.5 w-full rounded-lg bg-blue-500/20 px-3 py-2.5 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
+            className="mt-2.5 w-full rounded-lg bg-amber-500/20 px-3 py-2.5 text-[13px] font-medium text-amber-300 hover:bg-amber-500/30 transition-colors disabled:cursor-not-allowed disabled:text-[#6b6459]"
           >
             {creating ? "Creating..." : "Create Project"}
           </button>
@@ -895,21 +904,23 @@ async function uploadChunkQueue(
         {!selectedProject ? (
           <div className="flex h-full items-center justify-center">
             <div className="max-w-[360px] text-center">
-              <Folder className="mx-auto h-10 w-10 text-zinc-600 mb-3" />
-              <div className="text-[15px] font-semibold text-zinc-100">Get Started</div>
-              <div className="mt-2 text-[13px] leading-relaxed text-zinc-400">
-                Create a matter in the sidebar to start. Each matter gets its own
-                dedicated repository for documents and task outputs.
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1c1a17] ring-1 ring-amber-900/20">
+                <Folder className="h-7 w-7 text-[#6b6459]" />
               </div>
-              <div className="mt-5 space-y-2.5 text-left text-[13px] text-zinc-400">
-                <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
-                  <span className="text-zinc-300 font-medium">1.</span> Name your matter and select <span className="text-blue-400">lawborg</span> mode
+              <div className="text-[16px] font-semibold text-[#e8e0d4]">Get Started</div>
+              <div className="mt-2 text-[13px] leading-relaxed text-[#9c9486]">
+                Create a project in the sidebar to start. Each project gets its own
+                document store and can be chatted with via the Chat tab.
+              </div>
+              <div className="mt-5 space-y-2.5 text-left text-[13px] text-[#9c9486]">
+                <div className="rounded-xl border border-[#2a2520] bg-[#151412] px-4 py-3">
+                  <span className="text-[#e8e0d4] font-medium">1.</span> Name your project and select a mode
                 </div>
-                <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
-                  <span className="text-zinc-300 font-medium">2.</span> Upload reference documents (contracts, briefs, filings)
+                <div className="rounded-xl border border-[#2a2520] bg-[#151412] px-4 py-3">
+                  <span className="text-[#e8e0d4] font-medium">2.</span> Upload reference documents
                 </div>
-                <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
-                  <span className="text-zinc-300 font-medium">3.</span> Create tasks — research memos, contract reviews, case analysis
+                <div className="rounded-xl border border-[#2a2520] bg-[#151412] px-4 py-3">
+                  <span className="text-[#e8e0d4] font-medium">3.</span> Create tasks from the Tasks tab or chat about your docs
                 </div>
               </div>
             </div>
@@ -925,74 +936,102 @@ async function uploadChunkQueue(
               defaultTemplateId={undefined}
             />
           ) : (
-            <div className="flex h-full flex-col">
-              <div className="flex shrink-0 items-center justify-end border-b border-white/[0.07] px-4 py-3">
-                <TaskCreator defaultMode="lawborg" hideModePicker projectId={selectedProject.id} />
-              </div>
-              <div className="min-h-0 flex-1">
-                <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} onDelete={() => setSelectedProjectId(null)} />
-              </div>
-            </div>
+            <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} onDelete={() => setSelectedProjectId(null)} />
           )
         ) : (
-          <>
-            <div className="border-b border-white/[0.07] p-4">
-              <div className="text-[15px] font-semibold text-zinc-100">{selectedProject.name}</div>
-              <div className="mt-1.5 text-[12px] text-zinc-400">
-                Files {fileSummary?.total_files ?? 0} · {formatBytes(totalBytes)} / {formatBytes(projectMaxBytes)}
+          <div className="flex flex-col h-full overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl px-6 py-8 space-y-6">
+              {/* Header */}
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#1c1a17] ring-1 ring-amber-900/20">
+                  <Folder className="h-6 w-6 text-amber-400/60" />
+                </div>
+                <div>
+                  <h2 className="text-[20px] font-semibold text-[#e8e0d4]">{selectedProject.name}</h2>
+                  <p className="text-[13px] text-[#6b6459]">
+                    Project documents — scoped to this project only.
+                    Chat with these docs via the Chat tab.
+                  </p>
+                </div>
               </div>
-              <div className="mt-3 flex items-center gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  onChange={(e) => e.target.files && handleUpload(e.target.files)}
-                  className="hidden"
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="rounded-lg bg-white/[0.06] px-4 py-2 text-[13px] text-zinc-300 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:text-zinc-600 transition-colors"
-                >
-                  {uploading ? "Uploading..." : "Upload Files"}
-                </button>
-                {filesLoading && <span className="text-[12px] text-zinc-500">refreshing…</span>}
+
+              {/* Search & stats */}
+              <div className="flex items-center gap-3">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6b6459]" />
+                  <input
+                    type="text"
+                    value={fileSearch}
+                    onChange={(e) => {
+                      setFileSearch(e.target.value);
+                      setFilePageStack([{ cursor: null, offset: 0 }]);
+                    }}
+                    placeholder="Search project files..."
+                    className="w-full rounded-xl border border-[#2a2520] bg-[#151412] py-2.5 pl-10 pr-4 text-[14px] text-[#e8e0d4] outline-none transition-colors focus:border-amber-500/30 placeholder:text-[#6b6459]"
+                  />
+                </div>
+                <div className="text-[12px] text-[#6b6459] tabular-nums whitespace-nowrap">
+                  {fileSummary?.total_files ?? files.length} files
+                  <span className="ml-1">· {formatBytes(totalBytes)} / {formatBytes(projectMaxBytes)}</span>
+                </div>
               </div>
-              <div className="mt-3 flex items-center gap-2">
-                <input
-                  type="text"
-                  value={fileSearch}
-                  onChange={(e) => {
-                    setFileSearch(e.target.value);
-                    setFilePageStack([{ cursor: null, offset: 0 }]);
-                  }}
-                  placeholder="Filter uploaded files"
-                  className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500"
-                />
-                <span className="shrink-0 text-[11px] text-zinc-500">
-                  {filePage?.total ?? files.length} match
-                </span>
+
+              {/* Drag-and-drop upload area */}
+              <div
+                ref={dropRef}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                className={cn(
+                  "rounded-xl border-2 border-dashed p-6 transition-colors",
+                  dragOver
+                    ? "border-amber-500/40 bg-amber-500/[0.04]"
+                    : "border-[#2a2520] bg-[#151412]"
+                )}
+              >
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#1c1a17]">
+                    <Upload className="h-5 w-5 text-[#6b6459]" />
+                  </div>
+                  <div>
+                    <p className="text-[14px] font-medium text-[#e8e0d4]">
+                      Drop files here or{" "}
+                      <button onClick={() => fileInputRef.current?.click()} className="text-amber-400 hover:text-amber-300">
+                        browse
+                      </button>
+                    </p>
+                    <p className="mt-1 text-[12px] text-[#6b6459]">Supports any file type. Multiple files allowed.</p>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    onChange={(e) => e.target.files && handleUpload(e.target.files)}
+                    className="hidden"
+                  />
+                </div>
               </div>
-              {uploadError && (
-                <div className="mt-2 text-[11px] text-red-400">{uploadError}</div>
-              )}
+
+              {uploadError && <p className="text-[12px] text-red-400">{uploadError}</p>}
+
+              {/* Upload progress */}
               {uploadProgress.length > 0 && (
-                <div className="mt-3 space-y-1.5 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
+                <div className="space-y-2 rounded-xl border border-[#2a2520] bg-[#151412] p-4">
                   {uploadProgress.map((entry) => {
                     const pct = entry.totalBytes > 0 ? Math.round((entry.uploadedBytes / entry.totalBytes) * 100) : 0;
                     return (
                       <div key={entry.id} className="text-[12px]">
-                        <div className="flex items-center justify-between gap-2 text-zinc-300">
+                        <div className="flex items-center justify-between gap-2 text-[#e8e0d4]">
                           <span className="truncate">{entry.fileName}</span>
-                          <span className="shrink-0 text-zinc-400">
-                            {entry.status} {entry.status === "uploading" || entry.status === "processing" || entry.status === "done" ? `${pct}%` : ""}
+                          <span className="shrink-0 text-[#6b6459]">
+                            {entry.status} {["uploading", "processing", "done"].includes(entry.status) ? `${pct}%` : ""}
                           </span>
                         </div>
-                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-white/[0.06]">
+                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-[#1c1a17]">
                           <div
                             className={cn(
                               "h-full transition-all",
-                              entry.status === "failed" ? "bg-red-500/70" : "bg-blue-500/70"
+                              entry.status === "failed" ? "bg-red-500/70" : "bg-amber-500/70"
                             )}
                             style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
                           />
@@ -1003,149 +1042,183 @@ async function uploadChunkQueue(
                   })}
                 </div>
               )}
-              <div className="mt-3 max-h-32 overflow-y-auto rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                {files.map((f) => (
-                  <div key={f.id} className="flex items-center justify-between border-b border-white/[0.07] px-3 py-2 text-[13px] text-zinc-300 last:border-0">
-                    <div className="flex min-w-0 items-center gap-2 pr-2">
-                      <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-                      <div className="min-w-0">
-                        <div className="truncate">{f.file_name}</div>
-                        {f.source_path && f.source_path !== f.file_name && (
-                          <div className="truncate text-[11px] text-zinc-500">{f.source_path}</div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {f.has_text && (
-                        <button
-                          onClick={async () => {
-                            if (!activeProjectId) return;
-                            const data = await fetchProjectFileText(activeProjectId, f.id);
-                            setTextViewFile({ id: f.id, name: data.file_name, text: data.extracted_text });
-                          }}
-                          className="text-emerald-600 transition-colors hover:text-emerald-400"
-                          title={`View extracted text (${(f.text_chars / 1000).toFixed(1)}k chars)`}
-                        >
-                          <FileText className="h-3 w-3" />
-                        </button>
-                      )}
-                      {!f.has_text && (
-                        <button
-                          onClick={async () => {
-                            if (!activeProjectId) return;
-                            setExtracting(f.id);
-                            try {
-                              await reextractProjectFile(activeProjectId, f.id);
-                              refetchFiles();
-                            } finally { setExtracting(null); }
-                          }}
-                          disabled={extracting === f.id}
-                          className="text-zinc-600 transition-colors hover:text-zinc-300 disabled:animate-spin"
-                          title="Extract text"
-                        >
-                          <RotateCw className="h-3 w-3" />
-                        </button>
-                      )}
-                      {isPreviewable(f) && (
-                        <button
-                          onClick={() => setPreviewFile(f)}
-                          className="text-zinc-600 transition-colors hover:text-zinc-300"
-                          title="Preview"
-                        >
-                          <Eye className="h-3 w-3" />
-                        </button>
-                      )}
-                      <span className="text-zinc-500">{formatBytes(f.size_bytes)}</span>
-                    </div>
+
+              {/* File list */}
+              <div className="space-y-3">
+                {filesLoading && files.length === 0 && (
+                  <div className="flex items-center justify-center py-12">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#2a2520] border-t-amber-400" />
                   </div>
-                ))}
-                {files.length === 0 && (
-                  <div className="px-3 py-3 text-[12px] text-zinc-500 text-center">No files uploaded yet.</div>
                 )}
-              </div>
-              {filePage && filePage.total > filePage.limit && (
-                <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
-                  <span>
-                    Showing {filePage.total === 0 ? 0 : currentFilePage.offset + 1}-{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
-                      disabled={filePageStack.length <= 1}
-                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
-                    >
-                      Prev
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (!filePage.next_cursor) return;
-                        setFilePageStack((prev) => [
-                          ...prev,
-                          { cursor: filePage.next_cursor ?? null, offset: currentFilePage.offset + files.length },
-                        ]);
-                      }}
-                      disabled={!filePage.has_more || !filePage.next_cursor}
-                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
-                    >
-                      Next
-                    </button>
+                {!filesLoading && files.length === 0 && (
+                  <div className="flex flex-col items-center py-12 text-center">
+                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#1c1a17] ring-1 ring-amber-900/20">
+                      <FileText className="h-6 w-6 text-[#6b6459]" />
+                    </div>
+                    <p className="text-[14px] text-[#9c9486]">
+                      {filePage && filePage.total > 0 ? "No files match your search" : "No files uploaded yet"}
+                    </p>
+                    <p className="mt-1 text-[12px] text-[#6b6459]">
+                      {filePage && filePage.total > 0 ? "Try a different search term" : "Upload files to make them available for this project"}
+                    </p>
                   </div>
-                </div>
-              )}
-              <div className="mt-3 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
-                <div className="mb-2 text-[12px] font-semibold text-zinc-300">Upload Sessions</div>
-                <div className="mb-2 text-[12px] text-zinc-400">
-                  uploading: {uploadSessionCounts.uploading ?? 0} · processing: {uploadSessionCounts.processing ?? 0} · failed: {uploadSessionCounts.failed ?? 0} · done: {uploadSessionCounts.done ?? 0}
-                </div>
-                <div className="max-h-32 space-y-1.5 overflow-y-auto">
-                  {uploadSessions.slice(0, 8).map((s) => (
-                    <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/[0.07] px-3 py-2 text-[12px]">
-                      <span className="truncate pr-2 text-zinc-300">#{s.id} {s.file_name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-zinc-400">{s.status}</span>
-                        {s.status === "failed" && (
+                )}
+                {files.map((f) => (
+                  <div key={f.id} className="group rounded-xl border border-[#2a2520] bg-[#151412] p-4 transition-colors hover:border-amber-900/30">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#1c1a17] ring-1 ring-amber-900/20">
+                          <FileText className="h-4 w-4 text-[#6b6459]" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-medium text-[#e8e0d4] truncate">{f.file_name}</div>
+                          <div className="mt-0.5 text-[12px] text-[#6b6459]">
+                            {formatBytes(f.size_bytes)}
+                            {f.source_path && f.source_path !== f.file_name && (
+                              <span className="ml-1.5">· {f.source_path}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {f.has_text && (
                           <button
-                            onClick={() => retryUploadSession(s.id)}
-                            className="rounded-lg border border-amber-500/30 px-2 py-1 text-[11px] text-amber-300 hover:bg-amber-500/10"
+                            onClick={async () => {
+                              if (!activeProjectId) return;
+                              const data = await fetchProjectFileText(activeProjectId, f.id);
+                              setTextViewFile({ id: f.id, name: data.file_name, text: data.extracted_text });
+                            }}
+                            className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-[#232019] hover:text-emerald-400"
+                            title={`View extracted text (${(f.text_chars / 1000).toFixed(1)}k chars)`}
                           >
-                            Retry
+                            <FileText className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {!f.has_text && (
+                          <button
+                            onClick={async () => {
+                              if (!activeProjectId) return;
+                              setExtracting(f.id);
+                              try {
+                                await reextractProjectFile(activeProjectId, f.id);
+                                refetchFiles();
+                              } finally { setExtracting(null); }
+                            }}
+                            disabled={extracting === f.id}
+                            className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-[#232019] hover:text-[#e8e0d4] disabled:animate-spin"
+                            title="Extract text"
+                          >
+                            <RotateCw className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {isPreviewable(f) && (
+                          <button
+                            onClick={() => setPreviewFile(f)}
+                            className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-[#232019] hover:text-amber-400"
+                            title="Preview"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
                           </button>
                         )}
                       </div>
                     </div>
-                  ))}
-                  {!uploadSessionsLoading && uploadSessions.length === 0 && (
-                    <div className="text-[12px] text-zinc-500">No active upload sessions.</div>
-                  )}
-                </div>
+                    {f.has_text && (
+                      <div className="mt-3 flex items-center gap-2">
+                        <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/20">
+                          Extracted
+                        </span>
+                        <span className="text-[11px] text-[#6b6459]">{(f.text_chars / 1000).toFixed(1)}k chars</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Pagination */}
+                {filePage && filePage.total > filePage.limit && (
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-[12px] text-[#6b6459]">
+                      {filePage.total === 0 ? 0 : currentFilePage.offset + 1}–{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
+                        disabled={filePageStack.length <= 1}
+                        className="rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#9c9486] transition-colors hover:border-amber-900/30 hover:text-[#e8e0d4] disabled:opacity-40"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!filePage.next_cursor) return;
+                          setFilePageStack((prev) => [
+                            ...prev,
+                            { cursor: filePage.next_cursor ?? null, offset: currentFilePage.offset + files.length },
+                          ]);
+                        }}
+                        disabled={!filePage.has_more || !filePage.next_cursor}
+                        className="rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#9c9486] transition-colors hover:border-amber-900/30 hover:text-[#e8e0d4] disabled:opacity-40"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="mt-3 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
-                <div className="mb-2 text-[12px] font-semibold text-zinc-300">Cloud Storage</div>
+
+              {/* Upload sessions (compact) */}
+              {(uploadSessions.length > 0 || uploadSessionsLoading) && (
+                <div className="rounded-xl border border-[#2a2520] bg-[#151412] p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-[#e8e0d4]">Upload Sessions</span>
+                    <span className="text-[11px] text-[#6b6459] tabular-nums">
+                      {uploadSessionCounts.uploading ?? 0} uploading · {uploadSessionCounts.processing ?? 0} processing · {uploadSessionCounts.done ?? 0} done
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                    {uploadSessions.slice(0, 8).map((s) => (
+                      <div key={s.id} className="flex items-center justify-between rounded-lg border border-[#2a2520] px-3 py-2 text-[12px]">
+                        <span className="truncate pr-2 text-[#e8e0d4]">#{s.id} {s.file_name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[#6b6459]">{s.status}</span>
+                          {s.status === "failed" && (
+                            <button
+                              onClick={() => retryUploadSession(s.id)}
+                              className="rounded-lg border border-amber-500/30 px-2 py-1 text-[11px] text-amber-300 hover:bg-amber-500/10"
+                            >
+                              Retry
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Cloud storage */}
+              <div className="rounded-xl border border-[#2a2520] bg-[#151412] p-4">
+                <div className="mb-3 text-[12px] font-semibold text-[#e8e0d4]">Cloud Storage</div>
                 {!publicUrlValid && (
-                  <div className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                  <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
                     Configure a valid Public URL in Settings before connecting cloud accounts.
                   </div>
                 )}
                 {cloudMessage && (
                   <div
                     className={cn(
-                      "mb-2 flex items-start justify-between gap-2 rounded border px-2 py-1 text-[11px]",
+                      "mb-3 flex items-start justify-between gap-2 rounded-lg border px-3 py-2 text-[11px]",
                       cloudMessage.type === "success"
                         ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
                         : "border-red-500/30 bg-red-500/10 text-red-400"
                     )}
                   >
                     <span>{cloudMessage.text}</span>
-                    <button
-                      onClick={() => setCloudMessage(null)}
-                      className="shrink-0 text-[10px] opacity-80 hover:opacity-100"
-                      title="Dismiss"
-                    >
-                      x
+                    <button onClick={() => setCloudMessage(null)} className="shrink-0 text-[#6b6459] hover:text-[#e8e0d4]">
+                      <X className="h-3 w-3" />
                     </button>
                   </div>
                 )}
-                <div className="mb-2 flex flex-wrap gap-1.5">
+                <div className="mb-3 flex flex-wrap gap-1.5">
                   {CLOUD_PROVIDERS.map((provider) => {
                     const configured = hasCloudCredentials(provider);
                     return (
@@ -1160,7 +1233,7 @@ async function uploadChunkQueue(
                             ? `Connect ${provider.label}`
                             : `Configure ${provider.label} credentials in Settings > Cloud Storage`
                         }
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#e8e0d4] transition-colors hover:bg-[#232019] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <CloudProviderIcon provider={provider.id} />
                         {provider.label}
@@ -1168,117 +1241,38 @@ async function uploadChunkQueue(
                     );
                   })}
                 </div>
-                <div className="max-h-36 space-y-1 overflow-y-auto">
+                <div className="space-y-1.5 max-h-36 overflow-y-auto">
                   {cloudConnections.map((conn) => (
-                    <div key={conn.id} className="flex items-center justify-between rounded-lg border border-white/[0.07] px-3 py-2 text-[12px]">
-                      <div className="min-w-0 flex items-center gap-1.5 text-zinc-300">
+                    <div key={conn.id} className="flex items-center justify-between rounded-lg border border-[#2a2520] px-3 py-2 text-[12px]">
+                      <div className="min-w-0 flex items-center gap-1.5 text-[#e8e0d4]">
                         <CloudProviderIcon provider={conn.provider} />
                         <span className="truncate">{conn.account_email || cloudProviderLabel(conn.provider)}</span>
                       </div>
-                      <div className="flex shrink-0 items-center gap-1">
+                      <div className="flex shrink-0 items-center gap-1.5">
                         <button
                           onClick={() => openCloudBrowser(conn)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[12px] text-zinc-300 hover:bg-white/[0.06]"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a2520] px-2.5 py-1 text-[12px] text-[#e8e0d4] transition-colors hover:bg-[#232019]"
                         >
                           <Folder className="h-3 w-3" />
-                          Browse & Import
+                          Browse
                         </button>
                         <button
                           onClick={() => disconnectCloudConnection(conn)}
-                          className="rounded border border-red-500/20 px-1.5 py-0.5 text-red-400/80 hover:border-red-500/40 hover:text-red-400"
+                          className="rounded-lg p-1.5 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
                           title="Disconnect"
                         >
-                          x
+                          <X className="h-3 w-3" />
                         </button>
                       </div>
                     </div>
                   ))}
                   {!cloudConnectionsLoading && cloudConnections.length === 0 && (
-                    <div className="text-[12px] text-zinc-500">No connected cloud accounts.</div>
+                    <div className="text-[12px] text-[#6b6459]">No connected cloud accounts.</div>
                   )}
                 </div>
               </div>
             </div>
-
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex-1 overflow-y-auto p-4">
-                {messages.map((msg, idx) => (
-                  <div key={`${msg.ts}-${msg.role}-${idx}`} className={cn("mb-3 flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                    <div
-                      className={cn(
-                        "max-w-[85%] rounded-2xl px-4 py-3 text-[14px] leading-relaxed",
-                        msg.role === "user"
-                          ? "bg-blue-500/[0.15] text-zinc-200"
-                          : "bg-white/[0.05] text-zinc-300"
-                      )}
-                    >
-                      {msg.role !== "user" && (
-                        <div className="mb-1.5 text-[11px] font-medium text-zinc-400">{msg.sender ?? "Borg"}</div>
-                      )}
-                      {msg.role === "user" ? (
-                        <div className="whitespace-pre-wrap break-words">{msg.text}</div>
-                      ) : (
-                        <ChatMarkdown text={msg.text} />
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {sending && <BorgingIndicator />}
-                <div ref={bottomRef} />
-              </div>
-
-              <div className="border-t border-white/[0.07] p-4">
-                <div className="mb-3 flex flex-wrap gap-2">
-                  {CHAT_SUGGESTED_PROMPTS.map((prompt) => (
-                    <button
-                      key={prompt}
-                      onClick={() => setMessageInput(prompt)}
-                      disabled={sending}
-                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <textarea
-                    value={messageInput}
-                    onChange={(e) => setMessageInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendMessage();
-                      }
-                    }}
-                    placeholder="Message Borg about this project..."
-                    rows={2}
-                    className="flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500"
-                  />
-                  {dictation.supported && (
-                    <button
-                      onClick={dictation.toggle}
-                      title={dictation.listening ? "Stop dictation" : "Start dictation"}
-                      className={cn(
-                        "shrink-0 rounded-lg px-3 py-2.5 transition-colors",
-                        dictation.listening
-                          ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                          : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06]"
-                      )}
-                    >
-                      {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                    </button>
-                  )}
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={sending || !messageInput.trim()}
-                    className="rounded-lg bg-blue-500/20 px-4 py-2.5 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
+          </div>
         )}
       </div>
       {previewFile && activeProjectId && (
