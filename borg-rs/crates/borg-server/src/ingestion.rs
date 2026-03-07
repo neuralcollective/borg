@@ -210,20 +210,21 @@ async fn process_message(
                 mime_type: msg.mime_type.clone(),
             };
 
+            let dim = embed_client.map(|ec| ec.dim()).unwrap_or(1024);
             let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
             if let Some(ec) = embed_client {
                 for chunk in &chunks_text {
-                    match ec.embed_single(chunk).await {
+                    match ec.embed_document(chunk).await {
                         Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
                         Err(e) => {
                             tracing::warn!("embedding failed for chunk: {e}");
-                            chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768]));
+                            chunks_with_embeddings.push((chunk.clone(), vec![0.0; dim]));
                         }
                     }
                 }
             } else {
                 for chunk in &chunks_text {
-                    chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768]));
+                    chunks_with_embeddings.push((chunk.clone(), vec![0.0; dim]));
                 }
             }
 
@@ -281,12 +282,38 @@ pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String
         return "document".to_string();
     }
     if ext == "md" || ext == "txt" {
+        let text_lower = text.to_lowercase();
+        let first_2k = if text_lower.len() > 2000 { &text_lower[..2000] } else { &text_lower };
+        if first_2k.contains("agreement") || first_2k.contains("contract") || (first_2k.contains("between") && first_2k.contains("parties")) {
+            return "contract".to_string();
+        }
+        if first_2k.contains("court") || first_2k.contains("plaintiff") || first_2k.contains("defendant") || first_2k.contains(" v. ") {
+            return "filing".to_string();
+        }
+        if first_2k.contains("statute") || (first_2k.contains("section") && first_2k.contains("chapter")) {
+            return "statute".to_string();
+        }
         return "memo".to_string();
     }
     if ext == "csv" || ext == "json" || ext == "xml" {
         return "data".to_string();
     }
     "document".to_string()
+}
+
+pub(crate) fn detect_jurisdiction(text: &str) -> String {
+    static JURISDICTIONS: &[&str] = &[
+        "Delaware", "New York", "California", "Texas", "Illinois",
+        "Massachusetts", "Florida", "Pennsylvania", "Virginia",
+        "District of Columbia", "Nevada", "Georgia", "Federal",
+    ];
+    let first_4k = if text.len() > 4000 { &text[..text.floor_char_boundary(4000)] } else { text };
+    for &j in JURISDICTIONS {
+        if first_4k.contains(j) {
+            return j.to_string();
+        }
+    }
+    String::new()
 }
 
 pub(crate) async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String> {

@@ -42,7 +42,7 @@ schema project_chunk {
       indexing: attribute | summary
       attribute: fast-search
     }
-    field embedding type tensor<float>(x[768]) {
+    field embedding type tensor<float>(x[1024]) {
       indexing: attribute | index
       attribute {
         distance-metric: angular
@@ -68,14 +68,14 @@ schema project_chunk {
 
   rank-profile hybrid inherits default {
     inputs {
-      query(q_embedding) tensor<float>(x[768])
+      query(q_embedding) tensor<float>(x[1024])
     }
     first-phase {
       expression: bm25(title) + bm25(content) + bm25(file_path)
     }
     match-phase {
       attribute: project_id
-      max-hits-per-thread: 2000
+      max-hits: 2000
     }
     second-phase {
       expression: bm25(title) * 3 + bm25(content) * 2 + bm25(file_path) + closeness(field, embedding) * 10 + if(attribute(indexed_at) > 0, freshness(indexed_at).logscale * 2, 0)
@@ -92,34 +92,11 @@ schema project_chunk {
 
   rank-profile semantic {
     inputs {
-      query(q_embedding) tensor<float>(x[768])
+      query(q_embedding) tensor<float>(x[1024])
     }
     first-phase {
       expression: closeness(field, embedding)
     }
   }
 
-  document-summary default {
-    summary project_id {}
-    summary file_id {}
-    summary chunk_index {}
-    summary file_path {}
-    summary title {}
-    summary content {}
-    summary doc_type {}
-    summary jurisdiction {}
-    summary privileged {}
-    summary indexed_at {}
-  }
-
-  document-summary minimal {
-    summary project_id {}
-    summary file_id {}
-    summary chunk_index {}
-    summary file_path {}
-    summary title {}
-    summary doc_type {}
-    summary jurisdiction {}
-    summary score {}
-  }
 }

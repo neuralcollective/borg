@@ -63,14 +63,23 @@ impl BraveSearchClient {
 
 // ── Embedding client ─────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EmbeddingBackend {
+    Ollama,
+    OpenAI, // OpenAI-compatible API (Voyage AI, OpenAI, etc.)
+}
+
 pub struct EmbeddingClient {
     http: reqwest::Client,
     base_url: String,
     model: String,
+    api_key: Option<String>,
+    backend: EmbeddingBackend,
+    dim: usize,
 }
 
 impl EmbeddingClient {
-    pub fn new(base_url: &str, model: &str) -> Self {
+    pub fn new(base_url: &str, model: &str, api_key: Option<&str>, backend: EmbeddingBackend, dim: usize) -> Self {
         Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -81,18 +90,58 @@ impl EmbeddingClient {
                 }),
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
+            api_key: api_key.map(|s| s.to_string()),
+            backend,
+            dim,
         }
     }
 
     pub fn from_env() -> Self {
-        let base_url = std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let model =
-            std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "nomic-embed-text".to_string());
-        Self::new(&base_url, &model)
+        // Auto-detect backend: if VOYAGE_API_KEY or EMBEDDING_API_KEY is set, use OpenAI-compat
+        let api_key = std::env::var("VOYAGE_API_KEY")
+            .or_else(|_| std::env::var("EMBEDDING_API_KEY"))
+            .ok();
+        let backend = if api_key.is_some() {
+            EmbeddingBackend::OpenAI
+        } else {
+            EmbeddingBackend::Ollama
+        };
+
+        let (default_url, default_model, default_dim) = match backend {
+            EmbeddingBackend::OpenAI => ("https://api.voyageai.com", "voyage-law-2", 1024),
+            EmbeddingBackend::Ollama => ("http://localhost:11434", "nomic-embed-text", 768),
+        };
+
+        let base_url = std::env::var("EMBEDDING_BASE_URL")
+            .or_else(|_| std::env::var("OLLAMA_BASE_URL"))
+            .unwrap_or_else(|_| default_url.to_string());
+        let model = std::env::var("EMBEDDING_MODEL")
+            .unwrap_or_else(|_| default_model.to_string());
+        let dim = std::env::var("EMBEDDING_DIM")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default_dim);
+
+        tracing::info!("embedding backend: {backend:?}, model: {model}, dim: {dim}, url: {base_url}");
+        Self::new(&base_url, &model, api_key.as_deref(), backend, dim)
     }
 
-    pub async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    pub fn zero_embedding(&self) -> Vec<f32> {
+        vec![0.0; self.dim]
+    }
+
+    pub async fn embed(&self, texts: &[&str], input_type: &str) -> Result<Vec<Vec<f32>>> {
+        match self.backend {
+            EmbeddingBackend::Ollama => self.embed_ollama(texts).await,
+            EmbeddingBackend::OpenAI => self.embed_openai(texts, input_type).await,
+        }
+    }
+
+    async fn embed_ollama(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let body = serde_json::json!({
             "model": self.model,
             "input": texts,
@@ -111,30 +160,85 @@ impl EmbeddingClient {
             anyhow::bail!("ollama embed returned {status}: {body}");
         }
 
-        let parsed: EmbedResponse = resp.json().await.context("parse embed response")?;
+        let parsed: OllamaEmbedResponse = resp.json().await.context("parse ollama embed response")?;
         Ok(parsed.embeddings)
     }
 
+    async fn embed_openai(&self, texts: &[&str], input_type: &str) -> Result<Vec<Vec<f32>>> {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "input": texts,
+        });
+        if !input_type.is_empty() {
+            body["input_type"] = serde_json::Value::String(input_type.to_string());
+        }
+        let mut req = self.http.post(format!("{}/v1/embeddings", self.base_url)).json(&body);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.context("embedding API request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("embedding API returned {status}: {body}");
+        }
+
+        let parsed: OpenAIEmbedResponse = resp.json().await.context("parse embedding response")?;
+        let mut result: Vec<(usize, Vec<f32>)> = parsed.data.into_iter().map(|d| (d.index, d.embedding)).collect();
+        result.sort_by_key(|(i, _)| *i);
+        Ok(result.into_iter().map(|(_, e)| e).collect())
+    }
+
+    /// Embed a single text for indexing (document)
+    pub async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        let mut results = self.embed(&[text], "document").await?;
+        results.pop().ok_or_else(|| anyhow::anyhow!("empty embedding response"))
+    }
+
+    /// Embed a single text for search (query)
+    pub async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        let mut results = self.embed(&[text], "query").await?;
+        results.pop().ok_or_else(|| anyhow::anyhow!("empty embedding response"))
+    }
+
+    /// Backward-compatible: embed without specifying input_type
     pub async fn embed_single(&self, text: &str) -> Result<Vec<f32>> {
-        let mut results = self.embed(&[text]).await?;
-        results
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("empty embedding response"))
+        self.embed_document(text).await
     }
 
     pub async fn is_available(&self) -> bool {
-        self.http
-            .get(format!("{}/api/tags", self.base_url))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        match self.backend {
+            EmbeddingBackend::Ollama => {
+                self.http
+                    .get(format!("{}/api/tags", self.base_url))
+                    .send()
+                    .await
+                    .map(|r| r.status().is_success())
+                    .unwrap_or(false)
+            }
+            EmbeddingBackend::OpenAI => {
+                // For Voyage/OpenAI, just check that we have an API key
+                self.api_key.is_some()
+            }
+        }
     }
 }
 
 #[derive(serde::Deserialize)]
-struct EmbedResponse {
+struct OllamaEmbedResponse {
     embeddings: Vec<Vec<f32>>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAIEmbedResponse {
+    data: Vec<OpenAIEmbedData>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAIEmbedData {
+    embedding: Vec<f32>,
+    index: usize,
 }
 
 // ── Chunking ─────────────────────────────────────────────────────────────
@@ -361,7 +465,7 @@ pub async fn get_prior_research(
     if !embed_client.is_available().await {
         return vec![];
     }
-    match embed_client.embed_single(query).await {
+    match embed_client.embed_query(query).await {
         Ok(query_emb) => db
             .search_embeddings(&query_emb, limit, project_id)
             .unwrap_or_default()

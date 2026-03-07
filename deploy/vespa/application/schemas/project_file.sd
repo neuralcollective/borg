@@ -38,12 +38,4 @@ schema project_file {
     }
   }
 
-  document-summary default {
-    summary project_id type long {}
-    summary task_id type long {}
-    summary file_path type string {}
-    summary title type string {}
-    summary content type string {}
-    summary indexed_at type string {}
-  }
 }

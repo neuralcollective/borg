@@ -190,7 +190,7 @@ impl VespaClient {
         });
         let resp = self
             .http
-            .put(url)
+            .post(url)
             .json(&body)
             .send()
             .await
@@ -306,7 +306,7 @@ impl VespaClient {
                 let body = body.clone();
                 let doc_id = doc_id.clone();
                 set.spawn(async move {
-                    let resp = client.put(&url).json(&body).send().await;
+                    let resp = client.post(&url).json(&body).send().await;
                     match resp {
                         Ok(r) if r.status().is_success() => Ok(()),
                         Ok(r) => {

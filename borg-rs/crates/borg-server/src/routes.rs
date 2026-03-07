@@ -1712,7 +1712,7 @@ pub(crate) async fn search_documents(
 
     // Semantic search (when requested and embeddings exist)
     if query.semantic && state.db.embedding_count() > 0 {
-        if let Ok(query_emb) = state.embed_client.embed_single(&query.q).await {
+        if let Ok(query_emb) = state.embed_client.embed_query(&query.q).await {
             if let Ok(sem_results) =
                 state
                     .db
@@ -3437,15 +3437,15 @@ async fn chunk_embed_and_index(
     }
     let metadata = ChunkMetadata {
         doc_type: detect_doc_type(title, mime_type, text),
-        jurisdiction: String::new(),
+        jurisdiction: crate::ingestion::detect_jurisdiction(text),
         privileged,
         mime_type: mime_type.to_string(),
     };
     let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
     for chunk in &chunks_text {
-        match embed_client.embed_single(chunk).await {
+        match embed_client.embed_document(chunk).await {
             Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
-            Err(_) => chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768])),
+            Err(_) => chunks_with_embeddings.push((chunk.clone(), embed_client.zero_embedding())),
         }
     }
     if let Err(e) = search
@@ -5838,9 +5838,9 @@ pub(crate) async fn borgsearch_reindex(
                 };
                 let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
                 for chunk in &chunks_text {
-                    match embed.embed_single(chunk).await {
+                    match embed.embed_document(chunk).await {
                         Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
-                        Err(_) => chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768])),
+                        Err(_) => chunks_with_embeddings.push((chunk.clone(), embed.zero_embedding())),
                     }
                 }
                 total_chunks += chunks_with_embeddings.len();
@@ -5919,7 +5919,7 @@ pub(crate) async fn agent_search(
 
     // Try chunk-level hybrid search first
     if let Some(search) = &state.search {
-        let query_emb = state.embed_client.embed_single(&query.q).await.ok();
+        let query_emb = state.embed_client.embed_query(&query.q).await.ok();
         let emb_ref = query_emb.as_deref();
 
         match search.search_chunks(&query.q, emb_ref, query.project_id, &filters, limit).await {
@@ -5974,7 +5974,7 @@ pub(crate) async fn agent_search(
     }
 
     if state.db.embedding_count() > 0 {
-        if let Ok(query_emb) = state.embed_client.embed_single(&query.q).await {
+        if let Ok(query_emb) = state.embed_client.embed_query(&query.q).await {
             if let Ok(sem) = state.db.search_embeddings(&query_emb, limit as usize, query.project_id) {
                 for r in sem.iter().filter(|r| r.score > 0.5) {
                     let already = results.iter().any(|(p, _, _, _)| *p == r.file_path);

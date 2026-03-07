@@ -1,0 +1,3 @@
+<validation-overrides>
+    <allow until="2026-03-14">field-type-change</allow>
+</validation-overrides>
