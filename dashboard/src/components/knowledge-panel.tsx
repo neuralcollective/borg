@@ -268,14 +268,15 @@ export function KnowledgePanel() {
       <div className="mx-auto w-full max-w-3xl px-6 py-8 space-y-8">
         {/* Header */}
         <div>
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1c1a17] ring-1 ring-amber-900/20">
-              <BookOpen className="h-5 w-5 text-[#6b6459]" />
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#1c1a17] ring-1 ring-amber-900/20">
+              <BookOpen className="h-6 w-6 text-amber-400/60" />
             </div>
             <div>
-              <h2 className="text-[18px] font-semibold text-[#e8e0d4]">Knowledge Base</h2>
+              <h2 className="text-[20px] font-semibold text-[#e8e0d4]">Global Knowledge Base</h2>
               <p className="text-[13px] text-[#6b6459]">
-                Files available to all agents at <code className="rounded bg-[#1c1a17] px-1.5 py-0.5 text-[12px] text-[#e8e0d4]">/knowledge/</code>
+                Documents here are available to the agent across all projects.
+                For project-specific documents, add them in the project view.
               </p>
             </div>
           </div>

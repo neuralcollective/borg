@@ -12,7 +12,6 @@ import { LogViewer } from "@/components/log-viewer";
 import { QueuePanel } from "@/components/queue-panel";
 import { ProposalsPanel } from "@/components/proposals-panel";
 import { ChatPanel } from "@/components/chat-panel";
-import { ChatDrawer } from "@/components/chat-drawer";
 import { ProjectsPanel } from "@/components/projects-panel";
 import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -367,8 +366,6 @@ function AppInner() {
             {view === "settings" && <SettingsPanel />}
           </div>
 
-          {/* Persistent chat drawer at bottom */}
-          <ChatDrawer />
         </div>
       </div>
     </div>
