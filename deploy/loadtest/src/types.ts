@@ -30,7 +30,10 @@ export interface SearchTestCase {
     | "multi_concept"
     | "agent_realistic"
     | "ranking"
-    | "negative";
+    | "negative"
+    | "chunk_precision"
+    | "synonym"
+    | "score_quality";
   query: string;
   filters?: {
     doc_type?: string;
@@ -50,6 +53,16 @@ export interface SearchTestCase {
   expect_result_type?: string;
   // minimum number of results expected (for filter verification)
   min_results?: number;
+  // terms that must appear in returned chunk content (not just file name)
+  expected_chunk_terms?: string[];
+  // minimum fraction of top results whose content must contain expected_chunk_terms
+  min_chunk_precision?: number;
+  // terms that should NOT appear in majority of returned chunks (wrong-section detection)
+  rejected_chunk_terms?: string[];
+  // max fraction of results allowed to contain rejected terms
+  max_rejected_fraction?: number;
+  // minimum score threshold for top result
+  min_top_score?: number;
 }
 
 export interface SearchResult {
@@ -74,6 +87,7 @@ export interface TestConfig {
   projectId: number;
   topK: number;
   timeoutMs: number;
+  latencySlaMsP95?: number;
 }
 
 export interface TestResult {
@@ -87,6 +101,9 @@ export interface TestResult {
   rank_of_primary?: number;
   latency_ms: number;
   details?: string;
+  chunk_precision?: number;
+  reciprocal_rank?: number;
+  top_score?: number;
 }
 
 export interface IngestMetrics {

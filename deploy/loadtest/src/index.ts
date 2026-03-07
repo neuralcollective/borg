@@ -157,9 +157,18 @@ async function cmdTest(opts: ReturnType<typeof parseOptions>, projectId?: number
     );
   }
   console.log();
+  console.log(`  Quality metrics:`);
+  console.log(`    MRR:              ${summary.mrr.toFixed(3)}`);
+  console.log(`    Chunk precision:  ${(summary.avgChunkPrecision * 100).toFixed(0)}%`);
+  console.log();
   console.log(`  Latency:`);
   console.log(`    Average: ${summary.avgLatencyMs.toFixed(0)}ms`);
   console.log(`    P95:     ${summary.p95LatencyMs.toFixed(0)}ms`);
+  console.log(`    P95 (steady): ${summary.p95SteadyMs.toFixed(0)}ms`);
+  if (summary.settlingQueries > 0) {
+    console.log(`    Settling: ${summary.settlingQueries} queries >10s (Vespa HNSW)`);
+  }
+  console.log(`    SLA:     ${summary.latencySlaPassed ? "PASS" : "FAIL"} (p95 steady < 500ms)`);
   console.log();
 
   // write detailed results
