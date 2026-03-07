@@ -160,12 +160,22 @@ function AppInner() {
     setView((curr) => (curr === "tasks" ? defaultView : curr));
   }, [defaultView]);
 
+  const isGlobalLawMode = useMemo(() => {
+    const repos = status?.watched_repos;
+    if (!repos?.length) return false;
+    const primary = repos.find((r) => r.is_self) ?? repos[0];
+    return primary.mode === "lawborg" || primary.mode === "legal";
+  }, [status]);
+
+  const LAW_HIDDEN_KEYS = ["queue", "proposals", "logs"];
+
   const navItems = useMemo(
     () => ALL_NAV_ITEMS.filter((item) => {
       if (domain.hiddenNavKeys.includes(item.key)) return false;
+      if (isGlobalLawMode && LAW_HIDDEN_KEYS.includes(item.key)) return false;
       return uiMode === "advanced" || item.minimalVisible;
     }),
-    [uiMode, domain]
+    [uiMode, domain, isGlobalLawMode]
   );
 
   const handleSelectTask = useCallback((id: number) => setSelectedTaskId(id), []);
@@ -230,7 +240,7 @@ function AppInner() {
           className="flex shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
-          {MOBILE_TABS.map(({ key, label, Icon }) => (
+          {MOBILE_TABS.filter((t) => !(isGlobalLawMode && t.key === "queue")).map(({ key, label, Icon }) => (
             <button
               key={key}
               onClick={() => setMobileTab(key)}
