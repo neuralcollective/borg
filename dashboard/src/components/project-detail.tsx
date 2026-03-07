@@ -54,7 +54,7 @@ function useActiveFiles(tasks: ProjectTask[]): { activeFiles: Set<string>; activ
   return { activeFiles, activeTaskId: activeTask?.id ?? null };
 }
 
-interface MatterDetailProps {
+interface ProjectDetailProps {
   projectId: number;
   onDocumentSelect?: (doc: ProjectDocument) => void;
   onDelete?: () => void;
@@ -89,9 +89,9 @@ function formatRemaining(ms: number): string {
   return `${mins}m`;
 }
 
-// ── Matter header ─────────────────────────────────────────────────────────────
+// ── Project header ─────────────────────────────────────────────────────────────
 
-function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () => void }) {
+function ProjectHeader({ project, onDelete }: { project: Project; onDelete?: () => void }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportingAll, setExportingAll] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
@@ -1238,7 +1238,7 @@ const TABS: { key: TabKey; label: string }[] = [
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDetailProps) {
+export function ProjectDetail({ projectId, onDocumentSelect, onDelete }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetail(projectId);
   const [activeTab, setActiveTab] = useState<TabKey>("activity");
   const deleteMut = useDeleteProject();
@@ -1250,14 +1250,14 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
   if (isLoading || !project) {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-zinc-400">
-        Loading matter...
+        Loading project...
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <MatterHeader project={project} onDelete={handleDelete} />
+      <ProjectHeader project={project} onDelete={handleDelete} />
       <div className="shrink-0 flex gap-0 border-b border-white/[0.07] px-5">
         {TABS.map((tab) => (
           <button

@@ -77,7 +77,7 @@ const ALL_NAV_ITEMS = [
 
 const MOBILE_TABS = [
   { key: "tasks" as const, label: "Tasks", Icon: ListTodo },
-  { key: "projects" as const, label: "Matters", Icon: FolderOpen },
+  { key: "projects" as const, label: "Projects", Icon: FolderOpen },
   { key: "queue" as const, label: "Queue", Icon: GitMerge },
   { key: "chat" as const, label: "Chat", Icon: MessageSquare },
 ] as const;

@@ -27,7 +27,7 @@ import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useVocabulary } from "@/lib/vocabulary";
 import { useDashboardMode } from "@/lib/dashboard-mode";
-import { MatterDetail } from "./matter-detail";
+import { ProjectDetail } from "./project-detail";
 import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
 import { RedlineViewer } from "./viewers/redline-viewer";
 import { useProjectDocumentVersions } from "@/lib/api";
@@ -386,7 +386,7 @@ export function ProjectsPanel() {
       const opts = newProjectJurisdiction.trim()
         ? { jurisdiction: newProjectJurisdiction.trim() }
         : {};
-      const effectiveMode = !isSWE ? "lawborg" : (newProjectMode || "general");
+      const effectiveMode = isLegal ? "lawborg" : isSWE ? (newProjectMode || "general") : "general";
       const created = await createProject(name, effectiveMode, opts);
       setNewProjectName("");
       setNewProjectJurisdiction("");
@@ -839,7 +839,7 @@ async function uploadChunkQueue(
               defaultTemplateId={undefined}
             />
           ) : (
-            <MatterDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} onDelete={() => setSelectedProjectId(null)} />
+            <ProjectDetail projectId={selectedProject.id} onDocumentSelect={setSelectedDoc} onDelete={() => setSelectedProjectId(null)} />
           )
         ) : (
           <div className="flex flex-col h-full overflow-y-auto">
