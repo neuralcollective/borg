@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Mic, MicOff, ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { Send, Mic, MicOff, ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { ChatMarkdown } from "./chat-markdown";
-import { authHeaders, tokenReady } from "@/lib/api";
+import { authHeaders, tokenReady, useProjects } from "@/lib/api";
 import { useChatEvents } from "@/lib/use-chat-events";
 import { parseStreamEvents, type TermLine } from "@/lib/stream-utils";
 import { TimelineItem } from "./borging";
@@ -27,11 +27,6 @@ interface ChatMessage {
   thread?: string;
 }
 
-interface ChatThread {
-  id: string;
-  last_ts: string;
-  message_count: number;
-}
 
 const toolIconMap: Record<string, React.ReactNode> = {
   Read: <FileText className="w-3.5 h-3.5 text-amber-400/70" />,
@@ -51,8 +46,13 @@ function getToolIcon(tool?: string): React.ReactNode {
   return toolIconMap[tool] || <Circle className="w-3 h-3 text-[#6b6459]" />;
 }
 
-function threadLabel(id: string): string {
-  if (id === "web:dashboard") return "Main";
+function threadLabel(id: string, projects: { id: number; name: string }[]): string {
+  if (id === "web:dashboard") return "Global";
+  const match = id.match(/^web:project-(\d+)$/);
+  if (match) {
+    const proj = projects.find((p) => p.id === Number(match[1]));
+    return proj?.name ?? `Project #${match[1]}`;
+  }
   return id.replace("web:", "");
 }
 
@@ -61,11 +61,11 @@ interface ChatDrawerProps {
 }
 
 export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps) {
+  const { data: projects = [] } = useProjects();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [thread, setThread] = useState(defaultThread);
-  const [threads, setThreads] = useState<ChatThread[]>([]);
   const [showThreads, setShowThreads] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
@@ -89,22 +89,12 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
     });
   }, [thread]);
 
-  const fetchThreads = useCallback(() => {
-    tokenReady.then(() => {
-      fetch("/api/chat/threads", { headers: authHeaders() })
-        .then((r) => r.json())
-        .then((t: ChatThread[]) => setThreads(t))
-        .catch(() => {});
-    });
-  }, []);
-
   useEffect(() => {
     setMessages([]);
     setStreamEvents([]);
     lastTsRef.current = 0;
     fetchMessages();
-    fetchThreads();
-  }, [thread, fetchMessages, fetchThreads]);
+  }, [thread, fetchMessages]);
 
   const handleSseMessage = useCallback((msg: any) => {
     // Handle stream events (agentic breakdown)
@@ -224,12 +214,6 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
     }
   }
 
-  function handleNewThread() {
-    const id = `web:thread-${Date.now()}`;
-    setThread(id);
-    setShowThreads(false);
-  }
-
   const dictation = useDictation(input, setInput);
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -309,42 +293,49 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
       <div className="shrink-0 bg-[#0f0e0c]/90 backdrop-blur-sm">
         <div className="mx-auto max-w-3xl px-4 py-3">
           <div className="flex items-center gap-2">
-            {/* Thread selector */}
+            {/* Scope selector */}
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setShowThreads(!showThreads)}
                 className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-[#6b6459] transition-colors hover:text-[#9c9486]"
-                title="Switch thread"
+                title="Switch scope"
               >
-                <span className="max-w-[60px] truncate">{threadLabel(thread)}</span>
+                <span className="max-w-[80px] truncate">{threadLabel(thread, projects)}</span>
                 <ChevronDown className="h-3 w-3" />
               </button>
               {showThreads && (
-                <div className="absolute left-0 bottom-full z-50 mb-2 min-w-[180px] overflow-hidden rounded-xl border border-[#2a2520] bg-[#1c1a17] shadow-2xl">
-                  <div className="p-1.5 max-h-[200px] overflow-y-auto">
-                    {threads.map((t) => (
-                      <button
-                        key={t.id}
-                        onClick={() => { setThread(t.id); setShowThreads(false); }}
-                        className={cn(
-                          "flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-[#232019]",
-                          t.id === thread ? "bg-[#232019] text-[#e8e0d4]" : "text-[#9c9486]"
-                        )}
-                      >
-                        <span className="truncate">{threadLabel(t.id)}</span>
-                        <span className="ml-2 text-[10px] tabular-nums text-[#6b6459]">{t.message_count}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="border-t border-[#2a2520] p-1.5">
+                <div className="absolute left-0 bottom-full z-50 mb-2 min-w-[200px] overflow-hidden rounded-xl border border-[#2a2520] bg-[#1c1a17] shadow-2xl">
+                  <div className="p-1.5">
                     <button
-                      onClick={handleNewThread}
-                      className="flex w-full items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] text-amber-400 transition-colors hover:bg-amber-500/10"
+                      onClick={() => { setThread("web:dashboard"); setShowThreads(false); }}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-[#232019]",
+                        thread === "web:dashboard" ? "bg-[#232019] text-[#e8e0d4]" : "text-[#9c9486]"
+                      )}
                     >
-                      <Plus className="h-3 w-3" />
-                      New Thread
+                      Global
                     </button>
                   </div>
+                  {projects.length > 0 && (
+                    <div className="border-t border-[#2a2520] p-1.5 max-h-[200px] overflow-y-auto">
+                      {projects.map((p) => {
+                        const tid = `web:project-${p.id}`;
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => { setThread(tid); setShowThreads(false); }}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-[#232019]",
+                              thread === tid ? "bg-[#232019] text-[#e8e0d4]" : "text-[#9c9486]"
+                            )}
+                          >
+                            <FolderOpen className="h-3 w-3 shrink-0 text-[#6b6459]" />
+                            <span className="truncate">{p.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

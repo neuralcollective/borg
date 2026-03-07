@@ -12,6 +12,7 @@ import { LogViewer } from "@/components/log-viewer";
 import { QueuePanel } from "@/components/queue-panel";
 import { ProposalsPanel } from "@/components/proposals-panel";
 import { ChatPanel } from "@/components/chat-panel";
+import { ChatDrawer } from "@/components/chat-drawer";
 import { ProjectsPanel } from "@/components/projects-panel";
 import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -62,8 +63,8 @@ function useIsMobile() {
 }
 
 const ALL_NAV_ITEMS = [
-  { key: "tasks" as const, label: "Tasks", Icon: ListTodo, minimalVisible: true },
   { key: "projects" as const, label: "Projects", Icon: FolderOpen, minimalVisible: true },
+  { key: "tasks" as const, label: "Tasks", Icon: ListTodo, minimalVisible: true },
   { key: "creator" as const, label: "Creator", Icon: Wrench, minimalVisible: true },
   { key: "proposals" as const, label: "Proposals", Icon: Lightbulb, minimalVisible: true },
   { key: "logs" as const, label: "Logs", Icon: Terminal, minimalVisible: false },
@@ -86,13 +87,8 @@ function detectDefaultMode(domain: { defaultMode: "minimal" | "advanced" }, repo
   return domain.defaultMode;
 }
 
-function detectDefaultView(domain: { defaultView: "tasks" | "projects" }, repos?: { mode: string; is_self: boolean }[]): View {
-  if (!repos || repos.length === 0) return domain.defaultView;
-  const primary = repos.find((r) => r.is_self) ?? repos[0];
-  if (["lawborg", "legal"].includes(primary.mode)) {
-    return "projects";
-  }
-  return domain.defaultView;
+function detectDefaultView(_domain: { defaultView: "tasks" | "projects" }, _repos?: { mode: string; is_self: boolean }[]): View {
+  return "projects";
 }
 
 export default function App() {
@@ -144,7 +140,7 @@ function AppWithDomain() {
 function AppInner() {
   const domain = useDomain();
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
-  const [view, setView] = useState<View>("tasks");
+  const [view, setView] = useState<View>("projects");
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<MobileTab>("tasks");
   const [mobileBottomTab, setMobileBottomTab] = useState<"queue" | "proposals">("proposals");
@@ -156,7 +152,7 @@ function AppInner() {
   const sidebarAlert = !!status?.guardrail_alert;
 
   useEffect(() => {
-    setView((curr) => (curr === "tasks" ? defaultView : curr));
+    setView((curr) => (curr === "projects" || curr === "tasks" ? defaultView : curr));
   }, [defaultView]);
 
   const isGlobalLawMode = useMemo(() => {
@@ -350,7 +346,7 @@ function AppInner() {
                   {selectedTaskId !== null ? (
                     <TaskDetail taskId={selectedTaskId} onBack={handleBackFromTask} />
                   ) : (
-                    <EmptyState status={status} />
+                    <EmptyState status={status} isLawMode={isGlobalLawMode} />
                   )}
                 </div>
               </div>
@@ -361,18 +357,18 @@ function AppInner() {
             {view === "proposals" && <ProposalsPanel repoFilter={repoFilter} />}
             {view === "logs" && <LogViewer logs={logs} />}
             {view === "queue" && <QueuePanel repoFilter={repoFilter} />}
-            {view === "chat" && <ChatPanel />}
             {view === "knowledge" && <KnowledgePanel />}
             {view === "settings" && <SettingsPanel />}
           </div>
 
+          <ChatDrawer />
         </div>
       </div>
     </div>
   );
 }
 
-function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null }) {
+function EmptyState({ status, isLawMode }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null; isLawMode?: boolean }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-amber-500/[0.04] to-amber-500/[0.02] ring-1 ring-amber-900/15">
@@ -382,7 +378,7 @@ function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks:
         <p className="text-[15px] font-medium text-[#9c9486]">Select a task to view details</p>
         <p className="mt-2 text-[13px] text-[#6b6459]">or create a new one from the header</p>
       </div>
-      {status && (
+      {status && !isLawMode && (
         <div className="flex gap-8 mt-2">
           <StatPill value={status.active_tasks} label="Active" color="text-blue-400" />
           <StatPill value={status.merged_tasks} label="Merged" color="text-emerald-400" />
