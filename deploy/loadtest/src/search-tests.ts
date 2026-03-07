@@ -11,6 +11,20 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
   const filings = groundTruthDocs.filter((d) => d.doc_type === "filing");
   const statutes = groundTruthDocs.filter((d) => d.doc_type === "statute");
 
+  // For non-unique queries, include ALL matching docs as expected_hits.
+  // min_recall is set so that at least `minHits` of the matches must appear in results,
+  // which scales correctly from 200-doc to 500k-doc corpora.
+  function expectSome(matches: GeneratedDoc[], minHits: number = 2): {
+    expected_hits: string[];
+    min_recall: number;
+  } {
+    const all = matches.map((d) => d.file_name);
+    return {
+      expected_hits: all,
+      min_recall: Math.min(1.0, minHits / all.length),
+    };
+  }
+
   // ─── 1. EXACT TERM RETRIEVAL ───────────────────────────────────────
   // These use unique identifiers or very specific terms.
 
@@ -37,8 +51,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: `Exact: entity name "${entityName}"`,
       category: "exact_term",
       query: entityName,
-      expected_hits: entityDocs.slice(0, 5).map((d) => d.file_name),
-      min_recall: 0.4,
+      ...expectSome(entityDocs, 2),
       limit: 20,
     });
   }
@@ -50,8 +63,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Exact: Revlon case citation",
       category: "exact_term",
       query: "Revlon MacAndrews Forbes Holdings 506 A.2d 173",
-      expected_hits: docsWithRevlon.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(docsWithRevlon, 1),
       limit: 20,
     });
   }
@@ -63,8 +75,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Exact: force majeure clauses",
       category: "exact_term",
       query: "FORCE MAJEURE acts of God pandemic epidemic",
-      expected_hits: contractsWithForce.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(contractsWithForce, 2),
       limit: 20,
     });
   }
@@ -78,11 +89,10 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
   );
   if (contractsWithLiabilityCap.length > 0) {
     tests.push({
-      name: "Semantic: liability cap → limitation of liability",
+      name: "Semantic: exposure limits → limitation of liability",
       category: "semantic",
-      query: "What is the liability cap and are there carveouts for fraud?",
-      expected_hits: contractsWithLiabilityCap.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      query: "What limits exist on the total liability exposure under the agreement?",
+      ...expectSome(contractsWithLiabilityCap, 2),
       limit: 20,
     });
   }
@@ -93,8 +103,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Semantic: ending deal early → termination provisions",
       category: "semantic",
       query: "How can either party exit the agreement before it expires?",
-      expected_hits: contractsWithTermination.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(contractsWithTermination, 2),
       limit: 20,
     });
   }
@@ -107,22 +116,18 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Semantic: keeping secrets → confidentiality",
       category: "semantic",
       query: "obligations around protecting proprietary business information from disclosure",
-      expected_hits: contractsWithConfidentiality.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(contractsWithConfidentiality, 2),
       limit: 20,
     });
   }
 
-  const filingsWithDamages = filings.filter(
-    (d) => d.body.includes("PRAYER FOR RELIEF") && d.body.includes("compensatory damages"),
-  );
-  if (filingsWithDamages.length > 0) {
+  const contractsWithAssignment = contracts.filter((d) => d.body.includes("ASSIGNMENT"));
+  if (contractsWithAssignment.length > 0) {
     tests.push({
-      name: "Semantic: suing for damages → prayer for relief",
+      name: "Semantic: transferring rights → assignment provisions",
       category: "semantic",
-      query: "What monetary relief is being sought in the lawsuit?",
-      expected_hits: filingsWithDamages.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      query: "Can a party transfer or assign its rights and obligations under the contract?",
+      ...expectSome(contractsWithAssignment, 2),
       limit: 20,
     });
   }
@@ -197,8 +202,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Multi: indemnification + liability cap",
       category: "multi_concept",
       query: "indemnification obligations and limitation of liability cap carveouts",
-      expected_hits: contractsWithBoth.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(contractsWithBoth, 2),
       limit: 20,
     });
   }
@@ -211,8 +215,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Multi: breach + damages + injunctive relief",
       category: "multi_concept",
       query: "breach of contract damages injunctive relief preliminary injunction",
-      expected_hits: filingsWithInjunction.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(filingsWithInjunction, 2),
       limit: 20,
     });
   }
@@ -225,37 +228,34 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Multi: securities fraud + scienter + 10b-5",
       category: "multi_concept",
       query: "securities fraud scienter material misrepresentation Rule 10b-5",
-      expected_hits: docsWithSecurities.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(docsWithSecurities, 1),
       limit: 20,
     });
   }
 
   // ─── 5. AGENT-REALISTIC QUERIES ───────────────────────────────────
 
-  tests.push({
-    name: "Agent: force majeure provisions",
-    category: "agent_realistic",
-    query: "force majeure clause pandemic epidemic natural disaster acts of God",
-    expected_hits: contracts
-      .filter((d) => d.body.includes("FORCE MAJEURE"))
-      .slice(0, 5)
-      .map((d) => d.file_name),
-    min_recall: 0.4,
-    limit: 20,
-  });
+  const fmContracts = contracts.filter((d) => d.body.includes("FORCE MAJEURE"));
+  if (fmContracts.length > 0) {
+    tests.push({
+      name: "Agent: force majeure provisions",
+      category: "agent_realistic",
+      query: "force majeure clause pandemic epidemic natural disaster acts of God",
+      ...expectSome(fmContracts, 2),
+      limit: 20,
+    });
+  }
 
-  tests.push({
-    name: "Agent: insurance requirements",
-    category: "agent_realistic",
-    query: "insurance coverage requirements commercial general liability professional errors omissions",
-    expected_hits: contracts
-      .filter((d) => d.body.includes("INSURANCE"))
-      .slice(0, 5)
-      .map((d) => d.file_name),
-    min_recall: 0.4,
-    limit: 20,
-  });
+  const insuranceContracts = contracts.filter((d) => d.body.includes("INSURANCE"));
+  if (insuranceContracts.length > 0) {
+    tests.push({
+      name: "Agent: insurance requirements",
+      category: "agent_realistic",
+      query: "insurance coverage requirements commercial general liability professional errors omissions",
+      ...expectSome(insuranceContracts, 2),
+      limit: 20,
+    });
+  }
 
   const filingsWithSJ = filings.filter(
     (d) => d.body.includes("Summary Judgment") || d.body.includes("summary judgment"),
@@ -265,23 +265,21 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Agent: summary judgment motions",
       category: "agent_realistic",
       query: "motion for summary judgment genuine dispute material fact Celotex",
-      expected_hits: filingsWithSJ.slice(0, 3).map((d) => d.file_name),
-      min_recall: 0.33,
+      ...expectSome(filingsWithSJ, 2),
       limit: 20,
     });
   }
 
-  tests.push({
-    name: "Agent: governing law clauses",
-    category: "agent_realistic",
-    query: "governing law choice of law exclusive jurisdiction dispute resolution",
-    expected_hits: contracts
-      .filter((d) => d.body.includes("GOVERNING LAW"))
-      .slice(0, 5)
-      .map((d) => d.file_name),
-    min_recall: 0.4,
-    limit: 20,
-  });
+  const govLawContracts = contracts.filter((d) => d.body.includes("GOVERNING LAW"));
+  if (govLawContracts.length > 0) {
+    tests.push({
+      name: "Agent: governing law clauses",
+      category: "agent_realistic",
+      query: "governing law choice of law exclusive jurisdiction dispute resolution",
+      ...expectSome(govLawContracts, 2),
+      limit: 20,
+    });
+  }
 
   const dueDiligenceDocs = groundTruthDocs.filter(
     (d) => d.body.includes("due diligence") || d.body.includes("DUE DILIGENCE"),
@@ -291,8 +289,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Agent: due diligence findings",
       category: "agent_realistic",
       query: "due diligence findings material issues regulatory compliance",
-      expected_hits: dueDiligenceDocs.slice(0, 5).map((d) => d.file_name),
-      min_recall: 0.4,
+      ...expectSome(dueDiligenceDocs, 2),
       limit: 20,
     });
   }
@@ -307,7 +304,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Ranking: NDA contract in top results",
       category: "ranking",
       query: "non-disclosure agreement confidential information mutual NDA",
-      expected_hits: ndaContracts.slice(0, 1).map((d) => d.file_name),
+      ...expectSome(ndaContracts, 1),
       top_rank: 10,
       limit: 20,
     });
@@ -321,7 +318,7 @@ export function buildTestCases(groundTruthDocs: GeneratedDoc[]): SearchTestCase[
       name: "Ranking: patent statute for patent query",
       category: "ranking",
       query: "patent infringement 35 U.S.C. 271",
-      expected_hits: patentStatutes.slice(0, 1).map((d) => d.file_name),
+      ...expectSome(patentStatutes, 1),
       top_rank: 10,
       limit: 20,
     });
@@ -428,7 +425,8 @@ export async function runSearchTests(
           const missed = tc.expected_hits.filter(
             (expected) => !actualHits.some((hit) => hit.includes(expected) || expected.includes(hit)),
           );
-          details += `Recall ${(recall * 100).toFixed(0)}% < ${(minRecall * 100).toFixed(0)}% threshold (${found.length}/${tc.expected_hits.length}). Missing: ${missed.join(", ")}. `;
+          const sample = missed.length > 5 ? missed.slice(0, 5).join(", ") + ` +${missed.length - 5} more` : missed.join(", ");
+          details += `Recall ${(recall * 100).toFixed(0)}% < ${(minRecall * 100).toFixed(0)}% threshold (${found.length}/${tc.expected_hits.length}). Missing: ${sample}. `;
         } else {
           details += `Recall: ${(recall * 100).toFixed(0)}% (${found.length}/${tc.expected_hits.length}). `;
         }
@@ -445,16 +443,22 @@ export async function runSearchTests(
         }
       }
 
-      // Check ranking
+      // Check ranking — any expected_hit within top_rank passes
       if (tc.top_rank !== undefined && tc.expected_hits.length > 0) {
-        const primaryExpected = tc.expected_hits[0];
-        const idx = actualHits.findIndex(
-          (hit) => hit.includes(primaryExpected) || primaryExpected.includes(hit),
-        );
-        rankOfPrimary = idx === -1 ? undefined : idx + 1;
-        if (rankOfPrimary === undefined || rankOfPrimary > tc.top_rank) {
+        let bestRank: number | undefined;
+        for (const expected of tc.expected_hits) {
+          const idx = actualHits.findIndex(
+            (hit) => hit.includes(expected) || expected.includes(hit),
+          );
+          if (idx !== -1) {
+            const rank = idx + 1;
+            if (bestRank === undefined || rank < bestRank) bestRank = rank;
+          }
+        }
+        rankOfPrimary = bestRank;
+        if (bestRank === undefined || bestRank > tc.top_rank) {
           passed = false;
-          details += `Primary ranked ${rankOfPrimary ?? "not found"}, expected top ${tc.top_rank}. `;
+          details += `Best match ranked ${bestRank ?? "not found"}, expected top ${tc.top_rank}. `;
         }
       }
     } catch (err) {

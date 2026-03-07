@@ -256,10 +256,7 @@ export async function ingestCorpus(config: IngestConfig): Promise<{
 
       const docs = generateBatch(startId, count);
 
-      // keep first 200 docs as ground truth for search tests
-      if (startId < 200) {
-        groundTruthDocs.push(...docs.slice(0, Math.min(count, 200 - startId)));
-      }
+      groundTruthDocs.push(...docs);
 
       const zipPath = join(tmpDir, `shard-${shard}.zip`);
       const zipSize = await createZipShard(docs, zipPath);

@@ -128,8 +128,7 @@ async function cmdTest(opts: ReturnType<typeof parseOptions>, projectId?: number
   }
 
   if (!groundTruthDocs) {
-    // regenerate ground truth docs from IDs
-    groundTruthDocs = generateBatch(0, 200);
+    groundTruthDocs = generateBatch(0, opts.files);
   }
 
   const testCases = buildTestCases(groundTruthDocs);
