@@ -182,11 +182,6 @@ pub(crate) struct ExportQuery {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct FocusBody {
-    pub text: String,
-}
-
-#[derive(Deserialize)]
 pub(crate) struct RepoQuery {
     pub repo: Option<String>,
 }
@@ -4108,35 +4103,6 @@ pub(crate) async fn put_user_settings(
         updated += 1;
     }
     Ok(Json(json!({ "updated": updated })))
-}
-
-// Focus
-
-pub(crate) async fn get_focus(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, StatusCode> {
-    let text = state
-        .db
-        .get_config("focus")
-        .map_err(internal)?
-        .unwrap_or_default();
-    let active = !text.is_empty();
-    Ok(Json(json!({ "text": text, "active": active })))
-}
-
-pub(crate) async fn post_focus(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<FocusBody>,
-) -> Result<StatusCode, StatusCode> {
-    state.db.set_config("focus", &body.text).map_err(internal)?;
-    Ok(StatusCode::OK)
-}
-
-pub(crate) async fn delete_focus(
-    State(state): State<Arc<AppState>>,
-) -> Result<StatusCode, StatusCode> {
-    state.db.set_config("focus", "").map_err(internal)?;
-    Ok(StatusCode::OK)
 }
 
 // SSE logs — replays ring buffer history then streams live events

@@ -2,7 +2,6 @@ import { useStatus } from "@/lib/api";
 import { useUIMode } from "@/lib/ui-mode";
 import { useDomain } from "@/lib/domain";
 import { TaskCreator } from "./task-creator";
-import { FocusPicker } from "./focus-picker";
 import { BorgLogo } from "./borg-logo";
 import { repoName } from "@/lib/types";
 
@@ -125,7 +124,6 @@ export function Header({
       )}
 
       <div className="ml-auto flex items-center gap-4">
-        <FocusPicker />
         {multiRepo && onRepoFilterChange && (
           <select
             value={repoFilter ?? ""}

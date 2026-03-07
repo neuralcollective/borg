@@ -975,10 +975,6 @@ async fn main() -> anyhow::Result<()> {
         // Settings
         .route("/api/settings", get(routes::get_settings))
         .route("/api/settings", put(routes::put_settings))
-        // Focus
-        .route("/api/focus", get(routes::get_focus))
-        .route("/api/focus", post(routes::post_focus))
-        .route("/api/focus", delete(routes::delete_focus))
         // SSE logs
         .route("/api/logs", get(routes::sse_logs))
         // Events (queryable log)
