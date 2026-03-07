@@ -139,6 +139,11 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
+    if state.config.disable_auth {
+        request.extensions_mut().insert(AuthUser::system_admin());
+        return next.run(request).await;
+    }
+
     // Try JWT first
     if let Some(token) = extract_bearer(request.headers()) {
         if let Some(claims) = verify_jwt(token, &state.jwt_secret) {
@@ -173,10 +178,19 @@ pub async fn get_token(State(state): State<Arc<AppState>>) -> Response {
 
 // GET /api/auth/status — whether setup is needed, and user count
 pub async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
+    if state.config.disable_auth {
+        return Json(json!({
+            "needs_setup": false,
+            "user_count": 1,
+            "auth_disabled": true,
+        }))
+        .into_response();
+    }
     let user_count = state.db.count_users().unwrap_or(0);
     Json(json!({
         "needs_setup": user_count == 0,
         "user_count": user_count,
+        "auth_disabled": false,
     }))
     .into_response()
 }

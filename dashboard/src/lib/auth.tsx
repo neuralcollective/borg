@@ -39,6 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Check if users exist
       const status = await fetchAuthStatus();
+      if (status.auth_disabled) {
+        setUser({ id: 0, username: "admin", display_name: "Admin", is_admin: true });
+        setReady(true);
+        return;
+      }
       if (status.needs_setup) {
         setNeedsSetup(true);
         setReady(true);

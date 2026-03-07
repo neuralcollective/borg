@@ -78,6 +78,7 @@ export function authHeaders(): Record<string, string> {
 export interface AuthStatus {
   needs_setup: boolean;
   user_count: number;
+  auth_disabled?: boolean;
 }
 
 export interface AuthUser {

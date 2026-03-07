@@ -3142,7 +3142,7 @@ async fn process_uploaded_zip(
 ) -> anyhow::Result<String> {
     let assembled_path_owned = assembled_path.to_string();
     let state_for_zip = state.clone();
-    let (imported, deduped) = tokio::task::spawn_blocking(move || -> anyhow::Result<(i64, i64)> {
+    let (imported, deduped, pending_rows) = tokio::task::spawn_blocking(move || -> anyhow::Result<(i64, i64, Vec<ProjectFileRow>)> {
         let handle = tokio::runtime::Handle::current();
         let tmp_dir = std::path::Path::new(&state_for_zip.config.data_dir).join("uploads/tmp");
         std::fs::create_dir_all(&tmp_dir)?;
@@ -3150,6 +3150,8 @@ async fn process_uploaded_zip(
         let mut archive = zip::ZipArchive::new(file)?;
         let mut imported = 0i64;
         let mut deduped = 0i64;
+        let queue_disabled = matches!(state_for_zip.ingestion_queue.as_ref(), IngestionQueue::Disabled);
+        let mut pending_rows: Vec<ProjectFileRow> = Vec::new();
 
         for idx in 0..archive.len() {
             let mut entry = archive.by_index(idx)?;
@@ -3220,20 +3222,25 @@ async fn process_uploaded_zip(
             )) {
                 tracing::warn!("failed to enqueue zip file ingest: {e}");
             }
-            if matches!(
-                state_for_zip.ingestion_queue.as_ref(),
-                IngestionQueue::Disabled
-            ) {
+            if queue_disabled {
                 if let Ok(Some(row)) = state_for_zip.db.get_project_file(project_id, file_id) {
-                    handle.block_on(extract_and_index_project_file(state_for_zip.as_ref(), &row));
+                    pending_rows.push(row);
                 }
             }
             imported += 1;
         }
-        Ok((imported, deduped))
+        Ok((imported, deduped, pending_rows))
     })
     .await
     .map_err(|e| anyhow::anyhow!("zip extraction join error: {e}"))??;
+
+    // Process extracted files concurrently (embedding + Vespa indexing)
+    if !pending_rows.is_empty() {
+        let state2 = state.clone();
+        tokio::spawn(async move {
+            process_files_concurrently(&state2, pending_rows).await;
+        });
+    }
     Ok(format!(
         "zip://session/{session_id}/imported/{imported}/deduped/{deduped}"
     ))
@@ -3406,13 +3413,10 @@ pub(crate) async fn upload_project_files(
     if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled)
         && !uploaded_rows.is_empty()
     {
-        // Extract text from uploaded files in background (legacy mode when queue is disabled)
         let state2 = Arc::clone(&state);
         let rows = uploaded_rows;
         tokio::spawn(async move {
-            for file in rows {
-                extract_and_index_project_file(state2.as_ref(), &file).await;
-            }
+            process_files_concurrently(&state2, rows).await;
         });
     }
 
@@ -3450,6 +3454,25 @@ async fn chunk_embed_and_index(
     {
         tracing::warn!("chunk index failed for file {file_id}: {e}");
     }
+}
+
+/// Process multiple files concurrently: extract text, batch embed, index to Vespa.
+async fn process_files_concurrently(state: &Arc<AppState>, files: Vec<ProjectFileRow>) {
+    let concurrency: usize = std::env::var("INGEST_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut set = tokio::task::JoinSet::new();
+    for file in files {
+        let state = Arc::clone(state);
+        let sem = Arc::clone(&sem);
+        set.spawn(async move {
+            let _permit = sem.acquire().await;
+            extract_and_index_project_file(&state, &file).await;
+        });
+    }
+    while set.join_next().await.is_some() {}
 }
 
 async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow) {

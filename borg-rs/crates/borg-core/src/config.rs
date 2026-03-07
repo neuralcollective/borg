@@ -139,6 +139,9 @@ pub struct Config {
     // Product focus
     /// Enable non-core domain modes (health/web/crew/sales/data/chef/build/medwrite).
     pub experimental_domains: bool,
+
+    /// Disable dashboard auth entirely (not recommended).
+    pub disable_auth: bool,
 }
 
 impl Config {
@@ -1008,6 +1011,7 @@ impl Config {
             vespa_namespace: get_str("VESPA_NAMESPACE", &dotenv, "borg"),
             vespa_document_type: get_str("VESPA_DOCUMENT_TYPE", &dotenv, "project_file"),
             experimental_domains: get_bool("EXPERIMENTAL_DOMAINS", &dotenv, false),
+            disable_auth: get_bool("DISABLE_AUTH", &dotenv, false),
         })
     }
 }

@@ -30,8 +30,13 @@ export function LoginPage() {
         <div className="flex flex-col items-center gap-4">
           <div className="relative h-16 w-16">
             <div className="absolute inset-0 rounded-full bg-amber-500/20 blur-xl" />
-            <div className="relative h-16 w-16">
+            <div className="borg-logo relative h-16 w-16 bg-[#1c1a17] rounded-2xl">
               <BorgLogo expanded />
+              <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
+                {Array.from("BORG").map((c, i) => (
+                  <span key={i} className="flex items-center justify-center text-[22px]">{c}</span>
+                ))}
+              </div>
             </div>
           </div>
           <h1 className="text-xl font-semibold text-[#e8e0d4]">
