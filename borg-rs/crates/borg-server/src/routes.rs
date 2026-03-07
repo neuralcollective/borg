@@ -1206,6 +1206,30 @@ pub(crate) async fn run_chat_agent(
 
     let token = refresh_oauth_token(&config.credentials_path, &config.oauth_token);
 
+    // Write agent CLAUDE.md with search tool instructions
+    let api_url = format!("http://127.0.0.1:{}", config.web_port);
+    let api_token = std::fs::read_to_string(format!("{}/.api-token", config.data_dir))
+        .unwrap_or_default();
+    if !api_token.is_empty() {
+        let project_id_hint = project_for_chat
+            .as_ref()
+            .map(|p| format!("Current project_id: {}\n", p.id))
+            .unwrap_or_default();
+        let agent_claude_md = format!(
+            "# Document Search\n\n\
+             {project_id_hint}\
+             You have access to a project document search API. Use curl or WebFetch to query it.\n\n\
+             ## Endpoints\n\n\
+             All requests need: `Authorization: Bearer $BORG_API_TOKEN`\n\n\
+             - `GET $BORG_API_URL/api/agent/search?q=<query>&project_id=<id>&limit=20` — hybrid keyword+semantic search across project files\n\
+             - `GET $BORG_API_URL/api/agent/files?project_id=<id>&q=<filter>&limit=50&offset=0` — list project files\n\
+             - `GET $BORG_API_URL/api/agent/file/<file_id>?project_id=<id>` — read full file content\n\n\
+             Responses are plain text optimized for reading. Use search to find relevant documents before answering questions about project content.\n"
+        );
+        let claude_md_path = format!("{session_dir}/CLAUDE.md");
+        let _ = std::fs::write(&claude_md_path, &agent_claude_md);
+    }
+
     let timeout = std::time::Duration::from_secs(config.agent_timeout_s.max(300) as u64);
     ai_request_count.fetch_add(1, Ordering::Relaxed);
     let mut child = tokio::process::Command::new("claude")
@@ -1213,6 +1237,8 @@ pub(crate) async fn run_chat_agent(
         .current_dir(&session_dir)
         .env("HOME", &session_dir)
         .env("CLAUDE_CODE_OAUTH_TOKEN", &token)
+        .env("BORG_API_URL", &api_url)
+        .env("BORG_API_TOKEN", &api_token)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
@@ -5735,6 +5761,183 @@ pub(crate) async fn get_task_container(
         },
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+// ── Agent API (LLM-friendly endpoints for on-demand search) ──────────
+
+#[derive(Deserialize)]
+pub(crate) struct AgentSearchQuery {
+    q: String,
+    #[serde(default)]
+    project_id: Option<i64>,
+    #[serde(default = "default_agent_search_limit")]
+    limit: i64,
+}
+fn default_agent_search_limit() -> i64 {
+    20
+}
+
+pub(crate) async fn agent_search(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<AgentSearchQuery>,
+) -> Result<String, StatusCode> {
+    if query.q.trim().is_empty() {
+        return Ok("No query provided.".to_string());
+    }
+
+    let limit = query.limit.clamp(1, 100);
+    let mut results: Vec<(String, String, f64, String)> = Vec::new(); // (path, snippet, score, source)
+
+    if let Some(search) = &state.search {
+        if let Ok(hits) = search.search(&query.q, query.project_id, limit).await {
+            for r in hits {
+                let snippet = if !r.content_snippet.is_empty() {
+                    r.content_snippet.clone()
+                } else {
+                    r.title_snippet.clone()
+                };
+                results.push((r.file_path, snippet, r.score, search.backend_name().to_string()));
+            }
+        }
+    }
+
+    // Also try semantic search
+    if state.db.embedding_count() > 0 {
+        if let Ok(query_emb) = state.embed_client.embed_single(&query.q).await {
+            if let Ok(sem) = state.db.search_embeddings(
+                &query_emb,
+                limit as usize,
+                query.project_id,
+            ) {
+                for r in sem.iter().filter(|r| r.score > 0.5) {
+                    let already = results.iter().any(|(p, _, _, _)| *p == r.file_path);
+                    if !already {
+                        let snippet = if r.chunk_text.len() > 300 {
+                            format!("{}...", &r.chunk_text[..r.chunk_text.floor_char_boundary(300)])
+                        } else {
+                            r.chunk_text.clone()
+                        };
+                        results.push((r.file_path.clone(), snippet, r.score.into(), "semantic".to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    if results.is_empty() {
+        return Ok(format!("No results found for: {}", query.q));
+    }
+
+    results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit as usize);
+
+    let mut out = format!("Search results for: {}\n\n", query.q);
+    for (i, (path, snippet, score, source)) in results.iter().enumerate() {
+        out.push_str(&format!(
+            "--- Result {} (score: {:.3}, source: {}) ---\nFile: {}\n{}\n\n",
+            i + 1,
+            score,
+            source,
+            path,
+            snippet
+        ));
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AgentFileQuery {
+    project_id: i64,
+}
+
+pub(crate) async fn agent_get_file(
+    State(state): State<Arc<AppState>>,
+    Path(file_id): Path<i64>,
+    Query(query): Query<AgentFileQuery>,
+) -> Result<String, StatusCode> {
+    let file = state
+        .db
+        .get_project_file(query.project_id, file_id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let text = if !file.extracted_text.trim().is_empty() {
+        file.extracted_text.clone()
+    } else if !is_binary_mime(&file.mime_type) {
+        match state.file_storage.read_all(&file.stored_path).await {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+            Err(_) => return Err(StatusCode::NOT_FOUND),
+        }
+    } else {
+        return Ok(format!(
+            "File: {}\nType: {}\nSize: {} bytes\n\n(Binary file — no text content available)",
+            file.file_name, file.mime_type, file.size_bytes
+        ));
+    };
+
+    let mut out = format!(
+        "File: {}\nPath: {}\nType: {}\nSize: {} bytes\n\n",
+        file.file_name, file.source_path, file.mime_type, file.size_bytes
+    );
+    out.push_str(&text);
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AgentFilesQuery {
+    project_id: i64,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default = "default_agent_files_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+fn default_agent_files_limit() -> i64 {
+    50
+}
+
+pub(crate) async fn agent_list_files(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<AgentFilesQuery>,
+) -> Result<String, StatusCode> {
+    let (files, total) = state
+        .db
+        .list_project_file_page(
+            query.project_id,
+            query.q.as_deref(),
+            query.limit.clamp(1, 200),
+            query.offset.max(0),
+            None,
+            Some(true), // only files with extracted text
+            None,
+        )
+        .map_err(internal)?;
+
+    if files.is_empty() {
+        return Ok(format!(
+            "No files found for project {} (total: {}).",
+            query.project_id, total
+        ));
+    }
+
+    let mut out = format!(
+        "Project files (showing {}-{} of {}):\n\n",
+        query.offset + 1,
+        query.offset + files.len() as i64,
+        total
+    );
+    for f in &files {
+        out.push_str(&format!(
+            "  [id={}] {} ({}, {} bytes)\n",
+            f.id, f.source_path, f.mime_type, f.size_bytes
+        ));
+    }
+    out.push_str(&format!(
+        "\nUse /api/agent/file/<id>?project_id={} to read a file's content.",
+        query.project_id
+    ));
+    Ok(out)
 }
 
 #[cfg(test)]
