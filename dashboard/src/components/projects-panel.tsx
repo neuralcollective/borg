@@ -7,12 +7,10 @@ import {
   deleteProjectCloudConnection,
   fetchProjectFileText,
   getProjectUploadSessionStatus,
-  getProjectChatMessages,
   importProjectCloudFiles,
   listProjectUploadSessions,
   reextractProjectFile,
   retryProjectUploadSession,
-  sendProjectChat,
   uploadProjectUploadChunk,
   useProjectCloudConnections,
   useSettings,
@@ -32,16 +30,6 @@ import { MatterDetail } from "./matter-detail";
 import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
 import { RedlineViewer } from "./viewers/redline-viewer";
 import { useProjectDocumentVersions } from "@/lib/api";
-import { useChatEvents } from "@/lib/use-chat-events";
-
-type ChatMessage = {
-  role: "user" | "assistant";
-  sender?: string;
-  text: string;
-  ts: string | number;
-  thread?: string;
-};
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -321,16 +309,6 @@ export function ProjectsPanel() {
   }, [activeProjectId]);
 
   useEffect(() => {
-    if (!activeProjectId) {
-      setMessages([]);
-      return;
-    }
-    getProjectChatMessages(activeProjectId)
-      .then(setMessages)
-      .catch(() => setMessages([]));
-  }, [activeProjectId]);
-
-  useEffect(() => {
     if (!activeProjectId) return;
     let cancelled = false;
     const load = async () => {
@@ -351,17 +329,6 @@ export function ProjectsPanel() {
       clearInterval(t);
     };
   }, [activeProjectId]);
-
-  const projectThread = activeProjectId ? `project:${activeProjectId}` : null;
-  const handleProjectChatEvent = useCallback((msg: ChatMessage) => {
-    setMessages((prev) => [...prev, msg]);
-    if (msg.role === "assistant") setSending(false);
-  }, []);
-  useChatEvents<ChatMessage>(projectThread, handleProjectChatEvent, () => setSending(false));
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [messages.length]);
 
   useEffect(() => {
     const hash = window.location.hash || "";
@@ -642,22 +609,6 @@ async function uploadChunkQueue(
     const droppedFiles = e.dataTransfer.files;
     if (droppedFiles.length > 0) handleUpload(droppedFiles);
   }, [activeProjectId, uploading]);
-
-  async function handleSendMessage() {
-    if (!activeProjectId || sending) return;
-    const text = messageInput.trim();
-    if (!text) return;
-    setMessageInput("");
-    setSending(true);
-    const timeout = setTimeout(() => setSending(false), 60_000);
-    try {
-      await sendProjectChat(activeProjectId, text);
-    } catch {
-      setSending(false);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
 
   async function retryUploadSession(sessionId: number) {
     if (!activeProjectId) return;
