@@ -3,11 +3,11 @@ import type { PhaseConfigFull, PhaseType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TYPE_COLORS: Record<PhaseType, string> = {
-  setup: "bg-zinc-700/50 text-zinc-400",
-  agent: "bg-blue-500/15 text-blue-400",
+  setup: "bg-[#1c1a17] text-[#6b6459]",
+  agent: "bg-amber-500/15 text-amber-300",
   validate: "bg-teal-500/15 text-teal-400",
-  rebase: "bg-amber-500/15 text-amber-400",
-  lint_fix: "bg-violet-500/15 text-violet-400",
+  rebase: "bg-violet-500/15 text-violet-400",
+  lint_fix: "bg-cyan-500/15 text-cyan-400",
   human_review: "bg-emerald-500/15 text-emerald-400",
   compliance_check: "bg-fuchsia-500/15 text-fuchsia-400",
 };
@@ -33,8 +33,7 @@ const LOOP_TEXT_COLORS = [
   "fill-rose-500/60",
 ];
 
-// Width of each phase column (node + connector) in px
-const COL_W = 120;
+const COL_W = 130;
 const ARC_ROW_H = 28;
 
 interface LoopEdge {
@@ -66,13 +65,11 @@ export function PhaseStrip({
     return map;
   }, [phases]);
 
-  // Find backward edges (loops)
   const loops = useMemo(() => {
     const edges: LoopEdge[] = [];
     for (let i = 0; i < phases.length; i++) {
       const phase = phases[i];
       const targetIdx = nameToIndex.get(phase.next);
-      // Backward edge: next points to an earlier or same phase
       if (targetIdx !== undefined && targetIdx <= i) {
         edges.push({ fromIndex: i, toIndex: targetIdx, label: phase.next });
       }
@@ -80,7 +77,6 @@ export function PhaseStrip({
     return edges;
   }, [phases, nameToIndex]);
 
-  // Stack overlapping loops at different heights
   const loopRows = useMemo(() => {
     const sorted = [...loops].sort((a, b) => (b.fromIndex - b.toIndex) - (a.fromIndex - a.toIndex));
     const rows: LoopEdge[][] = [];
@@ -107,10 +103,10 @@ export function PhaseStrip({
   const arcH = loopRows.length * ARC_ROW_H + (loopRows.length > 0 ? 8 : 0);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="overflow-x-auto pb-1">
         <div style={{ minWidth: totalW }}>
-          {/* Phase nodes row */}
+          {/* Phase nodes */}
           <div className="flex items-center">
             {phases.map((phase, i) => {
               const selected = i === selectedIndex;
@@ -118,27 +114,27 @@ export function PhaseStrip({
                 <div key={`${phase.name}-${i}`} className="flex shrink-0 items-center" style={{ width: COL_W }}>
                   {i > 0 && (
                     <div className="flex items-center">
-                      <div className="h-px w-3 bg-zinc-700" />
-                      <span className="text-[9px] text-zinc-700">&rsaquo;</span>
-                      <div className="h-px w-3 bg-zinc-700" />
+                      <div className="h-px w-3 bg-[#2a2520]" />
+                      <span className="text-[10px] text-[#3d3830]">&rsaquo;</span>
+                      <div className="h-px w-3 bg-[#2a2520]" />
                     </div>
                   )}
                   <button
                     onClick={() => onSelect(selected ? null : i)}
                     className={cn(
-                      "flex-1 rounded-lg border px-3 py-2 text-left transition-colors",
+                      "flex-1 rounded-xl border px-3 py-2.5 text-left transition-colors",
                       selected
-                        ? "border-blue-500/30 bg-blue-500/[0.06] ring-1 ring-blue-500/40"
-                        : "border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06]"
+                        ? "border-amber-500/30 bg-amber-500/[0.06] ring-1 ring-amber-500/30"
+                        : "border-[#2a2520] bg-[#151412] hover:border-amber-900/30 hover:bg-[#1c1a17]"
                     )}
                   >
                     <div className={cn(
-                      "text-[11px] font-medium truncate",
-                      selected ? "text-zinc-100" : "text-zinc-300"
+                      "text-[12px] font-medium truncate",
+                      selected ? "text-[#e8e0d4]" : "text-[#9c9486]"
                     )}>
                       {phase.name}
                     </div>
-                    <span className={cn("mt-0.5 inline-block rounded px-1 py-px text-[9px]", TYPE_COLORS[phase.phase_type])}>
+                    <span className={cn("mt-1 inline-block rounded-md px-1.5 py-0.5 text-[10px]", TYPE_COLORS[phase.phase_type])}>
                       {phase.phase_type === "human_review" ? "\u{1F464} review" : phase.phase_type}
                     </span>
                   </button>
@@ -149,12 +145,12 @@ export function PhaseStrip({
             {/* Terminal "done" node */}
             <div className="flex shrink-0 items-center" style={{ width: COL_W }}>
               <div className="flex items-center">
-                <div className="h-px w-3 bg-zinc-700" />
-                <span className="text-[9px] text-zinc-700">&rsaquo;</span>
-                <div className="h-px w-3 bg-zinc-700" />
+                <div className="h-px w-3 bg-[#2a2520]" />
+                <span className="text-[10px] text-[#3d3830]">&rsaquo;</span>
+                <div className="h-px w-3 bg-[#2a2520]" />
               </div>
-              <div className="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-                <div className="text-[11px] font-medium text-zinc-600">done</div>
+              <div className="flex-1 rounded-xl border border-[#2a2520] bg-[#151412] px-3 py-2.5">
+                <div className="text-[12px] font-medium text-[#6b6459]">done</div>
               </div>
             </div>
           </div>
@@ -165,14 +161,12 @@ export function PhaseStrip({
               {loopRows.map((row, rowIdx) =>
                 row.map((edge, edgeIdx) => {
                   const colorIdx = (rowIdx + edgeIdx) % LOOP_COLORS.length;
-                  // Center of source and target nodes
                   const fromX = edge.fromIndex * COL_W + COL_W / 2;
                   const toX = edge.toIndex * COL_W + COL_W / 2;
                   const y0 = 4;
                   const y1 = (rowIdx + 1) * ARC_ROW_H;
                   const midX = (fromX + toX) / 2;
 
-                  // Curved path: down from source, arc to target, up to target
                   const d = `M ${fromX} ${y0} L ${fromX} ${y1} Q ${fromX} ${y1 + 8} ${fromX - 8} ${y1 + 8} L ${toX + 8} ${y1 + 8} Q ${toX} ${y1 + 8} ${toX} ${y1} L ${toX} ${y0}`;
 
                   return (
@@ -184,12 +178,10 @@ export function PhaseStrip({
                         strokeWidth={1.5}
                         strokeDasharray="4 2"
                       />
-                      {/* Arrow at target */}
                       <polygon
                         points={`${toX - 3},${y0 + 5} ${toX + 3},${y0 + 5} ${toX},${y0}`}
                         className={LOOP_FILL_COLORS[colorIdx]}
                       />
-                      {/* Label */}
                       <text
                         x={midX}
                         y={y1 + 5}
@@ -212,7 +204,7 @@ export function PhaseStrip({
         <div className="flex items-center gap-2">
           <button
             onClick={() => onAdd(selectedIndex ?? phases.length - 1)}
-            className="rounded-md bg-white/[0.06] px-2 py-1 text-[11px] text-zinc-400 hover:bg-white/[0.1]"
+            className="rounded-lg bg-[#1c1a17] px-3 py-1.5 text-[12px] text-[#9c9486] ring-1 ring-inset ring-[#2a2520] transition-colors hover:bg-[#232019] hover:text-[#e8e0d4]"
           >
             + Add Phase
           </button>
@@ -222,7 +214,7 @@ export function PhaseStrip({
                 onClick={() => { if (selectedIndex > 0) onMove(selectedIndex, selectedIndex - 1); }}
                 disabled={selectedIndex <= 0}
                 aria-label="Move phase left"
-                className="rounded-md bg-white/[0.06] px-2 py-1 text-[11px] text-zinc-400 hover:bg-white/[0.1] disabled:opacity-30"
+                className="rounded-lg bg-[#1c1a17] px-3 py-1.5 text-[12px] text-[#9c9486] ring-1 ring-inset ring-[#2a2520] transition-colors hover:bg-[#232019] disabled:opacity-30"
               >
                 &larr;
               </button>
@@ -230,13 +222,13 @@ export function PhaseStrip({
                 onClick={() => { if (selectedIndex < phases.length - 1) onMove(selectedIndex, selectedIndex + 1); }}
                 disabled={selectedIndex >= phases.length - 1}
                 aria-label="Move phase right"
-                className="rounded-md bg-white/[0.06] px-2 py-1 text-[11px] text-zinc-400 hover:bg-white/[0.1] disabled:opacity-30"
+                className="rounded-lg bg-[#1c1a17] px-3 py-1.5 text-[12px] text-[#9c9486] ring-1 ring-inset ring-[#2a2520] transition-colors hover:bg-[#232019] disabled:opacity-30"
               >
                 &rarr;
               </button>
               <button
                 onClick={() => onRemove(selectedIndex)}
-                className="rounded-md bg-red-500/10 px-2 py-1 text-[11px] text-red-400 hover:bg-red-500/20"
+                className="rounded-lg bg-red-500/10 px-3 py-1.5 text-[12px] text-red-400 ring-1 ring-inset ring-red-500/20 transition-colors hover:bg-red-500/20"
               >
                 Remove
               </button>

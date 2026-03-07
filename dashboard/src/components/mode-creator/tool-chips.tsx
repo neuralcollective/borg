@@ -16,7 +16,6 @@ export function ToolChips({
   const active = new Set(value.split(",").map((t) => t.trim()).filter(Boolean));
 
   const knownTools = visibleTools ?? DEFAULT_TOOLS;
-  // Include any unknown tools from the current value
   const allTools = [...knownTools];
   for (const t of active) {
     if (!allTools.includes(t)) allTools.push(t);
@@ -27,13 +26,12 @@ export function ToolChips({
     const next = new Set(active);
     if (next.has(tool)) next.delete(tool);
     else next.add(tool);
-    // Preserve KNOWN_TOOLS ordering
     const ordered = allTools.filter((t) => next.has(t));
     onChange(ordered.join(","));
   }
 
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap gap-1.5">
       {allTools.map((tool) => (
         <button
           key={tool}
@@ -41,10 +39,10 @@ export function ToolChips({
           disabled={disabled}
           onClick={() => toggle(tool)}
           className={cn(
-            "rounded-md px-2 py-0.5 text-[11px] transition-colors",
+            "rounded-lg px-2.5 py-1 text-[12px] transition-colors",
             active.has(tool)
-              ? "bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/20"
-              : "bg-white/[0.04] text-zinc-600 hover:bg-white/[0.08] hover:text-zinc-400",
+              ? "bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/20"
+              : "bg-[#1c1a17] text-[#6b6459] hover:bg-[#232019] hover:text-[#9c9486]",
             disabled && "cursor-not-allowed opacity-50"
           )}
         >

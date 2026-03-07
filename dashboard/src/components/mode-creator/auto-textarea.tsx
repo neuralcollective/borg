@@ -22,7 +22,7 @@ export function AutoTextarea({
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
-    const minH = minRows * 18; // ~18px per line at text-[11px]
+    const minH = minRows * 20;
     el.style.height = `${Math.max(minH, Math.min(el.scrollHeight, 280))}px`;
   }, [value, minRows]);
 
@@ -34,7 +34,7 @@ export function AutoTextarea({
       placeholder={placeholder}
       disabled={disabled}
       className={cn(
-        "w-full resize-none rounded-md border border-white/[0.08] bg-black/30 px-2.5 py-2 font-mono text-[11px] leading-[1.5] text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-blue-500/40 disabled:opacity-50",
+        "w-full resize-none rounded-lg border border-[#2a2520] bg-[#0f0e0c] px-3 py-2.5 font-mono text-[12px] leading-[1.6] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
         className
       )}
     />

@@ -55,9 +55,9 @@ export function PhaseDetail({
   ].filter((s) => s.trim()).length;
 
   return (
-    <div className="space-y-3 overflow-y-auto">
-      {/* Identity — compact inline row */}
-      <div className="flex items-end gap-2">
+    <div className="space-y-4 overflow-y-auto">
+      {/* Identity */}
+      <div className="flex items-end gap-3">
         <Field label="Name" className="w-36">
           <input
             value={phase.name}
@@ -74,7 +74,7 @@ export function PhaseDetail({
             className={inputCls}
           />
         </Field>
-        <Field label="Type" className="w-28">
+        <Field label="Type" className="w-32">
           <select
             value={phase.phase_type}
             onChange={(e) => onChange({ phase_type: e.target.value as PhaseType })}
@@ -84,13 +84,12 @@ export function PhaseDetail({
             {profile.phaseTypes.map((pt) => (
               <option key={pt} value={pt}>{PHASE_TYPE_LABELS[pt]}</option>
             ))}
-            {/* Keep current type visible even if profile hides it */}
             {!profile.phaseTypes.includes(phase.phase_type) && (
               <option value={phase.phase_type}>{PHASE_TYPE_LABELS[phase.phase_type]}</option>
             )}
           </select>
         </Field>
-        <Field label="Next" className="w-28">
+        <Field label="Next" className="w-32">
           <select
             value={phase.next}
             onChange={(e) => onChange({ next: e.target.value })}
@@ -108,7 +107,7 @@ export function PhaseDetail({
       {/* Human Review */}
       {isHumanReview && (
         <Section title="Human Review">
-          <div className="mb-2 rounded bg-emerald-500/5 border border-emerald-500/20 px-3 py-2 text-[11px] text-emerald-400/80">
+          <div className="mb-3 rounded-lg bg-emerald-500/[0.06] border border-emerald-500/20 px-4 py-2.5 text-[12px] text-emerald-400/80">
             Pauses the pipeline until a human approves, rejects, or requests revision.
           </div>
           <Field label="Reviewer Guidance">
@@ -153,7 +152,7 @@ export function PhaseDetail({
         </Section>
       )}
 
-      {/* Main instruction — the primary thing users edit */}
+      {/* Main instruction */}
       {isAgent && (
         <Section title="Instruction">
           <AutoTextarea
@@ -166,7 +165,7 @@ export function PhaseDetail({
         </Section>
       )}
 
-      {/* Tools — compact toggles */}
+      {/* Tools */}
       {isAgent && (
         <Section title="Tools">
           <ToolChips
@@ -178,10 +177,10 @@ export function PhaseDetail({
         </Section>
       )}
 
-      {/* Behavior — filtered by category profile */}
+      {/* Behavior */}
       {isAgent && (
         <Section title="Behavior">
-          <div className="grid grid-cols-3 gap-x-4 gap-y-1.5">
+          <div className="grid grid-cols-3 gap-x-4 gap-y-2">
             {profile.behaviorFlags.map((flag) => {
               const key = flag as keyof PhaseConfigFull;
               return (
@@ -195,9 +194,8 @@ export function PhaseDetail({
               );
             })}
           </div>
-          {/* Commit settings inline when enabled */}
           {phase.commits && (
-            <div className="mt-2.5 flex gap-3 border-t border-white/[0.04] pt-2.5">
+            <div className="mt-3 flex gap-3 border-t border-[#2a2520] pt-3">
               <Field label="Commit Message" className="flex-1">
                 <input
                   value={phase.commit_message}
@@ -207,7 +205,7 @@ export function PhaseDetail({
                   className={inputCls}
                 />
               </Field>
-              <Field label="Required Artifact" className="w-40">
+              <Field label="Required Artifact" className="w-44">
                 <input
                   value={phase.check_artifact ?? ""}
                   onChange={(e) => onChange({ check_artifact: e.target.value || null })}
@@ -221,24 +219,24 @@ export function PhaseDetail({
         </Section>
       )}
 
-      {/* Advanced — collapsed by default, for power users */}
+      {/* Advanced */}
       {isAgent && (
-        <div className="rounded-lg border border-white/[0.04]">
+        <div className="rounded-xl border border-[#2a2520]">
           <button
             type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-zinc-500 hover:text-zinc-400"
+            className="flex w-full items-center gap-2.5 px-4 py-3 text-[12px] text-[#6b6459] transition-colors hover:text-[#9c9486]"
           >
-            <span className="text-[9px]">{showAdvanced ? "\u25BC" : "\u25B6"}</span>
+            <span className="text-[10px]">{showAdvanced ? "\u25BC" : "\u25B6"}</span>
             <span className="font-medium">Advanced</span>
             {!showAdvanced && advancedCount > 0 && (
-              <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-zinc-500">
+              <span className="rounded-lg bg-[#1c1a17] px-2 py-0.5 text-[11px] text-[#6b6459]">
                 {advancedCount} configured
               </span>
             )}
           </button>
           {showAdvanced && (
-            <div className="space-y-3 border-t border-white/[0.04] px-3 pb-3 pt-2">
+            <div className="space-y-4 border-t border-[#2a2520] px-4 pb-4 pt-3">
               <Field label="System Prompt">
                 <AutoTextarea
                   value={phase.system_prompt}
@@ -277,12 +275,12 @@ export function PhaseDetail({
 }
 
 const inputCls =
-  "w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40 disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none transition-colors focus:border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{title}</div>
+    <div className="rounded-xl border border-[#2a2520] bg-[#151412] p-4">
+      <div className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-[#6b6459]">{title}</div>
       {children}
     </div>
   );
@@ -291,7 +289,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Field({ label, className, children }: { label: string; className?: string; children: React.ReactNode }) {
   return (
     <div className={className}>
-      <div className="mb-1 text-[11px] text-zinc-500">{label}</div>
+      <div className="mb-1.5 text-[12px] font-medium text-[#9c9486]">{label}</div>
       {children}
     </div>
   );
@@ -314,18 +312,18 @@ function FlagToggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "flex items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] transition-colors",
-        checked ? "text-zinc-300" : "text-zinc-600",
+        "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[12px] transition-colors",
+        checked ? "text-[#e8e0d4]" : "text-[#6b6459]",
         disabled && "cursor-not-allowed opacity-50"
       )}
     >
       <span className={cn(
-        "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
+        "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
         checked
-          ? "border-blue-500/40 bg-blue-500/20 text-blue-400"
-          : "border-white/[0.1] bg-white/[0.03]"
+          ? "border-amber-500/40 bg-amber-500/20 text-amber-400"
+          : "border-[#2a2520] bg-[#1c1a17]"
       )}>
-        {checked && <span className="text-[8px]">&#10003;</span>}
+        {checked && <span className="text-[9px]">&#10003;</span>}
       </span>
       {label}
     </button>

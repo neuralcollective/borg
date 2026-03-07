@@ -14,7 +14,7 @@ export function ModeSettings({
   profile: CategoryProfile;
 }) {
   return (
-    <div className="space-y-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+    <div className="space-y-4 rounded-xl border border-[#2a2520] bg-[#151412] p-4">
       {/* Row 1: Identity */}
       <div className="flex items-end gap-3">
         <Field label="Name" className="w-36">
@@ -61,13 +61,12 @@ export function ModeSettings({
             {profile.integrations.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
-            {/* Keep current value visible even if profile hides it */}
             {!profile.integrations.some((o) => o.value === mode.integration) && (
               <option value={mode.integration}>{mode.integration}</option>
             )}
           </select>
         </Field>
-        <Field label="Max Attempts" className="w-20">
+        <Field label="Max Attempts" className="w-24">
           <input
             type="number"
             min={1}
@@ -80,9 +79,9 @@ export function ModeSettings({
         </Field>
       </div>
 
-      {/* Row 2: Flags — only show what's relevant for this category */}
+      {/* Row 2: Flags */}
       {(profile.showDocker || profile.showTestCmd) && (
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {profile.showDocker && (
             <Toggle label="Docker" checked={mode.uses_docker} disabled={readOnly}
               onChange={(v) => onChange("uses_docker", v)} />
@@ -98,12 +97,12 @@ export function ModeSettings({
 }
 
 const inputCls =
-  "w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40 disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none transition-colors focus:border-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed";
 
 function Field({ label, className, children }: { label: string; className?: string; children: React.ReactNode }) {
   return (
     <div className={className}>
-      <div className="mb-1 text-[11px] text-zinc-500">{label}</div>
+      <div className="mb-1.5 text-[12px] font-medium text-[#9c9486]">{label}</div>
       {children}
     </div>
   );
@@ -126,14 +125,14 @@ function Toggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors",
+        "flex items-center gap-2 rounded-lg px-3 py-1.5 text-[12px] transition-colors",
         checked
-          ? "bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/20"
-          : "bg-white/[0.04] text-zinc-600",
+          ? "bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/20"
+          : "bg-[#1c1a17] text-[#6b6459]",
         disabled && "cursor-not-allowed opacity-50"
       )}
     >
-      <span className={cn("h-2 w-2 rounded-sm", checked ? "bg-blue-400" : "bg-zinc-700")} />
+      <span className={cn("h-2.5 w-2.5 rounded-sm", checked ? "bg-amber-400" : "bg-[#3d3830]")} />
       {label}
     </button>
   );
