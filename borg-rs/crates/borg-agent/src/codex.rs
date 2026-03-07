@@ -145,6 +145,7 @@ impl AgentBackend for CodexBackend {
             cmd.env("OPENAI_API_KEY", &self.api_key);
         }
         let mut child = cmd
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("failed to spawn codex binary: {}", self.codex_bin))?;
 
@@ -183,7 +184,9 @@ impl AgentBackend for CodexBackend {
                             if let Some(tx) = &stream_tx {
                                 let _ = tx.send(l.clone());
                             }
-                            output_lines.push(l);
+                            if output_lines.len() < 50_000 {
+                                output_lines.push(l);
+                            }
                         }
                         None => {
                             stdout_done = true;

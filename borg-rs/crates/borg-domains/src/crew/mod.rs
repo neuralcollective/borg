@@ -19,12 +19,13 @@ pub fn crew_mode() -> PipelineMode {
                 include_file_listing: true,
                 commits: true,
                 commit_message: "talent: sourcing and evaluation from crew agent".into(),
+                error_instruction: "Previous attempt failed:\n{ERROR}\n\nAnalyze the error and fix the issue.".into(),
                 ..agent_phase(
                     "implement",
                     "Implement",
                     CREW_IMPLEMENT_SYSTEM,
                     CREW_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "done",
                 )
             },
@@ -35,7 +36,7 @@ pub fn crew_mode() -> PipelineMode {
                 label: "Candidate Discovery".into(),
                 output_type: SeedOutputType::Task,
                 prompt: CREW_SEED_DISCOVERY.into(),
-                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                allowed_tools: "Read,Glob,Grep,Bash,web_search,WebFetch".into(),
                 target_primary_repo: false,
             },
             SeedConfig {
@@ -43,7 +44,7 @@ pub fn crew_mode() -> PipelineMode {
                 label: "Re-evaluate Pool".into(),
                 output_type: SeedOutputType::Task,
                 prompt: CREW_SEED_REFRESH.into(),
-                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                allowed_tools: "Read,Glob,Grep,Bash,web_search,WebFetch".into(),
                 target_primary_repo: false,
             },
             SeedConfig {

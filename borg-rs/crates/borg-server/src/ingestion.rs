@@ -266,13 +266,13 @@ pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String
     if mime.contains("pdf") || ext == "pdf" {
         let text_lower = text.to_lowercase();
         let first_2k = if text_lower.len() > 2000 { &text_lower[..2000] } else { &text_lower };
-        if first_2k.contains("agreement") || first_2k.contains("contract") || first_2k.contains("between") && first_2k.contains("parties") {
+        if first_2k.contains("agreement") || first_2k.contains("contract") || (first_2k.contains("between") && first_2k.contains("parties")) {
             return "contract".to_string();
         }
         if first_2k.contains("court") || first_2k.contains("plaintiff") || first_2k.contains("defendant") || first_2k.contains("v.") {
             return "filing".to_string();
         }
-        if first_2k.contains("statute") || first_2k.contains("section") && first_2k.contains("chapter") {
+        if first_2k.contains("statute") || (first_2k.contains("section") && first_2k.contains("chapter")) {
             return "statute".to_string();
         }
         return "document".to_string();
@@ -289,7 +289,7 @@ pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String
     "document".to_string()
 }
 
-async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String> {
+pub(crate) async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String> {
     let file_name = file_name.to_string();
     let mime = mime.to_string();
     let bytes = bytes.to_vec();

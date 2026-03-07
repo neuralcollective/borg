@@ -4,6 +4,10 @@ use serde_json::{json, Value};
 
 use crate::search::{ChunkSearchHit, SearchHit};
 
+fn escape_yql(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 fn expand_legal_query(query: &str) -> String {
     static SYNONYMS: &[&[&str]] = &[
         &["statute", "law", "legislation", "act", "enactment"],
@@ -376,6 +380,9 @@ impl VespaClient {
         project_id: i64,
         field: &str,
     ) -> Result<Vec<(String, i64)>> {
+        if !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            anyhow::bail!("invalid facet field name");
+        }
         let yql = format!(
             "select * from project_chunk where project_id = {project_id} | all(group({field}) each(output(count())))"
         );
@@ -434,10 +441,10 @@ impl VespaClient {
             yql.push_str(&format!(" and project_id = {pid}"));
         }
         if let Some(ref dt) = filters.doc_type {
-            yql.push_str(&format!(" and doc_type contains '{dt}'"));
+            yql.push_str(&format!(" and doc_type contains '{}'", escape_yql(dt)));
         }
         if let Some(ref j) = filters.jurisdiction {
-            yql.push_str(&format!(" and jurisdiction contains '{j}'"));
+            yql.push_str(&format!(" and jurisdiction contains '{}'", escape_yql(j)));
         }
         if filters.privileged_only {
             yql.push_str(" and privileged = true");

@@ -26,7 +26,7 @@ pub fn construction_mode() -> PipelineMode {
                     "Implement",
                     "",
                     BUILD_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "review",
                 )
             },
@@ -41,7 +41,7 @@ pub fn construction_mode() -> PipelineMode {
                     "Review",
                     "",
                     BUILD_REVIEW_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "done",
                 )
             },
@@ -53,7 +53,7 @@ pub fn construction_mode() -> PipelineMode {
                 output_type: SeedOutputType::Task,
                 prompt: "Research building permit requirements for the project described in this \
                     repository. Identify the jurisdiction and use shovels_get_geography + \
-                    shovels_search_permits to find similar permits in the area. Use WebSearch for \
+                    shovels_search_permits to find similar permits in the area. Use web_search for \
                     the jurisdiction's building department website, required forms, fee schedules, \
                     and submission procedures. Check zoning compatibility using the parcel address \
                     via shovels_search_addresses. Determine: required permit types (building, \
@@ -73,7 +73,7 @@ pub fn construction_mode() -> PipelineMode {
                     Use shovels_get_geography to identify the geo_id, then shovels_search_contractors \
                     filtered by relevant permit_tags (e.g. hvac, solar, reroof, new_dwelling). \
                     For each promising contractor, use shovels_get_contractor to check their permit \
-                    history, license status, and service area. Use WebSearch to verify license status \
+                    history, license status, and service area. Use web_search to verify license status \
                     on the state licensing board, check reviews (BBB, Google, Yelp), and look for \
                     any complaints or disciplinary actions. Evaluate based on: active license in \
                     the correct trade, permit volume and recency in the target area, project type \
@@ -89,7 +89,7 @@ pub fn construction_mode() -> PipelineMode {
                 output_type: SeedOutputType::Task,
                 prompt: "Develop a cost estimate for the construction project in this repository. \
                     Use shovels_search_permits in the target area filtered by project type to find \
-                    comparable permitted projects and their valuations. Use WebSearch for current \
+                    comparable permitted projects and their valuations. Use web_search for current \
                     material costs (RSMeans, HomeAdvisor, local supplier pricing), labor rates \
                     for the metro area, and permit fee schedules. Break down costs into: permits \
                     and fees, site preparation, foundation, framing/structure, mechanical (HVAC, \
@@ -106,7 +106,7 @@ pub fn construction_mode() -> PipelineMode {
                 label: "Code Compliance".into(),
                 output_type: SeedOutputType::Task,
                 prompt: "Review the project plans and specifications in this repository for \
-                    building code compliance. Use WebSearch to determine which edition of IBC/IRC \
+                    building code compliance. Use web_search to determine which edition of IBC/IRC \
                     the jurisdiction has adopted, plus any local amendments. Check compliance with: \
                     structural requirements (live/dead loads, wind speed, seismic category), fire \
                     safety (separation distances, fire-rated assemblies, egress), energy code \
@@ -139,7 +139,7 @@ Handle this construction task end-to-end:
 1. Use shovels_get_geography to find the correct geo_id for the target area.
 2. Research using Shovels tools: search permits for comparable projects, look up \
    contractors with relevant specializations, check address/parcel data.
-3. Research using WebSearch: building department requirements, applicable codes, \
+3. Research using web_search: building department requirements, applicable codes, \
    fee schedules, inspection requirements, zoning rules.
 4. Write research.md with: jurisdiction-specific requirements, comparable project data, \
    applicable codes and regulations, and source URLs.
@@ -161,7 +161,7 @@ jurisdiction-specific correctness. Fix issues directly.";
 const BUILD_REVIEW_INSTRUCTION: &str = "\
 Review all documents in the workspace for:
 1. Jurisdiction accuracy — verify the correct building codes, permit types, and \
-   local requirements are cited. Use WebSearch to confirm.
+   local requirements are cited. Use web_search to confirm.
 2. Data accuracy — verify permit data, contractor info, and cost figures against \
    Shovels tools and web sources.
 3. Completeness — all required permits identified, all applicable codes checked, \

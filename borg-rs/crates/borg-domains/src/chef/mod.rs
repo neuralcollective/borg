@@ -19,12 +19,13 @@ pub fn chef_mode() -> PipelineMode {
                 include_file_listing: true,
                 commits: true,
                 commit_message: "recipe: research and draft from chef agent".into(),
+                error_instruction: "Previous attempt failed:\n{ERROR}\n\nAnalyze the error and fix the issue.".into(),
                 ..agent_phase(
                     "implement",
                     "Implement",
                     CHEF_IMPLEMENT_SYSTEM,
                     CHEF_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "review",
                 )
             },
@@ -38,7 +39,7 @@ pub fn chef_mode() -> PipelineMode {
                     "Review",
                     CHEF_REVIEW_SYSTEM,
                     CHEF_REVIEW_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "done",
                 )
             },
@@ -49,7 +50,7 @@ pub fn chef_mode() -> PipelineMode {
                 label: "Technique Research".into(),
                 output_type: SeedOutputType::Task,
                 prompt: CHEF_SEED_TECHNIQUE.into(),
-                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                allowed_tools: "Read,Glob,Grep,Bash,web_search,WebFetch".into(),
                 target_primary_repo: false,
             },
             SeedConfig {
@@ -57,7 +58,7 @@ pub fn chef_mode() -> PipelineMode {
                 label: "Seasonal Update".into(),
                 output_type: SeedOutputType::Task,
                 prompt: CHEF_SEED_SEASONAL.into(),
-                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                allowed_tools: "Read,Glob,Grep,Bash,web_search,WebFetch".into(),
                 target_primary_repo: false,
             },
             SeedConfig {

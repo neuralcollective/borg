@@ -249,9 +249,10 @@ pub struct Connection {
 
 impl Connection {
     pub fn open(url: &str) -> Result<Self> {
-        let config = url
+        let mut config = url
             .parse::<tokio_postgres::Config>()
             .map_err(|err| Error::ConfigParse(err.to_string()))?;
+        config.options("-c timezone=UTC");
         let max_size = std::env::var("DATABASE_POOL_MAX_SIZE")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -273,9 +274,6 @@ impl Connection {
             Ok(client) => client,
             Err(err) => return ConnectionGuard::failed(err.to_string()),
         };
-        if let Err(err) = block_on(client.batch_execute("SET TIME ZONE 'UTC'")) {
-            return ConnectionGuard::failed(err.to_string());
-        }
         ConnectionGuard::ready(client)
     }
 }
@@ -531,9 +529,9 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         tokio::task::block_in_place(|| handle.block_on(f))
     } else {
-        tokio::runtime::Runtime::new()
-            .expect("failed to create tokio runtime for blocking pg call")
-            .block_on(f)
+        let rt = tokio::runtime::Runtime::new()
+            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"));
+        rt.block_on(f)
     }
 }
 

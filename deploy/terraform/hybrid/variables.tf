@@ -63,7 +63,7 @@ variable "ssh_public_key" {
 variable "allowed_ssh_cidrs" {
   description = "CIDRs allowed to SSH to the host."
   type        = list(string)
-  default     = ["0.0.0.0/0", "::/0"]
+  default     = []
 }
 
 variable "create_tunnel" {

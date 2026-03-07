@@ -75,7 +75,7 @@ cat <<EOF > /usr/local/bin/web_search
 QUERY="\$*"
 curl -s -X POST http://\${BORG_HOST_IP}:3132/v1/search \\
      -H "Content-Type: application/json" \\
-     -d "{\\"query\\": \\"\$QUERY\\", \\"project_id\\": \$PROJECT_ID}" | bun -e "
+     -d "\$(jq -n --arg q "\$QUERY" --argjson pid "\${PROJECT_ID:-0}" '{query: \$q, project_id: \$pid}')" | bun -e "
 let s=''; process.stdin.on('data', c=>s+=c); process.stdin.on('end', ()=>{
   try {
     const d=JSON.parse(s);
@@ -183,6 +183,8 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
     git config user.email "$GIT_AUTHOR_EMAIL"
 
     if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+        # Exclude secrets from commits
+        printf '.env\n.env.*\ncredentials*\n*.key\n*.pem\n' >> .gitignore 2>/dev/null || true
         git add -A
         git commit -m "$COMMIT_MSG" || true
         log_event "{\"type\":\"container_event\",\"event\":\"commit_complete\",\"message\":\"${COMMIT_MSG}\"}"
@@ -200,7 +202,7 @@ if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
 
     SIGNAL_FILE="$REPO_DIR/.borg/signal.json"
     if [ -f "$SIGNAL_FILE" ]; then
-        echo "---BORG_SIGNAL---$(cat "$SIGNAL_FILE")"
+        echo "BORG_SIGNAL:$(cat "$SIGNAL_FILE")"
     fi
 fi
 

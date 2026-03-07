@@ -96,8 +96,9 @@ impl Sandbox {
     /// 1. `--ro-bind / /`    — read-only root filesystem
     /// 2. `--dev /dev`       — minimal device tree (null, random, urandom, tty)
     /// 3. `--bind X X`       — per writable_dir (repo, session dir)
-    /// 4. `--bind /tmp /tmp` — shared /tmp (needed by compilers, git, etc.)
-    /// 5. `--unshare-all`    — isolate all namespaces (pid, user, net, uts, ipc, cgroup)
+    /// 4. `--tmpfs /tmp`     — per-sandbox /tmp (needed by compilers, git, etc.)
+    /// 5. `--unshare-all`    — isolate all namespaces (pid, user, uts, ipc, cgroup)
+    /// 5b. `--share-net`     — restore network namespace so agents can call APIs
     /// 6. `--new-session`    — setsid (detach terminal)
     /// 7. `--die-with-parent`— auto-cleanup
     /// 8. `--proc /proc`     — fresh procfs for PID namespace
@@ -120,11 +121,12 @@ impl Sandbox {
             args.extend(["--bind", dir, dir].map(str::to_string));
         }
 
-        args.extend(["--bind", "/tmp", "/tmp"].map(str::to_string));
+        args.extend(["--tmpfs", "/tmp"].map(str::to_string));
 
         args.extend(
             [
                 "--unshare-all",
+                "--share-net",
                 "--new-session",
                 "--die-with-parent",
                 "--proc",

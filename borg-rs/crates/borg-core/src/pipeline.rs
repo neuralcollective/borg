@@ -95,6 +95,9 @@ struct GithubIssue {
 impl Pipeline {
     fn task_ready_for_dispatch(&self, task: &Task) -> bool {
         let Some(mode) = self.resolve_mode(&task.mode) else {
+            let err = format!("unknown pipeline mode: {}", task.mode);
+            error!("task #{}: {err}", task.id);
+            let _ = self.db.update_task_status(task.id, "failed", Some(&err));
             return false;
         };
         let Some(phase) = mode.get_phase(&task.status) else {
@@ -129,16 +132,11 @@ impl Pipeline {
     }
 
     fn resolve_mode(&self, name: &str) -> Option<PipelineMode> {
-        get_mode(name)
-            .or_else(|| {
-                self.custom_modes_from_db()
-                    .into_iter()
-                    .find(|m| m.name == name)
-            })
-            .or_else(|| {
-                warn!("resolve_mode: unknown mode {name:?}, falling back to sweborg");
-                get_mode("sweborg")
-            })
+        get_mode(name).or_else(|| {
+            self.custom_modes_from_db()
+                .into_iter()
+                .find(|m| m.name == name)
+        })
     }
 
     pub fn new(
@@ -899,8 +897,8 @@ impl Pipeline {
             .force_restart
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            info!("force_restart flag set — exiting for systemd restart");
-            std::process::exit(0);
+            info!("force_restart flag set — returning error to trigger graceful shutdown");
+            anyhow::bail!("force_restart");
         }
 
         Ok(())
@@ -950,9 +948,15 @@ impl Pipeline {
             }
         }
 
-        let mode = self
-            .resolve_mode(&task.mode)
-            .ok_or_else(|| anyhow::anyhow!("no pipeline mode found for task #{}", task.id))?;
+        let mode = match self.resolve_mode(&task.mode) {
+            Some(m) => m,
+            None => {
+                let err = format!("unknown pipeline mode: {}", task.mode);
+                error!("task #{}: {err}", task.id);
+                let _ = self.db.update_task_status(task.id, "failed", Some(&err));
+                return Ok(());
+            }
+        };
 
         let phase = match mode.get_phase(&task.status) {
             Some(p) => p.clone(),
@@ -1320,8 +1324,8 @@ impl Pipeline {
             ),
         });
 
-        // Read agent signal from .borg/signal.json (if present).
-        let signal = Self::read_agent_signal(&work_dir);
+        // Read agent signal from .borg/signal.json (if present), or from stdout.
+        let signal = Self::read_agent_signal(&work_dir, result.signal_json.as_deref());
         if !signal.reason.is_empty() {
             info!(
                 "task #{} signal: status={} reason={}",
@@ -1450,16 +1454,27 @@ impl Pipeline {
     }
 
     /// Read `.borg/signal.json` from the work dir. Returns default (done) if missing or malformed.
-    fn read_agent_signal(work_dir: &str) -> crate::types::AgentSignal {
-        let path = format!("{work_dir}/.borg/signal.json");
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => {
-                // Clean up the signal file so it doesn't carry over to next run
-                std::fs::remove_file(&path).ok();
-                serde_json::from_str(&contents).unwrap_or_default()
-            },
-            Err(_) => crate::types::AgentSignal::default(),
+    fn read_agent_signal(work_dir: &str, phase_output_signal: Option<&str>) -> crate::types::AgentSignal {
+        // Try direct path first, then Docker container path
+        let paths = [
+            format!("{work_dir}/.borg/signal.json"),
+            format!("{work_dir}/repo/.borg/signal.json"),
+        ];
+        for path in &paths {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                std::fs::remove_file(path).ok();
+                if let Ok(sig) = serde_json::from_str(&contents) {
+                    return sig;
+                }
+            }
         }
+        // Fall back to signal from agent stdout
+        if let Some(json_str) = phase_output_signal {
+            if let Ok(sig) = serde_json::from_str(json_str) {
+                return sig;
+            }
+        }
+        crate::types::AgentSignal::default()
     }
 
     /// Run a purge phase: delete vectors, messages, and raw files for a task.
@@ -3212,10 +3227,13 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             return Ok(());
         }
 
-        let mode_name = self
-            .resolve_mode(&repo.mode)
-            .map(|m| m.name)
-            .unwrap_or_else(|| "sweborg".to_string());
+        let mode_name = match self.resolve_mode(&repo.mode) {
+            Some(m) => m.name,
+            None => {
+                warn!("seed_from_open_issues: unknown pipeline mode {:?}, skipping", repo.mode);
+                return Ok(());
+            }
+        };
 
         let active = self.db.list_active_tasks()?.len() as i64;
         let available_slots = (self.config.pipeline_max_backlog as i64 - active).max(0) as usize;

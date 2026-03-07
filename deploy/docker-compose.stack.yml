@@ -5,9 +5,9 @@ services:
     environment:
       POSTGRES_DB: borg
       POSTGRES_USER: borg
-      POSTGRES_PASSWORD: borg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-borg}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - borg-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -31,9 +31,9 @@ services:
         "-volume.max=0"
       ]
     ports:
-      - "8333:8333"
-      - "8888:8888"
-      - "9333:9333"
+      - "127.0.0.1:8333:8333"
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:9333:9333"
     volumes:
       - borg-seaweedfs:/data
       - ./seaweedfs/s3.conf:/etc/seaweedfs/s3.conf:ro
@@ -58,8 +58,8 @@ services:
     container_name: borg-vespa
     hostname: vespa
     ports:
-      - "8080:8080"
-      - "19071:19071"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:19071:19071"
     volumes:
       - borg-vespa:/opt/vespa/var
     healthcheck:

@@ -26,7 +26,7 @@ pub fn health_mode() -> PipelineMode {
                     "Implement",
                     "",
                     HEALTH_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "review",
                 )
             },
@@ -41,7 +41,7 @@ pub fn health_mode() -> PipelineMode {
                     "Review",
                     "",
                     HEALTH_REVIEW_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "done",
                 )
             },
@@ -55,7 +55,7 @@ pub fn health_mode() -> PipelineMode {
                     denial reason code, and plan type (employer, ACA marketplace, Medicaid, Medicare). \
                     Research applicable regulations: use federal_register_search for CMS coverage \
                     determinations and Medicare rules. Use openstates_search_bills for state insurance \
-                    mandates, external review laws, and prompt payment statutes. Use WebSearch for \
+                    mandates, external review laws, and prompt payment statutes. Use web_search for \
                     current clinical guidelines (ACR, NCCN, AMA) that support medical necessity. \
                     Check if the denial triggers external review rights under ACA Section 2719. \
                     Draft an appeal letter citing: specific plan provision that covers the service, \
@@ -72,7 +72,7 @@ pub fn health_mode() -> PipelineMode {
                 output_type: SeedOutputType::Task,
                 prompt: "Review the clinical documentation and payer requirements in this repository. \
                     Identify the procedure (CPT/HCPCS codes), diagnosis (ICD-10 codes), and payer. \
-                    Use WebSearch to find the payer's specific prior auth criteria, clinical policy \
+                    Use web_search to find the payer's specific prior auth criteria, clinical policy \
                     bulletins, and required documentation checklists. Use federal_register_search for \
                     CMS National Coverage Determinations and Local Coverage Determinations if Medicare. \
                     Prepare the prior authorization submission: letter of medical necessity linking \
@@ -93,7 +93,7 @@ pub fn health_mode() -> PipelineMode {
                     duplicate charges for the same service/date, balance billing violations \
                     (out-of-network provider billing beyond allowed amount), charges exceeding \
                     usual and customary rates, and services not documented in clinical notes. \
-                    Use WebSearch for current CPT code descriptions and Medicare fee schedules. \
+                    Use web_search for current CPT code descriptions and Medicare fee schedules. \
                     Use federal_register_search for No Surprises Act provisions and CMS billing rules. \
                     Use openstates_search_bills for state balance billing protections and surprise \
                     billing laws. Write research.md with findings and analysis.md with recommended \
@@ -123,7 +123,7 @@ Handle this healthcare admin task end-to-end:
 1. Research applicable regulations — federal (ACA, ERISA, CMS rules, No Surprises Act) \
    and state (insurance mandates, external review laws, balance billing protections). \
    Use federal_register_search for CMS rules, openstates_search_bills for state law, \
-   WebSearch for payer-specific policies and clinical guidelines.
+   web_search for payer-specific policies and clinical guidelines.
 2. Write research.md with: regulatory framework, applicable plan provisions, \
    clinical guidelines supporting the position, and source URLs for everything.
 3. Draft the administrative document (appeal letter, prior auth submission, \
@@ -153,7 +153,7 @@ Review all documents in the workspace for:
 1. Regulatory accuracy — verify cited federal and state regulations are current and \
    correctly applied. Use federal_register_search and openstates_search_bills to confirm.
 2. Clinical support — verify that cited clinical guidelines actually support the \
-   medical necessity argument. Use WebSearch for current guideline versions.
+   medical necessity argument. Use web_search for current guideline versions.
 3. Code accuracy — verify CPT, ICD-10, and denial reason codes are correct and \
    consistently used throughout.
 4. Completeness — all required elements present (plan citations, regulatory basis, \

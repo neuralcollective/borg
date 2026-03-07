@@ -25,7 +25,7 @@ pub fn data_mode() -> PipelineMode {
                     "Implement",
                     DATA_IMPLEMENT_SYSTEM,
                     DATA_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,Bash,web_search,WebFetch",
                     "review",
                 )
             },

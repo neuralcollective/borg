@@ -36,7 +36,7 @@ use tokio_stream::{
 };
 
 use crate::{
-    ingestion::{detect_doc_type, IngestionQueue},
+    ingestion::{detect_doc_type, extract_text_from_bytes, IngestionQueue},
     storage::FileStorage,
     vespa::ChunkMetadata,
     AppState,
@@ -3418,62 +3418,6 @@ pub(crate) async fn upload_project_files(
     Ok(Json(json!({ "uploaded": uploaded, "deduped": deduped })))
 }
 
-async fn extract_text_from_bytes(
-    file_name: &str,
-    mime: &str,
-    bytes: &[u8],
-) -> Result<String, StatusCode> {
-    let file_name = file_name.to_string();
-    let mime = mime.to_string();
-    let bytes = bytes.to_vec();
-    let text = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
-        let is_pdf = mime.contains("pdf") || ext == "pdf";
-        let is_docx = mime.contains("wordprocessingml")
-            || mime.contains("msword")
-            || ext == "docx"
-            || ext == "doc";
-        let is_text = mime.starts_with("text/")
-            || ext == "txt"
-            || ext == "md"
-            || ext == "csv"
-            || ext == "json"
-            || ext == "xml";
-
-        if is_pdf {
-            let tmp = tempfile::NamedTempFile::new()?;
-            std::fs::write(tmp.path(), &bytes)?;
-            let out = std::process::Command::new("pdftotext")
-                .args(["-layout", tmp.path().to_str().unwrap_or(""), "-"])
-                .output()?;
-            Ok(String::from_utf8_lossy(&out.stdout).to_string())
-        } else if is_docx {
-            let suffix = if ext.is_empty() { "docx" } else { &ext };
-            let tmp = tempfile::Builder::new()
-                .suffix(&format!(".{suffix}"))
-                .tempfile()?;
-            std::fs::write(tmp.path(), &bytes)?;
-            let out = std::process::Command::new("pandoc")
-                .args([
-                    tmp.path().to_str().unwrap_or(""),
-                    "-t",
-                    "plain",
-                    "--wrap=none",
-                ])
-                .output()?;
-            Ok(String::from_utf8_lossy(&out.stdout).to_string())
-        } else if is_text {
-            Ok(String::from_utf8_lossy(&bytes).to_string())
-        } else {
-            Ok(String::new())
-        }
-    })
-    .await
-    .map_err(internal)?
-    .map_err(internal)?;
-    Ok(text)
-}
-
 async fn chunk_embed_and_index(
     search: &crate::search::SearchClient,
     embed_client: &borg_core::knowledge::EmbeddingClient,
@@ -3600,7 +3544,7 @@ pub(crate) async fn reextract_project_file(
         .read_all(&file.stored_path)
         .await
         .map_err(internal)?;
-    let text = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await?;
+    let text = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await.map_err(internal)?;
     if !text.is_empty() {
         state
             .db
@@ -3995,7 +3939,11 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
 
 pub(crate) async fn get_settings(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
 ) -> Result<Json<Value>, StatusCode> {
+    if !user.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut obj = serde_json::Map::new();
     for key in SETTINGS_KEYS {
         let val = state.db.get_config(key).map_err(internal)?;
@@ -4473,6 +4421,10 @@ pub(crate) async fn post_chat(
     {
         let mut map = state.chat_rate.lock().unwrap_or_else(|e| e.into_inner());
         let now = std::time::Instant::now();
+        // Evict stale entries to prevent unbounded growth
+        if map.len() > 1000 {
+            map.retain(|_, last| now.duration_since(*last) < cooldown * 10);
+        }
         if let Some(last) = map.get(&thread) {
             if now.duration_since(*last) < cooldown {
                 return Err(StatusCode::TOO_MANY_REQUESTS);

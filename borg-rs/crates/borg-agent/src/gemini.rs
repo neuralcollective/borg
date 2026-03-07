@@ -89,6 +89,7 @@ impl AgentBackend for GeminiBackend {
         }
 
         let mut child = cmd
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("failed to spawn gemini binary: {}", self.gemini_bin))?;
 
@@ -127,7 +128,9 @@ impl AgentBackend for GeminiBackend {
                             if let Some(tx) = &stream_tx {
                                 let _ = tx.send(l.clone());
                             }
-                            output_lines.push(l);
+                            if output_lines.len() < 50_000 {
+                                output_lines.push(l);
+                            }
                         }
                         None => {
                             stdout_done = true;

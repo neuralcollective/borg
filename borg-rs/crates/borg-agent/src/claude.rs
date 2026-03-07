@@ -448,7 +448,9 @@ impl AgentBackend for ClaudeBackend {
                                 if let Some(tx) = &stream_tx {
                                     let _ = tx.send(l.clone());
                                 }
-                                output_lines.push(l);
+                                if output_lines.len() < 50_000 {
+                                    output_lines.push(l);
+                                }
                             }
                             Ok(None) => stdout_done = true,
                             Err(e) => {
@@ -524,10 +526,10 @@ impl AgentBackend for ClaudeBackend {
 
         Ok(PhaseOutput {
             output: raw_stream.clone(),
-            new_session_id: signal_json,
+            new_session_id: None,
             raw_stream,
             success,
-            signal_json: None,
+            signal_json,
             ran_in_docker: is_docker,
             container_test_results,
         })

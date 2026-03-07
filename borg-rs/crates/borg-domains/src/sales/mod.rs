@@ -16,14 +16,16 @@ pub fn sales_mode() -> PipelineMode {
             setup_phase("implement"),
             PhaseConfig {
                 include_task_context: true,
+                include_file_listing: true,
                 commits: true,
                 commit_message: "draft: outreach from sales agent".into(),
+                error_instruction: "Previous attempt failed:\n{ERROR}\n\nAnalyze the error and fix the issue.".into(),
                 ..agent_phase(
                     "implement",
                     "Implement",
                     SALES_IMPLEMENT_SYSTEM,
                     SALES_IMPLEMENT_INSTRUCTION,
-                    "Read,Glob,Grep,Write,Edit,WebSearch,WebFetch",
+                    "Read,Glob,Grep,Write,Edit,web_search,WebFetch",
                     "review",
                 )
             },
@@ -48,7 +50,7 @@ pub fn sales_mode() -> PipelineMode {
                 label: "Lead Discovery".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SALES_SEED_DISCOVERY.into(),
-                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                allowed_tools: "Read,Glob,Grep,Bash,web_search,WebFetch".into(),
                 target_primary_repo: false,
             },
             SeedConfig {
@@ -56,7 +58,7 @@ pub fn sales_mode() -> PipelineMode {
                 label: "Follow-up Drafts".into(),
                 output_type: SeedOutputType::Task,
                 prompt: SALES_SEED_FOLLOWUP.into(),
-                allowed_tools: "Read,Glob,Grep,Bash,WebSearch,WebFetch".into(),
+                allowed_tools: "Read,Glob,Grep,Bash,web_search,WebFetch".into(),
                 target_primary_repo: false,
             },
             SeedConfig {

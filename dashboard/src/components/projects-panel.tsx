@@ -752,8 +752,8 @@ async function uploadChunkQueue(
                   {r.project_name}
                   {r.source === "semantic" && <span className="px-1.5 py-0.5 rounded-lg bg-violet-900/50 text-violet-300 text-[10px]">semantic</span>}
                 </div>
-                {r.title_snippet && <div className="text-[12px] text-[#e8e0d4] truncate mt-0.5" dangerouslySetInnerHTML={{ __html: r.title_snippet }} />}
-                <div className="text-[11px] text-[#9c9486] line-clamp-2 mt-0.5" dangerouslySetInnerHTML={{ __html: r.content_snippet }} />
+                {r.title_snippet && <div className="text-[12px] text-[#e8e0d4] truncate mt-0.5">{r.title_snippet}</div>}
+                <div className="text-[11px] text-[#9c9486] line-clamp-2 mt-0.5">{r.content_snippet}</div>
               </button>
             ))}
             {!ftsSearching && ftsResults.length === 0 && (

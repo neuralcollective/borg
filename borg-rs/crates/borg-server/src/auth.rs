@@ -13,6 +13,9 @@ use serde_json::json;
 
 use crate::AppState;
 
+const MAX_LOGIN_ATTEMPTS: u32 = 5;
+const LOGIN_WINDOW_SECS: u64 = 300;
+
 // ── Token generation ─────────────────────────────────────────────────────
 
 pub fn generate_token() -> String {
@@ -49,7 +52,10 @@ pub fn create_jwt(user_id: i64, username: &str, is_admin: bool, secret: &str) ->
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
-    .unwrap_or_default()
+    .unwrap_or_else(|e| {
+        tracing::error!("JWT encode failed: {e}");
+        String::new()
+    })
 }
 
 pub fn verify_jwt(token: &str, secret: &str) -> Option<JwtClaims> {
@@ -114,15 +120,10 @@ fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
 // Paths exempt from bearer auth entirely.
 fn is_exempt(path: &str) -> bool {
     path == "/api/health"
-        || path == "/api/auth/token"
         || path == "/api/auth/login"
         || path == "/api/auth/setup"
         || path == "/api/auth/status"
         || !path.starts_with("/api/")
-}
-
-fn verify_token(headers: &axum::http::HeaderMap, expected: &str) -> bool {
-    extract_bearer(headers) == Some(expected)
 }
 
 // ── Middleware ────────────────────────────────────────────────────────────
@@ -188,10 +189,19 @@ pub struct SetupBody {
 }
 
 // POST /api/auth/setup — create first admin user (only when no users exist)
+static SETUP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub async fn setup(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetupBody>,
 ) -> Response {
+    let _guard = match SETUP_LOCK.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return (StatusCode::CONFLICT, Json(json!({"error": "setup already in progress"}))).into_response();
+        }
+    };
+
     let user_count = match state.db.count_users() {
         Ok(c) => c,
         Err(e) => {
@@ -207,10 +217,10 @@ pub async fn setup(
             .into_response();
     }
 
-    if body.username.trim().is_empty() || body.password.len() < 4 {
+    if body.username.trim().is_empty() || body.password.len() < 8 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "username required, password min 4 chars"})),
+            Json(json!({"error": "username required, password min 8 chars"})),
         )
             .into_response();
     }
@@ -249,6 +259,23 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginBody>,
 ) -> Response {
+    // Rate limiting
+    {
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        // Clean stale entries
+        attempts.retain(|_, (_, t)| now.duration_since(*t).as_secs() < LOGIN_WINDOW_SECS);
+        if let Some((count, _)) = attempts.get(&body.username) {
+            if *count >= MAX_LOGIN_ATTEMPTS {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(json!({"error": "too many login attempts, try again later"})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let user = match state.db.get_user_by_username(&body.username) {
         Ok(Some(u)) => u,
         Ok(None) => {
@@ -266,11 +293,21 @@ pub async fn login(
     let (id, username, display_name, password_hash, is_admin) = user;
 
     if !verify_password(&body.password, &password_hash) {
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = attempts.entry(body.username.clone()).or_insert((0, std::time::Instant::now()));
+        entry.0 += 1;
+        entry.1 = std::time::Instant::now();
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": "invalid credentials"})),
         )
             .into_response();
+    }
+
+    // Clear rate limit on success
+    {
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|e| e.into_inner());
+        attempts.remove(&body.username);
     }
 
     let token = create_jwt(id, &username, is_admin, &state.jwt_secret);
@@ -297,8 +334,6 @@ pub async fn get_me(request: axum::extract::Request) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue};
-
     use super::*;
 
     #[test]
@@ -307,8 +342,8 @@ mod tests {
     }
 
     #[test]
-    fn is_exempt_auth_token() {
-        assert!(is_exempt("/api/auth/token"));
+    fn auth_token_requires_auth() {
+        assert!(!is_exempt("/api/auth/token"));
     }
 
     #[test]
@@ -346,58 +381,6 @@ mod tests {
     #[test]
     fn generate_tokens_are_unique() {
         assert_ne!(generate_token(), generate_token());
-    }
-
-    #[test]
-    fn verify_token_accepts_valid_bearer() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret123"),
-        );
-        assert!(verify_token(&headers, "secret123"));
-    }
-
-    #[test]
-    fn verify_token_rejects_wrong_token() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer wrongtoken"),
-        );
-        assert!(!verify_token(&headers, "secret123"));
-    }
-
-    #[test]
-    fn verify_token_rejects_missing_header() {
-        let headers = HeaderMap::new();
-        assert!(!verify_token(&headers, "secret123"));
-    }
-
-    #[test]
-    fn verify_token_rejects_query_param_only() {
-        let headers = HeaderMap::new();
-        assert!(!verify_token(&headers, "secret123"));
-    }
-
-    #[test]
-    fn verify_token_rejects_malformed_bearer() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            HeaderValue::from_static("secret123"),
-        );
-        assert!(!verify_token(&headers, "secret123"));
-    }
-
-    #[test]
-    fn verify_token_rejects_basic_auth() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            axum::http::header::AUTHORIZATION,
-            HeaderValue::from_static("Basic secret123"),
-        );
-        assert!(!verify_token(&headers, "secret123"));
     }
 
     #[test]

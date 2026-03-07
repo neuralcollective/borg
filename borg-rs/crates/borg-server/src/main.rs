@@ -71,6 +71,7 @@ pub struct AppState {
     pub brave_search: Option<Arc<borg_core::knowledge::BraveSearchClient>>,
     pub upload_processing_sem: Arc<Semaphore>,
     pub upload_processing_limit: usize,
+    pub login_attempts: Arc<std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>>,
 }
 
 impl AppState {
@@ -780,6 +781,7 @@ async fn main() -> anyhow::Result<()> {
         brave_search,
         upload_processing_sem: Arc::new(Semaphore::new(upload_processing_limit)),
         upload_processing_limit,
+        login_attempts: Arc::new(std::sync::Mutex::new(HashMap::new())),
     });
 
     {
@@ -811,7 +813,6 @@ async fn main() -> anyhow::Result<()> {
     let proxy_router = proxy::proxy_routes().with_state(proxy_state);
 
     let app = Router::new()
-        .merge(proxy_router)
         // Health (unauthenticated)
         .route("/api/health", get(routes::health))
         // Auth endpoints (unauthenticated)
@@ -1091,9 +1092,10 @@ async fn main() -> anyhow::Result<()> {
             .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
 
+    let proxy_app = Router::new().merge(proxy_router);
     let proxy_server = axum::serve(
         proxy_listener,
-        app.clone()
+        proxy_app
             .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
 
