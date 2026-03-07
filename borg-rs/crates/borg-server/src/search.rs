@@ -1,7 +1,7 @@
 use anyhow::Result;
 use borg_core::config::Config;
 
-use crate::vespa::VespaClient;
+use crate::vespa::{ChunkFilters, ChunkMetadata, VespaClient};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
@@ -10,6 +10,18 @@ pub struct SearchHit {
     pub file_path: String,
     pub title_snippet: String,
     pub content_snippet: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChunkSearchHit {
+    pub project_id: i64,
+    pub file_id: i64,
+    pub chunk_index: i32,
+    pub file_path: String,
+    pub title: String,
+    pub content: String,
+    pub doc_type: String,
     pub score: f64,
 }
 
@@ -71,6 +83,47 @@ impl SearchClient {
     pub async fn healthcheck(&self) -> Result<()> {
         match self {
             Self::Vespa(client) => client.healthcheck().await,
+        }
+    }
+
+    pub async fn index_chunks(
+        &self,
+        project_id: i64,
+        file_id: i64,
+        file_path: &str,
+        title: &str,
+        chunks: &[(String, Vec<f32>)],
+        metadata: &ChunkMetadata,
+    ) -> Result<()> {
+        match self {
+            Self::Vespa(client) => {
+                client
+                    .index_chunks(project_id, file_id, file_path, title, chunks, metadata)
+                    .await
+            }
+        }
+    }
+
+    pub async fn delete_file_chunks(&self, project_id: i64, file_id: i64) -> Result<()> {
+        match self {
+            Self::Vespa(client) => client.delete_file_chunks(project_id, file_id).await,
+        }
+    }
+
+    pub async fn search_chunks(
+        &self,
+        query: &str,
+        query_embedding: Option<&[f32]>,
+        project_id: Option<i64>,
+        filters: &ChunkFilters,
+        limit: i64,
+    ) -> Result<Vec<ChunkSearchHit>> {
+        match self {
+            Self::Vespa(client) => {
+                client
+                    .search_chunks(query, query_embedding, project_id, filters, limit)
+                    .await
+            }
         }
     }
 }

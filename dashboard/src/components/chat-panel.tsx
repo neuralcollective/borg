@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { MessageSquare, Mic, MicOff, Send, ChevronDown, Globe, FolderOpen } from "lucide-react";
+import { Mic, MicOff, Send, ChevronDown, Globe, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { BorgingIndicator } from "./borging";

@@ -787,8 +787,9 @@ async fn main() -> anyhow::Result<()> {
         let db = Arc::clone(&state.db);
         let storage = Arc::clone(&state.file_storage);
         let search = state.search.clone();
+        let embed_client = Arc::new(borg_core::knowledge::EmbeddingClient::from_env());
         tokio::spawn(async move {
-            queue.run_worker(db, storage, search).await;
+            queue.run_worker(db, storage, search, embed_client).await;
         });
     }
 

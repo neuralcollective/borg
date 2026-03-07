@@ -24,17 +24,13 @@ import {
 } from "@/lib/api";
 import type { CloudBrowseItem, CloudConnection, FtsSearchResult } from "@/lib/api";
 import type { UploadSession } from "@/lib/api";
-import { Eye, FileText, Mic, MicOff, ArrowLeft, Search, RotateCw, Folder, Upload, X } from "lucide-react";
+import { Eye, FileText, ArrowLeft, Search, RotateCw, Folder, Upload, X } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useDictation } from "@/lib/dictation";
-import { BorgingIndicator } from "./borging";
-import { ChatMarkdown } from "./chat-markdown";
 import { MatterDetail } from "./matter-detail";
 import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
 import { RedlineViewer } from "./viewers/redline-viewer";
-import { TaskCreator } from "./task-creator";
 import { useProjectDocumentVersions } from "@/lib/api";
 import { useChatEvents } from "@/lib/use-chat-events";
 
@@ -58,11 +54,6 @@ const CLOUD_PROVIDERS = [
   { id: "onedrive", label: "OneDrive", clientIdKey: "ms_client_id", clientSecretKey: "ms_client_secret" },
 ] as const;
 const MAX_CLOUD_IMPORT_SELECTION = 1000;
-const CHAT_SUGGESTED_PROMPTS = [
-  "Summarize key themes across all uploaded documents.",
-  "List recurring terms and explain why they matter for this matter.",
-  "Identify common patterns, contradictions, and missing evidence.",
-] as const;
 const RESUMABLE_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 const RESUMABLE_UPLOAD_PARALLEL_CHUNKS = 4;
 const RESUMABLE_UPLOAD_CHUNK_RETRIES = 3;
@@ -281,11 +272,6 @@ export function ProjectsPanel() {
   const [dragOver, setDragOver] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [messageInput, setMessageInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const dictation = useDictation(messageInput, setMessageInput);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
   const totalBytes = fileSummary?.total_bytes ?? 0;
   const currentCloudFolderId = cloudBreadcrumbs[cloudBreadcrumbs.length - 1]?.id;

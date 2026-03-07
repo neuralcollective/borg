@@ -35,7 +35,12 @@ use tokio_stream::{
     StreamExt,
 };
 
-use crate::{ingestion::IngestionQueue, storage::FileStorage, AppState};
+use crate::{
+    ingestion::{detect_doc_type, IngestionQueue},
+    storage::FileStorage,
+    vespa::ChunkMetadata,
+    AppState,
+};
 
 pub(crate) mod tasks;
 pub(crate) use tasks::*;
@@ -1221,7 +1226,7 @@ pub(crate) async fn run_chat_agent(
              You have access to a project document search API. Use curl or WebFetch to query it.\n\n\
              ## Endpoints\n\n\
              All requests need: `Authorization: Bearer $BORG_API_TOKEN`\n\n\
-             - `GET $BORG_API_URL/api/agent/search?q=<query>&project_id=<id>&limit=20` — hybrid keyword+semantic search across project files\n\
+             - `GET $BORG_API_URL/api/agent/search?q=<query>&project_id=<id>&limit=20&doc_type=<type>&jurisdiction=<jur>&privileged_only=true` — hybrid keyword+semantic search with optional filters. doc_type: contract, filing, statute, memo, document, data. jurisdiction: e.g. US-CA, UK, EU.\n\
              - `GET $BORG_API_URL/api/agent/files?project_id=<id>&q=<filter>&limit=50&offset=0` — list project files\n\
              - `GET $BORG_API_URL/api/agent/file/<file_id>?project_id=<id>` — read full file content\n\n\
              Responses are plain text optimized for reading. Use search to find relevant documents before answering questions about project content.\n"
@@ -3442,6 +3447,43 @@ async fn extract_text_from_bytes(
     Ok(text)
 }
 
+async fn chunk_embed_and_index(
+    search: &crate::search::SearchClient,
+    embed_client: &borg_core::knowledge::EmbeddingClient,
+    project_id: i64,
+    file_id: i64,
+    file_path: &str,
+    title: &str,
+    text: &str,
+    privileged: bool,
+    mime_type: &str,
+) {
+    let _ = search.delete_file_chunks(project_id, file_id).await;
+    let chunks_text = borg_core::knowledge::chunk_text(text);
+    if chunks_text.is_empty() {
+        return;
+    }
+    let metadata = ChunkMetadata {
+        doc_type: detect_doc_type(title, mime_type, text),
+        jurisdiction: String::new(),
+        privileged,
+        mime_type: mime_type.to_string(),
+    };
+    let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
+    for chunk in &chunks_text {
+        match embed_client.embed_single(chunk).await {
+            Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
+            Err(_) => chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768])),
+        }
+    }
+    if let Err(e) = search
+        .index_chunks(project_id, file_id, file_path, title, &chunks_with_embeddings, &metadata)
+        .await
+    {
+        tracing::warn!("chunk index failed for file {file_id}: {e}");
+    }
+}
+
 async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow) {
     if !file.extracted_text.is_empty() {
         return;
@@ -3484,23 +3526,18 @@ async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow)
         return;
     }
     if let Some(search) = &state.search {
-        let doc_id = format!("project-{}-file-{}", file.project_id, file.id);
-        if let Err(e) = search
-            .index_document(
-                &doc_id,
-                file.project_id,
-                0,
-                source_path,
-                &file.file_name,
-                &text,
-            )
-            .await
-        {
-            tracing::warn!(
-                "project file search index failed for {}: {e}",
-                file.file_name
-            );
-        }
+        chunk_embed_and_index(
+            search,
+            &state.embed_client,
+            file.project_id,
+            file.id,
+            source_path,
+            &file.file_name,
+            &text,
+            file.privileged,
+            &file.mime_type,
+        )
+        .await;
     }
     tracing::info!("extracted {} chars from {}", text.len(), file.file_name);
 }
@@ -3547,16 +3584,18 @@ pub(crate) async fn reextract_project_file(
             .fts_index_document(project_id, 0, &file.file_name, &file.file_name, &text)
             .map_err(internal)?;
         if let Some(search) = &state.search {
-            let _ = search
-                .index_document(
-                    &format!("project-{}-file-{}", project_id, file_id),
-                    project_id,
-                    0,
-                    &file.file_name,
-                    &file.file_name,
-                    &text,
-                )
-                .await;
+            chunk_embed_and_index(
+                search,
+                &state.embed_client,
+                project_id,
+                file_id,
+                &file.file_name,
+                &file.file_name,
+                &text,
+                file.privileged,
+                &file.mime_type,
+            )
+            .await;
         }
     }
     Ok(Json(json!({
@@ -5513,7 +5552,6 @@ pub(crate) async fn import_cloud_files(
         imported.push(json!({ "id": file_id, "file_name": safe_name, "size_bytes": file_size }));
 
         if matches!(state.ingestion_queue.as_ref(), IngestionQueue::Disabled) {
-            // Kick off text extraction in-process when queue is disabled
             let db2 = state.db.clone();
             let search = state.search.clone();
             let mime2 = mime.clone();
@@ -5521,22 +5559,19 @@ pub(crate) async fn import_cloud_files(
             let proj_id = id;
             let fname = safe_name.clone();
             let source_path2 = source_path.clone();
+            let privileged = body.privileged;
             tokio::spawn(async move {
                 if let Ok(text) = extract_text_from_bytes(&fname, &mime2, &bytes2).await {
                     if !text.is_empty() {
                         let _ = db2.update_project_file_text(file_id, &text);
                         let _ = db2.fts_index_document(proj_id, 0, &source_path2, &fname, &text);
                         if let Some(search) = &search {
-                            let _ = search
-                                .index_document(
-                                    &format!("project-{}-file-{}", proj_id, file_id),
-                                    proj_id,
-                                    0,
-                                    &source_path2,
-                                    &fname,
-                                    &text,
-                                )
-                                .await;
+                            let ec = borg_core::knowledge::EmbeddingClient::from_env();
+                            chunk_embed_and_index(
+                                search, &ec, proj_id, file_id,
+                                &source_path2, &fname, &text, privileged, &mime2,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -5772,6 +5807,12 @@ pub(crate) struct AgentSearchQuery {
     project_id: Option<i64>,
     #[serde(default = "default_agent_search_limit")]
     limit: i64,
+    #[serde(default)]
+    doc_type: Option<String>,
+    #[serde(default)]
+    jurisdiction: Option<String>,
+    #[serde(default)]
+    privileged_only: bool,
 }
 fn default_agent_search_limit() -> i64 {
     20
@@ -5786,7 +5827,50 @@ pub(crate) async fn agent_search(
     }
 
     let limit = query.limit.clamp(1, 100);
-    let mut results: Vec<(String, String, f64, String)> = Vec::new(); // (path, snippet, score, source)
+    let filters = crate::vespa::ChunkFilters {
+        doc_type: query.doc_type.clone(),
+        jurisdiction: query.jurisdiction.clone(),
+        privileged_only: query.privileged_only,
+    };
+
+    // Try chunk-level hybrid search first
+    if let Some(search) = &state.search {
+        let query_emb = state.embed_client.embed_single(&query.q).await.ok();
+        let emb_ref = query_emb.as_deref();
+
+        match search.search_chunks(&query.q, emb_ref, query.project_id, &filters, limit).await {
+            Ok(hits) if !hits.is_empty() => {
+                let mut out = format!("Search results for: {}\n", query.q);
+                if let Some(dt) = &query.doc_type {
+                    out.push_str(&format!("Filter: doc_type={}\n", dt));
+                }
+                if let Some(j) = &query.jurisdiction {
+                    out.push_str(&format!("Filter: jurisdiction={}\n", j));
+                }
+                out.push('\n');
+                for (i, hit) in hits.iter().enumerate() {
+                    out.push_str(&format!(
+                        "--- Result {} (score: {:.3}, type: {}) ---\nFile: {} [id={}, chunk={}]\n{}\n\n",
+                        i + 1,
+                        hit.score,
+                        if hit.doc_type.is_empty() { "unknown" } else { &hit.doc_type },
+                        hit.file_path,
+                        hit.file_id,
+                        hit.chunk_index,
+                        hit.content,
+                    ));
+                }
+                return Ok(out);
+            }
+            Ok(_) => {},
+            Err(e) => {
+                tracing::warn!("chunk search failed, falling back: {e}");
+            }
+        }
+    }
+
+    // Fallback: old whole-document search + semantic
+    let mut results: Vec<(String, String, f64, String)> = Vec::new();
 
     if let Some(search) = &state.search {
         if let Ok(hits) = search.search(&query.q, query.project_id, limit).await {
@@ -5801,14 +5885,9 @@ pub(crate) async fn agent_search(
         }
     }
 
-    // Also try semantic search
     if state.db.embedding_count() > 0 {
         if let Ok(query_emb) = state.embed_client.embed_single(&query.q).await {
-            if let Ok(sem) = state.db.search_embeddings(
-                &query_emb,
-                limit as usize,
-                query.project_id,
-            ) {
+            if let Ok(sem) = state.db.search_embeddings(&query_emb, limit as usize, query.project_id) {
                 for r in sem.iter().filter(|r| r.score > 0.5) {
                     let already = results.iter().any(|(p, _, _, _)| *p == r.file_path);
                     if !already {
@@ -5835,11 +5914,7 @@ pub(crate) async fn agent_search(
     for (i, (path, snippet, score, source)) in results.iter().enumerate() {
         out.push_str(&format!(
             "--- Result {} (score: {:.3}, source: {}) ---\nFile: {}\n{}\n\n",
-            i + 1,
-            score,
-            source,
-            path,
-            snippet
+            i + 1, score, source, path, snippet
         ));
     }
     Ok(out)

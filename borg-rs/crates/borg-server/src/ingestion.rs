@@ -89,6 +89,7 @@ impl IngestionQueue {
         db: Arc<Db>,
         storage: Arc<FileStorage>,
         search: Option<Arc<SearchClient>>,
+        embed_client: Arc<borg_core::knowledge::EmbeddingClient>,
     ) {
         let (queue_url, client) = match self.as_ref() {
             Self::Disabled => return,
@@ -119,7 +120,7 @@ impl IngestionQueue {
                     continue;
                 }
 
-                let processed = process_message(body, &db, &storage, search.as_deref()).await;
+                let processed = process_message(body, &db, &storage, search.as_deref(), Some(&*embed_client)).await;
                 if processed {
                     let _ = client
                         .delete_message()
@@ -147,6 +148,7 @@ async fn process_message(
     db: &Db,
     storage: &FileStorage,
     search: Option<&SearchClient>,
+    embed_client: Option<&borg_core::knowledge::EmbeddingClient>,
 ) -> bool {
     let parsed = serde_json::from_str::<ProjectFileIngestMsg>(body);
     let Ok(msg) = parsed else {
@@ -196,17 +198,51 @@ async fn process_message(
         tracing::warn!("ingestion worker fts index failed: {e}");
         return false;
     }
+    // Chunk, embed, and index to Vespa
     if let Some(os) = search {
+        let _ = os.delete_file_chunks(msg.project_id, msg.file_id).await;
+        let chunks_text = borg_core::knowledge::chunk_text(&text);
+        if !chunks_text.is_empty() {
+            let metadata = crate::vespa::ChunkMetadata {
+                doc_type: detect_doc_type(&msg.file_name, &msg.mime_type, &text),
+                jurisdiction: String::new(),
+                privileged: row.privileged,
+                mime_type: msg.mime_type.clone(),
+            };
+
+            let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
+            if let Some(ec) = embed_client {
+                for chunk in &chunks_text {
+                    match ec.embed_single(chunk).await {
+                        Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
+                        Err(e) => {
+                            tracing::warn!("embedding failed for chunk: {e}");
+                            chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768]));
+                        }
+                    }
+                }
+            } else {
+                for chunk in &chunks_text {
+                    chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768]));
+                }
+            }
+
+            if let Err(e) = os.index_chunks(
+                msg.project_id,
+                msg.file_id,
+                &msg.file_name,
+                &msg.file_name,
+                &chunks_with_embeddings,
+                &metadata,
+            ).await {
+                tracing::warn!("ingestion worker chunk index failed: {e}");
+            }
+        }
+
+        // Also keep legacy whole-doc index for backward compat
         let doc_id = format!("project-{}-file-{}", msg.project_id, msg.file_id);
         if let Err(e) = os
-            .index_document(
-                &doc_id,
-                msg.project_id,
-                0,
-                &msg.file_name,
-                &msg.file_name,
-                &text,
-            )
+            .index_document(&doc_id, msg.project_id, 0, &msg.file_name, &msg.file_name, &text)
             .await
         {
             tracing::warn!("ingestion worker search index failed: {e}");
@@ -220,6 +256,37 @@ async fn process_message(
         "ingestion worker indexed file"
     );
     true
+}
+
+pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String {
+    let name_lower = file_name.to_lowercase();
+    let ext = name_lower.rsplit('.').next().unwrap_or("");
+
+    // By extension/mime
+    if mime.contains("pdf") || ext == "pdf" {
+        let text_lower = text.to_lowercase();
+        let first_2k = if text_lower.len() > 2000 { &text_lower[..2000] } else { &text_lower };
+        if first_2k.contains("agreement") || first_2k.contains("contract") || first_2k.contains("between") && first_2k.contains("parties") {
+            return "contract".to_string();
+        }
+        if first_2k.contains("court") || first_2k.contains("plaintiff") || first_2k.contains("defendant") || first_2k.contains("v.") {
+            return "filing".to_string();
+        }
+        if first_2k.contains("statute") || first_2k.contains("section") && first_2k.contains("chapter") {
+            return "statute".to_string();
+        }
+        return "document".to_string();
+    }
+    if ext == "docx" || ext == "doc" || mime.contains("wordprocessingml") {
+        return "document".to_string();
+    }
+    if ext == "md" || ext == "txt" {
+        return "memo".to_string();
+    }
+    if ext == "csv" || ext == "json" || ext == "xml" {
+        return "data".to_string();
+    }
+    "document".to_string()
 }
 
 async fn extract_text_from_bytes(file_name: &str, mime: &str, bytes: &[u8]) -> Result<String> {

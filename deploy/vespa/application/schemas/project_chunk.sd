@@ -1,0 +1,102 @@
+schema project_chunk {
+  document project_chunk {
+    field project_id type long {
+      indexing: attribute | summary
+      attribute: fast-search
+    }
+    field file_id type long {
+      indexing: attribute | summary
+      attribute: fast-search
+    }
+    field chunk_index type int {
+      indexing: attribute | summary
+    }
+    field file_path type string {
+      indexing: index | summary
+      index: enable-bm25
+    }
+    field title type string {
+      indexing: index | summary
+      index: enable-bm25
+    }
+    field content type string {
+      indexing: index | summary
+      index: enable-bm25
+    }
+    field doc_type type string {
+      indexing: attribute | summary
+      attribute: fast-search
+    }
+    field jurisdiction type string {
+      indexing: attribute | summary
+      attribute: fast-search
+    }
+    field privileged type bool {
+      indexing: attribute | summary
+      attribute: fast-search
+    }
+    field mime_type type string {
+      indexing: attribute | summary
+    }
+    field indexed_at type string {
+      indexing: attribute | summary
+    }
+    field embedding type tensor<float>(x[768]) {
+      indexing: attribute | index
+      attribute {
+        distance-metric: angular
+      }
+      index {
+        hnsw {
+          max-links-per-node: 16
+          neighbors-to-explore-at-insert: 200
+        }
+      }
+    }
+  }
+
+  fieldset default {
+    fields: title, content, file_path
+  }
+
+  rank-profile default {
+    first-phase {
+      expression: bm25(title) + bm25(content) + bm25(file_path)
+    }
+  }
+
+  rank-profile hybrid inherits default {
+    inputs {
+      query(q_embedding) tensor<float>(x[768])
+    }
+    first-phase {
+      expression: bm25(title) + bm25(content) + bm25(file_path)
+    }
+    second-phase {
+      expression: bm25(title) * 2 + bm25(content) + bm25(file_path) + closeness(field, embedding) * 10
+      rerank-count: 100
+    }
+  }
+
+  rank-profile semantic {
+    inputs {
+      query(q_embedding) tensor<float>(x[768])
+    }
+    first-phase {
+      expression: closeness(field, embedding)
+    }
+  }
+
+  document-summary default {
+    summary project_id {}
+    summary file_id {}
+    summary chunk_index {}
+    summary file_path {}
+    summary title {}
+    summary content {}
+    summary doc_type {}
+    summary jurisdiction {}
+    summary privileged {}
+    summary indexed_at {}
+  }
+}
