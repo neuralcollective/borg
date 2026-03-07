@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import { ingestCorpus, loadGroundTruth, saveGroundTruth } from "./corpus";
 import { generateBatch } from "./generators";
 import { buildTestCases, runSearchTests, summarizeResults } from "./search-tests";
+import { collectRealCorpus, buildRealTestCases } from "./collectors";
 import type { IngestConfig, TestConfig } from "./types";
 
 const GROUND_TRUTH_PATH = "ground-truth.json";
@@ -13,6 +14,8 @@ Commands:
   ingest    Generate and upload documents, then wait for indexing
   test      Run search quality tests against an existing project
   full      Ingest + test in one go
+  collect   Collect real documents from CourtListener, EDGAR, Federal Register
+  real      Collect + ingest + test with real documents
 
 Options:
   --base-url <url>       Server URL (default: http://127.0.0.1:3131)
@@ -61,12 +64,12 @@ function parseOptions() {
   if (values.help) usage();
 
   const command = positionals[0];
-  if (!command || !["ingest", "test", "full"].includes(command)) {
+  if (!command || !["ingest", "test", "full", "collect", "real"].includes(command)) {
     usage();
   }
 
   return {
-    command: command as "ingest" | "test" | "full",
+    command: command as "ingest" | "test" | "full" | "collect" | "real",
     baseUrl: values["base-url"]!,
     files: parseInt(values.files!, 10),
     filesPerZip: parseInt(values["files-per-zip"]!, 10),
@@ -184,6 +187,102 @@ async function cmdTest(opts: ReturnType<typeof parseOptions>, projectId?: number
   }
 }
 
+async function cmdCollect(): Promise<ReturnType<typeof collectRealCorpus>> {
+  return collectRealCorpus({
+    opinionsPerTopic: 15,
+    docketsPerTopic: 8,
+    edgarPerTopic: 8,
+    fedregPerTopic: 8,
+    ukPerTopic: 8,
+    eurlexPerTopic: 8,
+    usptoPerTopic: 8,
+    cachePath: "real-corpus.json",
+  });
+}
+
+async function cmdRealTest(opts: ReturnType<typeof parseOptions>, projectId?: number) {
+  let pid = projectId ?? opts.projectId;
+
+  const realDocs = await cmdCollect();
+  if (realDocs.length === 0) {
+    console.error("No real documents collected.");
+    process.exit(1);
+  }
+
+  if (!pid) {
+    // Ingest real docs
+    const config: IngestConfig = {
+      baseUrl: opts.baseUrl,
+      totalFiles: realDocs.length,
+      filesPerZip: Math.min(100, realDocs.length),
+      chunkSize: 2 * 1024 * 1024,
+      timeoutMs: opts.timeoutS * 1000,
+      projectName: opts.projectName || `Real Corpus ${new Date().toISOString().slice(0, 10)}`,
+      concurrency: opts.concurrency,
+    };
+
+    console.log(`\n=== INGEST: ${realDocs.length} real documents ===\n`);
+    const { metrics, projectId: newPid } = await ingestCorpus(config, realDocs);
+    pid = newPid;
+
+    await saveGroundTruth(realDocs, pid, "real-ground-truth.json");
+
+    console.log(`\n=== INGEST RESULTS ===`);
+    console.log(`  Project ID:      ${metrics.projectId}`);
+    console.log(`  Total files:     ${metrics.totalFiles}`);
+    console.log(`  Throughput:      ${metrics.filesPerSecond.toFixed(1)} files/sec\n`);
+  }
+
+  // Build and run real-doc test cases
+  const testCases = buildRealTestCases(realDocs);
+  console.log(`\n=== REAL DOC TESTS: ${testCases.length} cases against project ${pid} ===\n`);
+
+  const config: TestConfig = {
+    baseUrl: opts.baseUrl,
+    projectId: pid!,
+    topK: opts.topK,
+    timeoutMs: opts.timeoutS * 1000,
+  };
+
+  const results = await runSearchTests(config, testCases);
+  const summary = summarizeResults(results);
+
+  console.log(`\n=== REAL DOC TEST RESULTS ===`);
+  console.log(`  Total:     ${summary.total}`);
+  console.log(`  Passed:    ${summary.passed}`);
+  console.log(`  Failed:    ${summary.failed}`);
+  console.log(`  Pass rate: ${(summary.passRate * 100).toFixed(1)}%`);
+  console.log();
+  console.log(`  By category:`);
+  for (const [cat, stats] of Object.entries(summary.byCategory)) {
+    console.log(
+      `    ${cat.padEnd(20)} ${stats.passed}/${stats.total} (${(stats.passRate * 100).toFixed(0)}%)`,
+    );
+  }
+  console.log();
+  console.log(`  Quality metrics:`);
+  console.log(`    MRR:              ${summary.mrr.toFixed(3)}`);
+  console.log(`    Chunk precision:  ${(summary.avgChunkPrecision * 100).toFixed(0)}%`);
+  console.log();
+  console.log(`  Latency:`);
+  console.log(`    Average: ${summary.avgLatencyMs.toFixed(0)}ms`);
+  console.log(`    P95:     ${summary.p95LatencyMs.toFixed(0)}ms`);
+  console.log(`    P95 (steady): ${summary.p95SteadyMs.toFixed(0)}ms`);
+  console.log(`    SLA:     ${summary.latencySlaPassed ? "PASS" : "FAIL"} (p95 steady < 500ms)`);
+  console.log();
+
+  const reportPath = "real-test-results.json";
+  await Bun.write(reportPath, JSON.stringify({ summary, results }, null, 2));
+  console.log(`Detailed results written to ${reportPath}`);
+
+  if (summary.failed > 0) {
+    console.log(`\n  Failed tests:`);
+    for (const r of results.filter((r) => !r.passed)) {
+      console.log(`    - ${r.name}: ${r.details}`);
+    }
+  }
+}
+
 async function main() {
   const opts = parseOptions();
 
@@ -199,6 +298,15 @@ async function main() {
     case "full": {
       const projectId = await cmdIngest(opts);
       await cmdTest(opts, projectId);
+      break;
+    }
+    case "collect": {
+      const docs = await cmdCollect();
+      console.log(`\nCollected ${docs.length} documents.`);
+      break;
+    }
+    case "real": {
+      await cmdRealTest(opts);
       break;
     }
   }

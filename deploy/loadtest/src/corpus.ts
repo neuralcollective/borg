@@ -220,7 +220,7 @@ async function waitForIndexing(
   throw new Error(`timed out waiting for indexing`);
 }
 
-export async function ingestCorpus(config: IngestConfig): Promise<{
+export async function ingestCorpus(config: IngestConfig, pregenDocs?: GeneratedDoc[]): Promise<{
   metrics: IngestMetrics;
   projectId: number;
   groundTruthDocs: GeneratedDoc[];
@@ -248,13 +248,14 @@ export async function ingestCorpus(config: IngestConfig): Promise<{
   const tmpDir = await mkdtemp(join(tmpdir(), "borg-loadtest-"));
 
   try {
-    const totalShards = Math.ceil(config.totalFiles / config.filesPerZip);
+    const allDocs = pregenDocs ?? generateBatch(0, config.totalFiles);
+    const totalShards = Math.ceil(allDocs.length / config.filesPerZip);
 
     for (let shard = 0; shard < totalShards; shard++) {
       const startId = shard * config.filesPerZip;
-      const count = Math.min(config.filesPerZip, config.totalFiles - startId);
+      const count = Math.min(config.filesPerZip, allDocs.length - startId);
 
-      const docs = generateBatch(startId, count);
+      const docs = allDocs.slice(startId, startId + count);
 
       groundTruthDocs.push(...docs);
 
@@ -278,20 +279,20 @@ export async function ingestCorpus(config: IngestConfig): Promise<{
     const uploadMs = Date.now() - uploadStart;
 
     const indexStart = Date.now();
-    await waitForIndexing(client, projectId, config.totalFiles, config.timeoutMs);
+    await waitForIndexing(client, projectId, allDocs.length, config.timeoutMs);
     const indexMs = Date.now() - indexStart;
 
     const totalMs = Date.now() - totalStart;
 
     const metrics: IngestMetrics = {
       projectId,
-      totalFiles: config.totalFiles,
+      totalFiles: allDocs.length,
       totalBytes,
       generationMs: genMs,
       uploadMs,
       indexingMs: indexMs,
       totalMs,
-      filesPerSecond: (config.totalFiles / totalMs) * 1000,
+      filesPerSecond: (allDocs.length / totalMs) * 1000,
     };
 
     return { metrics, projectId, groundTruthDocs };

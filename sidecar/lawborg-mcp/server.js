@@ -19,6 +19,7 @@ const OPENSTATES_KEY = process.env.OPENSTATES_API_KEY || "";
 const CANLII_KEY = process.env.CANLII_API_KEY || "";
 const REGULATIONS_KEY = process.env.REGULATIONS_GOV_API_KEY || "";
 const KLDISCOVERY_API_KEY = process.env.KLDISCOVERY_API_KEY || "";
+const COURTLISTENER_TOKEN = process.env.COURTLISTENER_TOKEN || "";
 
 // ── Base URLs ──────────────────────────────────────────────────────────
 const COURTLISTENER = "https://www.courtlistener.com/api/rest/v4";
@@ -123,6 +124,13 @@ async function fetchJSON(url, opts = {}) {
   const ct = resp.headers.get("content-type") || "";
   if (ct.includes("json")) return resp.json();
   return { text: await resp.text() };
+}
+
+async function clFetch(url) {
+  const opts = COURTLISTENER_TOKEN
+    ? { headers: { Authorization: `Token ${COURTLISTENER_TOKEN}` } }
+    : {};
+  return fetchJSON(url, opts);
 }
 
 async function authedCall(base, path, key, method = "GET", body = null) {
@@ -1706,11 +1714,11 @@ async function handleTool(name, args) {
       if (args.cited_gt) params.cited_gt = args.cited_gt;
       if (args.ordering) params.ordering = args.ordering;
       if (args.page) params.page = args.page;
-      result = await fetchJSON(`${COURTLISTENER}/search/?${qs(params)}`);
+      result = await clFetch(`${COURTLISTENER}/search/?${qs(params)}`);
       break;
     }
     case "courtlistener_get_opinion":
-      result = await fetchJSON(`${COURTLISTENER}/clusters/${validateId(args.id)}/`);
+      result = await clFetch(`${COURTLISTENER}/clusters/${validateId(args.id)}/`);
       break;
     case "courtlistener_search_dockets": {
       const params = { q: args.q, type: "d" };
@@ -1719,21 +1727,21 @@ async function handleTool(name, args) {
       if (args.filed_before) params.filed_before = args.filed_before;
       if (args.nature_of_suit) params.nature_of_suit = args.nature_of_suit;
       if (args.page) params.page = args.page;
-      result = await fetchJSON(`${COURTLISTENER}/search/?${qs(params)}`);
+      result = await clFetch(`${COURTLISTENER}/search/?${qs(params)}`);
       break;
     }
     case "courtlistener_get_docket":
-      result = await fetchJSON(`${COURTLISTENER}/dockets/${validateId(args.id)}/`);
+      result = await clFetch(`${COURTLISTENER}/dockets/${validateId(args.id)}/`);
       break;
     case "courtlistener_search_judges": {
       const params = { q: args.q, type: "p" };
       if (args.court) params.court = args.court;
       if (args.page) params.page = args.page;
-      result = await fetchJSON(`${COURTLISTENER}/search/?${qs(params)}`);
+      result = await clFetch(`${COURTLISTENER}/search/?${qs(params)}`);
       break;
     }
     case "courtlistener_get_judge":
-      result = await fetchJSON(`${COURTLISTENER}/people/${validateId(args.id)}/`);
+      result = await clFetch(`${COURTLISTENER}/people/${validateId(args.id)}/`);
       break;
     case "courtlistener_search_oral_arguments": {
       const params = { q: args.q, type: "oa" };
@@ -1741,7 +1749,7 @@ async function handleTool(name, args) {
       if (args.argued_after) params.argued_after = args.argued_after;
       if (args.argued_before) params.argued_before = args.argued_before;
       if (args.page) params.page = args.page;
-      result = await fetchJSON(`${COURTLISTENER}/search/?${qs(params)}`);
+      result = await clFetch(`${COURTLISTENER}/search/?${qs(params)}`);
       break;
     }
     case "courtlistener_search_recap_documents": {
@@ -1749,11 +1757,11 @@ async function handleTool(name, args) {
       if (args.docket_id) params.docket_id = args.docket_id;
       if (args.description) params.description = args.description;
       if (args.page) params.page = args.page;
-      result = await fetchJSON(`${COURTLISTENER}/search/?${qs(params)}`);
+      result = await clFetch(`${COURTLISTENER}/search/?${qs(params)}`);
       break;
     }
     case "courtlistener_citation_lookup": {
-      result = await fetchJSON(`${COURTLISTENER}/search/?q=${encodeURIComponent(args.cite)}&type=o`);
+      result = await clFetch(`${COURTLISTENER}/search/?q=${encodeURIComponent(args.cite)}&type=o`);
       break;
     }
 
