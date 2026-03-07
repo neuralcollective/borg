@@ -1,0 +1,13 @@
+{
+  "name": "borg-loadtest",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "ingest": "bun run src/index.ts ingest",
+    "test": "bun run src/index.ts test",
+    "full": "bun run src/index.ts full"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
