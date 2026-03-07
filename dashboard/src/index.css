@@ -305,9 +305,8 @@ html:not(.dark) .animate-shimmer-text {
 }
 
 /* --- Light mode overrides --- */
-/* Remap hardcoded dark-mode hex colors when light mode is active.
-   This works because html:not(.dark) + class is more specific
-   than the Tailwind utility class alone. */
+/* Remap hardcoded dark-mode colors when light mode is active.
+   html:not(.dark) + class is more specific than the utility alone. */
 
 html:not(.dark) {
   --warm-success: hsl(145, 55%, 38%);
@@ -318,11 +317,13 @@ html:not(.dark) {
   color-scheme: light;
 }
 
-/* --- Background color remaps --- */
-html:not(.dark) .bg-\[\#0f0e0c\] { background-color: #faf8f5; }
-html:not(.dark) .bg-\[\#151412\] { background-color: #ffffff; }
-html:not(.dark) .bg-\[\#1c1a17\] { background-color: #f0ece5; }
-html:not(.dark) .bg-\[\#232019\] { background-color: #e8e3da; }
+/* --- Hardcoded hex backgrounds → light equivalents --- */
+html:not(.dark) .bg-\[\#0f0e0c\]    { background-color: #faf8f5; }
+html:not(.dark) .bg-\[\#151412\]    { background-color: #ffffff; }
+html:not(.dark) .bg-\[\#1c1a17\]    { background-color: #f0ece5; }
+html:not(.dark) .bg-\[\#1a1814\]    { background-color: #f5f1ea; }
+html:not(.dark) .bg-\[\#232019\]    { background-color: #e8e3da; }
+html:not(.dark) .bg-\[\#0e0e10\]    { background-color: #ffffff; }
 
 /* Gradient backgrounds (sidebar) */
 html:not(.dark) .from-\[\#1c1a17\] { --tw-gradient-from: #f5f2ed; }
@@ -332,46 +333,102 @@ html:not(.dark) .to-\[\#151412\]   { --tw-gradient-to: #faf8f5; }
 html:not(.dark) .bg-\[\#0f0e0c\]\/80 { background-color: rgba(250, 248, 245, 0.8); }
 html:not(.dark) .bg-\[\#0f0e0c\]\/90 { background-color: rgba(250, 248, 245, 0.9); }
 
-/* --- Border color remaps --- */
+/* --- Hardcoded hex borders → light equivalents --- */
 html:not(.dark) .border-\[\#2a2520\] { border-color: #d4cfc7; }
 
-/* --- Text color remaps --- */
+/* --- Hardcoded hex text → light equivalents --- */
 html:not(.dark) .text-\[\#e8e0d4\] { color: #1c1a17; }
 html:not(.dark) .text-\[\#9c9486\] { color: #5c574f; }
 html:not(.dark) .text-\[\#6b6459\] { color: #8a847a; }
 
-/* --- Ring color remaps --- */
-html:not(.dark) .ring-amber-900\/20 { --tw-ring-color: rgba(120, 53, 15, 0.12); }
-html:not(.dark) .ring-amber-900\/15 { --tw-ring-color: rgba(120, 53, 15, 0.08); }
-html:not(.dark) .ring-\[\#2a2520\]  { --tw-ring-color: #d4cfc7; }
+/* --- Zinc text: invert scale for light backgrounds --- */
+html:not(.dark) .text-zinc-100 { color: #27272a; }
+html:not(.dark) .text-zinc-200 { color: #3f3f46; }
+html:not(.dark) .text-zinc-300 { color: #52525b; }
+html:not(.dark) .text-zinc-400 { color: #71717a; }
+/* zinc-500 is the midpoint — leave as-is */
+html:not(.dark) .text-zinc-600 { color: #71717a; }
+html:not(.dark) .text-zinc-700 { color: #a1a1aa; }
+html:not(.dark) .text-white     { color: #1c1a17; }
 
-/* --- Amber accent adjustments (darken in light mode) --- */
+/* --- Zinc backgrounds: invert for light mode --- */
+html:not(.dark) .bg-zinc-600 { background-color: #e4e4e7; }
+html:not(.dark) .bg-zinc-700 { background-color: #e4e4e7; }
+html:not(.dark) .bg-zinc-800 { background-color: #f0ece5; }
+html:not(.dark) .bg-zinc-900 { background-color: #f5f2ed; }
+
+/* --- Zinc borders --- */
+html:not(.dark) .border-zinc-500 { border-color: #a1a1aa; }
+html:not(.dark) .border-zinc-600 { border-color: #d4d4d8; }
+html:not(.dark) .border-zinc-700 { border-color: #e4e4e7; }
+
+/* --- Ring color remaps --- */
+html:not(.dark) .ring-amber-900\/20  { --tw-ring-color: rgba(120, 53, 15, 0.12); }
+html:not(.dark) .ring-amber-900\/15  { --tw-ring-color: rgba(120, 53, 15, 0.08); }
+html:not(.dark) .ring-amber-900\/30  { --tw-ring-color: rgba(120, 53, 15, 0.15); }
+html:not(.dark) .ring-\[\#2a2520\]   { --tw-ring-color: #d4cfc7; }
+html:not(.dark) .ring-white\/\[0\.06\] { --tw-ring-color: rgba(0, 0, 0, 0.06); }
+
+/* --- Amber accent adjustments (darken for light bg) --- */
 html:not(.dark) .text-amber-400 { color: hsl(38, 80%, 40%); }
 html:not(.dark) .text-amber-300 { color: hsl(38, 75%, 42%); }
 html:not(.dark) .text-amber-200 { color: hsl(38, 70%, 35%); }
 html:not(.dark) .border-amber-500\/30 { border-color: hsla(38, 80%, 40%, 0.3); }
+html:not(.dark) .border-amber-500\/20 { border-color: hsla(38, 80%, 40%, 0.2); }
+html:not(.dark) .border-amber-500\/40 { border-color: hsla(38, 80%, 40%, 0.4); }
+html:not(.dark) .ring-amber-500\/20 { --tw-ring-color: hsla(38, 80%, 40%, 0.2); }
+html:not(.dark) .ring-amber-500\/30 { --tw-ring-color: hsla(38, 80%, 40%, 0.3); }
+html:not(.dark) .bg-amber-500\/10 { background-color: hsla(38, 80%, 50%, 0.08); }
 
-/* Amber button (stays vibrant) */
+/* Amber buttons (stay vibrant) */
 html:not(.dark) .bg-amber-500 { background-color: hsl(38, 92%, 50%); }
 html:not(.dark) .bg-amber-400 { background-color: hsl(38, 92%, 55%); }
 
 /* Amber semi-transparent fills */
-html:not(.dark) .bg-amber-500\/15 { background-color: hsla(38, 80%, 50%, 0.12); }
-html:not(.dark) .bg-amber-500\/20 { background-color: hsla(38, 80%, 50%, 0.15); }
+html:not(.dark) .bg-amber-500\/15       { background-color: hsla(38, 80%, 50%, 0.12); }
+html:not(.dark) .bg-amber-500\/20       { background-color: hsla(38, 80%, 50%, 0.15); }
 html:not(.dark) .bg-amber-500\/\[0\.04\] { background-color: hsla(38, 80%, 50%, 0.06); }
 html:not(.dark) .bg-amber-500\/\[0\.08\] { background-color: hsla(38, 80%, 50%, 0.08); }
+html:not(.dark) .bg-amber-400\/20       { background-color: hsla(38, 80%, 50%, 0.15); }
 
 /* Shadow adjustments */
 html:not(.dark) .shadow-amber-500\/20 { --tw-shadow-color: hsla(38, 80%, 50%, 0.15); }
 html:not(.dark) .shadow-amber-500\/25 { --tw-shadow-color: hsla(38, 80%, 50%, 0.18); }
 
-/* --- White/opacity overrides (used in legacy/non-amber parts) --- */
-html:not(.dark) .bg-white\/\[0\.04\]  { background-color: rgba(0, 0, 0, 0.03); }
-html:not(.dark) .bg-white\/\[0\.06\]  { background-color: rgba(0, 0, 0, 0.04); }
-html:not(.dark) .bg-white\/\[0\.08\]  { background-color: rgba(0, 0, 0, 0.05); }
+/* --- White/opacity → black/opacity (subtle overlays) --- */
+html:not(.dark) .bg-white\/\[0\.01\] { background-color: rgba(0, 0, 0, 0.01); }
+html:not(.dark) .bg-white\/\[0\.02\] { background-color: rgba(0, 0, 0, 0.02); }
+html:not(.dark) .bg-white\/\[0\.03\] { background-color: rgba(0, 0, 0, 0.02); }
+html:not(.dark) .bg-white\/\[0\.04\] { background-color: rgba(0, 0, 0, 0.03); }
+html:not(.dark) .bg-white\/\[0\.06\] { background-color: rgba(0, 0, 0, 0.04); }
+html:not(.dark) .bg-white\/\[0\.07\] { background-color: rgba(0, 0, 0, 0.04); }
+html:not(.dark) .bg-white\/\[0\.08\] { background-color: rgba(0, 0, 0, 0.05); }
+html:not(.dark) .bg-white\/\[0\.1\]  { background-color: rgba(0, 0, 0, 0.06); }
+
+html:not(.dark) .border-white\/\[0\.04\] { border-color: rgba(0, 0, 0, 0.06); }
+html:not(.dark) .border-white\/\[0\.05\] { border-color: rgba(0, 0, 0, 0.07); }
 html:not(.dark) .border-white\/\[0\.06\] { border-color: rgba(0, 0, 0, 0.08); }
 html:not(.dark) .border-white\/\[0\.07\] { border-color: rgba(0, 0, 0, 0.1); }
 html:not(.dark) .border-white\/\[0\.08\] { border-color: rgba(0, 0, 0, 0.1); }
+html:not(.dark) .border-white\/\[0\.1\]  { border-color: rgba(0, 0, 0, 0.1); }
+html:not(.dark) .border-white\/\[0\.12\] { border-color: rgba(0, 0, 0, 0.12); }
+html:not(.dark) .border-white\/\[0\.14\] { border-color: rgba(0, 0, 0, 0.14); }
+html:not(.dark) .border-white\/10        { border-color: rgba(0, 0, 0, 0.1); }
+
+html:not(.dark) .divide-white\/\[0\.06\] > :not(:first-child) { border-color: rgba(0, 0, 0, 0.08); }
+html:not(.dark) .divide-white\/\[0\.07\] > :not(:first-child) { border-color: rgba(0, 0, 0, 0.1); }
+
+/* --- Black overlays (modals, backdrops) — keep dark but soften --- */
+html:not(.dark) .bg-black\/20 { background-color: rgba(0, 0, 0, 0.12); }
+html:not(.dark) .bg-black\/30 { background-color: rgba(0, 0, 0, 0.2); }
+html:not(.dark) .bg-black\/60 { background-color: rgba(0, 0, 0, 0.4); }
+html:not(.dark) .bg-black\/70 { background-color: rgba(0, 0, 0, 0.5); }
+
+/* --- Other color adjustments --- */
+html:not(.dark) .text-blue-400\/60 { color: hsla(217, 70%, 45%, 0.8); }
+html:not(.dark) .text-blue-400     { color: hsl(217, 70%, 45%); }
+html:not(.dark) .bg-rose-500\/15   { background-color: hsla(350, 70%, 50%, 0.1); }
+html:not(.dark) .ring-rose-500\/20 { --tw-ring-color: hsla(350, 70%, 50%, 0.15); }
 
 /* --- Misc semantic remaps --- */
 html:not(.dark) .text-foreground { color: #1c1a17; }
