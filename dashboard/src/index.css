@@ -349,7 +349,6 @@ html:not(.dark) .text-zinc-400 { color: #71717a; }
 /* zinc-500 is the midpoint — leave as-is */
 html:not(.dark) .text-zinc-600 { color: #71717a; }
 html:not(.dark) .text-zinc-700 { color: #a1a1aa; }
-html:not(.dark) .text-white     { color: #1c1a17; }
 
 /* --- Zinc backgrounds: invert for light mode --- */
 html:not(.dark) .bg-zinc-600 { background-color: #e4e4e7; }
