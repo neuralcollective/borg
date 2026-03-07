@@ -342,7 +342,9 @@ function AppInner() {
 
       {/* Main content */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header connected={connected} view={view} repoFilter={repoFilter} onRepoFilterChange={setRepoFilter} />
+        {!isGlobalLawMode && (
+          <Header connected={connected} view={view} repoFilter={repoFilter} onRepoFilterChange={setRepoFilter} />
+        )}
 
         <div className="min-h-0 flex-1 flex overflow-hidden">
           <div className="min-w-0 flex-1 overflow-hidden">

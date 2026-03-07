@@ -16,7 +16,7 @@ const PdfViewer = lazy(() =>
   import("./viewers/pdf-viewer").then((m) => ({ default: m.PdfViewer }))
 );
 
-type ViewerType = "docx" | "xlsx" | "pptx" | "pdf";
+type ViewerType = "docx" | "xlsx" | "pptx" | "pdf" | "image" | "text";
 
 function pickViewer(mime: string, name: string): ViewerType | null {
   const lower = name.toLowerCase();
@@ -24,6 +24,8 @@ function pickViewer(mime: string, name: string): ViewerType | null {
   if (mime.includes("wordprocessingml") || lower.endsWith(".docx")) return "docx";
   if (mime.includes("spreadsheetml") || lower.endsWith(".xlsx")) return "xlsx";
   if (mime.includes("presentationml") || lower.endsWith(".pptx")) return "pptx";
+  if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(lower) || mime.startsWith("image/")) return "image";
+  if (/\.(txt|md|csv|json|log|xml|yaml|yml|toml|ini|cfg|conf|sh|py|js|ts|rs|go|rb|html|css)$/i.test(lower) || mime.startsWith("text/")) return "text";
   return null;
 }
 
@@ -122,6 +124,18 @@ export function FilePreviewModal({
               {viewerType === "xlsx" && <XlsxViewer buffer={buffer} />}
               {viewerType === "pptx" && <PptxViewer buffer={buffer} />}
               {viewerType === "pdf" && <PdfViewer buffer={buffer} />}
+              {viewerType === "image" && (
+                <img
+                  src={URL.createObjectURL(new Blob([buffer]))}
+                  className="max-w-full max-h-[70vh] mx-auto rounded-lg"
+                  alt={file.file_name}
+                />
+              )}
+              {viewerType === "text" && (
+                <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-zinc-300">
+                  {new TextDecoder().decode(buffer)}
+                </pre>
+              )}
               {!viewerType && (
                 <div className="flex h-48 items-center justify-center text-[13px] text-zinc-500">
                   Preview not available for this file type

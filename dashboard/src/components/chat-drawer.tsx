@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Mic, MicOff, ChevronRight, FolderOpen } from "lucide-react";
+import { Send, Mic, MicOff, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { ChatMarkdown } from "./chat-markdown";
@@ -17,7 +17,6 @@ import {
   Globe,
   Sparkles,
   Circle,
-  MessageSquare,
 } from "lucide-react";
 
 interface ChatMessage {
@@ -66,7 +65,6 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [thread, setThread] = useState(defaultThread);
-  const [open, setOpen] = useState(false);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -164,10 +162,8 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
   }, [thread]);
 
   useEffect(() => {
-    if (open) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant" });
-    }
-  }, [messages.length, streamEvents.length, open]);
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [messages.length, streamEvents.length]);
 
   async function handleSend() {
     const text = input.trim();
@@ -175,7 +171,6 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
 
     setInput("");
     setSending(true);
-    setOpen(true);
     setStreamEvents([]);
 
     if (sendingTimeoutRef.current) clearTimeout(sendingTimeoutRef.current);
@@ -237,54 +232,33 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
 
   return (
     <div
-      className={cn(
-        "flex h-full shrink-0 flex-col border-l border-[#2a2520] bg-[#0f0e0c] transition-[width] duration-200 ease-out overflow-hidden",
-        open ? "w-[380px]" : "w-12"
-      )}
+      className="flex h-full w-[480px] shrink-0 flex-col border-l border-[#2a2520] bg-[#0f0e0c] overflow-hidden"
     >
-      {/* Header — always visible */}
+      {/* Header */}
       <div className="flex h-12 shrink-0 items-center border-b border-[#2a2520]">
-        {open ? (
-          <div className="flex w-full items-center gap-2 px-3">
-            <button
-              onClick={() => setOpen(false)}
-              className="rounded-lg p-1.5 text-[#6b6459] transition-colors hover:text-[#9c9486]"
-              title="Collapse"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              {thread === "web:dashboard" ? (
-                <Globe className="h-3 w-3 shrink-0 text-amber-400/60" />
-              ) : (
-                <FolderOpen className="h-3 w-3 shrink-0 text-amber-400/60" />
-              )}
-              <span className="truncate text-[12px] font-medium text-[#9c9486]">{scopeLabel}</span>
-            </div>
-            {thread !== "web:dashboard" && (
-              <button
-                onClick={() => setThread("web:dashboard")}
-                className="rounded-lg p-1 text-[#6b6459] transition-colors hover:text-[#9c9486]"
-                title="Switch to Global"
-              >
-                <Globe className="h-3.5 w-3.5" />
-              </button>
+        <div className="flex w-full items-center gap-2 px-3">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {thread === "web:dashboard" ? (
+              <Globe className="h-3 w-3 shrink-0 text-amber-400/60" />
+            ) : (
+              <FolderOpen className="h-3 w-3 shrink-0 text-amber-400/60" />
             )}
+            <span className="truncate text-[12px] font-medium text-[#9c9486]">{scopeLabel}</span>
           </div>
-        ) : (
-          <button
-            onClick={() => setOpen(true)}
-            className="flex h-full w-full items-center justify-center text-[#6b6459] transition-colors hover:text-amber-400"
-            title="Open chat"
-          >
-            <MessageSquare className="h-[18px] w-[18px]" />
-          </button>
-        )}
+          {thread !== "web:dashboard" && (
+            <button
+              onClick={() => setThread("web:dashboard")}
+              className="rounded-lg p-1 text-[#6b6459] transition-colors hover:text-[#9c9486]"
+              title="Switch to Global"
+            >
+              <Globe className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Messages — only when open */}
-      {open && (
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      {/* Messages */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <div className="px-3 py-3 space-y-3">
             {!hasContent && (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -339,51 +313,48 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
             <div ref={bottomRef} />
           </div>
         </div>
-      )}
 
-      {/* Input — only when open */}
-      {open && (
-        <div className="shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]/90 px-3 py-2.5">
-          <div className="relative flex items-end gap-1.5 rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 transition-colors focus-within:border-amber-500/20 focus-within:bg-[#232019]">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder="Message Borg..."
-              rows={1}
-              className="max-h-[120px] min-h-[20px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-[#e8e0d4] placeholder:text-[#6b6459] focus:outline-none"
-            />
-            <div className="flex shrink-0 items-center gap-0.5">
-              {dictation.supported && (
-                <button
-                  onClick={dictation.toggle}
-                  className={cn(
-                    "rounded-lg p-1.5 transition-colors",
-                    dictation.listening
-                      ? "bg-red-500/20 text-red-400"
-                      : "text-[#6b6459] hover:text-[#9c9486]"
-                  )}
-                >
-                  {dictation.listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-                </button>
-              )}
+      {/* Input */}
+      <div className="shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]/90 px-3 py-2.5">
+        <div className="relative flex items-end gap-1.5 rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 transition-colors focus-within:border-amber-500/20 focus-within:bg-[#232019]">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Message Borg..."
+            rows={1}
+            className="max-h-[120px] min-h-[20px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-[#e8e0d4] placeholder:text-[#6b6459] focus:outline-none"
+          />
+          <div className="flex shrink-0 items-center gap-0.5">
+            {dictation.supported && (
               <button
-                onClick={handleSend}
-                disabled={!input.trim() || sending}
+                onClick={dictation.toggle}
                 className={cn(
-                  "rounded-lg p-1.5 transition-all",
-                  input.trim() && !sending
-                    ? "bg-amber-500 text-white hover:bg-amber-400 shadow-lg shadow-amber-500/25"
-                    : "text-[#6b6459] cursor-not-allowed"
+                  "rounded-lg p-1.5 transition-colors",
+                  dictation.listening
+                    ? "bg-red-500/20 text-red-400"
+                    : "text-[#6b6459] hover:text-[#9c9486]"
                 )}
               >
-                <Send className="h-3.5 w-3.5" />
+                {dictation.listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
               </button>
-            </div>
+            )}
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || sending}
+              className={cn(
+                "rounded-lg p-1.5 transition-all",
+                input.trim() && !sending
+                  ? "bg-amber-500 text-white hover:bg-amber-400 shadow-lg shadow-amber-500/25"
+                  : "text-[#6b6459] cursor-not-allowed"
+              )}
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

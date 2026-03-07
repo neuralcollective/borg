@@ -22,7 +22,7 @@ import {
 } from "@/lib/api";
 import type { CloudBrowseItem, CloudConnection, FtsSearchResult } from "@/lib/api";
 import type { UploadSession } from "@/lib/api";
-import { Eye, FileText, ArrowLeft, Search, RotateCw, Folder, Upload, X } from "lucide-react";
+import { FileText, ArrowLeft, Search, RotateCw, Folder, Upload, X } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -175,16 +175,6 @@ export function ProjectsPanel() {
   const [newProjectMode, setNewProjectMode] = useState("");
   const [newProjectJurisdiction, setNewProjectJurisdiction] = useState("");
   const [creating, setCreating] = useState(false);
-  const [jurisdictionFilter, setJurisdictionFilter] = useState<string>("all");
-
-  const jurisdictions = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of projects) {
-      if (p.jurisdiction?.trim()) set.add(p.jurisdiction.trim());
-    }
-    return [...set].sort();
-  }, [projects]);
-
   const isLegalMode = useMemo(() => {
     const repos = status?.watched_repos;
     if (repos?.length) {
@@ -195,20 +185,14 @@ export function ProjectsPanel() {
   }, [status, projects]);
 
   const filteredProjects = useMemo(() => {
-    let filtered = projects;
-    if (jurisdictionFilter !== "all") {
-      filtered = filtered.filter((p) => p.jurisdiction?.trim() === jurisdictionFilter);
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.jurisdiction && p.jurisdiction.toLowerCase().includes(q))
-      );
-    }
-    return filtered;
-  }, [projects, searchQuery, jurisdictionFilter]);
+    if (!searchQuery.trim()) return projects;
+    const q = searchQuery.toLowerCase();
+    return projects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.jurisdiction && p.jurisdiction.toLowerCase().includes(q))
+    );
+  }, [projects, searchQuery]);
 
   const selectedProject =
     projects.find((p) => p.id === selectedProjectId) ?? projects[0] ?? null;
@@ -719,29 +703,21 @@ async function uploadChunkQueue(
   return (
     <div className="flex h-full min-h-0">
       <div className="w-[270px] shrink-0 border-r border-[#2a2520] bg-[#0f0e0c] p-4">
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3">
           <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b6459]">
             {vocab.projectsLabel}
           </span>
-          {jurisdictions.length > 0 && (
-            <select
-              value={jurisdictionFilter}
-              onChange={(e) => setJurisdictionFilter(e.target.value)}
-              className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-2 py-1 text-[11px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
-            >
-              <option value="all">All jurisdictions</option>
-              {jurisdictions.map((j) => (
-                <option key={j} value={j}>{j}</option>
-              ))}
-            </select>
-          )}
         </div>
         <div className="relative mb-3">
           <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6b6459]" />
           <input
-            value={ftsQuery}
-            onChange={(e) => handleFtsSearch(e.target.value)}
-            placeholder="Search all documents..."
+            value={ftsQuery || searchQuery}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSearchQuery(v);
+              handleFtsSearch(v);
+            }}
+            placeholder={`Search ${vocab.projectPlural} & documents...`}
             className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] pl-8 pr-3 py-2.5 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
         </div>
@@ -751,7 +727,7 @@ async function uploadChunkQueue(
             {ftsResults.map((r, i) => (
               <button
                 key={`${r.task_id}-${r.file_path}-${i}`}
-                onClick={() => { setSelectedProjectId(r.project_id); setFtsQuery(""); setFtsResults([]); }}
+                onClick={() => { setSelectedProjectId(r.project_id); setSearchQuery(""); setFtsQuery(""); setFtsResults([]); }}
                 className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2.5 text-left hover:bg-[#232019] transition-colors"
               >
                 <div className="text-[11px] text-[#6b6459] truncate flex items-center gap-1.5">
@@ -768,15 +744,7 @@ async function uploadChunkQueue(
           </div>
         ) : (
           <>
-        {projects.length > 5 && (
-          <input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={`Filter ${vocab.projectPlural}...`}
-            className="mb-3 w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
-          />
-        )}
-        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 300px)" }}>
+        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
           {filteredProjects.map((p) => (
             <button
               key={p.id}
@@ -789,7 +757,7 @@ async function uploadChunkQueue(
               )}
             >
               <span className="truncate">{p.name}</span>
-              {p.jurisdiction?.trim() && jurisdictionFilter === "all" && (
+              {p.jurisdiction?.trim() && (
                 <span className="mt-0.5 block truncate text-[10px] text-[#6b6459]">{p.jurisdiction}</span>
               )}
             </button>
@@ -1008,8 +976,17 @@ async function uploadChunkQueue(
                     </p>
                   </div>
                 )}
-                {files.map((f) => (
-                  <div key={f.id} className="group rounded-xl border border-[#2a2520] bg-[#151412] p-4 transition-colors hover:border-amber-900/30">
+                {files.map((f) => {
+                  const canPreview = isPreviewable(f);
+                  return (
+                  <div
+                    key={f.id}
+                    onClick={() => canPreview && setPreviewFile(f)}
+                    className={cn(
+                      "group rounded-xl border border-[#2a2520] bg-[#151412] p-4 transition-colors hover:border-amber-900/30",
+                      canPreview && "cursor-pointer"
+                    )}
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-3 min-w-0">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#1c1a17] ring-1 ring-amber-900/20">
@@ -1028,7 +1005,8 @@ async function uploadChunkQueue(
                       <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                         {f.has_text && (
                           <button
-                            onClick={async () => {
+                            onClick={async (e) => {
+                              e.stopPropagation();
                               if (!activeProjectId) return;
                               const data = await fetchProjectFileText(activeProjectId, f.id);
                               setTextViewFile({ id: f.id, name: data.file_name, text: data.extracted_text });
@@ -1041,7 +1019,8 @@ async function uploadChunkQueue(
                         )}
                         {!f.has_text && (
                           <button
-                            onClick={async () => {
+                            onClick={async (e) => {
+                              e.stopPropagation();
                               if (!activeProjectId) return;
                               setExtracting(f.id);
                               try {
@@ -1056,15 +1035,6 @@ async function uploadChunkQueue(
                             <RotateCw className="h-3.5 w-3.5" />
                           </button>
                         )}
-                        {isPreviewable(f) && (
-                          <button
-                            onClick={() => setPreviewFile(f)}
-                            className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-[#232019] hover:text-amber-400"
-                            title="Preview"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </button>
-                        )}
                       </div>
                     </div>
                     {f.has_text && (
@@ -1076,7 +1046,8 @@ async function uploadChunkQueue(
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
 
                 {/* Pagination */}
                 {filePage && filePage.total > filePage.limit && (
