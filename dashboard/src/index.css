@@ -288,6 +288,40 @@
   opacity: 0;
 }
 
+/* --- Light mode overrides --- */
+/* Remap hardcoded dark-mode colors when light mode is active */
+html:not(.dark) {
+  --warm-success: hsl(145, 55%, 38%);
+  --warm-error: hsl(8, 70%, 48%);
+  --warm-info: hsl(35, 75%, 42%);
+  --warm-amber: hsl(35, 75%, 42%);
+  --warm-amber-dim: hsl(35, 50%, 55%);
+
+  color-scheme: light;
+}
+
+html:not(.dark) body {
+  background: hsl(40, 20%, 97%);
+  color: hsl(30, 10%, 15%);
+}
+
+/* Scrollbar for light mode */
+html:not(.dark) * {
+  scrollbar-color: hsla(35, 15%, 50%, 0.25) transparent;
+}
+html:not(.dark) *::-webkit-scrollbar-thumb {
+  background: hsla(35, 15%, 50%, 0.25);
+}
+html:not(.dark) *::-webkit-scrollbar-thumb:hover {
+  background: hsla(35, 15%, 50%, 0.4);
+}
+
+/* Selection */
+html:not(.dark) ::selection {
+  background: hsla(35, 70%, 55%, 0.25);
+  color: hsl(30, 10%, 10%);
+}
+
 /* --- Base layer --- */
 
 @layer base {

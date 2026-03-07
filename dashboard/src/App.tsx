@@ -12,6 +12,7 @@ import { LogViewer } from "@/components/log-viewer";
 import { QueuePanel } from "@/components/queue-panel";
 import { ProposalsPanel } from "@/components/proposals-panel";
 import { ChatPanel } from "@/components/chat-panel";
+import { ChatDrawer } from "@/components/chat-drawer";
 import { ProjectsPanel } from "@/components/projects-panel";
 import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -68,7 +69,6 @@ const ALL_NAV_ITEMS = [
   { key: "proposals" as const, label: "Proposals", Icon: Lightbulb, minimalVisible: true },
   { key: "logs" as const, label: "Logs", Icon: Terminal, minimalVisible: false },
   { key: "queue" as const, label: "Queue", Icon: GitMerge, minimalVisible: false },
-  { key: "chat" as const, label: "Chat", Icon: MessageSquare, minimalVisible: true },
   { key: "knowledge" as const, label: "Knowledge", Icon: BookOpen, minimalVisible: false },
   { key: "settings" as const, label: "Settings", Icon: Settings, minimalVisible: true },
 ] as const;
@@ -326,34 +326,39 @@ function AppInner() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Header connected={connected} view={view} repoFilter={repoFilter} onRepoFilterChange={setRepoFilter} />
 
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {view === "tasks" && (
-            <div className="flex h-full">
-              <div className="w-[420px] shrink-0 overflow-hidden border-r border-[#2a2520]">
-                <TaskList
-                  selectedId={selectedTaskId}
-                  onSelect={handleSelectTask}
-                  repoFilter={repoFilter}
-                />
+        <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {view === "tasks" && (
+              <div className="flex h-full">
+                <div className="w-[420px] shrink-0 overflow-hidden border-r border-[#2a2520]">
+                  <TaskList
+                    selectedId={selectedTaskId}
+                    onSelect={handleSelectTask}
+                    repoFilter={repoFilter}
+                  />
+                </div>
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  {selectedTaskId !== null ? (
+                    <TaskDetail taskId={selectedTaskId} onBack={handleBackFromTask} />
+                  ) : (
+                    <EmptyState status={status} />
+                  )}
+                </div>
               </div>
-              <div className="min-w-0 flex-1 overflow-hidden">
-                {selectedTaskId !== null ? (
-                  <TaskDetail taskId={selectedTaskId} onBack={handleBackFromTask} />
-                ) : (
-                  <EmptyState status={status} />
-                )}
-              </div>
-            </div>
-          )}
+            )}
 
-          {view === "projects" && <ProjectsPanel />}
-          {view === "creator" && <ModeCreatorPanel />}
-          {view === "proposals" && <ProposalsPanel repoFilter={repoFilter} />}
-          {view === "logs" && <LogViewer logs={logs} />}
-          {view === "queue" && <QueuePanel repoFilter={repoFilter} />}
-          {view === "chat" && <ChatPanel />}
-          {view === "knowledge" && <KnowledgePanel />}
-          {view === "settings" && <SettingsPanel />}
+            {view === "projects" && <ProjectsPanel />}
+            {view === "creator" && <ModeCreatorPanel />}
+            {view === "proposals" && <ProposalsPanel repoFilter={repoFilter} />}
+            {view === "logs" && <LogViewer logs={logs} />}
+            {view === "queue" && <QueuePanel repoFilter={repoFilter} />}
+            {view === "chat" && <ChatPanel />}
+            {view === "knowledge" && <KnowledgePanel />}
+            {view === "settings" && <SettingsPanel />}
+          </div>
+
+          {/* Persistent chat drawer at bottom */}
+          <ChatDrawer />
         </div>
       </div>
     </div>

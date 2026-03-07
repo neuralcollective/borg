@@ -16,6 +16,7 @@ import {
   uploadProjectUploadChunk,
   useProjectCloudConnections,
   useSettings,
+  useStatus,
   useModes,
   useProjectFiles,
   useProjects,
@@ -179,6 +180,7 @@ function DocumentViewWrapper({
 
 export function ProjectsPanel() {
   const { data: projects = [], refetch: refetchProjects } = useProjects();
+  const { data: status } = useStatus();
   const { data: modes = [] } = useModes();
   const { data: settings } = useSettings();
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
@@ -188,7 +190,7 @@ export function ProjectsPanel() {
   const [ftsSearching, setFtsSearching] = useState(false);
   const ftsDebounce = useRef<ReturnType<typeof setTimeout>>(null);
   const [newProjectName, setNewProjectName] = useState("");
-  const [newProjectMode, setNewProjectMode] = useState("general");
+  const [newProjectMode, setNewProjectMode] = useState("");
   const [newProjectJurisdiction, setNewProjectJurisdiction] = useState("");
   const [creating, setCreating] = useState(false);
   const [jurisdictionFilter, setJurisdictionFilter] = useState<string>("all");
@@ -201,9 +203,14 @@ export function ProjectsPanel() {
     return [...set].sort();
   }, [projects]);
 
-  const isLegalMode = useMemo(() =>
-    projects.some((p) => p.mode === "lawborg" || p.mode === "legal"),
-  [projects]);
+  const isLegalMode = useMemo(() => {
+    const repos = status?.watched_repos;
+    if (repos?.length) {
+      const primary = repos.find((r) => r.is_self) ?? repos[0];
+      return primary.mode === "lawborg" || primary.mode === "legal";
+    }
+    return projects.some((p) => p.mode === "lawborg" || p.mode === "legal");
+  }, [status, projects]);
 
   const filteredProjects = useMemo(() => {
     let filtered = projects;
@@ -439,7 +446,8 @@ export function ProjectsPanel() {
       const opts = newProjectJurisdiction.trim()
         ? { jurisdiction: newProjectJurisdiction.trim() }
         : {};
-      const created = await createProject(name, newProjectMode, opts);
+      const effectiveMode = isLegalMode ? "lawborg" : (newProjectMode || "general");
+      const created = await createProject(name, effectiveMode, opts);
       setNewProjectName("");
       setNewProjectJurisdiction("");
       await refetchProjects();
@@ -849,21 +857,23 @@ async function uploadChunkQueue(
             placeholder="New project name"
             className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
           />
-          <select
-            value={newProjectMode}
-            onChange={(e) => setNewProjectMode(e.target.value)}
-            className="mt-2.5 w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none"
-          >
-            <option value="general">general</option>
-            {modes.map((mode) => (
-              <option key={mode.name} value={mode.name}>
-                {mode.experimental
-                  ? `${mode.label ?? mode.name} (experimental)`
-                  : (mode.label ?? mode.name)}
-              </option>
-            ))}
-          </select>
-          {(isLegalMode || newProjectMode === "lawborg" || newProjectMode === "legal") && (
+          {!isLegalMode && (
+            <select
+              value={newProjectMode}
+              onChange={(e) => setNewProjectMode(e.target.value)}
+              className="mt-2.5 w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none"
+            >
+              <option value="general">general</option>
+              {modes.map((mode) => (
+                <option key={mode.name} value={mode.name}>
+                  {mode.experimental
+                    ? `${mode.label ?? mode.name} (experimental)`
+                    : (mode.label ?? mode.name)}
+                </option>
+              ))}
+            </select>
+          )}
+          {(isLegalMode || ["lawborg", "legal"].includes(newProjectMode)) && (
             <input
               value={newProjectJurisdiction}
               onChange={(e) => setNewProjectJurisdiction(e.target.value)}

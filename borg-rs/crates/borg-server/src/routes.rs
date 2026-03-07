@@ -27,7 +27,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncWriteExt},
     sync::{broadcast, Mutex as TokioMutex},
 };
 use tokio_stream::{
@@ -1213,30 +1213,55 @@ pub(crate) async fn run_chat_agent(
 
     let timeout = std::time::Duration::from_secs(config.agent_timeout_s.max(300) as u64);
     ai_request_count.fetch_add(1, Ordering::Relaxed);
-    let out = tokio::time::timeout(
-        timeout,
-        tokio::process::Command::new("claude")
-            .args(&args)
-            .current_dir(&session_dir)
-            .env("HOME", &session_dir)
-            .env("CLAUDE_CODE_OAUTH_TOKEN", &token)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output(),
+    let mut child = tokio::process::Command::new("claude")
+        .args(&args)
+        .current_dir(&session_dir)
+        .env("HOME", &session_dir)
+        .env("CLAUDE_CODE_OAUTH_TOKEN", &token)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    // Stream stdout line-by-line, forwarding NDJSON events to chat SSE
+    let stdout = child.stdout.take().expect("stdout piped");
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+    let mut raw_lines: Vec<String> = Vec::new();
+    let stream_result = tokio::time::timeout(timeout, async {
+        while let Some(line) = reader.next_line().await? {
+            raw_lines.push(line.clone());
+            // Forward stream events so frontend can show agentic breakdown
+            let stream_event = json!({
+                "type": "chat_stream",
+                "thread": chat_key,
+                "data": line,
+            })
+            .to_string();
+            let _ = chat_event_tx.send(stream_event);
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await;
+
+    let status = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        child.wait(),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("chat agent timed out after {}s", timeout.as_secs()))??;
+    .ok()
+    .and_then(|r| r.ok());
 
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        tracing::warn!(
-            "chat agent failed ({}): {}",
-            chat_key,
-            stderr.chars().take(500).collect::<String>()
-        );
+    if let Err(_) = stream_result {
+        let _ = child.kill().await;
+        anyhow::bail!("chat agent timed out after {}s", timeout.as_secs());
     }
 
-    let raw = String::from_utf8_lossy(&out.stdout).into_owned();
+    if let Some(st) = status {
+        if !st.success() {
+            tracing::warn!("chat agent failed ({}) exit={:?}", chat_key, st.code());
+        }
+    }
+
+    let raw = raw_lines.join("\n");
     let (text, new_session_id) = borg_agent::event::parse_stream(&raw);
 
     if let Some(sid) = new_session_id {

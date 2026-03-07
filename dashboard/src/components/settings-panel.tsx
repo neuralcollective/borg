@@ -17,6 +17,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useUIMode, type UIMode } from "@/lib/ui-mode";
+import { useTheme } from "@/lib/theme";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,7 @@ export function SettingsPanel() {
   const { data: settings, isLoading } = useSettings();
   const { data: status } = useStatus();
   const { mode: uiMode, setMode: setUIMode } = useUIMode();
+  const { theme, toggle: toggleTheme } = useTheme();
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Partial<Settings>>({});
@@ -109,6 +111,20 @@ export function SettingsPanel() {
               options={[
                 { value: "minimal", label: "Minimal" },
                 { value: "advanced", label: "Advanced" },
+              ]}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Theme</Label>
+              <Desc>Switch between dark and light appearance.</Desc>
+            </div>
+            <ToggleGroup
+              value={theme}
+              onChange={(v) => { if (v !== theme) toggleTheme(); }}
+              options={[
+                { value: "dark", label: "Dark" },
+                { value: "light", label: "Light" },
               ]}
             />
           </div>
