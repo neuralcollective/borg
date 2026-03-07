@@ -6,6 +6,7 @@ zig-cache/
 store/
 /data/
 logs/
+.local-borg-data/
 
 # Secrets
 .env
