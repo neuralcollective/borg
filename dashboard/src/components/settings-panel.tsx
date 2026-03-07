@@ -87,7 +87,7 @@ export function SettingsPanel() {
 
   if (isLoading || !effective) {
     return (
-      <div className="flex h-full items-center justify-center text-xs text-zinc-600">
+      <div className="flex h-full items-center justify-center text-xs text-[#6b6459]">
         Loading settings...
       </div>
     );
@@ -119,12 +119,12 @@ export function SettingsPanel() {
           <Section title="Account">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/15 text-[13px] font-semibold text-blue-400">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/15 text-[13px] font-semibold text-amber-400">
                   {(user.username[0] ?? "?").toUpperCase()}
                 </div>
                 <div>
-                  <div className="text-[12px] font-medium text-zinc-200">{user.username}</div>
-                  <div className="text-[11px] text-zinc-500">{isAdmin ? "Admin" : "User"}</div>
+                  <div className="text-[12px] font-medium text-[#e8e0d4]">{user.username}</div>
+                  <div className="text-[11px] text-[#6b6459]">{isAdmin ? "Admin" : "User"}</div>
                 </div>
               </div>
               <ChangeOwnPassword userId={user.id} />
@@ -136,7 +136,7 @@ export function SettingsPanel() {
         {isAdmin && !showAdmin && (
           <button
             onClick={() => setShowAdmin(true)}
-            className="w-full rounded-lg border border-white/[0.08] bg-white/[0.02] py-3 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.05] hover:text-zinc-200"
+            className="w-full rounded-lg border border-[#2a2520] bg-[#1c1a17]/50 py-3 text-[12px] font-medium text-[#9c9486] transition-colors hover:bg-[#1c1a17] hover:text-[#e8e0d4]"
           >
             Show Admin Settings
           </button>
@@ -234,7 +234,7 @@ export function SettingsPanel() {
                   <select
                     value={effective.model_override}
                     onChange={(e) => update("model_override", e.target.value)}
-                    className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
+                    className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[13px] text-[#e8e0d4] outline-none focus:border-amber-500/40 transition-colors"
                   >
                     <option value="">Disabled (users choose)</option>
                     {MODEL_OPTIONS.map((o) => (
@@ -526,20 +526,20 @@ export function SettingsPanel() {
 
         {/* Save bar */}
         {(hasDraft || saved) && (
-          <div className="sticky bottom-4 flex items-center justify-end gap-3 rounded-lg border border-white/[0.08] bg-zinc-900/95 px-4 py-3 backdrop-blur">
+          <div className="sticky bottom-4 flex items-center justify-end gap-3 rounded-lg border border-[#2a2520] bg-[#151412]/95 px-4 py-3 backdrop-blur">
             {saved && <span className="text-[11px] text-emerald-400">Settings saved</span>}
             {hasDraft && (
               <>
                 <button
                   onClick={() => setDraft({})}
-                  className="rounded-md px-3 py-1.5 text-[11px] text-zinc-400 hover:text-zinc-200"
+                  className="rounded-md px-3 py-1.5 text-[11px] text-[#9c9486] hover:text-[#e8e0d4]"
                 >
                   Discard
                 </button>
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="rounded-md bg-blue-500/20 px-4 py-1.5 text-[11px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 transition-colors hover:bg-blue-500/30 disabled:opacity-50"
+                  className="rounded-md bg-amber-500/20 px-4 py-1.5 text-[11px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : "Save Changes"}
                 </button>
@@ -592,7 +592,7 @@ function UserModelPicker() {
           <Label>Model</Label>
           <Desc>Set by admin — cannot be changed.</Desc>
         </div>
-        <span className="rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[12px] text-zinc-500">
+        <span className="rounded-md border border-[#2a2520] bg-[#1c1a17]/50 px-2.5 py-1.5 text-[12px] text-[#6b6459]">
           {label}
         </span>
       </div>
@@ -610,7 +610,7 @@ function UserModelPicker() {
         onChange={(e) => handleChange(e.target.value)}
         disabled={saving}
         className={cn(
-          "rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40",
+          "rounded-md border border-[#2a2520] bg-[#1c1a17] px-2.5 py-1.5 text-[12px] text-[#e8e0d4] outline-none focus:border-amber-500/40",
           saving && "opacity-50 cursor-not-allowed"
         )}
       >
@@ -633,7 +633,7 @@ function ChangeOwnPassword({ userId }: { userId: number }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-zinc-200"
+        className="rounded-md border border-[#2a2520] bg-[#1c1a17]/50 px-3 py-1.5 text-[11px] text-[#9c9486] transition-colors hover:bg-[#1c1a17] hover:text-[#e8e0d4]"
       >
         Change Password
       </button>
@@ -647,7 +647,7 @@ function ChangeOwnPassword({ userId }: { userId: number }) {
         value={pw}
         onChange={(e) => setPw(e.target.value)}
         placeholder="New password (min 4)"
-        className="w-40 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
+        className="w-40 rounded-md border border-[#2a2520] bg-[#1c1a17] px-2 py-1.5 text-[11px] text-[#e8e0d4] outline-none focus:border-amber-500/40"
       />
       <button
         disabled={busy || pw.length < 4}
@@ -658,11 +658,11 @@ function ChangeOwnPassword({ userId }: { userId: number }) {
           setPw("");
           setBusy(false);
         }}
-        className="rounded-md bg-blue-500/20 px-3 py-1.5 text-[11px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 disabled:opacity-50"
+        className="rounded-md bg-amber-500/20 px-3 py-1.5 text-[11px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 disabled:opacity-50"
       >
         Save
       </button>
-      <button onClick={() => { setOpen(false); setPw(""); setMsg(""); }} className="text-[11px] text-zinc-600 hover:text-zinc-400">
+      <button onClick={() => { setOpen(false); setPw(""); setMsg(""); }} className="text-[11px] text-[#6b6459] hover:text-[#9c9486]">
         Cancel
       </button>
       {msg && <span className="text-[10px] text-emerald-400">{msg}</span>}
@@ -683,12 +683,12 @@ function UserManagement() {
       {users?.map((u) => (
         <div key={u.id} className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-medium text-zinc-300">
+            <div className="text-[12px] font-medium text-[#e8e0d4]">
               {u.username}
               {u.is_admin && <span className="ml-1.5 text-[10px] text-amber-400/70">admin</span>}
             </div>
             {u.display_name && u.display_name !== u.username && (
-              <div className="text-[11px] text-zinc-600">{u.display_name}</div>
+              <div className="text-[11px] text-[#6b6459]">{u.display_name}</div>
             )}
           </div>
           {u.id !== currentUser?.id && (
@@ -710,39 +710,39 @@ function UserManagement() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setShowCreate(true)}
-            className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors"
+            className="text-[11px] text-amber-400/70 hover:text-amber-400 transition-colors"
           >
             + Add User
           </button>
           <button
             onClick={logout}
-            className="ml-auto text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            className="ml-auto text-[11px] text-[#6b6459] hover:text-[#9c9486] transition-colors"
           >
             Sign Out
           </button>
         </div>
       ) : (
-        <div className="space-y-2 rounded-md border border-white/[0.06] bg-white/[0.02] p-3">
+        <div className="space-y-2 rounded-md border border-[#2a2520] bg-[#1c1a17]/50 p-3">
           <input
             value={newUser.username}
             onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
             placeholder="Username"
-            className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+            className="w-full rounded-md border border-[#2a2520] bg-[#1c1a17] px-2 py-1.5 text-[12px] text-[#e8e0d4] outline-none focus:border-amber-500/40"
           />
           <input
             value={newUser.display_name}
             onChange={(e) => setNewUser({ ...newUser, display_name: e.target.value })}
             placeholder="Display Name (optional)"
-            className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+            className="w-full rounded-md border border-[#2a2520] bg-[#1c1a17] px-2 py-1.5 text-[12px] text-[#e8e0d4] outline-none focus:border-amber-500/40"
           />
           <input
             type="password"
             value={newUser.password}
             onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
             placeholder="Password (min 4)"
-            className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+            className="w-full rounded-md border border-[#2a2520] bg-[#1c1a17] px-2 py-1.5 text-[12px] text-[#e8e0d4] outline-none focus:border-amber-500/40"
           />
-          <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+          <label className="flex items-center gap-2 text-[11px] text-[#9c9486]">
             <input
               type="checkbox"
               checked={newUser.is_admin}
@@ -767,13 +767,13 @@ function UserManagement() {
                 }
                 setBusy(false);
               }}
-              className="rounded-md bg-blue-500/20 px-3 py-1 text-[11px] text-blue-400 ring-1 ring-inset ring-blue-500/20 disabled:opacity-50"
+              className="rounded-md bg-amber-500/20 px-3 py-1 text-[11px] text-amber-400 ring-1 ring-inset ring-amber-500/20 disabled:opacity-50"
             >
               Create
             </button>
             <button
               onClick={() => setShowCreate(false)}
-              className="text-[11px] text-zinc-500 hover:text-zinc-300"
+              className="text-[11px] text-[#6b6459] hover:text-[#9c9486]"
             >
               Cancel
             </button>
@@ -805,7 +805,7 @@ function ReposSection() {
               await setRepoBackend(repo.id, e.target.value);
               queryClient.invalidateQueries({ queryKey: ["repos"] });
             }}
-            className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
+            className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[13px] text-[#e8e0d4] outline-none focus:border-amber-500/40 transition-colors"
           >
             <option value="">default</option>
             <option value="claude">claude</option>
@@ -860,9 +860,9 @@ function CacheSection() {
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#6b6459]">
           Docker Cache Volumes
-          <span className="ml-2 font-normal normal-case text-zinc-600">
+          <span className="ml-2 font-normal normal-case text-[#5a5349]">
             {volumes.length} volumes · {formatBytes(totalSize)}
           </span>
         </h3>
@@ -874,12 +874,12 @@ function CacheSection() {
           {deleting === "__all__" ? "Deleting..." : "Delete All"}
         </button>
       </div>
-      <div className="max-h-[240px] space-y-3 overflow-y-auto rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+      <div className="max-h-[240px] space-y-3 overflow-y-auto rounded-lg border border-[#2a2520] bg-[#1c1a17]/50 p-4">
         {volumes.map((vol) => (
           <div key={vol.name} className="flex items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <div className="text-[12px] font-mono text-zinc-300 truncate">{vol.name}</div>
-              <div className="text-[11px] text-zinc-600">{formatBytes(vol.size)}</div>
+              <div className="text-[12px] font-mono text-[#e8e0d4] truncate">{vol.name}</div>
+              <div className="text-[11px] text-[#6b6459]">{formatBytes(vol.size)}</div>
             </div>
             <button
               onClick={() => handleDelete(vol.name)}
@@ -898,8 +898,8 @@ function CacheSection() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-zinc-500">{title}</h3>
-      <div className="space-y-4 rounded-xl border border-white/[0.07] bg-white/[0.02] p-5">
+      <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-[#6b6459]">{title}</h3>
+      <div className="space-y-4 rounded-xl border border-[#2a2520] bg-[#1c1a17]/50 p-5">
         {children}
       </div>
     </div>
@@ -907,11 +907,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Label({ children }: { children: React.ReactNode }) {
-  return <div className="text-[13px] font-medium text-zinc-200">{children}</div>;
+  return <div className="text-[13px] font-medium text-[#e8e0d4]">{children}</div>;
 }
 
 function Desc({ children }: { children: React.ReactNode }) {
-  return <div className="mt-0.5 text-[11px] text-zinc-500">{children}</div>;
+  return <div className="mt-0.5 text-[11px] text-[#6b6459]">{children}</div>;
 }
 
 function ToggleField({ label, desc, value, onChange }: {
@@ -930,7 +930,7 @@ function ToggleField({ label, desc, value, onChange }: {
         onClick={() => onChange(!value)}
         className={cn(
           "relative h-[22px] w-10 rounded-full transition-colors",
-          value ? "bg-blue-500" : "bg-zinc-700"
+          value ? "bg-amber-500" : "bg-[#3a352f]"
         )}
       >
         <div
@@ -959,11 +959,11 @@ function NumberField({ label, desc, value, onChange, min, max }: {
         <Label>{label}</Label>
         <Desc>{desc}</Desc>
       </div>
-      <div className="flex items-center gap-0 rounded-lg border border-white/[0.07] bg-white/[0.04]">
+      <div className="flex items-center gap-0 rounded-lg border border-[#2a2520] bg-[#1c1a17]">
         <button
           type="button"
           onClick={() => onChange(clamp(value - 1))}
-          className="flex h-7 w-7 items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors"
+          className="flex h-7 w-7 items-center justify-center text-[#9c9486] hover:text-[#e8e0d4] transition-colors"
         >
           −
         </button>
@@ -976,12 +976,12 @@ function NumberField({ label, desc, value, onChange, min, max }: {
             const v = parseInt(e.target.value);
             if (!isNaN(v)) onChange(clamp(v));
           }}
-          className="w-14 bg-transparent px-1 py-1 text-center text-[12px] tabular-nums text-zinc-200 outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
+          className="w-14 bg-transparent px-1 py-1 text-center text-[12px] tabular-nums text-[#e8e0d4] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
         />
         <button
           type="button"
           onClick={() => onChange(clamp(value + 1))}
-          className="flex h-7 w-7 items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors"
+          className="flex h-7 w-7 items-center justify-center text-[#9c9486] hover:text-[#e8e0d4] transition-colors"
         >
           +
         </button>
@@ -1006,7 +1006,7 @@ function TextField({ label, desc, value, onChange }: {
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-56 rounded-lg border border-white/[0.07] bg-white/[0.04] px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
+        className="w-56 rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[13px] text-[#e8e0d4] outline-none focus:border-amber-500/40 transition-colors"
       />
     </div>
   );
@@ -1028,7 +1028,7 @@ function SelectField({ label, desc, value, onChange, options }: {
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
+        className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[13px] text-[#e8e0d4] outline-none focus:border-amber-500/40 transition-colors"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -1044,17 +1044,17 @@ function ToggleGroup({ value, onChange, options }: {
   options: { value: string; label: string }[];
 }) {
   return (
-    <div className="flex rounded-md border border-white/[0.08]">
+    <div className="flex rounded-md border border-[#2a2520]">
       {options.map((opt, i) => (
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
           className={cn(
             "px-3 py-1.5 text-[11px] font-medium transition-colors",
-            i > 0 && "border-l border-white/[0.08]",
+            i > 0 && "border-l border-[#2a2520]",
             value === opt.value
-              ? "bg-white/[0.1] text-zinc-200"
-              : "text-zinc-500 hover:text-zinc-300"
+              ? "bg-amber-500/[0.08] text-[#e8e0d4]"
+              : "text-[#6b6459] hover:text-[#9c9486]"
           )}
         >
           {opt.label}
@@ -1067,8 +1067,8 @@ function ToggleGroup({ value, onChange, options }: {
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-[12px] text-zinc-500">{label}</span>
-      <span className="text-[12px] font-medium tabular-nums text-zinc-300">{value}</span>
+      <span className="text-[12px] text-[#6b6459]">{label}</span>
+      <span className="text-[12px] font-medium tabular-nums text-[#e8e0d4]">{value}</span>
     </div>
   );
 }
@@ -1100,7 +1100,7 @@ function ModelPicker({ model, backend, onChange }: {
             const opt = MODEL_OPTIONS.find((o) => o.model === e.target.value);
             if (opt) onChange(opt.model, opt.backend);
           }}
-          className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
+          className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[13px] text-[#e8e0d4] outline-none focus:border-amber-500/40 transition-colors"
         >
           {MODEL_OPTIONS.map((o) => (
             <option key={o.model} value={o.model}>{o.label}</option>
@@ -1153,8 +1153,8 @@ function CategoryPicker({ value, onChange }: { value: string; onChange: (v: stri
               className={cn(
                 "rounded-md px-2.5 py-1 text-[11px] transition-colors",
                 on
-                  ? "bg-blue-500/15 text-blue-400 ring-1 ring-inset ring-blue-500/20"
-                  : "bg-white/[0.04] text-zinc-600 hover:bg-white/[0.08] hover:text-zinc-400"
+                  ? "bg-amber-500/15 text-amber-400 ring-1 ring-inset ring-amber-500/20"
+                  : "bg-[#1c1a17] text-[#6b6459] hover:bg-[#2a2520] hover:text-[#9c9486]"
               )}
             >
               {cat.label}

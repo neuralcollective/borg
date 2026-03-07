@@ -64,7 +64,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
 
   if (isLoading || !task) {
     return (
-      <div className="flex h-full items-center justify-center text-xs text-zinc-600">Loading...</div>
+      <div className="flex h-full items-center justify-center text-xs text-[#6b6459]">Loading...</div>
     );
   }
 
@@ -107,7 +107,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
                   className="ml-auto flex items-center gap-1.5 rounded-md border border-[#2a2520] px-2.5 py-1 text-[11px] font-medium text-[#9c9486] hover:border-amber-500/40 hover:text-amber-400 disabled:opacity-50 transition-colors"
                 >
                   <RotateCcw className="h-3 w-3" />
-                  {retrying ? "Retrying…" : "Retry"}
+                  {retrying ? "Retrying\u2026" : "Retry"}
                 </button>
               )}
             </div>
@@ -157,7 +157,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
                     value={revisionFeedback}
                     onChange={(e) => setRevisionFeedback(e.target.value)}
                     rows={3}
-                    className="w-full rounded-md border border-amber-500/20 bg-black/30 px-2.5 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-amber-500/40 resize-y placeholder:text-zinc-600"
+                    className="w-full rounded-md border border-amber-500/20 bg-black/30 px-2.5 py-1.5 text-[11px] text-[#e8e0d4] outline-none focus:border-amber-500/40 resize-y placeholder:text-[#6b6459]"
                     placeholder="Describe what needs to change..."
                   />
                   <div className="flex items-center gap-2">
@@ -174,7 +174,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
                     >Send Revision Request</button>
                     <button
                       onClick={() => { setShowRevision(false); setRevisionFeedback(""); }}
-                      className="text-[11px] text-zinc-600 hover:text-zinc-400"
+                      className="text-[11px] text-[#6b6459] hover:text-[#9c9486]"
                     >Cancel</button>
                   </div>
                 </div>
@@ -191,8 +191,8 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
             <div className="space-y-1">
               {(compliance.findings ?? []).map((f, idx) => (
                 <div key={`${f.check_id}-${idx}`} className="rounded border border-fuchsia-500/10 bg-black/20 px-2 py-1.5">
-                  <div className="text-[11px] text-zinc-200">{f.issue}</div>
-                  <div className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500">
+                  <div className="text-[11px] text-[#e8e0d4]">{f.issue}</div>
+                  <div className="mt-0.5 flex items-center gap-2 text-[10px] text-[#6b6459]">
                     <span className="uppercase">{f.severity}</span>
                     {f.as_of && <span>as of {f.as_of}</span>}
                     {f.source_url && (
@@ -319,13 +319,13 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
             <div className="mt-2 space-y-2 border-l-2 border-amber-500/20 pl-3">
               {revHistory.rounds.map((round) => (
                 <div key={round.round} className="space-y-1">
-                  <div className="text-[10px] font-medium text-zinc-300">
+                  <div className="text-[10px] font-medium text-[#e8e0d4]">
                     {round.round === 0 ? "Initial Draft" : `Draft ${round.round + 1}`}
                   </div>
                   {round.feedback && (
                     <div className="rounded border border-amber-500/10 bg-amber-500/[0.03] px-2 py-1.5 text-[11px]">
                       <div className="text-[9px] text-amber-500/60 mb-0.5">Reviewer feedback</div>
-                      <div className="text-zinc-300 whitespace-pre-wrap">{round.feedback}</div>
+                      <div className="text-[#e8e0d4] whitespace-pre-wrap">{round.feedback}</div>
                     </div>
                   )}
                   {round.phases.length > 0 && (
@@ -356,20 +356,20 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
       {showDiagnostics && (
         <div className="mx-4 mt-3 rounded-lg border border-[#2a2520] bg-[#1c1a17]/50 p-3 text-[11px]">
           {diagnosticsLoading && !diagnostics ? (
-            <div className="text-zinc-500">Loading diagnostics…</div>
+            <div className="text-[#6b6459]">Loading diagnostics\u2026</div>
           ) : diagnostics ? (
             <div className="space-y-2">
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-zinc-400">
-                <span>stuck_suspected: <span className={diagnostics.summary.stuck_suspected ? "text-amber-400" : "text-zinc-500"}>{String(diagnostics.summary.stuck_suspected)}</span></span>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[#9c9486]">
+                <span>stuck_suspected: <span className={diagnostics.summary.stuck_suspected ? "text-amber-400" : "text-[#6b6459]"}>{String(diagnostics.summary.stuck_suspected)}</span></span>
                 <span>same_failure_streak: {diagnostics.summary.same_failure_streak}</span>
                 <span>queue_entries: {diagnostics.queue_entries.length}</span>
                 <span>attempt: {diagnostics.summary.attempt}/{diagnostics.summary.max_attempts}</span>
               </div>
               <div>
-                <div className="mb-1 text-zinc-500">Recent events</div>
+                <div className="mb-1 text-[#6b6459]">Recent events</div>
                 <div className="max-h-24 overflow-y-auto space-y-1">
                   {diagnostics.recent_events.slice(0, 8).map((e) => (
-                    <div key={e.id} className="font-mono text-[10px] text-zinc-500">
+                    <div key={e.id} className="font-mono text-[10px] text-[#6b6459]">
                       [{e.created_at}] {e.kind}
                     </div>
                   ))}
@@ -377,7 +377,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
               </div>
             </div>
           ) : (
-            <div className="text-zinc-500">Diagnostics unavailable</div>
+            <div className="text-[#6b6459]">Diagnostics unavailable</div>
           )}
         </div>
       )}
@@ -395,7 +395,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
           <OutputSelector outputs={task.outputs} />
         ) : !isActive && !streaming ? (
-          <div className="flex flex-1 items-center justify-center text-xs text-zinc-700">
+          <div className="flex flex-1 items-center justify-center text-xs text-[#6b6459]">
             No agent outputs yet
           </div>
         ) : null}
@@ -412,7 +412,7 @@ function StreamView({ raw }: { raw: string }) {
   const events = useMemo(() => parseRawStream(raw), [raw]);
 
   if (events.length === 0) {
-    return <div className="p-4 text-[12px] text-zinc-600">No stream data</div>;
+    return <div className="p-4 text-[12px] text-[#6b6459]">No stream data</div>;
   }
 
   return (
@@ -458,10 +458,10 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
           <span className="truncate text-[11px] text-[#9c9486]">
             {ev.label || (ev.input && ev.input.length > 80 ? ev.input.slice(0, 80) + "..." : ev.input)}
           </span>
-          <span className="ml-auto shrink-0 text-[9px] text-zinc-600">{expanded ? "^" : "v"}</span>
+          <span className="ml-auto shrink-0 text-[9px] text-[#6b6459]">{expanded ? "^" : "v"}</span>
         </button>
         {expanded && ev.input && (
-          <pre className="max-h-60 overflow-y-auto border-t border-amber-500/10 px-3 py-2 font-mono text-[10px] leading-relaxed text-zinc-400">
+          <pre className="max-h-60 overflow-y-auto border-t border-amber-500/15 px-3 py-2 font-mono text-[10px] leading-relaxed text-[#9c9486]">
             {ev.input}
           </pre>
         )}
@@ -477,13 +477,13 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
           onClick={() => setExpanded(!expanded)}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         >
-          <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zinc-400">
+          <span className="shrink-0 rounded bg-[#2a2520] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#9c9486]">
             result{ev.tool ? `: ${ev.tool}` : ""}
           </span>
           {!expanded && (
-            <span className="truncate font-mono text-[10px] text-zinc-600">{preview}</span>
+            <span className="truncate font-mono text-[10px] text-[#6b6459]">{preview}</span>
           )}
-          <span className="ml-auto shrink-0 text-[9px] text-zinc-600">{expanded ? "^" : "v"}</span>
+          <span className="ml-auto shrink-0 text-[9px] text-[#6b6459]">{expanded ? "^" : "v"}</span>
         </button>
         {expanded && ev.output && (
           <pre className="max-h-60 overflow-y-auto border-t border-[#2a2520] px-3 py-2 font-mono text-[10px] leading-relaxed text-[#6b6459]">
@@ -652,15 +652,15 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
 }
 
 function DiffView({ diff }: { diff: string }) {
-  if (!diff) return <div className="p-4 text-[12px] text-zinc-600">No diff data</div>;
+  if (!diff) return <div className="p-4 text-[12px] text-[#6b6459]">No diff data</div>;
   return (
     <pre className="p-4 font-mono text-[12px] leading-relaxed overflow-x-auto">
       {diff.split("\n").map((line, i) => {
-        let color = "text-zinc-500";
+        let color = "text-[#6b6459]";
         if (line.startsWith("+") && !line.startsWith("+++")) color = "text-emerald-400/80";
         else if (line.startsWith("-") && !line.startsWith("---")) color = "text-red-400/80";
         else if (line.startsWith("@@")) color = "text-blue-400/60";
-        else if (line.startsWith("diff ") || line.startsWith("index ")) color = "text-zinc-600";
+        else if (line.startsWith("diff ") || line.startsWith("index ")) color = "text-[#2a2520]";
         return <div key={i} className={color}>{line}</div>;
       })}
     </pre>

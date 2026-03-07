@@ -75,7 +75,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {!filtered?.length && (
-            <p className="py-12 text-center text-xs text-zinc-700">No tasks yet</p>
+            <p className="py-12 text-center text-xs text-[#6b6459]">No tasks yet</p>
           )}
         </div>
       </div>
