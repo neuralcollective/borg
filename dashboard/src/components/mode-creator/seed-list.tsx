@@ -2,6 +2,7 @@ import type { SeedConfigFull, SeedOutputType } from "@/lib/types";
 import { AutoTextarea } from "./auto-textarea";
 import { ToolChips } from "./tool-chips";
 import { cn } from "@/lib/utils";
+import { useDashboardMode } from "@/lib/dashboard-mode";
 
 export function SeedList({
   seeds,
@@ -20,6 +21,7 @@ export function SeedList({
   onAdd: () => void;
   onRemove: (index: number) => void;
 }) {
+  const { isSWE } = useDashboardMode();
   return (
     <div className="space-y-3">
       {seeds.length === 0 && (
@@ -66,7 +68,7 @@ export function SeedList({
               )}>
                 {seed.output_type}
               </span>
-              {seed.target_primary_repo && (
+              {isSWE && seed.target_primary_repo && (
                 <span className="rounded-lg px-2 py-0.5 text-[10px] font-medium bg-emerald-500/15 text-emerald-300">
                   primary
                 </span>
@@ -127,12 +129,14 @@ export function SeedList({
                 </Field>
 
                 <div className="flex items-center gap-4">
-                  <FlagToggle
-                    label="Target Primary Repo"
-                    checked={seed.target_primary_repo}
-                    disabled={readOnly}
-                    onChange={(v) => onUpdate(i, { target_primary_repo: v })}
-                  />
+                  {isSWE && (
+                    <FlagToggle
+                      label="Target Primary Repo"
+                      checked={seed.target_primary_repo}
+                      disabled={readOnly}
+                      onChange={(v) => onUpdate(i, { target_primary_repo: v })}
+                    />
+                  )}
                   {!readOnly && (
                     <button
                       onClick={() => onRemove(i)}

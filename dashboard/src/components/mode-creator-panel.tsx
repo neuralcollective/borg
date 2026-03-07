@@ -9,6 +9,7 @@ import { PhaseDetail } from "./mode-creator/phase-detail";
 import { SeedList } from "./mode-creator/seed-list";
 import { editorReducer, INITIAL_STATE, blankMode } from "./mode-creator/reducer";
 import { getProfile } from "./mode-creator/category-profiles";
+import { useDashboardMode } from "@/lib/dashboard-mode";
 import { Layers } from "lucide-react";
 
 const TABS = ["phases", "seeds", "json"] as const;
@@ -23,6 +24,7 @@ export function ModeCreatorPanel() {
   const [msg, setMsg] = useState("");
   const [showAllOptions, setShowAllOptions] = useState(false);
 
+  const { isSWE, mode: dashboardMode } = useDashboardMode();
   const allowExperimental = settings?.experimental_domains === true;
   const visibleCats = useMemo(() => {
     const raw = settings?.visible_categories ?? "";
@@ -52,12 +54,17 @@ export function ModeCreatorPanel() {
 
   const handleNew = useCallback(() => {
     const mode = blankMode();
-    if (!allowExperimental && (mode.category ?? "").toLowerCase() !== "engineering") {
-      mode.category = "Engineering";
+    if (isSWE) {
+      if (!allowExperimental && (mode.category ?? "").toLowerCase() !== "engineering") {
+        mode.category = "Engineering";
+      }
+    } else {
+      mode.category = "Professional Services";
+      mode.integration = "none" as PipelineModeFull["integration"];
     }
     dispatch({ type: "LOAD_MODE", mode, readOnly: false });
     setMsg("");
-  }, [allowExperimental]);
+  }, [allowExperimental, isSWE]);
 
   const handleFork = useCallback(() => {
     const forkName = `${state.mode.name}_custom`;
@@ -113,7 +120,7 @@ export function ModeCreatorPanel() {
   const { mode, selectedPhaseIndex, expandedSeedIndex, activeTab, isDirty, isReadOnly } = state;
   const selectedPhase = selectedPhaseIndex !== null ? mode.phases[selectedPhaseIndex] : null;
   const phaseNames = mode.phases.map((p) => p.name);
-  const profile = useMemo(() => getProfile(mode.category || "", showAllOptions), [mode.category, showAllOptions]);
+  const profile = useMemo(() => getProfile(mode.category || "", showAllOptions, dashboardMode), [mode.category, showAllOptions, dashboardMode]);
 
   return (
     <div className="flex h-full min-h-0">

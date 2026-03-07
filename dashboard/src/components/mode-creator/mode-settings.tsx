@@ -13,6 +13,8 @@ export function ModeSettings({
   onChange: (key: keyof PipelineModeFull, value: unknown) => void;
   profile: CategoryProfile;
 }) {
+  const hasGitIntegrations = profile.integrations.some((o) => o.value !== "none");
+
   return (
     <div className="space-y-4 rounded-xl border border-[#2a2520] bg-[#151412] p-4">
       {/* Row 1: Identity */}
@@ -51,21 +53,23 @@ export function ModeSettings({
             <option value="Data & Analytics" />
           </datalist>
         </Field>
-        <Field label="Integration" className="w-28">
-          <select
-            value={mode.integration}
-            onChange={(e) => onChange("integration", e.target.value as IntegrationType)}
-            disabled={readOnly}
-            className={inputCls}
-          >
-            {profile.integrations.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-            {!profile.integrations.some((o) => o.value === mode.integration) && (
-              <option value={mode.integration}>{mode.integration}</option>
-            )}
-          </select>
-        </Field>
+        {hasGitIntegrations && (
+          <Field label="Integration" className="w-28">
+            <select
+              value={mode.integration}
+              onChange={(e) => onChange("integration", e.target.value as IntegrationType)}
+              disabled={readOnly}
+              className={inputCls}
+            >
+              {profile.integrations.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+              {!profile.integrations.some((o) => o.value === mode.integration) && (
+                <option value={mode.integration}>{mode.integration}</option>
+              )}
+            </select>
+          </Field>
+        )}
         <Field label="Max Attempts" className="w-24">
           <input
             type="number"

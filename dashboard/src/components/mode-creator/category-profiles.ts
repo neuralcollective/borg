@@ -52,7 +52,15 @@ const ALL_PROFILE: CategoryProfile = {
   showComplianceButtons: true,
 };
 
-export function getProfile(category: string, showAll: boolean): CategoryProfile {
+const KNOWLEDGE_PROFILE: CategoryProfile = {
+  ...DOCUMENT_PROFILE,
+  showComplianceButtons: false,
+};
+
+export function getProfile(category: string, showAll: boolean, dashboardMode?: string): CategoryProfile {
+  // Dashboard mode takes priority over category-based detection
+  if (dashboardMode === "legal") return showAll ? { ...ALL_PROFILE, showComplianceButtons: true } : DOCUMENT_PROFILE;
+  if (dashboardMode === "knowledge") return showAll ? { ...ALL_PROFILE, showComplianceButtons: false } : KNOWLEDGE_PROFILE;
   if (showAll) return ALL_PROFILE;
   const cat = (category || "").toLowerCase();
   if (cat.includes("engineering") || cat.includes("data")) return CODE_PROFILE;
