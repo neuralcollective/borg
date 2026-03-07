@@ -3456,23 +3456,107 @@ async fn chunk_embed_and_index(
     }
 }
 
-/// Process multiple files concurrently: extract text, batch embed, index to Vespa.
+/// Process files with cross-file batch embedding to minimize API calls.
+/// Extracts text from all files, batches their chunks into large embedding calls,
+/// then indexes to Vespa concurrently.
 async fn process_files_concurrently(state: &Arc<AppState>, files: Vec<ProjectFileRow>) {
-    let concurrency: usize = std::env::var("INGEST_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
-    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    // Phase 1: Extract text from all files concurrently
+    struct ExtractedFile {
+        row: ProjectFileRow,
+        text: String,
+        source_path: String,
+    }
+    let mut extracted: Vec<ExtractedFile> = Vec::with_capacity(files.len());
     let mut set = tokio::task::JoinSet::new();
+    let sem = Arc::new(tokio::sync::Semaphore::new(20));
+
     for file in files {
         let state = Arc::clone(state);
         let sem = Arc::clone(&sem);
         set.spawn(async move {
             let _permit = sem.acquire().await;
-            extract_and_index_project_file(&state, &file).await;
+            if !file.extracted_text.is_empty() {
+                return None;
+            }
+            let source_path = if file.source_path.is_empty() {
+                file.file_name.clone()
+            } else {
+                file.source_path.clone()
+            };
+            let bytes = state.file_storage.read_all(&file.stored_path).await.ok()?;
+            let text = extract_text_from_bytes(&file.file_name, &file.mime_type, &bytes).await.ok()?;
+            if text.is_empty() {
+                return None;
+            }
+            let _ = state.db.update_project_file_text(file.id, &text);
+            let _ = state.db.fts_index_document(file.project_id, 0, &source_path, &file.file_name, &text);
+            Some(ExtractedFile { row: file, text, source_path })
         });
     }
-    while set.join_next().await.is_some() {}
+    while let Some(result) = set.join_next().await {
+        if let Ok(Some(ef)) = result {
+            extracted.push(ef);
+        }
+    }
+
+    let Some(search) = &state.search else {
+        return;
+    };
+    let embed_client = &state.embed_client;
+
+    // Phase 2: Chunk all files and collect a flat list with file ownership
+    let mut file_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(extracted.len());
+    let mut all_chunk_texts: Vec<String> = Vec::new();
+
+    for ef in &extracted {
+        let chunks = borg_core::knowledge::chunk_text(&ef.text);
+        let start = all_chunk_texts.len();
+        all_chunk_texts.extend(chunks);
+        file_chunk_ranges.push((start, all_chunk_texts.len()));
+    }
+
+    if all_chunk_texts.is_empty() {
+        return;
+    }
+
+    tracing::info!("batch embedding {} chunks across {} files", all_chunk_texts.len(), extracted.len());
+
+    // Phase 3: Batch embed ALL chunks across files (128 per API call)
+    let embeddings = crate::ingestion::batch_embed_chunks(
+        &all_chunk_texts, Some(embed_client), embed_client.dim(),
+    ).await;
+
+    // Phase 4: Reassemble per-file chunks with embeddings and index to Vespa concurrently
+    let mut index_set = tokio::task::JoinSet::new();
+    let index_sem = Arc::new(tokio::sync::Semaphore::new(20));
+    for (file_idx, ef) in extracted.into_iter().enumerate() {
+        let (start, end) = file_chunk_ranges[file_idx];
+        let chunks_with_embeddings: Vec<(String, Vec<f32>)> = embeddings[start..end].to_vec();
+        if chunks_with_embeddings.is_empty() {
+            continue;
+        }
+        let search = search.clone();
+        let sem = Arc::clone(&index_sem);
+        let metadata = ChunkMetadata {
+            doc_type: detect_doc_type(&ef.row.file_name, &ef.row.mime_type, &ef.text),
+            jurisdiction: crate::ingestion::detect_jurisdiction(&ef.text),
+            privileged: ef.row.privileged,
+            mime_type: ef.row.mime_type.clone(),
+        };
+        index_set.spawn(async move {
+            let _permit = sem.acquire().await;
+            let _ = search.delete_file_chunks(ef.row.project_id, ef.row.id).await;
+            if let Err(e) = search.index_chunks(
+                ef.row.project_id, ef.row.id, &ef.source_path, &ef.row.file_name,
+                &chunks_with_embeddings, &metadata,
+            ).await {
+                tracing::warn!("batch index failed for file {}: {e}", ef.row.id);
+            }
+        });
+    }
+    while index_set.join_next().await.is_some() {}
+
+    tracing::info!("batch processed {} chunks across {} files", all_chunk_texts.len(), file_chunk_ranges.len());
 }
 
 async fn extract_and_index_project_file(state: &AppState, file: &ProjectFileRow) {
