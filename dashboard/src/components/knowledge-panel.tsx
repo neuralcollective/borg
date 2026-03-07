@@ -1,4 +1,4 @@
-import { useState, useRef, lazy, Suspense } from "react";
+import { useState, useRef, lazy, Suspense, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useKnowledgeFiles,
@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import type { KnowledgeFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Search, Upload, FileText, Eye, Pencil, Trash2, ChevronLeft, ChevronRight, BookOpen, X } from "lucide-react";
 
 const DocxViewer = lazy(() => import("./viewers/docx-viewer").then(m => ({ default: m.DocxViewer })));
 
@@ -18,7 +19,22 @@ function formatBytes(n: number) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function FileRow({
+const CATEGORIES = [
+  { value: "general", label: "General" },
+  { value: "template", label: "Template" },
+  { value: "clause", label: "Clause Library" },
+  { value: "reference", label: "Reference" },
+  { value: "policy", label: "Policy" },
+];
+
+const categoryColors: Record<string, string> = {
+  template: "bg-violet-500/15 text-violet-300 ring-violet-500/20",
+  clause: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/20",
+  reference: "bg-cyan-500/15 text-cyan-300 ring-cyan-500/20",
+  policy: "bg-amber-500/15 text-amber-300 ring-amber-500/20",
+};
+
+function FileCard({
   file,
   onDeleted,
   onUpdated,
@@ -62,65 +78,72 @@ function FileRow({
   }
 
   return (
-    <div className="border border-zinc-700 rounded-lg p-3 space-y-2">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="font-mono text-sm text-zinc-100 truncate">{file.file_name}</div>
-          <div className="text-xs text-zinc-500 mt-0.5">
-            {formatBytes(file.size_bytes)} &middot; {new Date(file.created_at).toLocaleDateString()}
+    <div className="group rounded-xl border border-white/[0.07] bg-white/[0.02] p-4 transition-colors hover:border-white/[0.1] hover:bg-white/[0.03]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06]">
+            <FileText className="h-4 w-4 text-zinc-500" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium text-zinc-100 truncate">{file.file_name}</div>
+            <div className="mt-0.5 text-[12px] text-zinc-500">
+              {formatBytes(file.size_bytes)} · {new Date(file.created_at).toLocaleDateString()}
+            </div>
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
           {isPreviewable && (
             <button
               onClick={() => onPreview(file)}
-              className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded border border-zinc-700 hover:border-blue-700 transition-colors"
+              className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-blue-400"
+              title="Preview"
             >
-              Preview
+              <Eye className="h-3.5 w-3.5" />
             </button>
           )}
           <button
             onClick={() => setEditing((v) => !v)}
-            className="text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded border border-zinc-700 hover:border-zinc-500 transition-colors"
+            className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300"
+            title="Edit"
           >
-            {editing ? "Cancel" : "Edit"}
+            <Pencil className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={remove}
             disabled={deleting}
-            className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded border border-zinc-700 hover:border-red-700 transition-colors disabled:opacity-50"
+            className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+            title="Delete"
           >
-            {deleting ? "..." : "Delete"}
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
       {!editing && file.description && (
-        <div className="text-sm text-zinc-400">{file.description}</div>
+        <p className="mt-2 text-[13px] leading-relaxed text-zinc-400">{file.description}</p>
       )}
+
       {!editing && (
-        <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
           <span
             className={cn(
-              "text-xs px-1.5 py-0.5 rounded",
+              "rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ring-inset",
               file.inline
-                ? "bg-blue-900/50 text-blue-300 border border-blue-700"
-                : "bg-zinc-800 text-zinc-400 border border-zinc-700",
+                ? "bg-blue-500/15 text-blue-300 ring-blue-500/20"
+                : "bg-white/[0.04] text-zinc-400 ring-white/[0.08]"
             )}
           >
             {file.inline ? "Inline" : "Listed"}
           </span>
           {file.category && file.category !== "general" && (
-            <span className={cn("text-xs px-1.5 py-0.5 rounded border",
-              file.category === "template" ? "bg-violet-900/50 text-violet-300 border-violet-700"
-                : file.category === "clause" ? "bg-emerald-900/50 text-emerald-300 border-emerald-700"
-                : "bg-zinc-800 text-zinc-400 border-zinc-700"
+            <span className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ring-inset",
+              categoryColors[file.category] ?? "bg-white/[0.04] text-zinc-400 ring-white/[0.08]"
             )}>
               {file.category}
             </span>
           )}
           {file.tags && file.tags.split(",").filter(Boolean).map(t => (
-            <span key={t.trim()} className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700">
+            <span key={t.trim()} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] text-zinc-500 ring-1 ring-inset ring-white/[0.06]">
               {t.trim()}
             </span>
           ))}
@@ -128,60 +151,63 @@ function FileRow({
       )}
 
       {editing && (
-        <div className="space-y-2 pt-1">
+        <div className="mt-4 space-y-3">
           <div>
-            <label className="text-xs text-zinc-400 block mb-1">Description</label>
+            <label className="text-[12px] font-medium text-zinc-400 block mb-1.5">Description</label>
             <input
               type="text"
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
               placeholder="Brief description of this file"
-              className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
+              className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-100 outline-none focus:border-white/[0.15] placeholder:text-zinc-600"
             />
           </div>
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Category</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
-            >
-              <option value="general">General</option>
-              <option value="template">Template</option>
-              <option value="clause">Clause</option>
-              <option value="reference">Reference</option>
-              <option value="policy">Policy</option>
-            </select>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="text-[12px] font-medium text-zinc-400 block mb-1.5">Category</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-100 outline-none focus:border-white/[0.15]"
+              >
+                {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="text-[12px] font-medium text-zinc-400 block mb-1.5">Tags</label>
+              <input
+                type="text"
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+                placeholder="comma-separated"
+                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-100 outline-none focus:border-white/[0.15] placeholder:text-zinc-600"
+              />
+            </div>
           </div>
-          <div>
-            <label className="text-xs text-zinc-400 block mb-1">Tags (comma-separated)</label>
+          <label className="flex items-center gap-2.5 cursor-pointer">
             <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="e.g. nda, confidentiality, employment"
-              className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              id={`inline-${file.id}`}
               type="checkbox"
               checked={inline}
               onChange={(e) => setInline(e.target.checked)}
               className="rounded"
             />
-            <label htmlFor={`inline-${file.id}`} className="text-sm text-zinc-300">
-              Inline (embed content in prompt)
-            </label>
+            <span className="text-[13px] text-zinc-300">Inline (embed content in agent prompts)</span>
+          </label>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={save}
+              disabled={saving}
+              className="rounded-lg bg-blue-500/20 px-4 py-2 text-[13px] font-medium text-blue-300 transition-colors hover:bg-blue-500/30 disabled:opacity-50"
+            >
+              {saving ? "Saving..." : "Save Changes"}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setDesc(file.description); setInline(file.inline); setCategory(file.category || "general"); setTags(file.tags || ""); }}
+              className="rounded-lg px-4 py-2 text-[13px] text-zinc-500 transition-colors hover:text-zinc-300"
+            >
+              Cancel
+            </button>
           </div>
-          <button
-            onClick={save}
-            disabled={saving}
-            className="text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-100 px-3 py-1.5 rounded transition-colors disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Save"}
-          </button>
         </div>
       )}
     </div>
@@ -195,6 +221,7 @@ export function KnowledgePanel() {
   const files = page?.files ?? [];
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
   const [description, setDescription] = useState("");
   const [inline, setInline] = useState(false);
   const [uploadCategory, setUploadCategory] = useState("general");
@@ -204,6 +231,7 @@ export function KnowledgePanel() {
   const [previewFile, setPreviewFile] = useState<KnowledgeFile | null>(null);
   const [previewBuffer, setPreviewBuffer] = useState<ArrayBuffer | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ["knowledge"] });
@@ -228,176 +256,253 @@ export function KnowledgePanel() {
     }
   }
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) setSelectedFile(file);
+  }, []);
+
   return (
-    <div className="flex flex-col h-full overflow-y-auto p-4 space-y-6 max-w-2xl mx-auto w-full">
-      <div>
-        <h2 className="text-lg font-semibold text-zinc-100">Knowledge Base</h2>
-        <p className="text-sm text-zinc-400 mt-1">
-          Files available to all agents at <code className="text-zinc-300">/knowledge/</code>.
-          Inline files are embedded directly in the prompt; listed files are mentioned by name.
-        </p>
-        <div className="mt-3 flex items-center gap-2">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setOffset(0);
-            }}
-            placeholder="Filter knowledge files"
-            className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
-          />
-          <span className="shrink-0 text-xs text-zinc-500">{page?.total ?? files.length} files</span>
-        </div>
-        {page && (
-          <div className="mt-2 text-xs text-zinc-500">
-            Showing {page.total === 0 ? 0 : page.offset + 1}-{Math.min(page.offset + files.length, page.total)} of {page.total} · {(page.total_bytes / (1024 * 1024)).toFixed(1)} MB total
+    <div className="flex flex-col h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl px-6 py-8 space-y-8">
+        {/* Header */}
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.04] ring-1 ring-white/[0.06]">
+              <BookOpen className="h-5 w-5 text-zinc-500" />
+            </div>
+            <div>
+              <h2 className="text-[18px] font-semibold text-zinc-100">Knowledge Base</h2>
+              <p className="text-[13px] text-zinc-500">
+                Files available to all agents at <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[12px] text-zinc-300">/knowledge/</code>
+              </p>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Upload form */}
-      <div className="border border-zinc-700 rounded-lg p-4 space-y-3 bg-zinc-900/50">
-        <h3 className="text-sm font-medium text-zinc-200">Upload File</h3>
-        <div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-            className="block w-full text-sm text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border file:border-zinc-600 file:bg-zinc-800 file:text-zinc-200 file:text-xs file:cursor-pointer hover:file:bg-zinc-700"
-          />
+        {/* Search & stats */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setOffset(0); }}
+              placeholder="Search knowledge files..."
+              className="w-full rounded-xl border border-white/[0.07] bg-white/[0.03] py-2.5 pl-10 pr-4 text-[14px] text-zinc-100 outline-none transition-colors focus:border-white/[0.15] placeholder:text-zinc-600"
+            />
+          </div>
+          <div className="text-[12px] text-zinc-500 tabular-nums whitespace-nowrap">
+            {page?.total ?? files.length} files
+            {page && <span className="ml-1 text-zinc-600">· {(page.total_bytes / (1024 * 1024)).toFixed(1)} MB</span>}
+          </div>
         </div>
-        <div>
-          <label className="text-xs text-zinc-400 block mb-1">Description</label>
-          <input
-            type="text"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="What is this file? (shown in prompt)"
-            className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-zinc-400 block mb-1">Category</label>
-          <select
-            value={uploadCategory}
-            onChange={(e) => setUploadCategory(e.target.value)}
-            className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-400"
-          >
-            <option value="general">General</option>
-            <option value="template">Template (firm letterhead/styles)</option>
-            <option value="clause">Clause Library</option>
-            <option value="reference">Reference</option>
-            <option value="policy">Policy</option>
-          </select>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            id="upload-inline"
-            type="checkbox"
-            checked={inline}
-            onChange={(e) => setInline(e.target.checked)}
-            className="rounded"
-          />
-          <label htmlFor="upload-inline" className="text-sm text-zinc-300">
-            Inline (embed file content in agent prompts)
-          </label>
-        </div>
-        {uploadError && <div className="text-xs text-red-400">{uploadError}</div>}
-        <button
-          onClick={handleUpload}
-          disabled={!selectedFile || uploading}
-          className="text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-100 px-4 py-2 rounded transition-colors disabled:opacity-40"
+
+        {/* Upload area */}
+        <div
+          ref={dropRef}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          className={cn(
+            "rounded-xl border-2 border-dashed p-6 transition-colors",
+            dragOver
+              ? "border-blue-500/40 bg-blue-500/[0.04]"
+              : "border-white/[0.07] bg-white/[0.02]"
+          )}
         >
-          {uploading ? "Uploading..." : "Upload"}
-        </button>
+          <div className="flex flex-col items-center gap-3 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/[0.04]">
+              <Upload className="h-5 w-5 text-zinc-500" />
+            </div>
+            {selectedFile ? (
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-blue-400" />
+                <span className="text-[13px] text-zinc-200">{selectedFile.name}</span>
+                <button onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }} className="rounded p-0.5 text-zinc-500 hover:text-zinc-300">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <p className="text-[14px] font-medium text-zinc-300">Drop a file here or <button onClick={() => fileInputRef.current?.click()} className="text-blue-400 hover:text-blue-300">browse</button></p>
+                  <p className="mt-1 text-[12px] text-zinc-600">Supports any file type. Inline files are embedded in agent prompts.</p>
+                </div>
+              </>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+              className="hidden"
+            />
+          </div>
+
+          {selectedFile && (
+            <div className="mt-4 space-y-3 border-t border-white/[0.06] pt-4">
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-[12px] font-medium text-zinc-400 block mb-1.5">Description</label>
+                  <input
+                    type="text"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="What is this file?"
+                    className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-100 outline-none focus:border-white/[0.15] placeholder:text-zinc-600"
+                  />
+                </div>
+                <div className="w-40">
+                  <label className="text-[12px] font-medium text-zinc-400 block mb-1.5">Category</label>
+                  <select
+                    value={uploadCategory}
+                    onChange={(e) => setUploadCategory(e.target.value)}
+                    className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-3 py-2.5 text-[13px] text-zinc-100 outline-none focus:border-white/[0.15]"
+                  >
+                    {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={inline}
+                    onChange={(e) => setInline(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span className="text-[13px] text-zinc-300">Inline in prompts</span>
+                </label>
+                <button
+                  onClick={handleUpload}
+                  disabled={uploading}
+                  className="rounded-lg bg-blue-500 px-5 py-2 text-[13px] font-medium text-white transition-colors hover:bg-blue-400 disabled:opacity-50 shadow-lg shadow-blue-500/20"
+                >
+                  {uploading ? "Uploading..." : "Upload"}
+                </button>
+              </div>
+              {uploadError && <p className="text-[12px] text-red-400">{uploadError}</p>}
+            </div>
+          )}
+        </div>
+
+        {/* File list */}
+        <div className="space-y-3">
+          {isLoading && (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+            </div>
+          )}
+          {!isLoading && files.length === 0 && (
+            <div className="flex flex-col items-center py-16 text-center">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] ring-1 ring-white/[0.06]">
+                <FileText className="h-6 w-6 text-zinc-600" />
+              </div>
+              <p className="text-[14px] text-zinc-400">
+                {page && page.total > 0 ? "No files match your search" : "No knowledge files yet"}
+              </p>
+              <p className="mt-1 text-[12px] text-zinc-600">
+                {page && page.total > 0 ? "Try a different search term" : "Upload files to make them available to agents"}
+              </p>
+            </div>
+          )}
+          {files.map((file) => (
+            <FileCard
+              key={file.id}
+              file={file}
+              onDeleted={invalidate}
+              onUpdated={invalidate}
+              onPreview={async (f) => {
+                setPreviewFile(f);
+                setPreviewLoading(true);
+                try {
+                  const buf = await fetchKnowledgeContent(f.id);
+                  setPreviewBuffer(buf);
+                } catch {
+                  setPreviewBuffer(null);
+                } finally {
+                  setPreviewLoading(false);
+                }
+              }}
+            />
+          ))}
+
+          {/* Pagination */}
+          {page && page.total > page.limit && (
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[12px] text-zinc-500">
+                {page.total === 0 ? 0 : page.offset + 1}–{Math.min(page.offset + files.length, page.total)} of {page.total}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setOffset((prev) => Math.max(0, prev - page.limit))}
+                  disabled={page.offset === 0}
+                  className="flex items-center gap-1 rounded-lg border border-white/[0.07] px-3 py-1.5 text-[12px] text-zinc-400 transition-colors hover:border-white/[0.12] hover:text-zinc-300 disabled:opacity-40"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" /> Prev
+                </button>
+                <button
+                  onClick={() => setOffset((prev) => prev + page.limit)}
+                  disabled={!page.has_more}
+                  className="flex items-center gap-1 rounded-lg border border-white/[0.07] px-3 py-1.5 text-[12px] text-zinc-400 transition-colors hover:border-white/[0.12] hover:text-zinc-300 disabled:opacity-40"
+                >
+                  Next <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* File list */}
-      <div className="space-y-3">
-        {isLoading && <div className="text-sm text-zinc-500">Loading...</div>}
-        {!isLoading && files.length === 0 && (
-          <div className="text-sm text-zinc-500 text-center py-8">
-            {page && page.total > 0 ? "No files match the current filter." : "No knowledge files uploaded yet."}
-          </div>
-        )}
-        {files.map((file) => (
-          <FileRow
-            key={file.id}
-            file={file}
-            onDeleted={invalidate}
-            onUpdated={invalidate}
-            onPreview={async (f) => {
-              setPreviewFile(f);
-              setPreviewLoading(true);
-              try {
-                const buf = await fetchKnowledgeContent(f.id);
-                setPreviewBuffer(buf);
-              } catch {
-                setPreviewBuffer(null);
-              } finally {
-                setPreviewLoading(false);
-              }
-            }}
-          />
-        ))}
-        {page && page.total > page.limit && (
-          <div className="flex items-center justify-between text-xs text-zinc-500">
-            <button
-              onClick={() => setOffset((prev) => Math.max(0, prev - page.limit))}
-              disabled={page.offset === 0}
-              className="rounded border border-zinc-700 px-2 py-1 disabled:opacity-40"
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => setOffset((prev) => prev + page.limit)}
-              disabled={!page.has_more}
-              className="rounded border border-zinc-700 px-2 py-1 disabled:opacity-40"
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-
+      {/* Preview modal */}
       {previewFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => { setPreviewFile(null); setPreviewBuffer(null); }}>
-          <div className="mx-4 flex max-h-[85vh] w-full max-w-4xl flex-col rounded-lg border border-white/10 bg-zinc-900 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-              <div>
-                <span className="text-sm font-medium text-zinc-200">{previewFile.file_name}</span>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => { setPreviewFile(null); setPreviewBuffer(null); }}>
+          <div className="mx-4 flex max-h-[85vh] w-full max-w-4xl flex-col rounded-2xl border border-white/[0.08] bg-[#0e0e10] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <FileText className="h-4 w-4 text-zinc-500" />
+                <span className="text-[14px] font-medium text-zinc-200">{previewFile.file_name}</span>
                 {previewFile.category === "template" && (
-                  <span className="ml-2 rounded bg-violet-900/50 px-1.5 py-0.5 text-[10px] text-violet-300 border border-violet-700">template</span>
+                  <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] font-medium text-violet-300 ring-1 ring-inset ring-violet-500/20">template</span>
                 )}
               </div>
-              <button onClick={() => { setPreviewFile(null); setPreviewBuffer(null); }} className="text-zinc-500 hover:text-zinc-300">✕</button>
+              <button onClick={() => { setPreviewFile(null); setPreviewBuffer(null); }} className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300">
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <div className="flex-1 overflow-auto p-4">
-              {previewLoading && <div className="text-sm text-zinc-500 text-center py-8">Loading preview...</div>}
+            <div className="flex-1 overflow-auto p-5">
+              {previewLoading && (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+                </div>
+              )}
               {!previewLoading && previewBuffer && /\.docx$/i.test(previewFile.file_name) && (
-                <Suspense fallback={<div className="text-sm text-zinc-500">Loading viewer...</div>}>
+                <Suspense fallback={<div className="flex items-center justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" /></div>}>
                   <DocxViewer buffer={previewBuffer} />
                 </Suspense>
               )}
               {!previewLoading && previewBuffer && /\.pdf$/i.test(previewFile.file_name) && (
                 <iframe
                   src={URL.createObjectURL(new Blob([previewBuffer], { type: "application/pdf" }))}
-                  className="w-full h-[70vh] rounded"
+                  className="w-full h-[70vh] rounded-lg"
                 />
               )}
               {!previewLoading && previewBuffer && /\.(png|jpg|jpeg|gif|svg)$/i.test(previewFile.file_name) && (
                 <img
                   src={URL.createObjectURL(new Blob([previewBuffer]))}
-                  className="max-w-full max-h-[70vh] mx-auto"
+                  className="max-w-full max-h-[70vh] mx-auto rounded-lg"
                   alt={previewFile.file_name}
                 />
               )}
               {!previewLoading && previewBuffer && /\.(txt|md|csv)$/i.test(previewFile.file_name) && (
-                <pre className="whitespace-pre-wrap font-mono text-[12px] text-zinc-300">{new TextDecoder().decode(previewBuffer)}</pre>
+                <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-zinc-300">{new TextDecoder().decode(previewBuffer)}</pre>
               )}
               {!previewLoading && !previewBuffer && (
-                <div className="text-sm text-zinc-500 text-center py-8">Failed to load preview</div>
+                <div className="flex flex-col items-center py-12 text-center">
+                  <p className="text-[14px] text-zinc-400">Failed to load preview</p>
+                  <p className="mt-1 text-[12px] text-zinc-600">The file may be too large or in an unsupported format</p>
+                </div>
               )}
             </div>
           </div>

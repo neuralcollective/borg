@@ -75,7 +75,7 @@ function InlineField({
   if (editing) {
     return (
       <div className="flex flex-col gap-0.5">
-        <span className="text-[10px] text-zinc-600">{label}</span>
+        <span className="text-[11px] text-zinc-400">{label}</span>
         <div className="flex items-center gap-1">
           <input
             autoFocus
@@ -85,13 +85,13 @@ function InlineField({
               if (e.key === "Enter") commit();
               if (e.key === "Escape") cancel();
             }}
-            className="flex-1 rounded border border-white/[0.12] bg-white/[0.04] px-2 py-0.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+            className="flex-1 rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
           />
           <button onClick={commit} className="text-emerald-400 hover:text-emerald-300 transition-colors">
-            <Check className="h-3 w-3" />
+            <Check className="h-3.5 w-3.5" />
           </button>
-          <button onClick={cancel} className="text-zinc-600 hover:text-zinc-400 transition-colors">
-            <X className="h-3 w-3" />
+          <button onClick={cancel} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -100,9 +100,9 @@ function InlineField({
 
   return (
     <div className="group flex flex-col gap-0.5">
-      <span className="text-[10px] text-zinc-600">{label}</span>
+      <span className="text-[11px] text-zinc-400">{label}</span>
       <div className="flex items-center gap-1.5">
-        <span className="text-[12px] text-zinc-300">{value || <span className="text-zinc-600">{placeholder ?? "—"}</span>}</span>
+        <span className="text-[13px] text-zinc-300">{value || <span className="text-zinc-500">{placeholder ?? "—"}</span>}</span>
         <button
           onClick={() => { setDraft(value ?? ""); setEditing(true); }}
           className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-600 hover:text-zinc-400"
@@ -127,11 +127,11 @@ function SelectField({
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] text-zinc-600">{label}</span>
+      <span className="text-[11px] text-zinc-400">{label}</span>
       <select
         value={value || ""}
         onChange={(e) => onSave(e.target.value)}
-        className="rounded border border-white/[0.12] bg-white/[0.04] px-2 py-0.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+        className="rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
       >
         <option value="">unset</option>
         {options.map((opt) => (
@@ -257,43 +257,43 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   }
 
   return (
-    <div className="border-b border-white/[0.06] px-5 py-3">
+    <div className="border-b border-white/[0.07] px-5 py-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-[14px] font-semibold text-zinc-100">{project.name}</h2>
+            <h2 className="text-[15px] font-semibold text-zinc-100">{project.name}</h2>
             {project.status && <StatusBadge status={project.status} />}
             {project.session_privileged && (
-              <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-medium text-rose-300">
+              <span className="rounded-lg bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-300">
                 privileged session
               </span>
             )}
             {project.matter_type && (
-              <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
+              <span className="rounded-lg bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400">
                 {project.matter_type}
               </span>
             )}
           </div>
-          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-zinc-500">
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-zinc-400">
             {project.case_number && (
               <span>
-                <span className="text-zinc-600">case</span>{" "}
+                <span className="text-zinc-500">case</span>{" "}
                 <span className="font-mono">{project.case_number}</span>
               </span>
             )}
             {project.client_name && (
               <span>
-                <span className="text-zinc-600">client</span> {project.client_name}
+                <span className="text-zinc-500">client</span> {project.client_name}
               </span>
             )}
             {project.jurisdiction && (
               <span>
-                <span className="text-zinc-600">jurisdiction</span> {project.jurisdiction}
+                <span className="text-zinc-500">jurisdiction</span> {project.jurisdiction}
               </span>
             )}
             {project.deadline && (
               <span>
-                <span className="text-zinc-600">deadline</span> {fmtDate(project.deadline)}
+                <span className="text-zinc-500">deadline</span> {fmtDate(project.deadline)}
               </span>
             )}
           </div>
@@ -303,20 +303,20 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
             <button
               onClick={() => setExportMenu(v => !v)}
               disabled={exportingAll}
-              className="rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-blue-500/30 hover:text-blue-400 transition-colors disabled:opacity-50"
+              className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 transition-colors disabled:opacity-50"
               title="Export all documents"
             >
               {exportingAll ? "Exporting..." : "Export All"}
             </button>
             {exportMenu && (
-              <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded border border-white/[0.1] bg-zinc-900 shadow-xl">
+              <div className="absolute right-0 top-full z-50 mt-1.5 w-56 rounded-xl border border-white/[0.1] bg-zinc-900 shadow-xl">
                 {templates.length > 0 && (
-                  <div className="border-b border-white/[0.06] px-3 py-2">
-                    <label className="text-[9px] text-zinc-500 block mb-0.5">Template</label>
+                  <div className="border-b border-white/[0.07] px-4 py-3">
+                    <label className="text-[11px] text-zinc-400 block mb-1">Template</label>
                     <select
                       value={exportTemplateId ?? ""}
                       onChange={(e) => setExportTemplateId(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full rounded border border-white/[0.08] bg-zinc-800 px-1.5 py-1 text-[10px] text-zinc-300 outline-none"
+                      className="w-full rounded-lg border border-white/[0.08] bg-zinc-800 px-2 py-1.5 text-[12px] text-zinc-300 outline-none"
                     >
                       <option value="">None (default)</option>
                       {templates.map((t) => (
@@ -325,10 +325,10 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
                     </select>
                   </div>
                 )}
-                <button onClick={() => exportAll("docx")} className="flex w-full items-center px-3 py-2 text-left text-[11px] text-zinc-300 hover:bg-white/[0.06]">
+                <button onClick={() => exportAll("docx")} className="flex w-full items-center px-4 py-2.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] transition-colors">
                   Export as DOCX (ZIP)
                 </button>
-                <button onClick={() => exportAll("pdf")} className="flex w-full items-center px-3 py-2 text-left text-[11px] text-zinc-300 hover:bg-white/[0.06]">
+                <button onClick={() => exportAll("pdf")} className="flex w-full items-center px-4 py-2.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06] transition-colors">
                   Export as PDF (ZIP)
                 </button>
               </div>
@@ -337,9 +337,9 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
           {onDelete && (
             confirmDelete ? (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-red-400">Delete?</span>
-                <button onClick={onDelete} className="rounded px-1.5 py-0.5 text-[10px] bg-red-500/20 text-red-400 hover:bg-red-500/30">Yes</button>
-                <button onClick={() => setConfirmDelete(false)} className="rounded px-1.5 py-0.5 text-[10px] bg-zinc-700 text-zinc-400 hover:bg-zinc-600">No</button>
+                <span className="text-[11px] text-red-400">Delete?</span>
+                <button onClick={onDelete} className="rounded-lg px-2 py-1 text-[11px] bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors">Yes</button>
+                <button onClick={() => setConfirmDelete(false)} className="rounded-lg px-2 py-1 text-[11px] bg-zinc-700 text-zinc-400 hover:bg-zinc-600 transition-colors">No</button>
               </div>
             ) : (
               <button onClick={() => setConfirmDelete(true)} className="shrink-0 rounded p-1 text-zinc-600 hover:text-red-400 hover:bg-red-500/10" title="Delete matter">
@@ -373,29 +373,29 @@ function MetadataPanel({ project, projectId }: { project: Project; projectId: nu
   }
 
   return (
-    <div className="border-b border-white/[0.06]">
+    <div className="border-b border-white/[0.07]">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-5 py-2 text-left hover:bg-white/[0.02] transition-colors"
+        className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-white/[0.02] transition-colors"
       >
-        <span className="text-[11px] font-medium text-zinc-500">Matter Details</span>
+        <span className="text-[12px] font-semibold text-zinc-400">Matter Details</span>
         {conflicts.length > 0 && (
-          <AlertTriangle className="h-3 w-3 text-amber-400" />
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
         )}
-        <span className="ml-auto text-zinc-600">
-          {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        <span className="ml-auto text-zinc-500">
+          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
         </span>
       </button>
       {open && (
         <>
           {conflicts.length > 0 && (
-            <div className="mx-5 mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5">
-              <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-amber-400">
-                <AlertTriangle className="h-3 w-3" />
+            <div className="mx-5 mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+              <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" />
                 Potential Conflict
               </div>
               {conflicts.map((c, i) => (
-                <p key={i} className="text-[10px] text-amber-300/80">
+                <p key={i} className="text-[11px] text-amber-300/80">
                   <span className="font-medium">{c.party_name}</span>
                   {" "}({c.party_role === "opposing_counsel" ? "opposing" : c.party_role})
                   {" in "}<span className="font-medium">{c.project_name}</span>
@@ -403,7 +403,7 @@ function MetadataPanel({ project, projectId }: { project: Project; projectId: nu
               ))}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-5 pb-4 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4 px-5 pb-5 sm:grid-cols-3">
             <InlineField label="Client" value={project.client_name} onSave={save("client_name")} placeholder="unset" />
             <InlineField label="Case Number" value={project.case_number} onSave={save("case_number")} placeholder="unset" />
             <InlineField label="Jurisdiction" value={project.jurisdiction} onSave={save("jurisdiction")} placeholder="unset" />
@@ -426,7 +426,7 @@ function MetadataPanel({ project, projectId }: { project: Project; projectId: nu
                     const v = e.target.value ? Number(e.target.value) : null;
                     update({ default_template_id: v });
                   }}
-                  className="rounded border border-white/[0.12] bg-white/[0.04] px-2 py-0.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+                  className="rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
                 >
                   <option value="">none</option>
                   {templates.map((t) => (
@@ -456,7 +456,7 @@ function deadlineUrgency(dueDate: string): "overdue" | "urgent" | "normal" {
 const urgencyStyle: Record<string, string> = {
   overdue: "border-red-500/30 bg-red-500/10 text-red-400",
   urgent: "border-amber-500/30 bg-amber-500/10 text-amber-400",
-  normal: "border-white/[0.06] bg-white/[0.02] text-zinc-300",
+  normal: "border-white/[0.07] bg-white/[0.03] text-zinc-300",
 };
 
 function DeadlinesPanel({ projectId }: { projectId: number }) {
@@ -489,33 +489,33 @@ function DeadlinesPanel({ projectId }: { projectId: number }) {
   }
 
   return (
-    <div className="border-b border-white/[0.06]">
+    <div className="border-b border-white/[0.07]">
       <button
         onClick={() => setOpen(v => !v)}
-        className="flex w-full items-center gap-2 px-5 py-2 text-left hover:bg-white/[0.02] transition-colors"
+        className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-white/[0.02] transition-colors"
       >
-        <span className="text-[11px] font-medium text-zinc-500">Deadlines</span>
+        <span className="text-[12px] font-semibold text-zinc-400">Deadlines</span>
         {pending.length > 0 && (
-          <span className={cn("rounded-full px-1.5 py-0.5 text-[9px] font-medium", hasOverdue ? "bg-red-500/20 text-red-400" : "bg-zinc-700 text-zinc-400")}>
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", hasOverdue ? "bg-red-500/20 text-red-400" : "bg-zinc-700 text-zinc-400")}>
             {pending.length}
           </span>
         )}
-        <span className="ml-auto text-zinc-600">
-          {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        <span className="ml-auto text-zinc-500">
+          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
         </span>
       </button>
       {open && (
-        <div className="px-5 pb-4 space-y-1.5">
+        <div className="px-5 pb-5 space-y-2">
           {pending.map(d => {
             const urg = deadlineUrgency(d.due_date);
             return (
-              <div key={d.id} className={cn("flex items-center gap-2 rounded border px-2.5 py-1.5 text-[11px]", urgencyStyle[urg])}>
+              <div key={d.id} className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px]", urgencyStyle[urg])}>
                 <button onClick={() => handleComplete(d)} className="shrink-0 opacity-60 hover:opacity-100" title="Mark complete">
-                  <Check className="h-3 w-3" />
+                  <Check className="h-3.5 w-3.5" />
                 </button>
                 <span className="font-medium">{d.label}</span>
-                <span className="font-mono text-[10px] opacity-70">{d.due_date}</span>
-                {d.rule_basis && <span className="text-[10px] opacity-60 truncate">{d.rule_basis}</span>}
+                <span className="font-mono text-[11px] opacity-70">{d.due_date}</span>
+                {d.rule_basis && <span className="text-[11px] opacity-60 truncate">{d.rule_basis}</span>}
                 <button onClick={() => handleDelete(d)} className="ml-auto shrink-0 opacity-40 hover:opacity-100 text-zinc-500 hover:text-red-400" title="Delete">
                   <X className="h-3 w-3" />
                 </button>
@@ -525,7 +525,7 @@ function DeadlinesPanel({ projectId }: { projectId: number }) {
           {completed.length > 0 && (
             <div className="mt-2 space-y-1">
               {completed.map(d => (
-                <div key={d.id} className="flex items-center gap-2 rounded border border-white/[0.04] px-2.5 py-1 text-[10px] text-zinc-600 line-through">
+                <div key={d.id} className="flex items-center gap-2 rounded-lg border border-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-500 line-through">
                   <span>{d.label}</span>
                   <span className="font-mono">{d.due_date}</span>
                   <button onClick={() => handleDelete(d)} className="ml-auto shrink-0 opacity-40 hover:opacity-100 hover:text-red-400" title="Delete">
@@ -536,37 +536,37 @@ function DeadlinesPanel({ projectId }: { projectId: number }) {
             </div>
           )}
           {adding ? (
-            <div className="mt-2 space-y-1.5 rounded border border-white/[0.08] bg-white/[0.02] p-2">
+            <div className="mt-2 space-y-2 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
               <input
                 autoFocus
                 value={newLabel}
                 onChange={e => setNewLabel(e.target.value)}
                 placeholder="Label (e.g. Motion to Dismiss)"
-                className="w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
+                className="w-full rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 placeholder:text-zinc-500"
               />
-              <div className="flex gap-1.5">
+              <div className="flex gap-2">
                 <input
                   type="date"
                   value={newDate}
                   onChange={e => setNewDate(e.target.value)}
-                  className="flex-1 rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
+                  className="flex-1 rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
                 />
                 <input
                   value={newBasis}
                   onChange={e => setNewBasis(e.target.value)}
                   placeholder="Rule basis (optional)"
-                  className="flex-1 rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-200 outline-none focus:border-blue-500/40"
+                  className="flex-1 rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 placeholder:text-zinc-500"
                 />
               </div>
-              <div className="flex gap-1.5">
-                <button onClick={handleAdd} className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] text-blue-300 hover:bg-blue-500/30">Add</button>
-                <button onClick={() => setAdding(false)} className="rounded bg-zinc-700 px-2 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-600">Cancel</button>
+              <div className="flex gap-2">
+                <button onClick={handleAdd} className="rounded-lg bg-blue-500/20 px-3 py-1 text-[12px] text-blue-300 hover:bg-blue-500/30 transition-colors">Add</button>
+                <button onClick={() => setAdding(false)} className="rounded-lg bg-zinc-700 px-3 py-1 text-[12px] text-zinc-400 hover:bg-zinc-600 transition-colors">Cancel</button>
               </div>
             </div>
           ) : (
             <button
               onClick={() => setAdding(true)}
-              className="mt-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+              className="mt-1.5 text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
             >
               + Add deadline
             </button>
@@ -586,8 +586,9 @@ function TimelineTab({ projectId }: { projectId: number }) {
 
   if (items.length === 0) {
     return (
-      <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">
-        No activity yet.
+      <div className="flex h-32 flex-col items-center justify-center text-center">
+        <FileText className="h-6 w-6 text-zinc-600 mb-2" />
+        <div className="text-[13px] text-zinc-400">No activity yet</div>
       </div>
     );
   }
@@ -685,7 +686,7 @@ function DocumentsTab({
   if (docs.length === 0 && (filePage?.summary.total_files ?? 0) === 0) {
     return (
       <div className="space-y-2 p-4">
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+        <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
           <div className="mb-2 text-[11px] font-medium text-zinc-400">Document Intake</div>
           <div className="flex items-center gap-3">
             <input
@@ -723,7 +724,7 @@ function DocumentsTab({
 
   return (
     <div className="space-y-3 p-4">
-      <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+      <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
         <div className="mb-2 text-[11px] font-medium text-zinc-400">Document Intake</div>
         <div className="flex items-center gap-3">
           <input
@@ -754,7 +755,7 @@ function DocumentsTab({
       </div>
 
       {(filePage?.summary.total_files ?? 0) > 0 && (
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+        <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="text-[11px] font-medium text-zinc-400">
               Source Files ({filePage?.summary.total_files ?? files.length})
@@ -786,7 +787,7 @@ function DocumentsTab({
               </div>
             ))}
             {files.length === 0 && (
-              <div className="rounded border border-dashed border-white/[0.06] px-2 py-2 text-[11px] text-zinc-600">
+              <div className="rounded border border-dashed border-white/[0.07] px-2 py-2 text-[11px] text-zinc-600">
                 No files match the current filter.
               </div>
             )}
@@ -828,7 +829,7 @@ function DocumentsTab({
         <button
           key={`${doc.task_id}-${doc.file_name}`}
           onClick={() => onDocumentSelect?.(doc)}
-          className="flex flex-col gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 text-left transition-colors hover:border-white/[0.1] hover:bg-white/[0.04]"
+          className="flex flex-col gap-1.5 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 text-left transition-colors hover:border-white/[0.1] hover:bg-white/[0.04]"
         >
           <div className="flex items-center gap-2">
             <FileText className="h-3.5 w-3.5 shrink-0 text-blue-400/60" />
@@ -881,7 +882,7 @@ function TaskStreamMini({ taskId }: { taskId: number }) {
   if (!streaming && lines.length === 0) return null;
 
   return (
-    <div className="mt-2 rounded border border-white/[0.06] bg-black/30">
+    <div className="mt-2 rounded border border-white/[0.07] bg-black/30">
       <div className="flex items-center gap-2 border-b border-white/[0.04] px-2.5 py-1.5">
         {streaming && (
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
@@ -940,7 +941,7 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
   };
 
   return (
-    <div className="mt-2 rounded border border-white/[0.06] bg-black/20 p-3 space-y-3">
+    <div className="mt-2 rounded border border-white/[0.07] bg-black/20 p-3 space-y-3">
       {summary && (
         <p className="text-[11px] text-zinc-300 leading-relaxed">{summary}</p>
       )}
@@ -1105,7 +1106,7 @@ function TasksTab({ projectId }: { projectId: number }) {
               "rounded-lg border p-3",
               isHumanReview
                 ? "border-emerald-500/20 bg-emerald-500/[0.03]"
-                : "border-white/[0.06] bg-white/[0.02]"
+                : "border-white/[0.07] bg-white/[0.02]"
             )}
           >
             <div className="flex items-start gap-2">
@@ -1351,7 +1352,7 @@ function CitationPanel({ taskId }: { taskId: number }) {
   };
 
   return (
-    <div className="mt-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 space-y-2">
+    <div className="mt-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-medium text-zinc-400">
           Citations {citations.length > 0 && `(${citations.length})`}
@@ -1408,14 +1409,14 @@ function RevisionHistoryPanel({ taskId }: { taskId: number }) {
 
   if (!history || history.rounds.length === 0) {
     return (
-      <div className="mt-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+      <div className="mt-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
         <span className="text-[11px] text-zinc-600">No revision history</span>
       </div>
     );
   }
 
   return (
-    <div className="mt-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 space-y-3">
+    <div className="mt-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 space-y-3">
       <div className="flex items-center gap-2">
         <span className="text-[11px] font-medium text-zinc-400">
           Revision History
@@ -1613,7 +1614,7 @@ function ChatTab({ projectId }: { projectId: number }) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-white/[0.06] p-3">
+      <div className="shrink-0 border-t border-white/[0.07] p-3">
         <div className="flex gap-2">
           <textarea
             value={messageInput}
@@ -1692,7 +1693,7 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
       <MetadataPanel project={project} projectId={projectId} />
       <DeadlinesPanel projectId={projectId} />
 
-      <div className="shrink-0 flex gap-0 border-b border-white/[0.06] px-5">
+      <div className="shrink-0 flex gap-0 border-b border-white/[0.07] px-5">
         {TABS.map((tab) => (
           <button
             key={tab.key}

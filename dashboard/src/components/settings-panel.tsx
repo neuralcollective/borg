@@ -95,7 +95,7 @@ export function SettingsPanel() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-2xl space-y-8 p-6">
+      <div className="mx-auto max-w-2xl space-y-8 px-6 py-8">
         {/* ── Your Settings ──────────────────────────────────────── */}
         <Section title="Your Settings">
           <div className="flex items-center justify-between">
@@ -234,7 +234,7 @@ export function SettingsPanel() {
                   <select
                     value={effective.model_override}
                     onChange={(e) => update("model_override", e.target.value)}
-                    className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+                    className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
                   >
                     <option value="">Disabled (users choose)</option>
                     {MODEL_OPTIONS.map((o) => (
@@ -805,7 +805,7 @@ function ReposSection() {
               await setRepoBackend(repo.id, e.target.value);
               queryClient.invalidateQueries({ queryKey: ["repos"] });
             }}
-            className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+            className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
           >
             <option value="">default</option>
             <option value="claude">claude</option>
@@ -898,8 +898,8 @@ function CacheSection() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{title}</h3>
-      <div className="space-y-4 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+      <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wider text-zinc-500">{title}</h3>
+      <div className="space-y-4 rounded-xl border border-white/[0.07] bg-white/[0.02] p-5">
         {children}
       </div>
     </div>
@@ -907,11 +907,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Label({ children }: { children: React.ReactNode }) {
-  return <div className="text-[12px] font-medium text-zinc-300">{children}</div>;
+  return <div className="text-[13px] font-medium text-zinc-200">{children}</div>;
 }
 
 function Desc({ children }: { children: React.ReactNode }) {
-  return <div className="mt-0.5 text-[11px] text-zinc-600">{children}</div>;
+  return <div className="mt-0.5 text-[11px] text-zinc-500">{children}</div>;
 }
 
 function ToggleField({ label, desc, value, onChange }: {
@@ -929,14 +929,14 @@ function ToggleField({ label, desc, value, onChange }: {
       <button
         onClick={() => onChange(!value)}
         className={cn(
-          "relative h-5 w-9 rounded-full transition-colors",
+          "relative h-[22px] w-10 rounded-full transition-colors",
           value ? "bg-blue-500" : "bg-zinc-700"
         )}
       >
         <div
           className={cn(
-            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
-            value ? "left-[18px]" : "left-0.5"
+            "absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+            value ? "left-[22px]" : "left-[3px]"
           )}
         />
       </button>
@@ -959,7 +959,7 @@ function NumberField({ label, desc, value, onChange, min, max }: {
         <Label>{label}</Label>
         <Desc>{desc}</Desc>
       </div>
-      <div className="flex items-center gap-0 rounded-md border border-white/[0.08] bg-white/[0.04]">
+      <div className="flex items-center gap-0 rounded-lg border border-white/[0.07] bg-white/[0.04]">
         <button
           type="button"
           onClick={() => onChange(clamp(value - 1))}
@@ -1006,7 +1006,7 @@ function TextField({ label, desc, value, onChange }: {
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-56 rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+        className="w-56 rounded-lg border border-white/[0.07] bg-white/[0.04] px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
       />
     </div>
   );
@@ -1028,7 +1028,7 @@ function SelectField({ label, desc, value, onChange, options }: {
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+        className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -1100,7 +1100,7 @@ function ModelPicker({ model, backend, onChange }: {
             const opt = MODEL_OPTIONS.find((o) => o.model === e.target.value);
             if (opt) onChange(opt.model, opt.backend);
           }}
-          className="rounded-md border border-white/[0.08] bg-zinc-900 px-2.5 py-1.5 text-[12px] text-zinc-200 outline-none focus:border-blue-500/40"
+          className="rounded-lg border border-white/[0.07] bg-zinc-900 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 transition-colors"
         >
           {MODEL_OPTIONS.map((o) => (
             <option key={o.model} value={o.model}>{o.label}</option>

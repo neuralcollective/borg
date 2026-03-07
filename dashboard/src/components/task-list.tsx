@@ -30,7 +30,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Stats row */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.07] px-4">
         {(status?.failed_tasks ?? 0) > 0 && (
           <button
             onClick={async () => {
@@ -44,32 +44,32 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
               }
             }}
             disabled={retryingAll}
-            className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] text-zinc-500 hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-50 transition-colors"
+            className="rounded-lg border border-white/[0.07] px-2.5 py-1 text-[12px] text-zinc-400 hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-50 transition-colors"
           >
             {retryingAll ? "..." : "Retry all failed"}
           </button>
         )}
-        <span className="ml-auto rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] tabular-nums text-zinc-600">
+        <span className="ml-auto rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[11px] tabular-nums text-zinc-400">
           {filtered?.length ?? 0} tasks
         </span>
       </div>
 
       <div className="flex-1 overflow-y-auto overscroll-contain">
-        <div className="p-1.5">
+        <div className="p-2">
           {active.map((t) => (
             <TaskRow key={t.id} task={t} isActive showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {pending.length > 0 && active.length > 0 && (
-            <div className="mx-3 my-2 h-px bg-white/[0.04]" />
+            <div className="mx-3.5 my-3 h-px bg-white/[0.04]" />
           )}
           {pending.length > 0 && (
-            <div className="px-3 pt-1 pb-0.5 text-[9px] font-medium uppercase tracking-wider text-zinc-600">Pending</div>
+            <div className="px-3.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-widest text-zinc-500">Pending</div>
           )}
           {pending.map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {terminal.length > 0 && (active.length > 0 || pending.length > 0) && (
-            <div className="mx-3 my-2 h-px bg-white/[0.04]" />
+            <div className="mx-3.5 my-3 h-px bg-white/[0.04]" />
           )}
           {terminal.slice(0, 30).map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
@@ -105,37 +105,37 @@ function TaskRow({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full flex-col gap-0.5 rounded-lg px-3 py-2 text-left transition-all",
-        "hover:bg-white/[0.03]",
+        "flex w-full flex-col gap-1 rounded-xl px-3.5 py-2.5 text-left transition-all",
+        "hover:bg-white/[0.04]",
         isActive && !isStuck && "bg-blue-500/[0.03]",
         isStuck && "bg-red-500/[0.04]",
-        selected && "bg-white/[0.07] ring-1 ring-inset ring-white/[0.08]"
+        selected && "bg-blue-500/[0.06] ring-1 ring-blue-500/20"
       )}
     >
       <div className="flex w-full items-center gap-2">
-        <span className="min-w-[22px] font-mono text-[10px] text-zinc-600">#{task.id}</span>
+        <span className="min-w-[24px] font-mono text-[11px] text-zinc-500">#{task.id}</span>
         <StatusBadge status={task.status} />
         {showRepo && task.repo_path && (
-          <span className="shrink-0 rounded bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium text-zinc-500">
+          <span className="shrink-0 rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
             {repoName(task.repo_path)}
           </span>
         )}
         {task.mode && task.mode !== "sweborg" && task.mode !== "swe" && (
-          <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
+          <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-400">
             {task.mode}
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2 pl-[30px]">
-        <span className="flex-1 truncate text-[12px] text-zinc-300">{task.title}</span>
+      <div className="flex items-center gap-2 pl-[32px]">
+        <span className="flex-1 truncate text-[13px] text-zinc-300">{task.title}</span>
         {!isMinimal && task.attempt > 0 && (
-          <span className={cn("shrink-0 font-mono text-[10px]", isStuck ? "text-red-400/80" : "text-zinc-600")}>
+          <span className={cn("shrink-0 font-mono text-[11px]", isStuck ? "text-red-400/80" : "text-zinc-500")}>
             {task.attempt}/{task.max_attempts}
           </span>
         )}
       </div>
       {task.last_error && isActive && (
-        <div className="pl-[30px] truncate text-[10px] text-red-400/60">
+        <div className="pl-[32px] truncate text-[11px] text-red-400/60">
           {task.last_error}
         </div>
       )}

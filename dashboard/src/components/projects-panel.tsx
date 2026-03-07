@@ -132,24 +132,24 @@ function DocumentViewWrapper({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.07] px-4 py-3">
         <button
           onClick={onBack}
-          className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="flex items-center gap-1.5 text-[12px] text-zinc-400 hover:text-zinc-200 transition-colors"
         >
-          <ArrowLeft className="h-3 w-3" />
+          <ArrowLeft className="h-3.5 w-3.5" />
           Back to matter
         </button>
-        <span className="text-[11px] text-zinc-600">·</span>
-        <span className="truncate text-[11px] text-zinc-400">{doc.file_name}</span>
+        <span className="text-[12px] text-zinc-600">·</span>
+        <span className="truncate text-[12px] text-zinc-400">{doc.file_name}</span>
         {versions.length >= 2 && (
           <button
             onClick={onToggleMode}
             className={cn(
-              "ml-auto rounded border px-2 py-0.5 text-[10px] font-medium transition-colors",
+              "ml-auto rounded-lg border px-3 py-1 text-[12px] font-medium transition-colors",
               viewMode === "redline"
                 ? "border-blue-500/30 bg-blue-500/10 text-blue-400"
-                : "border-white/[0.08] text-zinc-500 hover:border-white/[0.14] hover:text-zinc-300"
+                : "border-white/[0.08] text-zinc-400 hover:border-white/[0.14] hover:text-zinc-200"
             )}
           >
             {viewMode === "redline" ? "Document View" : "Compare Versions"}
@@ -733,38 +733,38 @@ async function uploadChunkQueue(
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-[260px] shrink-0 border-r border-white/[0.06] p-3">
-        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+      <div className="w-[270px] shrink-0 border-r border-white/[0.07] p-4">
+        <div className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-400">
           Projects
         </div>
-        <div className="relative mb-2">
-          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-zinc-600" />
+        <div className="relative mb-3">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
           <input
             value={ftsQuery}
             onChange={(e) => handleFtsSearch(e.target.value)}
             placeholder="Search all documents..."
-            className="w-full rounded border border-white/[0.08] bg-black/30 pl-7 pr-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600 focus:border-blue-500/40"
+            className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] pl-8 pr-3 py-2.5 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
           />
         </div>
         {ftsQuery.trim() && (ftsSearching || ftsResults.length > 0) ? (
-          <div className="space-y-1 overflow-y-auto mb-3" style={{ maxHeight: "calc(100vh - 280px)" }}>
-            {ftsSearching && <div className="text-[10px] text-zinc-600 px-1">Searching…</div>}
+          <div className="space-y-1.5 overflow-y-auto mb-3" style={{ maxHeight: "calc(100vh - 280px)" }}>
+            {ftsSearching && <div className="text-[11px] text-zinc-500 px-1">Searching…</div>}
             {ftsResults.map((r, i) => (
               <button
                 key={`${r.task_id}-${r.file_path}-${i}`}
                 onClick={() => { setSelectedProjectId(r.project_id); setFtsQuery(""); setFtsResults([]); }}
-                className="w-full rounded-md border border-white/[0.04] bg-white/[0.02] px-2 py-1.5 text-left hover:bg-white/[0.06] transition-colors"
+                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2.5 text-left hover:bg-white/[0.06] transition-colors"
               >
-                <div className="text-[10px] text-zinc-500 truncate flex items-center gap-1">
+                <div className="text-[11px] text-zinc-400 truncate flex items-center gap-1.5">
                   {r.project_name}
-                  {r.source === "semantic" && <span className="px-1 py-0 rounded bg-violet-900/50 text-violet-300 text-[9px]">semantic</span>}
+                  {r.source === "semantic" && <span className="px-1.5 py-0.5 rounded-lg bg-violet-900/50 text-violet-300 text-[10px]">semantic</span>}
                 </div>
-                {r.title_snippet && <div className="text-[11px] text-zinc-300 truncate" dangerouslySetInnerHTML={{ __html: r.title_snippet }} />}
-                <div className="text-[10px] text-zinc-500 line-clamp-2" dangerouslySetInnerHTML={{ __html: r.content_snippet }} />
+                {r.title_snippet && <div className="text-[12px] text-zinc-300 truncate mt-0.5" dangerouslySetInnerHTML={{ __html: r.title_snippet }} />}
+                <div className="text-[11px] text-zinc-400 line-clamp-2 mt-0.5" dangerouslySetInnerHTML={{ __html: r.content_snippet }} />
               </button>
             ))}
             {!ftsSearching && ftsResults.length === 0 && (
-              <div className="text-[10px] text-zinc-600 px-1">No results.</div>
+              <div className="text-[11px] text-zinc-500 px-1">No results.</div>
             )}
           </div>
         ) : (
@@ -774,18 +774,18 @@ async function uploadChunkQueue(
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Filter matters..."
-            className="mb-2 w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600 focus:border-blue-500/40"
+            className="mb-3 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
           />
         )}
-        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 280px)" }}>
+        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 300px)" }}>
           {filteredProjects.map((p) => (
             <button
               key={p.id}
               onClick={() => setSelectedProjectId(p.id)}
               className={cn(
-                "w-full rounded-md px-2 py-1.5 text-left text-[12px] transition-colors",
+                "w-full rounded-xl px-3 py-2.5 text-left text-[13px] transition-colors",
                 p.id === activeProjectId
-                  ? "bg-white/[0.08] text-zinc-100"
+                  ? "bg-white/[0.08] text-zinc-100 font-medium"
                   : "text-zinc-400 hover:bg-white/[0.04]"
               )}
             >
@@ -793,25 +793,27 @@ async function uploadChunkQueue(
             </button>
           ))}
           {projects.length === 0 && (
-            <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-2 text-[11px] text-zinc-600">
-              No projects yet.
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] px-4 py-6 text-center">
+              <Folder className="h-6 w-6 text-zinc-600 mb-2" />
+              <div className="text-[12px] text-zinc-400">No projects yet</div>
+              <div className="text-[11px] text-zinc-500 mt-0.5">Create one below to get started</div>
             </div>
           )}
         </div>
           </>
         )}
-        <div className="mt-3 border-t border-white/[0.06] pt-3">
+        <div className="mt-4 border-t border-white/[0.07] pt-4">
           <input
             value={newProjectName}
             onChange={(e) => setNewProjectName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
             placeholder="New project name"
-            className="w-full rounded border border-white/[0.08] bg-white/[0.03] px-2 py-1.5 text-[12px] text-zinc-200 outline-none"
+            className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
           />
           <select
             value={newProjectMode}
             onChange={(e) => setNewProjectMode(e.target.value)}
-            className="mt-2 w-full rounded border border-white/[0.08] bg-white/[0.03] px-2 py-1.5 text-[12px] text-zinc-300 outline-none"
+            className="mt-2.5 w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none"
           >
             <option value="general">general</option>
             {modes.map((mode) => (
@@ -825,7 +827,7 @@ async function uploadChunkQueue(
           <button
             onClick={handleCreateProject}
             disabled={creating || !newProjectName.trim()}
-            className="mt-2 w-full rounded bg-blue-500/20 px-2 py-1.5 text-[12px] font-medium text-blue-300 disabled:cursor-not-allowed disabled:text-zinc-600"
+            className="mt-2.5 w-full rounded-lg bg-blue-500/20 px-3 py-2.5 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
           >
             {creating ? "Creating..." : "Create Project"}
           </button>
@@ -835,21 +837,22 @@ async function uploadChunkQueue(
       <div className="flex min-w-0 flex-1 flex-col">
         {!selectedProject ? (
           <div className="flex h-full items-center justify-center">
-            <div className="max-w-[320px] text-center">
-              <div className="text-[14px] font-medium text-zinc-300">Get Started</div>
-              <div className="mt-2 text-[12px] leading-relaxed text-zinc-500">
+            <div className="max-w-[360px] text-center">
+              <Folder className="mx-auto h-10 w-10 text-zinc-600 mb-3" />
+              <div className="text-[15px] font-semibold text-zinc-100">Get Started</div>
+              <div className="mt-2 text-[13px] leading-relaxed text-zinc-400">
                 Create a matter in the sidebar to start. Each matter gets its own
                 dedicated repository for documents and task outputs.
               </div>
-              <div className="mt-4 space-y-2 text-left text-[11px] text-zinc-600">
-                <div className="rounded border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-                  <span className="text-zinc-400">1.</span> Name your matter and select <span className="text-blue-400">lawborg</span> mode
+              <div className="mt-5 space-y-2.5 text-left text-[13px] text-zinc-400">
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
+                  <span className="text-zinc-300 font-medium">1.</span> Name your matter and select <span className="text-blue-400">lawborg</span> mode
                 </div>
-                <div className="rounded border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-                  <span className="text-zinc-400">2.</span> Upload reference documents (contracts, briefs, filings)
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
+                  <span className="text-zinc-300 font-medium">2.</span> Upload reference documents (contracts, briefs, filings)
                 </div>
-                <div className="rounded border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-                  <span className="text-zinc-400">3.</span> Create tasks — research memos, contract reviews, case analysis
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
+                  <span className="text-zinc-300 font-medium">3.</span> Create tasks — research memos, contract reviews, case analysis
                 </div>
               </div>
             </div>
@@ -866,7 +869,7 @@ async function uploadChunkQueue(
             />
           ) : (
             <div className="flex h-full flex-col">
-              <div className="flex shrink-0 items-center justify-end border-b border-white/[0.06] px-4 py-2">
+              <div className="flex shrink-0 items-center justify-end border-b border-white/[0.07] px-4 py-3">
                 <TaskCreator defaultMode="lawborg" hideModePicker projectId={selectedProject.id} />
               </div>
               <div className="min-h-0 flex-1">
@@ -876,9 +879,9 @@ async function uploadChunkQueue(
           )
         ) : (
           <>
-            <div className="border-b border-white/[0.06] p-3">
-              <div className="text-[13px] font-semibold text-zinc-200">{selectedProject.name}</div>
-              <div className="mt-1 text-[11px] text-zinc-500">
+            <div className="border-b border-white/[0.07] p-4">
+              <div className="text-[15px] font-semibold text-zinc-100">{selectedProject.name}</div>
+              <div className="mt-1.5 text-[12px] text-zinc-400">
                 Files {fileSummary?.total_files ?? 0} · {formatBytes(totalBytes)} / {formatBytes(projectMaxBytes)}
               </div>
               <div className="mt-3 flex items-center gap-2">
@@ -892,13 +895,13 @@ async function uploadChunkQueue(
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
-                  className="rounded bg-white/[0.06] px-3 py-1.5 text-[12px] text-zinc-300 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:text-zinc-600"
+                  className="rounded-lg bg-white/[0.06] px-4 py-2 text-[13px] text-zinc-300 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:text-zinc-600 transition-colors"
                 >
                   {uploading ? "Uploading..." : "Upload Files"}
                 </button>
-                {filesLoading && <span className="text-[11px] text-zinc-600">refreshing…</span>}
+                {filesLoading && <span className="text-[12px] text-zinc-500">refreshing…</span>}
               </div>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-3 flex items-center gap-2">
                 <input
                   type="text"
                   value={fileSearch}
@@ -907,9 +910,9 @@ async function uploadChunkQueue(
                     setFilePageStack([{ cursor: null, offset: 0 }]);
                   }}
                   placeholder="Filter uploaded files"
-                  className="w-full rounded border border-white/[0.08] bg-black/20 px-2 py-1.5 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600"
+                  className="w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500"
                 />
-                <span className="shrink-0 text-[10px] text-zinc-600">
+                <span className="shrink-0 text-[11px] text-zinc-500">
                   {filePage?.total ?? files.length} match
                 </span>
               </div>
@@ -917,14 +920,14 @@ async function uploadChunkQueue(
                 <div className="mt-2 text-[11px] text-red-400">{uploadError}</div>
               )}
               {uploadProgress.length > 0 && (
-                <div className="mt-2 space-y-1 rounded border border-white/[0.06] bg-black/20 p-2">
+                <div className="mt-3 space-y-1.5 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
                   {uploadProgress.map((entry) => {
                     const pct = entry.totalBytes > 0 ? Math.round((entry.uploadedBytes / entry.totalBytes) * 100) : 0;
                     return (
-                      <div key={entry.id} className="text-[11px]">
-                        <div className="flex items-center justify-between gap-2 text-zinc-400">
+                      <div key={entry.id} className="text-[12px]">
+                        <div className="flex items-center justify-between gap-2 text-zinc-300">
                           <span className="truncate">{entry.fileName}</span>
-                          <span className="shrink-0 text-zinc-500">
+                          <span className="shrink-0 text-zinc-400">
                             {entry.status} {entry.status === "uploading" || entry.status === "processing" || entry.status === "done" ? `${pct}%` : ""}
                           </span>
                         </div>
@@ -943,14 +946,17 @@ async function uploadChunkQueue(
                   })}
                 </div>
               )}
-              <div className="mt-3 max-h-28 overflow-y-auto rounded border border-white/[0.06] bg-black/20">
+              <div className="mt-3 max-h-32 overflow-y-auto rounded-xl border border-white/[0.07] bg-white/[0.03]">
                 {files.map((f) => (
-                  <div key={f.id} className="flex items-center justify-between border-b border-white/[0.04] px-2 py-1 text-[11px] text-zinc-400 last:border-0">
-                    <div className="min-w-0 pr-2">
-                      <div className="truncate">{f.file_name}</div>
-                      {f.source_path && f.source_path !== f.file_name && (
-                        <div className="truncate text-[10px] text-zinc-600">{f.source_path}</div>
-                      )}
+                  <div key={f.id} className="flex items-center justify-between border-b border-white/[0.07] px-3 py-2 text-[13px] text-zinc-300 last:border-0">
+                    <div className="flex min-w-0 items-center gap-2 pr-2">
+                      <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                      <div className="min-w-0">
+                        <div className="truncate">{f.file_name}</div>
+                        {f.source_path && f.source_path !== f.file_name && (
+                          <div className="truncate text-[11px] text-zinc-500">{f.source_path}</div>
+                        )}
+                      </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {f.has_text && (
@@ -997,11 +1003,11 @@ async function uploadChunkQueue(
                   </div>
                 ))}
                 {files.length === 0 && (
-                  <div className="px-2 py-2 text-[11px] text-zinc-600">No files uploaded yet.</div>
+                  <div className="px-3 py-3 text-[12px] text-zinc-500 text-center">No files uploaded yet.</div>
                 )}
               </div>
               {filePage && filePage.total > filePage.limit && (
-                <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-600">
+                <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
                   <span>
                     Showing {filePage.total === 0 ? 0 : currentFilePage.offset + 1}-{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
                   </span>
@@ -1009,7 +1015,7 @@ async function uploadChunkQueue(
                     <button
                       onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
                       disabled={filePageStack.length <= 1}
-                      className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
                     >
                       Prev
                     </button>
@@ -1022,28 +1028,28 @@ async function uploadChunkQueue(
                         ]);
                       }}
                       disabled={!filePage.has_more || !filePage.next_cursor}
-                      className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
                     >
                       Next
                     </button>
                   </div>
                 </div>
               )}
-              <div className="mt-3 rounded border border-white/[0.06] bg-black/20 p-2">
-                <div className="mb-2 text-[11px] font-medium text-zinc-400">Upload Sessions</div>
-                <div className="mb-2 text-[11px] text-zinc-500">
+              <div className="mt-3 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
+                <div className="mb-2 text-[12px] font-semibold text-zinc-300">Upload Sessions</div>
+                <div className="mb-2 text-[12px] text-zinc-400">
                   uploading: {uploadSessionCounts.uploading ?? 0} · processing: {uploadSessionCounts.processing ?? 0} · failed: {uploadSessionCounts.failed ?? 0} · done: {uploadSessionCounts.done ?? 0}
                 </div>
-                <div className="max-h-28 space-y-1 overflow-y-auto">
+                <div className="max-h-32 space-y-1.5 overflow-y-auto">
                   {uploadSessions.slice(0, 8).map((s) => (
-                    <div key={s.id} className="flex items-center justify-between rounded border border-white/[0.06] px-2 py-1 text-[11px]">
-                      <span className="truncate pr-2 text-zinc-400">#{s.id} {s.file_name}</span>
+                    <div key={s.id} className="flex items-center justify-between rounded-lg border border-white/[0.07] px-3 py-2 text-[12px]">
+                      <span className="truncate pr-2 text-zinc-300">#{s.id} {s.file_name}</span>
                       <div className="flex items-center gap-2">
-                        <span className="text-zinc-500">{s.status}</span>
+                        <span className="text-zinc-400">{s.status}</span>
                         {s.status === "failed" && (
                           <button
                             onClick={() => retryUploadSession(s.id)}
-                            className="rounded border border-amber-500/30 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/10"
+                            className="rounded-lg border border-amber-500/30 px-2 py-1 text-[11px] text-amber-300 hover:bg-amber-500/10"
                           >
                             Retry
                           </button>
@@ -1052,12 +1058,12 @@ async function uploadChunkQueue(
                     </div>
                   ))}
                   {!uploadSessionsLoading && uploadSessions.length === 0 && (
-                    <div className="text-[11px] text-zinc-600">No active upload sessions.</div>
+                    <div className="text-[12px] text-zinc-500">No active upload sessions.</div>
                   )}
                 </div>
               </div>
-              <div className="mt-3 rounded border border-white/[0.06] bg-black/20 p-2">
-                <div className="mb-2 text-[11px] font-medium text-zinc-400">Cloud Storage</div>
+              <div className="mt-3 rounded-xl border border-white/[0.07] bg-white/[0.03] p-3">
+                <div className="mb-2 text-[12px] font-semibold text-zinc-300">Cloud Storage</div>
                 {!publicUrlValid && (
                   <div className="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
                     Configure a valid Public URL in Settings before connecting cloud accounts.
@@ -1097,7 +1103,7 @@ async function uploadChunkQueue(
                             ? `Connect ${provider.label}`
                             : `Configure ${provider.label} credentials in Settings > Cloud Storage`
                         }
-                        className="inline-flex items-center gap-1.5 rounded border border-white/[0.08] px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <CloudProviderIcon provider={provider.id} />
                         {provider.label}
@@ -1107,7 +1113,7 @@ async function uploadChunkQueue(
                 </div>
                 <div className="max-h-36 space-y-1 overflow-y-auto">
                   {cloudConnections.map((conn) => (
-                    <div key={conn.id} className="flex items-center justify-between rounded border border-white/[0.06] px-2 py-1.5 text-[11px]">
+                    <div key={conn.id} className="flex items-center justify-between rounded-lg border border-white/[0.07] px-3 py-2 text-[12px]">
                       <div className="min-w-0 flex items-center gap-1.5 text-zinc-300">
                         <CloudProviderIcon provider={conn.provider} />
                         <span className="truncate">{conn.account_email || cloudProviderLabel(conn.provider)}</span>
@@ -1115,7 +1121,7 @@ async function uploadChunkQueue(
                       <div className="flex shrink-0 items-center gap-1">
                         <button
                           onClick={() => openCloudBrowser(conn)}
-                          className="inline-flex items-center gap-1 rounded border border-white/[0.08] px-2 py-0.5 text-zinc-300 hover:bg-white/[0.06]"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[12px] text-zinc-300 hover:bg-white/[0.06]"
                         >
                           <Folder className="h-3 w-3" />
                           Browse & Import
@@ -1131,26 +1137,26 @@ async function uploadChunkQueue(
                     </div>
                   ))}
                   {!cloudConnectionsLoading && cloudConnections.length === 0 && (
-                    <div className="text-[11px] text-zinc-600">No connected cloud accounts.</div>
+                    <div className="text-[12px] text-zinc-500">No connected cloud accounts.</div>
                   )}
                 </div>
               </div>
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="flex-1 overflow-y-auto p-4">
                 {messages.map((msg, idx) => (
-                  <div key={`${msg.ts}-${msg.role}-${idx}`} className={cn("mb-2 flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+                  <div key={`${msg.ts}-${msg.role}-${idx}`} className={cn("mb-3 flex", msg.role === "user" ? "justify-end" : "justify-start")}>
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-lg px-3 py-2 text-[12px] leading-relaxed",
+                        "max-w-[85%] rounded-2xl px-4 py-3 text-[14px] leading-relaxed",
                         msg.role === "user"
                           ? "bg-blue-500/[0.15] text-zinc-200"
                           : "bg-white/[0.05] text-zinc-300"
                       )}
                     >
                       {msg.role !== "user" && (
-                        <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "Borg"}</div>
+                        <div className="mb-1.5 text-[11px] font-medium text-zinc-400">{msg.sender ?? "Borg"}</div>
                       )}
                       {msg.role === "user" ? (
                         <div className="whitespace-pre-wrap break-words">{msg.text}</div>
@@ -1164,14 +1170,14 @@ async function uploadChunkQueue(
                 <div ref={bottomRef} />
               </div>
 
-              <div className="border-t border-white/[0.06] p-3">
-                <div className="mb-2 flex flex-wrap gap-1.5">
+              <div className="border-t border-white/[0.07] p-4">
+                <div className="mb-3 flex flex-wrap gap-2">
                   {CHAT_SUGGESTED_PROMPTS.map((prompt) => (
                     <button
                       key={prompt}
                       onClick={() => setMessageInput(prompt)}
                       disabled={sending}
-                      className="rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {prompt}
                     </button>
@@ -1189,17 +1195,17 @@ async function uploadChunkQueue(
                     }}
                     placeholder="Message Borg about this project..."
                     rows={2}
-                    className="flex-1 resize-none rounded border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
+                    className="flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500"
                   />
                   {dictation.supported && (
                     <button
                       onClick={dictation.toggle}
                       title={dictation.listening ? "Stop dictation" : "Start dictation"}
                       className={cn(
-                        "shrink-0 rounded px-2.5 py-2 transition-colors",
+                        "shrink-0 rounded-lg px-3 py-2.5 transition-colors",
                         dictation.listening
                           ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                          : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+                          : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06]"
                       )}
                     >
                       {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
@@ -1208,7 +1214,7 @@ async function uploadChunkQueue(
                   <button
                     onClick={handleSendMessage}
                     disabled={sending || !messageInput.trim()}
-                    className="rounded bg-blue-500/20 px-3 py-2 text-[12px] font-medium text-blue-300 disabled:cursor-not-allowed disabled:text-zinc-600"
+                    className="rounded-lg bg-blue-500/20 px-4 py-2.5 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
                   >
                     Send
                   </button>
@@ -1231,15 +1237,15 @@ async function uploadChunkQueue(
           onClick={() => setCloudModalOpen(false)}
         >
           <div
-            className="mx-4 flex max-h-[82vh] w-full max-w-4xl flex-col rounded-lg border border-white/10 bg-zinc-900 shadow-xl"
+            className="mx-4 flex max-h-[82vh] w-full max-w-4xl flex-col rounded-xl border border-white/10 bg-zinc-900 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div className="min-w-0">
-                <div className="text-sm font-medium text-zinc-200">
+                <div className="text-[15px] font-semibold text-zinc-100">
                   {cloudProviderLabel(cloudModalConn.provider)} - {cloudModalConn.account_email || "Account"}
                 </div>
-                <div className="mt-1 flex items-center gap-1 overflow-x-auto text-[11px] text-zinc-500">
+                <div className="mt-1.5 flex items-center gap-1 overflow-x-auto text-[12px] text-zinc-400">
                   {cloudBreadcrumbs.map((crumb, idx) => (
                     <button
                       key={`${crumb.id ?? "root"}-${idx}`}
@@ -1261,17 +1267,17 @@ async function uploadChunkQueue(
               </div>
               <button onClick={() => setCloudModalOpen(false)} className="text-zinc-500 hover:text-zinc-300">x</button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
               {cloudLoadError && (
-                <div className="mb-2 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-400">
+                <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] text-red-400">
                   {cloudLoadError}
                 </div>
               )}
-              <div className="overflow-hidden rounded border border-white/[0.08]">
+              <div className="overflow-hidden rounded-xl border border-white/[0.08]">
                 {cloudItems.map((item) => {
                   const selected = Boolean(cloudSelected[item.id]);
                   return (
-                    <div key={item.id} className="flex items-center justify-between border-b border-white/[0.05] px-2 py-1.5 text-[12px] last:border-b-0">
+                    <div key={item.id} className="flex items-center justify-between border-b border-white/[0.07] px-3 py-2.5 text-[13px] last:border-b-0">
                       <label className="flex min-w-0 flex-1 items-center gap-2 text-zinc-300">
                         {item.type === "file" ? (
                           <input
@@ -1308,34 +1314,34 @@ async function uploadChunkQueue(
                           {item.name}
                         </button>
                       </label>
-                      <div className="ml-2 shrink-0 text-[11px] text-zinc-600">
+                      <div className="ml-2 shrink-0 text-[12px] text-zinc-500">
                         {item.type === "file" ? formatBytes(item.size || 0) : "folder"}
                       </div>
                     </div>
                   );
                 })}
                 {!cloudLoading && cloudItems.length === 0 && (
-                  <div className="px-2 py-2 text-[11px] text-zinc-600">This folder is empty.</div>
+                  <div className="px-4 py-6 text-[13px] text-zinc-500 text-center">This folder is empty.</div>
                 )}
               </div>
-              {cloudLoading && <div className="mt-2 text-[11px] text-zinc-600">Loading...</div>}
+              {cloudLoading && <div className="mt-3 text-[12px] text-zinc-500">Loading...</div>}
               {!cloudLoading && cloudHasMore && cloudCursor && (
                 <button
                   onClick={() => loadCloudFolder(cloudModalConn, currentCloudFolderId, { append: true, cursor: cloudCursor })}
-                  className="mt-2 rounded border border-white/[0.08] px-2 py-1 text-[11px] text-zinc-300 hover:bg-white/[0.06]"
+                  className="mt-3 rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-300 hover:bg-white/[0.06] transition-colors"
                 >
                   Load more
                 </button>
               )}
             </div>
-            <div className="flex items-center justify-between border-t border-white/10 px-4 py-3">
-              <div className="text-[11px] text-zinc-500">
+            <div className="flex items-center justify-between border-t border-white/10 px-5 py-4">
+              <div className="text-[12px] text-zinc-400">
                 Selected: {Object.values(cloudSelected).filter((i) => i.type === "file").length} file(s)
               </div>
               <button
                 onClick={importSelectedCloudFiles}
                 disabled={cloudImporting || Object.values(cloudSelected).every((i) => i.type !== "file")}
-                className="rounded bg-blue-500/20 px-3 py-1.5 text-[12px] font-medium text-blue-300 disabled:cursor-not-allowed disabled:text-zinc-600"
+                className="rounded-lg bg-blue-500/20 px-4 py-2 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
               >
                 {cloudImporting ? "Importing..." : "Import Selected"}
               </button>
@@ -1345,12 +1351,12 @@ async function uploadChunkQueue(
       )}
       {textViewFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setTextViewFile(null)}>
-          <div className="mx-4 flex max-h-[80vh] w-full max-w-3xl flex-col rounded-lg border border-white/10 bg-zinc-900 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-              <span className="text-sm font-medium text-zinc-200">{textViewFile.name} — Extracted Text</span>
+          <div className="mx-4 flex max-h-[80vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-zinc-900 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+              <span className="text-[15px] font-semibold text-zinc-100">{textViewFile.name} — Extracted Text</span>
               <button onClick={() => setTextViewFile(null)} className="text-zinc-500 hover:text-zinc-300">✕</button>
             </div>
-            <pre className="flex-1 overflow-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-zinc-300">{textViewFile.text}</pre>
+            <pre className="flex-1 overflow-auto whitespace-pre-wrap p-5 font-mono text-[13px] leading-relaxed text-zinc-300">{textViewFile.text}</pre>
           </div>
         </div>
       )}

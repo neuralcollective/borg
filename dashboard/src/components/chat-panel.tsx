@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, MicOff } from "lucide-react";
+import { MessageSquare, Mic, MicOff, Send, ChevronDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { BorgingIndicator } from "./borging";
@@ -36,6 +36,7 @@ export function ChatPanel() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastTsRef = useRef<number>(0);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const sendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -67,7 +68,6 @@ export function ChatPanel() {
     });
   }, []);
 
-  // Load messages when thread changes
   useEffect(() => {
     setMessages([]);
     lastTsRef.current = 0;
@@ -131,6 +131,18 @@ export function ChatPanel() {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [messages.length]);
 
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!showThreads) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowThreads(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showThreads]);
+
   async function handleSend() {
     const text = input.trim();
     if (!text || sending) return;
@@ -185,97 +197,133 @@ export function ChatPanel() {
     }
   }
 
+  // Auto-resize textarea
+  function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value);
+    const el = e.target;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Chat</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="relative">
-            <button
-              onClick={() => setShowThreads(!showThreads)}
-              className="rounded-md bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-zinc-500 ring-1 ring-inset ring-white/[0.06] transition-colors hover:bg-white/[0.08]"
-            >
-              {threadLabel(thread)}
-            </button>
-            {showThreads && (
-              <div className="absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-white/[0.08] bg-zinc-900 py-1 shadow-xl">
+      {/* Header */}
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] px-5">
+        <h2 className="text-[14px] font-semibold text-zinc-100">Chat</h2>
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => setShowThreads(!showThreads)}
+            className="flex items-center gap-1.5 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 py-1.5 text-[12px] text-zinc-400 transition-colors hover:border-white/[0.12] hover:text-zinc-300"
+          >
+            <span>{threadLabel(thread)}</span>
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          {showThreads && (
+            <div className="absolute right-0 top-full z-50 mt-2 min-w-[200px] overflow-hidden rounded-xl border border-white/[0.08] bg-[#141416] shadow-2xl">
+              <div className="p-1.5">
                 {threads.map((t) => (
                   <button
                     key={t.id}
                     onClick={() => { setThread(t.id); setShowThreads(false); }}
                     className={cn(
-                      "flex w-full items-center justify-between px-3 py-1.5 text-left text-[11px] transition-colors hover:bg-white/[0.06]",
-                      t.id === thread ? "text-zinc-200" : "text-zinc-500"
+                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.05]",
+                      t.id === thread ? "bg-white/[0.05] text-zinc-100" : "text-zinc-400"
                     )}
                   >
                     <span className="truncate">{threadLabel(t.id)}</span>
-                    <span className="ml-2 text-[9px] tabular-nums text-zinc-600">{t.message_count}</span>
+                    <span className="ml-3 text-[11px] tabular-nums text-zinc-600">{t.message_count}</span>
                   </button>
                 ))}
-                {threads.length > 0 && <div className="mx-2 my-1 h-px bg-white/[0.06]" />}
+              </div>
+              <div className="border-t border-white/[0.06] p-1.5">
                 <button
                   onClick={handleNewThread}
-                  className="flex w-full items-center px-3 py-1.5 text-[11px] text-violet-400 transition-colors hover:bg-white/[0.06]"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] text-blue-400 transition-colors hover:bg-blue-500/10"
                 >
-                  + New Thread
+                  <Plus className="h-3.5 w-3.5" />
+                  New Thread
                 </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-2">
-        {messages.map((msg, i) => (
-          <MessageBubble key={`${msg.ts}-${msg.role}-${i}`} msg={msg} />
-        ))}
-        {sending && <BorgingIndicator />}
-        <div ref={bottomRef} />
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-3xl px-4 py-6">
+          {messages.length === 0 && !sending && (
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] ring-1 ring-white/[0.06]">
+                <MessageSquare className="h-6 w-6 text-zinc-600" strokeWidth={1.5} />
+              </div>
+              <p className="text-[15px] font-medium text-zinc-400">Start a conversation with Borg</p>
+              <p className="mt-1.5 text-[13px] text-zinc-600">Messages are processed by the active agent</p>
+            </div>
+          )}
+
+          <div className="space-y-5">
+            {messages.map((msg, i) => (
+              <MessageBubble key={`${msg.ts}-${msg.role}-${i}`} msg={msg} />
+            ))}
+          </div>
+
+          {sending && (
+            <div className="mt-5 flex gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20 ring-1 ring-white/[0.06]">
+                <span className="text-[11px] font-bold text-violet-300">B</span>
+              </div>
+              <div className="pt-1">
+                <BorgingIndicator />
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
 
-      <div className="shrink-0 border-t border-white/[0.06] p-3">
-        <div className="flex gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Message Borg..."
-            rows={1}
-            className={cn(
-              "flex-1 resize-none rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 md:py-2",
-              "text-[14px] md:text-[12px] text-zinc-200 placeholder:text-zinc-600",
-              "focus:border-white/[0.15] focus:outline-none"
-            )}
-          />
-          {dictation.supported && (
-            <button
-              onClick={dictation.toggle}
-              title={dictation.listening ? "Stop dictation" : "Start dictation"}
-              className={cn(
-                "shrink-0 rounded-lg px-2.5 py-2.5 md:py-2 transition-colors",
-                dictation.listening
-                  ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                  : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+      {/* Input */}
+      <div className="shrink-0 border-t border-white/[0.07] bg-[#09090b]/80 backdrop-blur-sm">
+        <div className="mx-auto max-w-3xl px-4 py-4">
+          <div className="relative flex items-end gap-2 rounded-2xl border border-white/[0.1] bg-white/[0.03] px-4 py-3 transition-colors focus-within:border-white/[0.16] focus-within:bg-white/[0.04]">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Message Borg..."
+              rows={1}
+              className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
+            />
+            <div className="flex shrink-0 items-center gap-1">
+              {dictation.supported && (
+                <button
+                  onClick={dictation.toggle}
+                  title={dictation.listening ? "Stop dictation" : "Start dictation"}
+                  className={cn(
+                    "rounded-lg p-2 transition-colors",
+                    dictation.listening
+                      ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                      : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+                  )}
+                >
+                  {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                </button>
               )}
-            >
-              {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </button>
-          )}
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || sending}
-            className={cn(
-              "rounded-lg px-4 md:px-3 py-2.5 md:py-2 text-[13px] md:text-[11px] font-medium transition-colors",
-              input.trim() && !sending
-                ? "bg-blue-500/20 text-blue-300 active:bg-blue-500/30 hover:bg-blue-500/25"
-                : "text-zinc-700 cursor-not-allowed"
-            )}
-          >
-            Send
-          </button>
+              <button
+                onClick={handleSend}
+                disabled={!input.trim() || sending}
+                className={cn(
+                  "rounded-lg p-2 transition-all",
+                  input.trim() && !sending
+                    ? "bg-blue-500 text-white hover:bg-blue-400 shadow-lg shadow-blue-500/25"
+                    : "text-zinc-700 cursor-not-allowed"
+                )}
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -284,26 +332,44 @@ export function ChatPanel() {
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === "user";
+
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
+      {/* Avatar */}
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-3 py-2 text-[13px] md:text-[12px] leading-relaxed",
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1 ring-white/[0.06]",
           isUser
-            ? "bg-blue-500/[0.15] text-zinc-200"
-            : "bg-white/[0.05] text-zinc-300"
+            ? "bg-gradient-to-br from-blue-500/20 to-cyan-500/20"
+            : "bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20"
         )}
       >
+        <span className={cn("text-[11px] font-bold", isUser ? "text-blue-300" : "text-violet-300")}>
+          {isUser ? "U" : "B"}
+        </span>
+      </div>
+
+      {/* Content */}
+      <div className={cn("min-w-0 max-w-[85%]", isUser && "flex flex-col items-end")}>
         {!isUser && (
-          <div className="mb-0.5 text-[10px] font-medium text-zinc-500">
-            {msg.sender ?? "borg"}
+          <div className="mb-1 text-[11px] font-medium text-zinc-500">
+            {msg.sender ?? "Borg"}
           </div>
         )}
-        {isUser ? (
-          <div className="whitespace-pre-wrap break-words">{msg.text}</div>
-        ) : (
-          <ChatMarkdown text={msg.text} />
-        )}
+        <div
+          className={cn(
+            "rounded-2xl px-4 py-3 text-[14px] leading-relaxed",
+            isUser
+              ? "bg-blue-500/15 text-zinc-100 rounded-br-md"
+              : "bg-white/[0.04] text-zinc-200 rounded-bl-md"
+          )}
+        >
+          {isUser ? (
+            <div className="whitespace-pre-wrap break-words">{msg.text}</div>
+          ) : (
+            <ChatMarkdown text={msg.text} />
+          )}
+        </div>
       </div>
     </div>
   );

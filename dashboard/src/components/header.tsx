@@ -47,8 +47,8 @@ export function Header({
 
   if (mobile) {
     return (
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#09090b] px-4">
-        <div className="flex items-center gap-2">
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-white/[0.07] bg-[#09090b] px-5">
+        <div className="flex items-center gap-2.5">
           <div className={`borg-logo h-6 w-6 ${domain.accentBg}`}>
             <BorgLogo size="mobile" />
             <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2" aria-hidden>
@@ -57,18 +57,18 @@ export function Header({
               ))}
             </div>
           </div>
-          <span className="text-[13px] font-semibold tracking-tight text-white">Borg</span>
+          <span className="text-[14px] font-semibold tracking-tight text-white">Borg</span>
         </div>
 
         <div className="ml-auto flex items-center gap-3">
           <TaskCreator />
           {status?.continuous_mode && (
-            <span className="flex items-center gap-1 text-[11px] text-zinc-400">
+            <span className="flex items-center gap-1.5 text-[12px] text-zinc-400">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Cont
             </span>
           )}
-          <span className="text-[11px] tabular-nums text-zinc-500">
+          <span className="text-[12px] tabular-nums text-zinc-400">
             {status ? formatUptime(status.uptime_s) : "--"}
           </span>
           <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-red-500"}`} />
@@ -81,15 +81,15 @@ export function Header({
   const multiRepo = repos.length > 1;
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-4 border-b border-white/[0.06] px-5">
-      <h1 className="text-[13px] font-semibold text-zinc-200">
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-white/[0.07] px-6">
+      <h1 className="text-[15px] font-semibold text-zinc-100">
         {VIEW_TITLES[view ?? "tasks"]}
       </h1>
 
       {!isMinimal && (
         <>
-          <div className="h-4 w-px bg-white/[0.06]" />
-          <div className="flex items-center gap-3 text-[11px] text-zinc-500">
+          <div className="h-4 w-px bg-white/[0.07]" />
+          <div className="flex items-center gap-4 text-[12px] text-zinc-500">
             {status?.continuous_mode && (
               <span className="flex items-center gap-1.5 text-zinc-400">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
@@ -102,7 +102,7 @@ export function Header({
             <span>
               Model <span className="text-zinc-300">{status?.model ?? "--"}</span>
             </span>
-            <span className="h-3 w-px bg-white/[0.06]" />
+            <span className="h-3 w-px bg-white/[0.07]" />
             <span>
               Active <span className="text-blue-400 tabular-nums">{status?.active_tasks ?? 0}</span>
             </span>
@@ -124,13 +124,13 @@ export function Header({
         </>
       )}
 
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-4">
         <FocusPicker />
         {multiRepo && onRepoFilterChange && (
           <select
             value={repoFilter ?? ""}
             onChange={(e) => onRepoFilterChange(e.target.value || null)}
-            className="h-6 shrink-0 rounded border border-white/[0.08] bg-transparent px-1.5 text-[11px] text-zinc-300 outline-none"
+            className="h-7 shrink-0 rounded-lg border border-white/[0.07] bg-white/[0.03] px-2 text-[12px] text-zinc-300 outline-none"
           >
             <option value="">All repos</option>
             {repos.map((r) => (

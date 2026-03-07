@@ -74,9 +74,9 @@ export function LogViewer({ logs }: { logs: LogEvent[] }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 flex-col border-b border-white/[0.06]">
+      <div className="flex shrink-0 flex-col border-b border-white/[0.07]">
         {/* Mode toggle + level filter */}
-        <div className="flex h-10 items-center justify-between px-4">
+        <div className="flex h-14 items-center justify-between px-5">
           <div className="flex gap-1">
             <button
               className={cn(

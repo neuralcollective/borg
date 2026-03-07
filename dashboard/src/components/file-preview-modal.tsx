@@ -1,5 +1,5 @@
 import { useEffect, useState, lazy, Suspense } from "react";
-import { X } from "lucide-react";
+import { X, FileText } from "lucide-react";
 import { fetchProjectFileContent } from "@/lib/api";
 import type { ProjectFile } from "@/lib/types";
 
@@ -29,6 +29,14 @@ function pickViewer(mime: string, name: string): ViewerType | null {
 
 export function isPreviewable(file: { mime_type: string; file_name: string }): boolean {
   return pickViewer(file.mime_type, file.file_name) !== null;
+}
+
+function Spinner() {
+  return (
+    <div className="flex h-48 items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
+    </div>
+  );
 }
 
 export function FilePreviewModal({
@@ -72,28 +80,27 @@ export function FilePreviewModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-white/[0.08] bg-[#0e0e10]">
-        <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
-          <span className="truncate text-[12px] text-zinc-200">
-            {file.file_name}
-          </span>
+      <div className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0e0e10] shadow-2xl mx-4">
+        <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <FileText className="h-4 w-4 shrink-0 text-zinc-500" />
+            <span className="truncate text-[14px] font-medium text-zinc-200">
+              {file.file_name}
+            </span>
+          </div>
           <button
             onClick={onClose}
-            className="shrink-0 rounded p-1 text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-300"
+            className="shrink-0 rounded-lg p-2 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto">
-          {loading && (
-            <div className="flex h-48 items-center justify-center">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-300" />
-            </div>
-          )}
+        <div className="min-h-0 flex-1 overflow-auto p-5">
+          {loading && <Spinner />}
           {error && (
-            <div className="flex h-48 flex-col items-center justify-center gap-2">
-              <span className="text-[12px] text-red-400">{error}</span>
+            <div className="flex h-48 flex-col items-center justify-center gap-3">
+              <span className="text-[13px] text-red-400">{error}</span>
               <button
                 onClick={() => {
                   setLoading(true);
@@ -103,27 +110,21 @@ export function FilePreviewModal({
                     .catch((e) => setError(e.message))
                     .finally(() => setLoading(false));
                 }}
-                className="rounded bg-white/[0.06] px-3 py-1 text-[11px] text-zinc-400 hover:bg-white/[0.1]"
+                className="rounded-lg border border-white/[0.07] px-4 py-2 text-[12px] text-zinc-400 transition-colors hover:border-white/[0.12] hover:text-zinc-300"
               >
                 Retry
               </button>
             </div>
           )}
           {!loading && !error && buffer && (
-            <Suspense
-              fallback={
-                <div className="flex h-48 items-center justify-center">
-                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-300" />
-                </div>
-              }
-            >
+            <Suspense fallback={<Spinner />}>
               {viewerType === "docx" && <DocxViewer buffer={buffer} />}
               {viewerType === "xlsx" && <XlsxViewer buffer={buffer} />}
               {viewerType === "pptx" && <PptxViewer buffer={buffer} />}
               {viewerType === "pdf" && <PdfViewer buffer={buffer} />}
               {!viewerType && (
-                <div className="flex h-48 items-center justify-center text-[12px] text-zinc-500">
-                  Preview not available for this file type.
+                <div className="flex h-48 items-center justify-center text-[13px] text-zinc-500">
+                  Preview not available for this file type
                 </div>
               )}
             </Suspense>

@@ -112,7 +112,9 @@ function AuthGate() {
   if (!ready) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#09090b]">
-        <div className="h-8 w-8 animate-pulse rounded-full bg-white/[0.06]" />
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-800 border-t-zinc-400" />
+        </div>
       </div>
     );
   }
@@ -249,16 +251,18 @@ function AppInner() {
   // Desktop layout
   return (
     <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
-      {/* Sidebar nav — expands on hover */}
+      {/* Sidebar nav — slim icon bar with overlay expansion */}
+      <div className="w-14 shrink-0" />
       <nav
         className={cn(
-          "group/nav flex w-[52px] hover:w-[160px] shrink-0 flex-col items-start border-r pb-3 transition-[width] duration-200 overflow-hidden",
+          "group/nav fixed left-0 top-0 z-30 flex h-full w-14 hover:w-[180px] flex-col items-start border-r pb-4 transition-[width] duration-200 ease-out overflow-hidden",
           sidebarAlert
             ? "border-red-500/30 bg-red-950/35"
-            : "border-white/[0.06] bg-[#09090b]"
+            : "border-white/[0.07] bg-[#0a0a0c]",
+          "hover:shadow-[4px_0_24px_rgba(0,0,0,0.5)]"
         )}
       >
-        <div className={cn("borg-logo mb-3 w-full shrink-0 h-[52px]", domain.accentBg)}>
+        <div className={cn("borg-logo mb-2 w-full shrink-0 h-14", domain.accentBg)}>
           <BorgLogo expanded />
           <div className="borg-logo-ghost grid grid-cols-2 grid-rows-2 group-hover/nav:grid-cols-4 group-hover/nav:grid-rows-1" aria-hidden>
             {"BORG".split("").map((c, i) => (
@@ -267,7 +271,7 @@ function AppInner() {
           </div>
         </div>
 
-        <div className="flex flex-1 flex-col items-start gap-1 w-full px-1.5">
+        <div className="flex flex-1 flex-col items-start gap-0.5 w-full px-2">
           {navItems.map(({ key, label, Icon }) => (
             <button
               key={key}
@@ -275,22 +279,22 @@ function AppInner() {
               title={label}
               aria-label={label}
               className={cn(
-                "group relative flex h-9 w-full items-center gap-2.5 rounded-lg px-[9px] transition-all",
+                "group relative flex h-10 w-full items-center gap-3 rounded-xl px-[10px] transition-all duration-150",
                 view === key
                   ? sidebarAlert
                     ? "bg-red-400/20 text-red-50"
-                    : "bg-white/[0.1] text-zinc-100"
+                    : "bg-white/[0.08] text-zinc-100"
                   : sidebarAlert
                     ? "text-red-200/80 hover:bg-red-400/15 hover:text-red-50"
-                    : "text-zinc-600 hover:bg-white/[0.05] hover:text-zinc-400"
+                    : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300"
               )}
             >
               <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={view === key ? 2 : 1.5} />
-              <span className="truncate text-[12px] font-medium opacity-0 group-hover/nav:opacity-100 transition-opacity duration-200">{label}</span>
+              <span className="truncate text-[13px] font-medium opacity-0 group-hover/nav:opacity-100 transition-opacity duration-200">{label}</span>
               {view === key && (
                 <div
                   className={cn(
-                    "absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r",
+                    "absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full",
                     sidebarAlert ? "bg-red-300" : "bg-blue-400"
                   )}
                 />
@@ -300,18 +304,18 @@ function AppInner() {
         </div>
 
         {/* Status indicator at bottom */}
-        <div className="mt-auto flex flex-col items-center gap-2 w-[52px] shrink-0">
+        <div className="mt-auto flex flex-col items-center gap-3 w-14 shrink-0">
           {(status?.dispatched_agents ?? 0) > 0 && (
-            <div className="flex h-5 w-5 items-center justify-center" title={`${status?.dispatched_agents} active agent(s)`}>
-              <span className="text-[10px] font-bold tabular-nums text-blue-400">{status?.dispatched_agents}</span>
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/15 ring-1 ring-blue-500/20" title={`${status?.dispatched_agents} active agent(s)`}>
+              <span className="text-[11px] font-bold tabular-nums text-blue-400">{status?.dispatched_agents}</span>
             </div>
           )}
           <div
             className={cn(
-              "h-2 w-2 rounded-full",
+              "h-2.5 w-2.5 rounded-full transition-colors",
               connected
-                ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]"
-                : "bg-red-500"
+                ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
             )}
             title={connected ? "Connected" : "Disconnected"}
           />
@@ -325,7 +329,7 @@ function AppInner() {
         <div className="min-h-0 flex-1 overflow-hidden">
           {view === "tasks" && (
             <div className="flex h-full">
-              <div className="w-[450px] shrink-0 overflow-hidden border-r border-white/[0.06]">
+              <div className="w-[420px] shrink-0 overflow-hidden border-r border-white/[0.07]">
                 <TaskList
                   selectedId={selectedTaskId}
                   onSelect={handleSelectTask}
@@ -358,16 +362,16 @@ function AppInner() {
 
 function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.03] ring-1 ring-white/[0.06]">
-        <ListTodo className="h-7 w-7 text-zinc-700" strokeWidth={1.5} />
+    <div className="flex h-full flex-col items-center justify-center gap-8 text-center">
+      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-white/[0.04] to-white/[0.02] ring-1 ring-white/[0.06]">
+        <ListTodo className="h-8 w-8 text-zinc-600" strokeWidth={1.5} />
       </div>
       <div>
-        <p className="text-[13px] font-medium text-zinc-500">Select a task to view details</p>
-        <p className="mt-1 text-[11px] text-zinc-700">or create a new one from the header</p>
+        <p className="text-[15px] font-medium text-zinc-400">Select a task to view details</p>
+        <p className="mt-2 text-[13px] text-zinc-600">or create a new one from the header</p>
       </div>
       {status && (
-        <div className="flex gap-6 mt-2">
+        <div className="flex gap-8 mt-2">
           <StatPill value={status.active_tasks} label="Active" color="text-blue-400" />
           <StatPill value={status.merged_tasks} label="Merged" color="text-emerald-400" />
           <StatPill value={status.ai_requests} label="AI Calls" color="text-cyan-400" />
@@ -381,9 +385,9 @@ function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks:
 
 function StatPill({ value, label, color }: { value: number; label: string; color: string }) {
   return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span className={cn("text-lg font-semibold tabular-nums", color)}>{value}</span>
-      <span className="text-[10px] text-zinc-600">{label}</span>
+    <div className="flex flex-col items-center gap-1">
+      <span className={cn("text-2xl font-semibold tabular-nums", color)}>{value}</span>
+      <span className="text-[11px] font-medium text-zinc-600">{label}</span>
     </div>
   );
 }

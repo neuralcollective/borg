@@ -134,19 +134,19 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
-        <span className="text-[12px] md:text-[11px] font-medium text-zinc-400">Proposals</span>
-        <div className="flex items-center gap-2">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] px-5">
+        <span className="text-[14px] font-semibold text-zinc-100">Proposals</span>
+        <div className="flex items-center gap-2.5">
           {pending.length > 0 && (
             <button
               onClick={handleTriage}
               disabled={triaging}
-              className="rounded-md bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400 ring-1 ring-inset ring-violet-500/20 transition-colors hover:bg-violet-500/20 disabled:opacity-50"
+              className="rounded-lg bg-violet-500/10 px-3 py-1.5 text-[12px] font-medium text-violet-400 ring-1 ring-inset ring-violet-500/20 transition-colors hover:bg-violet-500/20 disabled:opacity-50"
             >
               {triaging ? "Scoring..." : "Triage"}
             </button>
           )}
-          <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] tabular-nums text-zinc-500">
+          <span className="rounded-full bg-white/[0.05] px-2.5 py-0.5 text-[11px] tabular-nums text-zinc-500">
             {pending.length}
           </span>
         </div>

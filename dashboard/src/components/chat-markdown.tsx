@@ -94,13 +94,14 @@ SyntaxHighlighter.registerLanguage("dart", dart);
 
 const PROSE_CLASSES =
   "prose prose-invert prose-sm max-w-none break-words " +
-  "[&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 " +
-  "[&_h1]:text-[14px] [&_h2]:text-[13px] [&_h3]:text-[12px] " +
-  "[&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1 " +
-  "[&_hr]:border-white/[0.08] [&_strong]:text-zinc-200 [&_a]:text-blue-400 " +
-  "[&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_table]:text-[11px] " +
-  "[&_th]:text-left [&_th]:px-2 [&_th]:py-1.5 [&_th]:border-b [&_th]:border-white/[0.1] [&_th]:text-zinc-400 [&_th]:font-medium [&_th]:align-top " +
-  "[&_td]:px-2 [&_td]:py-1.5 [&_td]:border-b [&_td]:border-white/[0.06] [&_td]:text-zinc-300 [&_td]:align-top";
+  "[&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 " +
+  "[&_h1]:text-[15px] [&_h2]:text-[14px] [&_h3]:text-[13px] " +
+  "[&_h1]:mt-3 [&_h2]:mt-2.5 [&_h3]:mt-2 " +
+  "[&_hr]:border-white/[0.08] [&_strong]:text-zinc-100 [&_a]:text-blue-400 [&_a]:hover:text-blue-300 " +
+  "[&_table]:w-full [&_table]:table-fixed [&_table]:border-collapse [&_table]:text-[12px] " +
+  "[&_th]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:border-b [&_th]:border-white/[0.1] [&_th]:text-zinc-400 [&_th]:font-medium [&_th]:align-top " +
+  "[&_td]:px-3 [&_td]:py-2 [&_td]:border-b [&_td]:border-white/[0.06] [&_td]:text-zinc-300 [&_td]:align-top " +
+  "[&_blockquote]:border-l-2 [&_blockquote]:border-white/[0.1] [&_blockquote]:pl-4 [&_blockquote]:text-zinc-400";
 
 const LANGUAGE_MAP: Record<string, string> = {
   js: "javascript",
@@ -135,7 +136,7 @@ function CodeBlock({ className, children, ...props }: React.HTMLAttributes<HTMLE
 
   if (!match) {
     return (
-      <code className="text-[11px] bg-white/[0.08] px-1 rounded text-orange-300" {...props}>
+      <code className="text-[12px] bg-white/[0.08] px-1.5 py-0.5 rounded-md text-orange-300" {...props}>
         {children}
       </code>
     );
@@ -150,11 +151,12 @@ function CodeBlock({ className, children, ...props }: React.HTMLAttributes<HTMLE
       PreTag="div"
       customStyle={{
         margin: 0,
-        padding: "0.75rem",
-        borderRadius: "0.375rem",
-        fontSize: "11px",
-        lineHeight: "1.5",
+        padding: "1rem",
+        borderRadius: "0.75rem",
+        fontSize: "12px",
+        lineHeight: "1.6",
         background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
       }}
       codeTagProps={{ style: { fontFamily: "inherit" } }}
     >

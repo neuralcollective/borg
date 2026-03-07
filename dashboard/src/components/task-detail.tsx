@@ -73,18 +73,18 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Task header */}
-      <div className="space-y-3 border-b border-white/[0.06] px-5 py-4">
+      <div className="space-y-3 border-b border-white/[0.07] px-6 py-5">
         <div className="flex items-start gap-3">
           <button
             onClick={onBack}
             aria-label="Back"
-            className="mt-0.5 rounded-md p-1 text-zinc-600 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 md:hidden"
+            className="mt-0.5 rounded-lg p-1 text-zinc-600 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 md:hidden"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2.5">
-              <span className="font-mono text-[11px] text-zinc-600">#{task.id}</span>
+              <span className="font-mono text-[12px] text-zinc-500">#{task.id}</span>
               <StatusBadge status={task.status} />
               {task.mode && task.mode !== "sweborg" && task.mode !== "swe" && (
                 <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
@@ -111,7 +111,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
                 </button>
               )}
             </div>
-            <h2 className="mt-1 text-[14px] font-medium leading-snug text-zinc-200">
+            <h2 className="mt-1 text-[15px] font-medium leading-snug text-zinc-200">
               {task.title}
             </h2>
           </div>
@@ -128,18 +128,18 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
             queryClient.invalidateQueries({ queryKey: ["task", task.id] });
           };
           return (
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] p-3 space-y-2">
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4 space-y-2.5">
               {phaseInstruction && (
-                <div className="text-[11px] text-emerald-400/70 leading-relaxed">{phaseInstruction}</div>
+                <div className="text-[12px] text-emerald-400/70 leading-relaxed">{phaseInstruction}</div>
               )}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2.5">
                 <button
                   onClick={async () => { await approveTask(task.id); invalidate(); }}
-                  className="rounded-md bg-emerald-500/15 px-3 py-1.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                  className="rounded-lg bg-emerald-500/15 px-3.5 py-1.5 text-[12px] font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
                 >Approve</button>
                 <button
                   onClick={() => setShowRevision(!showRevision)}
-                  className="rounded-md bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                  className="rounded-lg bg-amber-500/10 px-3.5 py-1.5 text-[12px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
                 >Request Revision</button>
                 <button
                   onClick={async () => {
@@ -148,7 +148,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
                       invalidate();
                     }
                   }}
-                  className="rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+                  className="rounded-lg bg-red-500/10 px-3.5 py-1.5 text-[12px] font-medium text-red-400 hover:bg-red-500/20 transition-colors"
                 >Reject</button>
               </div>
               {showRevision && (
@@ -184,8 +184,8 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         })()}
 
         {task.status === "pending_review" && compliance && (compliance.findings?.length ?? 0) > 0 && (
-          <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/[0.04] p-3 space-y-2">
-            <div className="text-[11px] text-fuchsia-300/80">
+          <div className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/[0.04] p-4 space-y-2.5">
+            <div className="text-[12px] text-fuchsia-300/80">
               Compliance check blocked this task ({compliance.profile ?? "unknown profile"}).
             </div>
             <div className="space-y-1">
@@ -236,27 +236,27 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[12px] text-zinc-300">
           {task.repo_path && (
             <span title={task.repo_path}>
-              <span className="text-zinc-600">repo</span> {repoName(task.repo_path)}
+              <span className="text-zinc-500">repo</span> {repoName(task.repo_path)}
             </span>
           )}
           {!isMinimal && task.branch && (
             <span>
-              <span className="text-zinc-600">branch</span> <span className="font-mono">{task.branch}</span>
+              <span className="text-zinc-500">branch</span> <span className="font-mono">{task.branch}</span>
             </span>
           )}
           {!isMinimal && task.attempt > 0 && (
             <span>
-              <span className="text-zinc-600">attempt</span> {task.attempt}/{task.max_attempts}
+              <span className="text-zinc-500">attempt</span> {task.attempt}/{task.max_attempts}
             </span>
           )}
           <span>
-            <span className="text-zinc-600">by</span> {task.created_by || "pipeline"}
+            <span className="text-zinc-500">by</span> {task.created_by || "pipeline"}
           </span>
           <span>
-            <span className="text-zinc-600">at</span> {task.created_at}
+            <span className="text-zinc-500">at</span> {task.created_at}
           </span>
           <button
             onClick={() => setShowDiagnostics((v) => !v)}
@@ -297,7 +297,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
       </div>
 
       {task.description && (
-        <div className="max-h-16 overflow-y-auto border-b border-white/[0.06] px-5 py-2.5 text-[11px] leading-relaxed text-zinc-500">
+        <div className="max-h-16 overflow-y-auto border-b border-white/[0.07] px-6 py-3 text-[12px] leading-relaxed text-zinc-400">
           {task.description}
         </div>
       )}
@@ -346,8 +346,8 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
       )}
 
       {task.last_error && task.status === "failed" && (
-        <div className="mx-4 mt-3 rounded-lg border border-red-500/20 bg-red-500/[0.05] p-3">
-          <pre className="max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-red-400/90">
+        <div className="mx-4 mt-3 rounded-xl border border-red-500/20 bg-red-500/[0.05] p-4">
+          <pre className="max-h-20 overflow-y-auto whitespace-pre-wrap font-mono text-[12px] text-red-400/90">
             {task.last_error}
           </pre>
         </div>
@@ -412,11 +412,11 @@ function StreamView({ raw }: { raw: string }) {
   const events = useMemo(() => parseRawStream(raw), [raw]);
 
   if (events.length === 0) {
-    return <div className="p-4 text-[11px] text-zinc-600">No stream data</div>;
+    return <div className="p-4 text-[12px] text-zinc-600">No stream data</div>;
   }
 
   return (
-    <div className="space-y-1 p-3">
+    <div className="space-y-1 p-4">
       {events.map((ev, i) => (
         <StreamEventBlock key={i} event={ev} />
       ))}
@@ -429,7 +429,7 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
 
   if (ev.type === "system") {
     return (
-      <div className="rounded bg-blue-500/[0.06] px-3 py-1.5 text-[10px] text-blue-400/70">
+      <div className="rounded bg-blue-500/[0.06] px-3 py-1.5 text-[11px] text-blue-400/70">
         {ev.content}
       </div>
     );
@@ -452,10 +452,10 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
           onClick={() => setExpanded(!expanded)}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         >
-          <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-400">
+          <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-400">
             {ev.tool}
           </span>
-          <span className="truncate text-[10px] text-zinc-400">
+          <span className="truncate text-[11px] text-zinc-400">
             {ev.label || (ev.input && ev.input.length > 80 ? ev.input.slice(0, 80) + "..." : ev.input)}
           </span>
           <span className="ml-auto shrink-0 text-[9px] text-zinc-600">{expanded ? "^" : "v"}</span>
@@ -477,7 +477,7 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
           onClick={() => setExpanded(!expanded)}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         >
-          <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-zinc-400">
+          <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zinc-400">
             result{ev.tool ? `: ${ev.tool}` : ""}
           </span>
           {!expanded && (
@@ -558,11 +558,11 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] px-5 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.07] px-6 py-3">
         <select
           value={selectedKey}
           onChange={(e) => setSelectedKey(e.target.value)}
-          className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
+          className="rounded-lg border border-white/[0.07] bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium uppercase tracking-wide text-zinc-300 outline-none focus:border-blue-500/40"
         >
           {labeled.map((o) => {
             const key = o.phase + "-" + o.id;
@@ -575,7 +575,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
           })}
         </select>
         <span className={cn(
-          "rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset",
+          "rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ring-inset",
           selected.exit_code === 0
             ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20"
             : "bg-red-500/10 text-red-400 ring-red-500/20"
@@ -584,11 +584,11 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
         </span>
         {!isDiff && (
           <div className="ml-auto flex items-center gap-2">
-            <div className="flex rounded-md border border-white/[0.08]">
+            <div className="flex rounded-lg border border-white/[0.07]">
               <button
                 onClick={() => setViewMode("summary")}
                 className={cn(
-                  "px-2 py-0.5 text-[10px] font-medium transition-colors",
+                  "px-2.5 py-1 text-[12px] font-medium transition-colors",
                   viewMode === "summary"
                     ? "bg-white/[0.08] text-zinc-200"
                     : "text-zinc-500 hover:text-zinc-300"
@@ -600,7 +600,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
                 <button
                   onClick={() => setViewMode("trace")}
                   className={cn(
-                    "border-l border-white/[0.08] px-2 py-0.5 text-[10px] font-medium transition-colors",
+                    "border-l border-white/[0.07] px-2.5 py-1 text-[12px] font-medium transition-colors",
                     viewMode === "trace"
                       ? "bg-white/[0.08] text-zinc-200"
                       : "text-zinc-500 hover:text-zinc-300"
@@ -619,7 +619,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
                   copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
                 });
               }}
-              className="rounded-md px-2 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
+              className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
             >
               {copied ? "Copied" : "Copy"}
             </button>
@@ -629,7 +629,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
                 const ext = viewMode === "trace" && hasStream ? "ndjson" : "txt";
                 downloadText(text || "", `task-${selected.id}-${selected.phase}.${ext}`);
               }}
-              className="rounded-md px-2 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
+              className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05] transition-colors"
             >
               Download
             </button>
@@ -642,7 +642,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
         ) : viewMode === "trace" && hasStream ? (
           <StreamView raw={selected.raw_stream} />
         ) : (
-          <pre className="p-4 font-mono text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words">
+          <pre className="p-4 font-mono text-[12px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words">
             {selected.output || "(empty)"}
           </pre>
         )}
@@ -652,9 +652,9 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
 }
 
 function DiffView({ diff }: { diff: string }) {
-  if (!diff) return <div className="p-4 text-[11px] text-zinc-600">No diff data</div>;
+  if (!diff) return <div className="p-4 text-[12px] text-zinc-600">No diff data</div>;
   return (
-    <pre className="p-4 font-mono text-[11px] leading-relaxed overflow-x-auto">
+    <pre className="p-4 font-mono text-[12px] leading-relaxed overflow-x-auto">
       {diff.split("\n").map((line, i) => {
         let color = "text-zinc-500";
         if (line.startsWith("+") && !line.startsWith("+++")) color = "text-emerald-400/80";

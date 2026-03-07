@@ -25,7 +25,7 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset",
+        "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ring-inset",
         statusStyles[status] ?? "bg-zinc-500/10 text-zinc-400 ring-zinc-500/20"
       )}
     >
