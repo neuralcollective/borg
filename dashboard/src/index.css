@@ -451,18 +451,18 @@ html:not(.dark) .shadow-\[0_0_8px_rgba\(200\,160\,80\,0\.3\)\] {
     scrollbar-color: hsla(35, 15%, 40%, 0.2) transparent;
   }
   *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
   *::-webkit-scrollbar-track {
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: hsla(35, 15%, 40%, 0.2);
-    border-radius: 3px;
+    background: hsla(35, 15%, 40%, 0.3);
+    border-radius: 4px;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: hsla(35, 15%, 40%, 0.35);
+    background: hsla(35, 15%, 40%, 0.5);
   }
 
   /* Warm amber selection */

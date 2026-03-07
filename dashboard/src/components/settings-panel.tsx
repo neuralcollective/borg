@@ -165,6 +165,24 @@ export function SettingsPanel() {
             {/* User Management */}
             <UserManagement />
 
+            {/* Dashboard Mode */}
+            <Section title="Dashboard">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Dashboard Mode</Label>
+                  <Desc>Legal mode adjusts vocabulary, hides engineering UI, and shows legal task types.</Desc>
+                </div>
+                <ToggleGroup
+                  value={effective.dashboard_mode ?? "general"}
+                  onChange={(v) => update("dashboard_mode", v)}
+                  options={[
+                    { value: "general", label: "General" },
+                    { value: "legal", label: "Legal" },
+                  ]}
+                />
+              </div>
+            </Section>
+
             {/* Pipeline Settings */}
             <Section title="Pipeline">
               <ToggleField

@@ -5,6 +5,7 @@ import { useVocabulary } from "@/lib/vocabulary";
 import { UIModeProvider, useUIMode } from "@/lib/ui-mode";
 import type { UIMode } from "@/lib/ui-mode";
 import { DomainProvider, useDomain } from "@/lib/domain";
+import { DashboardModeProvider, useDashboardMode } from "@/lib/dashboard-mode";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { Header } from "@/components/header";
 import { TaskList } from "@/components/task-list";
@@ -120,16 +121,22 @@ function AuthGate() {
   }
 
   return (
-    <DomainProvider>
-      <AppWithDomain />
-    </DomainProvider>
+    <DashboardModeProvider>
+      <DomainProvider>
+        <AppWithDomain />
+      </DomainProvider>
+    </DashboardModeProvider>
   );
 }
 
 function AppWithDomain() {
   const domain = useDomain();
   const { data: status } = useStatus();
-  const defaultMode = useMemo(() => detectDefaultMode(domain, status?.watched_repos), [domain, status]);
+  const { isLegal } = useDashboardMode();
+  const defaultMode = useMemo(() => {
+    if (isLegal) return "minimal" as UIMode;
+    return detectDefaultMode(domain, status?.watched_repos);
+  }, [domain, status, isLegal]);
 
   return (
     <UIModeProvider defaultMode={defaultMode}>
@@ -157,12 +164,7 @@ function AppInner() {
     setView((curr) => (curr === "projects" || curr === "tasks" ? defaultView : curr));
   }, [defaultView]);
 
-  const isGlobalLawMode = useMemo(() => {
-    const repos = status?.watched_repos;
-    if (!repos?.length) return false;
-    const primary = repos.find((r) => r.is_self) ?? repos[0];
-    return primary.mode === "lawborg" || primary.mode === "legal";
-  }, [status]);
+  const { isLegal: isGlobalLawMode } = useDashboardMode();
 
   const navLabelOverrides: Record<string, string> = useMemo(() => ({
     projects: vocab.projectsLabel,
@@ -266,15 +268,13 @@ function AppInner() {
   // Desktop layout
   return (
     <div className="flex h-screen bg-[#0f0e0c] text-foreground antialiased">
-      {/* Sidebar nav — slim icon bar with overlay expansion */}
-      <div className="w-14 shrink-0" />
+      {/* Sidebar nav — slim icon bar, expands on hover pushing content */}
       <nav
         className={cn(
-          "group/nav fixed left-0 top-0 z-30 flex h-full w-14 hover:w-[180px] flex-col items-start border-r pb-4 transition-[width] duration-200 ease-out overflow-hidden",
+          "group/nav flex h-full w-[2.2vw] hover:w-[7vw] shrink-0 flex-col items-start border-r pb-4 transition-[width] duration-200 ease-out overflow-hidden",
           sidebarAlert
             ? "border-red-500/30 bg-red-950/35"
-            : "border-[#2a2520] bg-gradient-to-b from-[#1c1a17] to-[#151412]",
-          "hover:shadow-[4px_0_24px_rgba(20,15,10,0.6)]"
+            : "border-[#2a2520] bg-gradient-to-b from-[#1c1a17] to-[#151412]"
         )}
       >
         <div className={cn("borg-logo mb-2 w-full shrink-0 h-14", domain.accentBg)}>
@@ -322,7 +322,7 @@ function AppInner() {
         </div>
 
         {/* Status indicator at bottom */}
-        <div className="mt-auto flex flex-col items-center gap-3 w-14 shrink-0">
+        <div className="mt-auto flex flex-col items-center gap-3 w-[2.2vw] shrink-0">
           {(status?.dispatched_agents ?? 0) > 0 && (
             <div className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20" title={`${status?.dispatched_agents} active agent(s)`}>
               <span className="text-[11px] font-bold tabular-nums text-amber-400">{status?.dispatched_agents}</span>

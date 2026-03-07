@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useStatus } from "./api";
+import { useSettings } from "./api";
 
 export interface Vocabulary {
   mode: "swe" | "law" | "general";
@@ -83,11 +83,9 @@ export function getVocabulary(mode: string): Vocabulary {
 }
 
 export function useVocabulary(): Vocabulary {
-  const { data: status } = useStatus();
+  const { data: settings } = useSettings();
   return useMemo(() => {
-    const repos = status?.watched_repos;
-    if (!repos?.length) return GENERAL_VOCAB;
-    const primary = repos.find((r: any) => r.is_self) ?? repos[0];
-    return getVocabulary(primary.mode);
-  }, [status]);
+    const mode = settings?.dashboard_mode ?? "general";
+    return getVocabulary(mode);
+  }, [settings?.dashboard_mode]);
 }

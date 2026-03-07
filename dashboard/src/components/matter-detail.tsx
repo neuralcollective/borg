@@ -14,10 +14,11 @@ import type { Project, ProjectDocument } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { PhaseTracker } from "./phase-tracker";
 import { cn } from "@/lib/utils";
+import { useDashboardMode } from "@/lib/dashboard-mode";
 import { retryTask, patchTask, approveTask, rejectTask, requestRevision, getRevisionHistory, useFullModes, useTemplates } from "@/lib/api";
 import type { RevisionHistory } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { Edit2, Eye, FileText, RotateCcw, Trash2, Upload } from "lucide-react";
+import { Edit2, Eye, FileText, RotateCcw, Search, Trash2, Upload } from "lucide-react";
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile } from "@/lib/types";
 
@@ -64,6 +65,7 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   const [exportMenu, setExportMenu] = useState(false);
   const [exportTemplateId, setExportTemplateId] = useState<number | null>(null);
   const { data: templates = [] } = useTemplates("template");
+  const { isLegal } = useDashboardMode();
 
   async function exportAll(format: "pdf" | "docx") {
     setExportMenu(false);
@@ -105,7 +107,7 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
                 {project.jurisdiction}
               </span>
             )}
-            {project.mode && (
+            {project.mode && !isLegal && (
               <span className="rounded-lg bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400">
                 {project.mode}
               </span>
@@ -298,7 +300,7 @@ function DocumentsTab({
     { cursor: null, offset: 0 },
   ]);
   const currentFilePage = filePageStack[filePageStack.length - 1] ?? { cursor: null, offset: 0 };
-  const { data: filePage, refetch: refetchFiles, isLoading: filesLoading } = useProjectFiles(projectId, {
+  const { data: filePage, refetch: refetchFiles } = useProjectFiles(projectId, {
     limit: 50,
     offset: currentFilePage.offset,
     cursor: currentFilePage.cursor,
@@ -338,7 +340,7 @@ function DocumentsTab({
     }
   }
 
-  if (isLoading || filesLoading) {
+  if (isLoading) {
     return <div className="flex h-32 items-center justify-center text-[13px] text-zinc-400">Loading...</div>;
   }
 
@@ -391,6 +393,7 @@ function DocumentsTab({
               <span className="ml-1.5 text-[12px] text-[#6b6459]">({filePage?.summary.total_files ?? files.length})</span>
             </div>
             <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6b6459]" />
               <input
                 type="text"
                 value={fileSearch}
@@ -398,8 +401,8 @@ function DocumentsTab({
                   setFileSearch(e.target.value);
                   setFilePageStack([{ cursor: null, offset: 0 }]);
                 }}
-                placeholder="Filter..."
-                className="w-48 rounded-xl border border-[#2a2520] bg-[#151412] px-3 py-1.5 text-[12px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
+                placeholder="Search files..."
+                className="w-64 rounded-xl border border-[#2a2520] bg-[#151412] py-2.5 pl-8 pr-3 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
               />
             </div>
           </div>
@@ -733,6 +736,7 @@ const ACTIVE_STATUSES = new Set(["implement", "review", "validate", "lint_fix", 
 function TasksTab({ projectId }: { projectId: number }) {
   const { data: tasks = [], isLoading } = useProjectTasks(projectId);
   const { data: fullModes = [] } = useFullModes();
+  const { isLegal } = useDashboardMode();
   const queryClient = useQueryClient();
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [expandedStream, setExpandedStream] = useState<number | null>(null);
@@ -818,7 +822,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                       purged
                     </span>
                   )}
-                  {task.mode && task.mode !== "lawborg" && task.mode !== "legal" && (
+                  {task.mode && !isLegal && (
                     <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-400">
                       {task.mode}
                     </span>

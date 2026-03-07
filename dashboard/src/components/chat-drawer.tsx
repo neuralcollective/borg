@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Send, Mic, MicOff, FolderOpen } from "lucide-react";
+import { Send, Mic, MicOff, FolderOpen, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDictation } from "@/lib/dictation";
 import { ChatMarkdown } from "./chat-markdown";
@@ -227,56 +227,56 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
     [streamEvents]
   );
 
-  const hasContent = messages.length > 0 || sending;
   const scopeLabel = threadLabel(thread, projects);
+
+  const [threadPickerOpen, setThreadPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!threadPickerOpen) return;
+    function close(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setThreadPickerOpen(false);
+    }
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [threadPickerOpen]);
+
+  const threadOptions = useMemo(() => {
+    const opts: { id: string; label: string; icon: "globe" | "folder" }[] = [
+      { id: "web:dashboard", label: "Global", icon: "globe" },
+    ];
+    for (const p of projects) {
+      opts.push({ id: `web:project-${p.id}`, label: p.name, icon: "folder" });
+    }
+    return opts;
+  }, [projects]);
 
   return (
     <div
-      className="flex h-full w-[480px] shrink-0 flex-col border-l border-[#2a2520] bg-[#0f0e0c] overflow-hidden"
+      className="group/chat flex h-full w-[32vw] hover:w-[48vw] shrink-0 flex-col border-l border-[#2a2520] bg-[#0f0e0c] overflow-hidden transition-[width] duration-200 ease-out"
     >
-      {/* Header */}
-      <div className="flex h-12 shrink-0 items-center border-b border-[#2a2520]">
-        <div className="flex w-full items-center gap-2 px-3">
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            {thread === "web:dashboard" ? (
-              <Globe className="h-3 w-3 shrink-0 text-amber-400/60" />
-            ) : (
-              <FolderOpen className="h-3 w-3 shrink-0 text-amber-400/60" />
-            )}
-            <span className="truncate text-[12px] font-medium text-[#9c9486]">{scopeLabel}</span>
-          </div>
-          {thread !== "web:dashboard" && (
-            <button
-              onClick={() => setThread("web:dashboard")}
-              className="rounded-lg p-1 text-[#6b6459] transition-colors hover:text-[#9c9486]"
-              title="Switch to Global"
-            >
-              <Globe className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-
       {/* Messages */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div className="px-3 py-3 space-y-3">
-            {!hasContent && (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#1c1a17] ring-1 ring-[#2a2520]">
-                  {thread === "web:dashboard" ? (
-                    <Globe className="h-5 w-5 text-amber-400/40" strokeWidth={1.5} />
-                  ) : (
-                    <FolderOpen className="h-5 w-5 text-[#6b6459]" strokeWidth={1.5} />
-                  )}
-                </div>
-                <p className="text-[13px] font-medium text-[#9c9486]">{scopeLabel}</p>
-                <p className="mt-1 text-[11px] text-[#6b6459]">
-                  {thread === "web:dashboard"
-                    ? "Chat with global knowledge"
-                    : "Scoped to this project"}
-                </p>
+      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {/* Centered scope indicator — sits behind messages */}
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#1c1a17] ring-1 ring-[#2a2520]">
+                {thread === "web:dashboard" ? (
+                  <Globe className="h-5 w-5 text-amber-400/40" strokeWidth={1.5} />
+                ) : (
+                  <FolderOpen className="h-5 w-5 text-[#6b6459]" strokeWidth={1.5} />
+                )}
               </div>
-            )}
+              <p className="text-[13px] font-medium text-[#9c9486]">{scopeLabel}</p>
+              <p className="mt-1 text-[11px] text-[#6b6459]">
+                {thread === "web:dashboard"
+                  ? "Chat with global knowledge"
+                  : "Scoped to this project"}
+              </p>
+            </div>
+          </div>
+
+          <div className="relative px-3 py-3 space-y-3">
 
             {messages.map((msg, i) => (
               <MessageBubble key={`${msg.ts}-${msg.role}-${i}`} msg={msg} />
@@ -316,6 +316,42 @@ export function ChatDrawer({ defaultThread = "web:dashboard" }: ChatDrawerProps)
 
       {/* Input */}
       <div className="shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]/90 px-3 py-2.5">
+        {/* Thread picker */}
+        <div className="relative mb-1.5" ref={pickerRef}>
+          <button
+            onClick={() => setThreadPickerOpen((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] text-[#9c9486] hover:bg-[#1c1a17] hover:text-[#e8e0d4] transition-colors"
+          >
+            {thread === "web:dashboard" ? (
+              <Globe className="h-3.5 w-3.5 text-amber-400/60" />
+            ) : (
+              <FolderOpen className="h-3.5 w-3.5 text-[#6b6459]" />
+            )}
+            <span>{scopeLabel} Chat</span>
+            <ChevronDown className={cn("h-3 w-3 transition-transform", threadPickerOpen && "rotate-180")} />
+          </button>
+          {threadPickerOpen && (
+            <div className="absolute bottom-full left-0 mb-1 w-56 max-h-[320px] overflow-y-auto rounded-lg border border-[#2a2520] bg-[#1c1a17] py-1 shadow-xl z-50">
+              {threadOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => { setThread(opt.id); setThreadPickerOpen(false); }}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-[12px] transition-colors hover:bg-[#232019]",
+                    thread === opt.id ? "text-amber-400" : "text-[#9c9486]"
+                  )}
+                >
+                  {opt.icon === "globe" ? (
+                    <Globe className="h-3.5 w-3.5" />
+                  ) : (
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  )}
+                  <span className="truncate">{opt.label} Chat</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="relative flex items-end gap-1.5 rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 transition-colors focus-within:border-amber-500/20 focus-within:bg-[#232019]">
           <textarea
             ref={inputRef}

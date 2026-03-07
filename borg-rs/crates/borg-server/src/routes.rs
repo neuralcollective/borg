@@ -486,6 +486,7 @@ pub(crate) const SETTINGS_KEYS: &[&str] = &[
     "experimental_domains",
     "visible_categories",
     "model_override",
+    "dashboard_mode",
 ];
 
 pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
@@ -538,6 +539,7 @@ pub(crate) const SETTINGS_DEFAULTS: &[(&str, &str)] = &[
     ("experimental_domains", "false"),
     ("visible_categories", "Professional Services"),
     ("model_override", ""),
+    ("dashboard_mode", "general"),
 ];
 
 // ── Shared helper functions ───────────────────────────────────────────────

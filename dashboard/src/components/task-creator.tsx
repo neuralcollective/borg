@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useModes, useStatus, createTask } from "@/lib/api";
+import { useDashboardMode } from "@/lib/dashboard-mode";
 import { repoName, type PipelineMode } from "@/lib/types";
 import { Plus, X, ChevronRight } from "lucide-react";
 
@@ -36,6 +37,7 @@ export function TaskCreator({
   const queryClient = useQueryClient();
   const { data: modes } = useModes();
   const { data: status } = useStatus();
+  const { isLegal } = useDashboardMode();
 
   const repos = status?.watched_repos ?? [];
 
@@ -191,7 +193,7 @@ export function TaskCreator({
             </div>
           )}
 
-          {(mode === "lawborg" || mode === "legal") && (
+          {isLegal && (
             <div>
               <label className="mb-1.5 block text-[12px] font-medium text-zinc-400">Task Type</label>
               <select

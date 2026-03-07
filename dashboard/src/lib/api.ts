@@ -459,6 +459,7 @@ export interface Settings {
   experimental_domains: boolean;
   visible_categories: string;
   model_override: string;
+  dashboard_mode: string;
 }
 
 export function useSettings() {

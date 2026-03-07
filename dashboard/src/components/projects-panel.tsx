@@ -14,7 +14,6 @@ import {
   uploadProjectUploadChunk,
   useProjectCloudConnections,
   useSettings,
-  useStatus,
   useModes,
   useProjectFiles,
   useProjects,
@@ -27,6 +26,7 @@ import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useVocabulary } from "@/lib/vocabulary";
+import { useDashboardMode } from "@/lib/dashboard-mode";
 import { MatterDetail } from "./matter-detail";
 import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
 import { RedlineViewer } from "./viewers/redline-viewer";
@@ -161,7 +161,6 @@ function DocumentViewWrapper({
 
 export function ProjectsPanel() {
   const { data: projects = [], refetch: refetchProjects } = useProjects();
-  const { data: status } = useStatus();
   const { data: modes = [] } = useModes();
   const { data: settings } = useSettings();
   const vocab = useVocabulary();
@@ -175,14 +174,7 @@ export function ProjectsPanel() {
   const [newProjectMode, setNewProjectMode] = useState("");
   const [newProjectJurisdiction, setNewProjectJurisdiction] = useState("");
   const [creating, setCreating] = useState(false);
-  const isLegalMode = useMemo(() => {
-    const repos = status?.watched_repos;
-    if (repos?.length) {
-      const primary = repos.find((r) => r.is_self) ?? repos[0];
-      return primary.mode === "lawborg" || primary.mode === "legal";
-    }
-    return projects.some((p) => p.mode === "lawborg" || p.mode === "legal");
-  }, [status, projects]);
+  const { isLegal: isLegalMode } = useDashboardMode();
 
   const filteredProjects = useMemo(() => {
     if (!searchQuery.trim()) return projects;
@@ -702,7 +694,7 @@ async function uploadChunkQueue(
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-[270px] shrink-0 border-r border-[#2a2520] bg-[#0f0e0c] p-4">
+      <div className="group/matters flex w-[10.5vw] hover:w-[21vw] shrink-0 flex-col border-r border-[#2a2520] bg-[#0f0e0c] p-4 transition-[width] duration-200 ease-out">
         <div className="mb-3">
           <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b6459]">
             {vocab.projectsLabel}
@@ -722,7 +714,7 @@ async function uploadChunkQueue(
           />
         </div>
         {ftsQuery.trim() && (ftsSearching || ftsResults.length > 0) ? (
-          <div className="space-y-1.5 overflow-y-auto mb-3" style={{ maxHeight: "calc(100vh - 280px)" }}>
+          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto mb-3">
             {ftsSearching && <div className="text-[11px] text-[#6b6459] px-1">Searching…</div>}
             {ftsResults.map((r, i) => (
               <button
@@ -744,7 +736,7 @@ async function uploadChunkQueue(
           </div>
         ) : (
           <>
-        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
           {filteredProjects.map((p) => (
             <button
               key={p.id}
@@ -757,9 +749,6 @@ async function uploadChunkQueue(
               )}
             >
               <span className="truncate">{p.name}</span>
-              {p.jurisdiction?.trim() && (
-                <span className="mt-0.5 block truncate text-[10px] text-[#6b6459]">{p.jurisdiction}</span>
-              )}
             </button>
           ))}
           {projects.length === 0 && (
@@ -772,7 +761,7 @@ async function uploadChunkQueue(
         </div>
           </>
         )}
-        <div className="mt-4 border-t border-[#2a2520] pt-4">
+        <div className="mt-4 shrink-0 border-t border-[#2a2520] pt-4">
           <input
             value={newProjectName}
             onChange={(e) => setNewProjectName(e.target.value)}
