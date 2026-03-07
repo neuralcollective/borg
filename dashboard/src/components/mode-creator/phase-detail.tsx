@@ -173,6 +173,7 @@ export function PhaseDetail({
             value={phase.allowed_tools}
             onChange={(v) => onChange({ allowed_tools: v })}
             disabled={readOnly}
+            visibleTools={profile.tools}
           />
         </Section>
       )}

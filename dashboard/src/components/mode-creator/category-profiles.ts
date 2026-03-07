@@ -4,10 +4,14 @@ export interface CategoryProfile {
   phaseTypes: PhaseType[];
   behaviorFlags: string[];
   integrations: { value: IntegrationType; label: string }[];
+  tools: string[];
   showDocker: boolean;
   showTestCmd: boolean;
   showComplianceButtons: boolean;
 }
+
+const ALL_TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "Bash", "WebSearch", "WebFetch"];
+const DOC_TOOLS = ["Read", "Write", "WebSearch", "WebFetch"];
 
 const CODE_PROFILE: CategoryProfile = {
   phaseTypes: ["setup", "agent", "validate", "rebase", "lint_fix"],
@@ -16,6 +20,7 @@ const CODE_PROFILE: CategoryProfile = {
     { value: "git_pr", label: "Git PR" },
     { value: "none", label: "None" },
   ],
+  tools: ALL_TOOLS,
   showDocker: true,
   showTestCmd: true,
   showComplianceButtons: false,
@@ -23,11 +28,11 @@ const CODE_PROFILE: CategoryProfile = {
 
 const DOCUMENT_PROFILE: CategoryProfile = {
   phaseTypes: ["setup", "agent", "human_review", "compliance_check"],
-  behaviorFlags: ["commits", "include_task_context", "allow_no_changes", "fresh_session"],
+  behaviorFlags: ["include_task_context", "allow_no_changes", "fresh_session"],
   integrations: [
-    { value: "git_branch", label: "Git Branch" },
     { value: "none", label: "None" },
   ],
+  tools: DOC_TOOLS,
   showDocker: false,
   showTestCmd: false,
   showComplianceButtons: true,
@@ -41,6 +46,7 @@ const ALL_PROFILE: CategoryProfile = {
     { value: "git_branch", label: "Git Branch" },
     { value: "none", label: "None" },
   ],
+  tools: ALL_TOOLS,
   showDocker: true,
   showTestCmd: true,
   showComplianceButtons: true,

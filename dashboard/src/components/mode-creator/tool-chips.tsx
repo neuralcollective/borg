@@ -1,20 +1,23 @@
 import { cn } from "@/lib/utils";
 
-const KNOWN_TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "Bash", "WebSearch", "WebFetch"];
+const DEFAULT_TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "Bash", "WebSearch", "WebFetch"];
 
 export function ToolChips({
   value,
   onChange,
   disabled,
+  visibleTools,
 }: {
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
+  visibleTools?: string[];
 }) {
   const active = new Set(value.split(",").map((t) => t.trim()).filter(Boolean));
 
+  const knownTools = visibleTools ?? DEFAULT_TOOLS;
   // Include any unknown tools from the current value
-  const allTools = [...KNOWN_TOOLS];
+  const allTools = [...knownTools];
   for (const t of active) {
     if (!allTools.includes(t)) allTools.push(t);
   }
