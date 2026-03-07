@@ -1033,10 +1033,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/knowledge/:id/content",
             get(routes::get_knowledge_content),
         )
-        // Agent API (LLM-friendly text endpoints)
-        .route("/api/agent/search", get(routes::agent_search))
-        .route("/api/agent/file/:id", get(routes::agent_get_file))
-        .route("/api/agent/files", get(routes::agent_list_files))
+        // BorgSearch (LLM-friendly text endpoints for project document search)
+        .route("/api/borgsearch/query", get(routes::agent_search))
+        .route("/api/borgsearch/file/:id", get(routes::agent_get_file))
+        .route("/api/borgsearch/files", get(routes::agent_list_files))
         // Static dashboard
         .fallback_service(serve_dir)
         .layer(middleware::from_fn_with_state(

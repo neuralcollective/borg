@@ -1221,15 +1221,17 @@ pub(crate) async fn run_chat_agent(
             .map(|p| format!("Current project_id: {}\n", p.id))
             .unwrap_or_default();
         let agent_claude_md = format!(
-            "# Document Search\n\n\
+            "# BorgSearch — Project Document Search\n\n\
              {project_id_hint}\
-             You have access to a project document search API. Use curl or WebFetch to query it.\n\n\
+             You have access to BorgSearch, a project document search API. Use curl or WebFetch to query it.\n\
+             This is NOT the same as Claude's built-in Grep/Glob/Read tools — BorgSearch searches uploaded project documents (contracts, filings, memos, etc.) via Vespa.\n\n\
              ## Endpoints\n\n\
              All requests need: `Authorization: Bearer $BORG_API_TOKEN`\n\n\
-             - `GET $BORG_API_URL/api/agent/search?q=<query>&project_id=<id>&limit=20&doc_type=<type>&jurisdiction=<jur>&privileged_only=true` — hybrid keyword+semantic search with optional filters. doc_type: contract, filing, statute, memo, document, data. jurisdiction: e.g. US-CA, UK, EU.\n\
-             - `GET $BORG_API_URL/api/agent/files?project_id=<id>&q=<filter>&limit=50&offset=0` — list project files\n\
-             - `GET $BORG_API_URL/api/agent/file/<file_id>?project_id=<id>` — read full file content\n\n\
-             Responses are plain text optimized for reading. Use search to find relevant documents before answering questions about project content.\n"
+             - `GET $BORG_API_URL/api/borgsearch/query?q=<query>&project_id=<id>&limit=20&doc_type=<type>&jurisdiction=<jur>&privileged_only=true` \
+             — hybrid keyword+semantic search with optional filters. doc_type: contract, filing, statute, memo, document, data. jurisdiction: e.g. US-CA, UK, EU.\n\
+             - `GET $BORG_API_URL/api/borgsearch/files?project_id=<id>&q=<filter>&limit=50&offset=0` — list project files\n\
+             - `GET $BORG_API_URL/api/borgsearch/file/<file_id>?project_id=<id>` — read full file content\n\n\
+             Responses are plain text. Use BorgSearch to find relevant documents before answering questions about project content.\n"
         );
         let claude_md_path = format!("{session_dir}/CLAUDE.md");
         let _ = std::fs::write(&claude_md_path, &agent_claude_md);
@@ -6011,7 +6013,7 @@ pub(crate) async fn agent_list_files(
         ));
     }
     out.push_str(&format!(
-        "\nUse /api/agent/file/<id>?project_id={} to read a file's content.",
+        "\nUse /api/borgsearch/file/<id>?project_id={} to read a file's content.",
         query.project_id
     ));
     Ok(out)
