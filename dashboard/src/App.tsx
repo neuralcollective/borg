@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import { useLogs, useStatus } from "@/lib/api";
+import { useVocabulary } from "@/lib/vocabulary";
 import { UIModeProvider, useUIMode } from "@/lib/ui-mode";
 import type { UIMode } from "@/lib/ui-mode";
 import { DomainProvider, useDomain } from "@/lib/domain";
@@ -147,6 +148,7 @@ function AppInner() {
   const { logs, connected } = useLogs();
   const { data: status } = useStatus();
   const { mode: uiMode } = useUIMode();
+  const vocab = useVocabulary();
   const isMobile = useIsMobile();
   const defaultView = useMemo(() => detectDefaultView(domain, status?.watched_repos), [domain, status]);
   const sidebarAlert = !!status?.guardrail_alert;
@@ -161,6 +163,11 @@ function AppInner() {
     const primary = repos.find((r) => r.is_self) ?? repos[0];
     return primary.mode === "lawborg" || primary.mode === "legal";
   }, [status]);
+
+  const navLabelOverrides: Record<string, string> = useMemo(() => ({
+    projects: vocab.projectsLabel,
+    tasks: vocab.tasksLabel,
+  }), [vocab]);
 
   const LAW_HIDDEN_KEYS = ["queue", "proposals", "logs"];
 
@@ -235,7 +242,9 @@ function AppInner() {
           className="flex shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
-          {MOBILE_TABS.filter((t) => !(isGlobalLawMode && t.key === "queue")).map(({ key, label, Icon }) => (
+          {MOBILE_TABS.filter((t) => !(isGlobalLawMode && t.key === "queue")).map(({ key, label: defaultLabel, Icon }) => {
+            const label = navLabelOverrides[key] ?? defaultLabel;
+            return (
             <button
               key={key}
               onClick={() => setMobileTab(key)}
@@ -247,7 +256,8 @@ function AppInner() {
               <Icon className="h-5 w-5" strokeWidth={mobileTab === key ? 2 : 1.5} />
               <span className="text-[10px] font-medium">{label}</span>
             </button>
-          ))}
+            );
+          })}
         </nav>
       </div>
     );
@@ -277,7 +287,9 @@ function AppInner() {
         </div>
 
         <div className="flex flex-1 flex-col items-start gap-0.5 w-full px-2">
-          {navItems.map(({ key, label, Icon }) => (
+          {navItems.map(({ key, label: defaultLabel, Icon }) => {
+            const label = navLabelOverrides[key] ?? defaultLabel;
+            return (
             <button
               key={key}
               onClick={() => setView(key)}
@@ -305,7 +317,8 @@ function AppInner() {
                 />
               )}
             </button>
-          ))}
+            );
+          })}
         </div>
 
         {/* Status indicator at bottom */}

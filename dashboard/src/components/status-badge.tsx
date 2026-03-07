@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { useVocabulary } from "@/lib/vocabulary";
 
 const statusStyles: Record<string, string> = {
   backlog: "bg-amber-500/10 text-amber-400 ring-amber-500/20",
@@ -22,6 +23,8 @@ const statusStyles: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
+  const vocab = useVocabulary();
+  const label = vocab.statusLabels[status] ?? status;
   return (
     <span
       className={cn(
@@ -29,7 +32,7 @@ export function StatusBadge({ status }: { status: string }) {
         statusStyles[status] ?? "bg-[#232019] text-[#9c9486] ring-[#2a2520]"
       )}
     >
-      {status}
+      {label}
     </span>
   );
 }

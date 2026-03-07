@@ -3,6 +3,7 @@ import { useTasks, useStatus, retryAllFailed } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { isActiveStatus, repoName } from "@/lib/types";
 import { useUIMode } from "@/lib/ui-mode";
+import { useVocabulary } from "@/lib/vocabulary";
 import { StatusBadge } from "./status-badge";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   const { data: tasks } = useTasks();
   const { data: status } = useStatus();
   const queryClient = useQueryClient();
+  const vocab = useVocabulary();
   const multiRepo = (status?.watched_repos?.length ?? 0) > 1;
   const [retryingAll, setRetryingAll] = useState(false);
 
@@ -31,7 +33,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
     <div className="flex h-full flex-col">
       {/* Stats row */}
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[#2a2520] px-4">
-        {(status?.failed_tasks ?? 0) > 0 && (
+        {!vocab.hideRetryAll && (status?.failed_tasks ?? 0) > 0 && (
           <button
             onClick={async () => {
               setRetryingAll(true);
@@ -50,7 +52,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
           </button>
         )}
         <span className="ml-auto rounded-full bg-amber-500/[0.06] px-2.5 py-0.5 text-[11px] tabular-nums text-[#9c9486]">
-          {filtered?.length ?? 0} tasks
+          {filtered?.length ?? 0} {vocab.taskPlural}
         </span>
       </div>
 
@@ -98,6 +100,7 @@ function TaskRow({
   onClick: () => void;
 }) {
   const { mode: uiMode } = useUIMode();
+  const vocab = useVocabulary();
   const isMinimal = uiMode === "minimal";
   const isStuck = task.attempt >= 3 && isActive;
 
@@ -128,7 +131,7 @@ function TaskRow({
       </div>
       <div className="flex items-center gap-2 pl-[32px]">
         <span className="flex-1 truncate text-[13px] text-[#e8e0d4]">{task.title}</span>
-        {!isMinimal && task.attempt > 0 && (
+        {!isMinimal && !vocab.hideAttemptCount && task.attempt > 0 && (
           <span className={cn("shrink-0 font-mono text-[11px]", isStuck ? "text-red-400/80" : "text-[#6b6459]")}>
             {task.attempt}/{task.max_attempts}
           </span>

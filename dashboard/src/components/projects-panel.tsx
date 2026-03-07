@@ -26,6 +26,7 @@ import { Eye, FileText, ArrowLeft, Search, RotateCw, Folder, Upload, X } from "l
 import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
 import type { ProjectFile, ProjectDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useVocabulary } from "@/lib/vocabulary";
 import { MatterDetail } from "./matter-detail";
 import { MarkdownLegalViewer } from "./viewers/markdown-legal-viewer";
 import { RedlineViewer } from "./viewers/redline-viewer";
@@ -109,6 +110,7 @@ function DocumentViewWrapper({
   defaultTemplateId?: number | null;
 }) {
   const { data: versions = [] } = useProjectDocumentVersions(projectId, doc.task_id, doc.file_name);
+  const vocab = useVocabulary();
 
   return (
     <div className="flex h-full flex-col">
@@ -118,7 +120,7 @@ function DocumentViewWrapper({
           className="flex items-center gap-1.5 text-[12px] text-zinc-400 hover:text-zinc-200 transition-colors"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          Back to matter
+          Back to {vocab.projectSingular}
         </button>
         <span className="text-[12px] text-zinc-600">·</span>
         <span className="truncate text-[12px] text-zinc-400">{doc.file_name}</span>
@@ -162,6 +164,7 @@ export function ProjectsPanel() {
   const { data: status } = useStatus();
   const { data: modes = [] } = useModes();
   const { data: settings } = useSettings();
+  const vocab = useVocabulary();
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [ftsQuery, setFtsQuery] = useState("");
@@ -712,7 +715,7 @@ async function uploadChunkQueue(
       <div className="w-[270px] shrink-0 border-r border-[#2a2520] bg-[#0f0e0c] p-4">
         <div className="mb-3 flex items-center justify-between">
           <span className="text-[12px] font-semibold uppercase tracking-wide text-[#6b6459]">
-            Projects
+            {vocab.projectsLabel}
           </span>
           {jurisdictions.length > 0 && (
             <select
@@ -763,7 +766,7 @@ async function uploadChunkQueue(
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter projects..."
+            placeholder={`Filter ${vocab.projectPlural}...`}
             className="mb-3 w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
         )}
@@ -788,7 +791,7 @@ async function uploadChunkQueue(
           {projects.length === 0 && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#2a2520] px-4 py-6 text-center">
               <Folder className="h-6 w-6 text-[#6b6459] mb-2" />
-              <div className="text-[12px] text-[#9c9486]">No projects yet</div>
+              <div className="text-[12px] text-[#9c9486]">No {vocab.projectPlural} yet</div>
               <div className="text-[11px] text-[#6b6459] mt-0.5">Create one below to get started</div>
             </div>
           )}
@@ -800,7 +803,7 @@ async function uploadChunkQueue(
             value={newProjectName}
             onChange={(e) => setNewProjectName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
-            placeholder="New project name"
+            placeholder={vocab.newProjectPlaceholder}
             className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
           {!isLegalMode && (
@@ -832,7 +835,7 @@ async function uploadChunkQueue(
             disabled={creating || !newProjectName.trim()}
             className="mt-2.5 w-full rounded-lg bg-amber-500/20 px-3 py-2.5 text-[13px] font-medium text-amber-300 hover:bg-amber-500/30 transition-colors disabled:cursor-not-allowed disabled:text-[#6b6459]"
           >
-            {creating ? "Creating..." : "Create Project"}
+            {creating ? "Creating..." : `Create ${vocab.projectSingular[0].toUpperCase()}${vocab.projectSingular.slice(1)}`}
           </button>
         </div>
       </div>
@@ -846,12 +849,12 @@ async function uploadChunkQueue(
               </div>
               <div className="text-[16px] font-semibold text-[#e8e0d4]">Get Started</div>
               <div className="mt-2 text-[13px] leading-relaxed text-[#9c9486]">
-                Create a project in the sidebar to start. Each project gets its own
-                document store and can be chatted with via the Chat tab.
+                Create a {vocab.projectSingular} in the sidebar to start. Each {vocab.projectSingular} gets its own
+                document store and can be chatted with via the bottom bar.
               </div>
               <div className="mt-5 space-y-2.5 text-left text-[13px] text-[#9c9486]">
                 <div className="rounded-xl border border-[#2a2520] bg-[#151412] px-4 py-3">
-                  <span className="text-[#e8e0d4] font-medium">1.</span> Name your project and select a mode
+                  <span className="text-[#e8e0d4] font-medium">1.</span> Name your {vocab.projectSingular} and select a mode
                 </div>
                 <div className="rounded-xl border border-[#2a2520] bg-[#151412] px-4 py-3">
                   <span className="text-[#e8e0d4] font-medium">2.</span> Upload reference documents
@@ -886,8 +889,7 @@ async function uploadChunkQueue(
                 <div>
                   <h2 className="text-[20px] font-semibold text-[#e8e0d4]">{selectedProject.name}</h2>
                   <p className="text-[13px] text-[#6b6459]">
-                    Project documents — scoped to this project only.
-                    Chat with these docs via the Chat tab.
+                    {vocab.projectDocsDescription}
                   </p>
                 </div>
               </div>
