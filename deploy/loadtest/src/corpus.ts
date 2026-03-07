@@ -6,24 +6,121 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 async function createZipShard(docs: GeneratedDoc[], outPath: string): Promise<number> {
-  const proc = Bun.spawn(["zip", "-j", "-q", outPath, "-"], {
-    stdin: "pipe",
-  });
-
-  // zip from stdin doesn't work well — write files to a temp dir then zip
-  const dir = await mkdtemp(join(tmpdir(), "borg-shard-"));
-  try {
-    await Promise.all(
-      docs.map((doc) => Bun.write(join(dir, doc.file_name), doc.body)),
-    );
-    const zip = Bun.spawn(["zip", "-j", "-q", outPath, ...docs.map((d) => join(dir, d.file_name))]);
-    const code = await zip.exited;
-    if (code !== 0) throw new Error(`zip failed with code ${code}`);
-    const stat = await Bun.file(outPath).stat();
-    return stat?.size ?? 0;
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+  const files: Record<string, Uint8Array> = {};
+  const encoder = new TextEncoder();
+  for (const doc of docs) {
+    files[doc.file_name] = encoder.encode(doc.body);
   }
+
+  // Build ZIP using Bun's built-in writer
+  // Bun doesn't have a native zip writer yet, so we use the standard
+  // approach: write files to a temp dir, then use tar+gzip or just
+  // send them as a multipart. Actually, let's build a minimal ZIP manually.
+  const zipBytes = buildZip(files);
+  await Bun.write(outPath, zipBytes);
+  return zipBytes.length;
+}
+
+// Minimal ZIP file builder (no compression — server handles text fine uncompressed)
+function buildZip(files: Record<string, Uint8Array>): Uint8Array {
+  const entries: { name: Uint8Array; data: Uint8Array; offset: number }[] = [];
+  const encoder = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const [name, data] of Object.entries(files)) {
+    const nameBytes = encoder.encode(name);
+    // Local file header (30 bytes + name + data)
+    const header = new ArrayBuffer(30);
+    const view = new DataView(header);
+    view.setUint32(0, 0x04034b50, true); // signature
+    view.setUint16(4, 20, true); // version needed
+    view.setUint16(6, 0, true); // flags
+    view.setUint16(8, 0, true); // compression: store
+    view.setUint16(10, 0, true); // mod time
+    view.setUint16(12, 0, true); // mod date
+    view.setUint32(14, crc32(data), true); // crc32
+    view.setUint32(18, data.length, true); // compressed size
+    view.setUint32(22, data.length, true); // uncompressed size
+    view.setUint16(26, nameBytes.length, true); // name length
+    view.setUint16(28, 0, true); // extra length
+
+    entries.push({ name: nameBytes, data, offset });
+    const headerBytes = new Uint8Array(header);
+    parts.push(headerBytes, nameBytes, data);
+    offset += headerBytes.length + nameBytes.length + data.length;
+  }
+
+  // Central directory
+  const cdStart = offset;
+  for (const entry of entries) {
+    const cd = new ArrayBuffer(46);
+    const view = new DataView(cd);
+    view.setUint32(0, 0x02014b50, true); // signature
+    view.setUint16(4, 20, true); // version made by
+    view.setUint16(6, 20, true); // version needed
+    view.setUint16(8, 0, true); // flags
+    view.setUint16(10, 0, true); // compression
+    view.setUint16(12, 0, true); // mod time
+    view.setUint16(14, 0, true); // mod date
+    view.setUint32(16, crc32(entry.data), true); // crc32
+    view.setUint32(20, entry.data.length, true); // compressed
+    view.setUint32(24, entry.data.length, true); // uncompressed
+    view.setUint16(28, entry.name.length, true); // name len
+    view.setUint16(30, 0, true); // extra len
+    view.setUint16(32, 0, true); // comment len
+    view.setUint16(34, 0, true); // disk start
+    view.setUint16(36, 0, true); // internal attrs
+    view.setUint32(38, 0, true); // external attrs
+    view.setUint32(42, entry.offset, true); // local header offset
+
+    parts.push(new Uint8Array(cd), entry.name);
+    offset += 46 + entry.name.length;
+  }
+
+  // End of central directory
+  const eocd = new ArrayBuffer(22);
+  const eocdView = new DataView(eocd);
+  eocdView.setUint32(0, 0x06054b50, true); // signature
+  eocdView.setUint16(4, 0, true); // disk number
+  eocdView.setUint16(6, 0, true); // cd disk
+  eocdView.setUint16(8, entries.length, true); // cd entries on disk
+  eocdView.setUint16(10, entries.length, true); // total cd entries
+  eocdView.setUint32(12, offset - cdStart, true); // cd size
+  eocdView.setUint32(16, cdStart, true); // cd offset
+  eocdView.setUint16(20, 0, true); // comment length
+  parts.push(new Uint8Array(eocd));
+
+  // Concatenate
+  const totalLen = parts.reduce((s, p) => s + p.length, 0);
+  const result = new Uint8Array(totalLen);
+  let pos = 0;
+  for (const part of parts) {
+    result.set(part, pos);
+    pos += part.length;
+  }
+  return result;
+}
+
+// CRC-32 (standard ZIP polynomial)
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c;
+  }
+  return table;
+})();
+
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < data.length; i++) {
+    crc = CRC_TABLE[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 async function uploadZipShard(
@@ -67,11 +164,16 @@ async function waitForSessions(
 
   while (pending.size > 0 && Date.now() < deadline) {
     for (const sessionId of [...pending]) {
-      const status = await client.getUploadSession(projectId, sessionId);
-      if (status.session.status === "done") {
-        pending.delete(sessionId);
-      } else if (status.session.status === "failed") {
-        throw new Error(`upload session ${sessionId} failed: ${status.session.error}`);
+      try {
+        const status = await client.getUploadSession(projectId, sessionId);
+        if (status.session.status === "done") {
+          pending.delete(sessionId);
+        } else if (status.session.status === "failed") {
+          throw new Error(`upload session ${sessionId} failed: ${status.session.error}`);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("failed:")) throw err;
+        // transient error, retry
       }
     }
     if (pending.size > 0) {
@@ -92,26 +194,30 @@ async function waitForIndexing(
   timeoutMs: number,
 ): Promise<{ total_files: number; text_files: number }> {
   const deadline = Date.now() + timeoutMs;
-  let lastTotal = 0;
+  let lastLog = 0;
 
   while (Date.now() < deadline) {
-    const payload = await client.getProjectFiles(projectId, 1);
-    const summary = payload.summary;
-    if (summary.total_files !== lastTotal) {
-      lastTotal = summary.total_files;
-      process.stdout.write(
-        `\r  indexed: ${summary.text_files}/${expectedFiles} files (${summary.total_files} total)`,
-      );
+    try {
+      const payload = await client.getProjectFiles(projectId, 1);
+      const summary = payload.summary;
+      if (Date.now() - lastLog > 5000) {
+        process.stdout.write(
+          `\r  indexed: ${summary.text_files}/${expectedFiles} files (${summary.total_files} total)   `,
+        );
+        lastLog = Date.now();
+      }
+      if (summary.total_files >= expectedFiles && summary.text_files >= expectedFiles) {
+        console.log(
+          `\r  indexing complete: ${summary.text_files} files indexed                    `,
+        );
+        return summary;
+      }
+    } catch {
+      // transient, retry
     }
-    if (summary.total_files >= expectedFiles && summary.text_files >= expectedFiles) {
-      console.log(
-        `\r  indexing complete: ${summary.text_files} files indexed                    `,
-      );
-      return summary;
-    }
-    await Bun.sleep(5000);
+    await Bun.sleep(3000);
   }
-  throw new Error(`timed out waiting for indexing (got ${lastTotal}/${expectedFiles})`);
+  throw new Error(`timed out waiting for indexing`);
 }
 
 export async function ingestCorpus(config: IngestConfig): Promise<{
@@ -135,7 +241,6 @@ export async function ingestCorpus(config: IngestConfig): Promise<{
   const projectId = project.id;
   console.log(`created project ${projectId}`);
 
-  // generate and upload in batches
   const genStart = Date.now();
   const sessionIds: string[] = [];
   const groundTruthDocs: GeneratedDoc[] = [];
@@ -166,13 +271,6 @@ export async function ingestCorpus(config: IngestConfig): Promise<{
       console.log(
         `  shard ${shard + 1}/${totalShards}: ${count} docs, ${(zipSize / 1024 / 1024).toFixed(1)}MB → session ${sessionId}`,
       );
-
-      // upload up to N shards concurrently
-      if (sessionIds.length % config.concurrency === 0 && sessionIds.length < totalShards) {
-        // wait for oldest batch to finish before sending more
-        const batch = sessionIds.slice(-config.concurrency);
-        await waitForSessions(client, projectId, batch, config.timeoutMs);
-      }
     }
 
     const genMs = Date.now() - genStart;
@@ -205,7 +303,6 @@ export async function ingestCorpus(config: IngestConfig): Promise<{
   }
 }
 
-// save ground truth for later test runs
 export async function saveGroundTruth(
   docs: GeneratedDoc[],
   projectId: number,
@@ -226,7 +323,6 @@ export async function loadGroundTruth(
   path: string,
 ): Promise<{ projectId: number; docs: GeneratedDoc[] }> {
   const data = JSON.parse(await Bun.file(path).text());
-  // regenerate full docs from IDs for body content
   const docs: GeneratedDoc[] = data.docs.map((d: any, i: number) => {
     const full = generateDocument(i);
     return { ...full, ...d, body: full.body };

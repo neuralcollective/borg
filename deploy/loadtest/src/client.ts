@@ -1,4 +1,12 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { SearchResult } from "./types";
+
+// Token file locations to try, in order
+const TOKEN_PATHS = [
+  resolve(import.meta.dir, "../../../store/.api-token"),
+  resolve(import.meta.dir, "../../../.local-borg-data/.api-token"),
+];
 
 export class BorgClient {
   private baseUrl: string;
@@ -9,10 +17,25 @@ export class BorgClient {
   }
 
   async authenticate(): Promise<void> {
-    const resp = await fetch(`${this.baseUrl}/api/auth/token`);
-    if (!resp.ok) throw new Error(`auth failed: ${resp.status}`);
-    const data = (await resp.json()) as { token: string };
-    this.token = data.token;
+    // try reading token from file first (auth endpoint itself requires auth)
+    for (const path of TOKEN_PATHS) {
+      if (existsSync(path)) {
+        this.token = (await Bun.file(path).text()).trim();
+        if (this.token) return;
+      }
+    }
+    // fallback: try the API endpoint (works if no auth middleware on it)
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/auth/token`, {
+        headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { token: string };
+        this.token = data.token;
+        return;
+      }
+    } catch {}
+    throw new Error("Could not authenticate — no .api-token file found and /api/auth/token failed");
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {
@@ -122,7 +145,7 @@ export class BorgClient {
     if (opts?.privileged_only) params.set("privileged_only", "true");
 
     // agent search returns plain text, web search returns JSON
-    const resp = await fetch(`${this.baseUrl}/api/documents?${params}`, {
+    const resp = await fetch(`${this.baseUrl}/api/search?${params}`, {
       headers: this.headers(),
     });
     if (!resp.ok) {

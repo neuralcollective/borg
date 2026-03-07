@@ -1645,7 +1645,7 @@ impl Db {
                 size_bytes,
                 content_hash,
                 created_at,
-                if privileged { 1 } else { 0 }
+                if privileged { 1i64 } else { 0i64 }
             ],
         )
         .context("insert_project_file")?;
@@ -1654,9 +1654,9 @@ impl Db {
              (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
              VALUES (?1, 1, ?2, ?3, 0, 0, ?4) \
              ON CONFLICT(project_id) DO UPDATE SET
-               total_files = total_files + 1,
-               total_bytes = total_bytes + excluded.total_bytes,
-               privileged_files = privileged_files + excluded.privileged_files,
+               total_files = project_corpus_stats.total_files + 1,
+               total_bytes = project_corpus_stats.total_bytes + excluded.total_bytes,
+               privileged_files = project_corpus_stats.privileged_files + excluded.privileged_files,
                updated_at = excluded.updated_at",
             params![
                 project_id,
@@ -1727,9 +1727,9 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let (project_id, old_chars): (i64, i64) = conn.query_row(
-            "SELECT project_id, length(extracted_text) FROM project_files WHERE id = ?1",
+            "SELECT project_id, COALESCE(length(extracted_text), 0)::bigint FROM project_files WHERE id = ?1",
             params![file_id],
-            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         conn.execute(
             "UPDATE project_files SET extracted_text = ?1 WHERE id = ?2",
@@ -1741,8 +1741,8 @@ impl Db {
              (project_id, total_files, total_bytes, privileged_files, text_files, text_chars, updated_at) \
              VALUES (?1, 0, 0, 0, ?2, ?3, ?4) \
              ON CONFLICT(project_id) DO UPDATE SET
-               text_files = text_files + excluded.text_files,
-               text_chars = text_chars + excluded.text_chars,
+               text_files = project_corpus_stats.text_files + excluded.text_files,
+               text_chars = project_corpus_stats.text_chars + excluded.text_chars,
                updated_at = excluded.updated_at",
             params![
                 project_id,
@@ -1813,8 +1813,8 @@ impl Db {
                 file_size,
                 chunk_size,
                 total_chunks,
-                if is_zip { 1 } else { 0 },
-                if privileged { 1 } else { 0 },
+                if is_zip { 1i64 } else { 0i64 },
+                if privileged { 1i64 } else { 0i64 },
                 now
             ],
         )
