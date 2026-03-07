@@ -96,13 +96,18 @@ impl IngestionQueue {
             Self::Sqs { queue_url, client } => (queue_url.clone(), client.clone()),
         };
 
+        let concurrency: usize = std::env::var("INGEST_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+
         loop {
             let resp = client
                 .receive_message()
                 .queue_url(&queue_url)
-                .max_number_of_messages(5)
+                .max_number_of_messages(10)
                 .wait_time_seconds(20)
-                .visibility_timeout(120)
+                .visibility_timeout(300)
                 .send()
                 .await;
             let Ok(resp) = resp else {
@@ -113,23 +118,38 @@ impl IngestionQueue {
             let Some(messages) = resp.messages else {
                 continue;
             };
-            for message in messages {
-                let body = message.body.as_deref().unwrap_or("");
-                let receipt = message.receipt_handle.as_deref().unwrap_or("");
-                if receipt.is_empty() {
-                    continue;
-                }
 
-                let processed = process_message(body, &db, &storage, search.as_deref(), Some(&*embed_client)).await;
-                if processed {
-                    let _ = client
-                        .delete_message()
-                        .queue_url(&queue_url)
-                        .receipt_handle(receipt)
-                        .send()
-                        .await;
-                }
+            let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+            let mut set = tokio::task::JoinSet::new();
+
+            for message in messages {
+                let body = message.body.unwrap_or_default();
+                let receipt = match message.receipt_handle {
+                    Some(r) if !r.is_empty() => r,
+                    _ => continue,
+                };
+                let db = Arc::clone(&db);
+                let storage = Arc::clone(&storage);
+                let search = search.clone();
+                let embed_client = Arc::clone(&embed_client);
+                let sqs_client = client.clone();
+                let queue_url = queue_url.clone();
+                let sem = Arc::clone(&sem);
+
+                set.spawn(async move {
+                    let _permit = sem.acquire().await;
+                    let processed = process_message(&body, &db, &storage, search.as_deref(), Some(&*embed_client)).await;
+                    if processed {
+                        let _ = sqs_client
+                            .delete_message()
+                            .queue_url(&queue_url)
+                            .receipt_handle(&receipt)
+                            .send()
+                            .await;
+                    }
+                });
             }
+            while set.join_next().await.is_some() {}
         }
     }
 }
@@ -211,22 +231,7 @@ async fn process_message(
             };
 
             let dim = embed_client.map(|ec| ec.dim()).unwrap_or(1024);
-            let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
-            if let Some(ec) = embed_client {
-                for chunk in &chunks_text {
-                    match ec.embed_document(chunk).await {
-                        Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
-                        Err(e) => {
-                            tracing::warn!("embedding failed for chunk: {e}");
-                            chunks_with_embeddings.push((chunk.clone(), vec![0.0; dim]));
-                        }
-                    }
-                }
-            } else {
-                for chunk in &chunks_text {
-                    chunks_with_embeddings.push((chunk.clone(), vec![0.0; dim]));
-                }
-            }
+            let chunks_with_embeddings = batch_embed_chunks(&chunks_text, embed_client, dim).await;
 
             if let Err(e) = os.index_chunks(
                 msg.project_id,
@@ -257,6 +262,36 @@ async fn process_message(
         "ingestion worker indexed file"
     );
     true
+}
+
+/// Batch-embed all chunks in as few API calls as possible (max 128 per batch for Voyage).
+pub(crate) async fn batch_embed_chunks(
+    chunks: &[String],
+    embed_client: Option<&borg_core::knowledge::EmbeddingClient>,
+    dim: usize,
+) -> Vec<(String, Vec<f32>)> {
+    const MAX_BATCH: usize = 128;
+    let Some(ec) = embed_client else {
+        return chunks.iter().map(|c| (c.clone(), vec![0.0; dim])).collect();
+    };
+    let mut result = Vec::with_capacity(chunks.len());
+    for batch in chunks.chunks(MAX_BATCH) {
+        let refs: Vec<&str> = batch.iter().map(|s| s.as_str()).collect();
+        match ec.embed(&refs, "document").await {
+            Ok(embeddings) => {
+                for (chunk, emb) in batch.iter().zip(embeddings) {
+                    result.push((chunk.clone(), emb));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("batch embedding failed ({} chunks): {e}", batch.len());
+                for chunk in batch {
+                    result.push((chunk.clone(), vec![0.0; dim]));
+                }
+            }
+        }
+    }
+    result
 }
 
 pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String {

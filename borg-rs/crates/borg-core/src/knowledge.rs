@@ -82,7 +82,7 @@ impl EmbeddingClient {
     pub fn new(base_url: &str, model: &str, api_key: Option<&str>, backend: EmbeddingBackend, dim: usize) -> Self {
         Self {
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to build HTTP client: {e}");

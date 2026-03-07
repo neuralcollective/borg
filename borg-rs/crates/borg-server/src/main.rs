@@ -785,14 +785,21 @@ async fn main() -> anyhow::Result<()> {
     });
 
     {
-        let queue = Arc::clone(&state.ingestion_queue);
-        let db = Arc::clone(&state.db);
-        let storage = Arc::clone(&state.file_storage);
-        let search = state.search.clone();
         let embed_client = Arc::new(borg_core::knowledge::EmbeddingClient::from_env());
-        tokio::spawn(async move {
-            queue.run_worker(db, storage, search, embed_client).await;
-        });
+        let worker_loops: usize = std::env::var("INGEST_WORKER_LOOPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+        for _ in 0..worker_loops {
+            let queue = Arc::clone(&state.ingestion_queue);
+            let db = Arc::clone(&state.db);
+            let storage = Arc::clone(&state.file_storage);
+            let search = state.search.clone();
+            let ec = Arc::clone(&embed_client);
+            tokio::spawn(async move {
+                queue.run_worker(db, storage, search, ec).await;
+            });
+        }
     }
 
     {

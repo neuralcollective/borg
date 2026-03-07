@@ -3441,13 +3441,9 @@ async fn chunk_embed_and_index(
         privileged,
         mime_type: mime_type.to_string(),
     };
-    let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
-    for chunk in &chunks_text {
-        match embed_client.embed_document(chunk).await {
-            Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
-            Err(_) => chunks_with_embeddings.push((chunk.clone(), embed_client.zero_embedding())),
-        }
-    }
+    let chunks_with_embeddings = crate::ingestion::batch_embed_chunks(
+        &chunks_text, Some(embed_client), embed_client.dim(),
+    ).await;
     if let Err(e) = search
         .index_chunks(project_id, file_id, file_path, title, &chunks_with_embeddings, &metadata)
         .await
