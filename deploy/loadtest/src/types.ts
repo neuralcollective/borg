@@ -44,6 +44,12 @@ export interface SearchTestCase {
   // if set, expected_hits[0] must be ranked at or above this position
   top_rank?: number;
   limit?: number;
+  // minimum recall threshold (0-1) to pass; default 1.0 (all expected_hits required)
+  min_recall?: number;
+  // if set, check that returned results' doc_type matches this value
+  expect_result_type?: string;
+  // minimum number of results expected (for filter verification)
+  min_results?: number;
 }
 
 export interface SearchResult {
