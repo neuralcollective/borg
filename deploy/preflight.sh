@@ -97,6 +97,12 @@ else
     fail "vespa_url is required when search_backend=vespa"
   else
     ok "vespa_url configured"
+    chunk_check=$(curl -sf "${vespa_url}/search/?yql=select+*+from+project_chunk+where+true+limit+0" 2>/dev/null || true)
+    if echo "$chunk_check" | grep -q '"totalCount"'; then
+      ok "project_chunk schema active"
+    else
+      warn "project_chunk schema NOT deployed — run: just stack-up"
+    fi
   fi
 fi
 

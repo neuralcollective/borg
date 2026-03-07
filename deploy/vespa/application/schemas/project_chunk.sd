@@ -38,8 +38,9 @@ schema project_chunk {
     field mime_type type string {
       indexing: attribute | summary
     }
-    field indexed_at type string {
+    field indexed_at type long {
       indexing: attribute | summary
+      attribute: fast-search
     }
     field embedding type tensor<float>(x[768]) {
       indexing: attribute | index
@@ -72,9 +73,20 @@ schema project_chunk {
     first-phase {
       expression: bm25(title) + bm25(content) + bm25(file_path)
     }
+    match-phase {
+      attribute: project_id
+      max-hits-per-thread: 2000
+    }
     second-phase {
-      expression: bm25(title) * 2 + bm25(content) + bm25(file_path) + closeness(field, embedding) * 10
-      rerank-count: 100
+      expression: bm25(title) * 3 + bm25(content) * 2 + bm25(file_path) + closeness(field, embedding) * 10 + if(attribute(indexed_at) > 0, freshness(indexed_at).logscale * 2, 0)
+      rerank-count: 200
+    }
+  }
+
+  rank-profile legal inherits hybrid {
+    second-phase {
+      expression: bm25(title) * 4 + bm25(content) * 2 + bm25(file_path) + closeness(field, embedding) * 12 + if(attribute(indexed_at) > 0, freshness(indexed_at).logscale * 2, 0)
+      rerank-count: 200
     }
   }
 
@@ -98,5 +110,16 @@ schema project_chunk {
     summary jurisdiction {}
     summary privileged {}
     summary indexed_at {}
+  }
+
+  document-summary minimal {
+    summary project_id {}
+    summary file_id {}
+    summary chunk_index {}
+    summary file_path {}
+    summary title {}
+    summary doc_type {}
+    summary jurisdiction {}
+    summary score {}
   }
 }

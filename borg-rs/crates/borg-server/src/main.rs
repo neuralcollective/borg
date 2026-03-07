@@ -1034,6 +1034,8 @@ async fn main() -> anyhow::Result<()> {
             get(routes::get_knowledge_content),
         )
         // BorgSearch (LLM-friendly text endpoints for project document search)
+        .route("/api/borgsearch/facets", get(routes::borgsearch_facets))
+        .route("/api/borgsearch/reindex", post(routes::borgsearch_reindex))
         .route("/api/borgsearch/query", get(routes::agent_search))
         .route("/api/borgsearch/file/:id", get(routes::agent_get_file))
         .route("/api/borgsearch/files", get(routes::agent_list_files))

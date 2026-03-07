@@ -126,4 +126,22 @@ impl SearchClient {
             }
         }
     }
+
+    pub async fn document_count(&self, doc_type: &str) -> Result<i64> {
+        match self {
+            Self::Vespa(client) => client.document_count(doc_type).await,
+        }
+    }
+
+    pub async fn delete_project_chunks(&self, project_id: i64) -> Result<()> {
+        match self {
+            Self::Vespa(client) => client.delete_project_chunks(project_id).await,
+        }
+    }
+
+    pub async fn facet_counts(&self, project_id: i64, field: &str) -> Result<Vec<(String, i64)>> {
+        match self {
+            Self::Vespa(client) => client.facet_counts(project_id, field).await,
+        }
+    }
 }

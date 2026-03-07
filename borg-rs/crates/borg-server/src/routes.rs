@@ -1399,6 +1399,18 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     };
     let backup = crate::backup::backup_status_snapshot(&state.db, &state.config).await;
     let ok = storage_result.is_ok() && search_result.is_ok();
+    let mut search_info = serde_json::json!({
+        "backend": state.search.as_ref().map(|s| s.backend_name()).unwrap_or("none"),
+        "target": state.search.as_ref().map(|s| s.target()).unwrap_or_default(),
+        "healthy": search_result.is_ok(),
+        "error": search_result.err().map(|e| e.to_string()),
+    });
+    if let Some(search) = &state.search {
+        let files = search.document_count("project_file").await.unwrap_or(-1);
+        let chunks = search.document_count("project_chunk").await.unwrap_or(-1);
+        search_info["documents"] = json!(files);
+        search_info["chunks"] = json!(chunks);
+    }
     Json(json!({
         "status": if ok { "ok" } else { "degraded" },
         "storage": {
@@ -1407,12 +1419,7 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
             "healthy": storage_result.is_ok(),
             "error": storage_result.err().map(|e| e.to_string()),
         },
-        "search": {
-            "backend": state.search.as_ref().map(|s| s.backend_name()).unwrap_or("none"),
-            "target": state.search.as_ref().map(|s| s.target()).unwrap_or_default(),
-            "healthy": search_result.is_ok(),
-            "error": search_result.err().map(|e| e.to_string()),
-        },
+        "search": search_info,
         "backup": backup,
     }))
 }
@@ -1583,6 +1590,9 @@ pub(crate) async fn delete_project(
         "matter.deleted",
         &json!({ "name": project.name }),
     );
+    if let Some(search) = &state.search {
+        let _ = search.delete_project_chunks(id).await;
+    }
     state.db.delete_project(id).map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -5817,7 +5827,109 @@ pub(crate) async fn get_task_container(
     }
 }
 
+// ── BorgSearch reindex ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(crate) struct ReindexQuery {
+    project_id: Option<i64>,
+}
+
+pub(crate) async fn borgsearch_reindex(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReindexQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let search = state.search.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?.clone();
+    let db = state.db.clone();
+
+    let project_ids: Vec<i64> = if let Some(pid) = query.project_id {
+        vec![pid]
+    } else {
+        db.list_projects()
+            .map_err(internal)?
+            .into_iter()
+            .map(|p| p.id)
+            .collect()
+    };
+
+    let total_projects = project_ids.len();
+    let embed = borg_core::knowledge::EmbeddingClient::from_env();
+    tokio::spawn(async move {
+        let mut total_files = 0usize;
+        let mut total_chunks = 0usize;
+        for pid in &project_ids {
+            let files = match db.list_project_files(*pid) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("reindex: failed to list files for project {pid}: {e}");
+                    continue;
+                }
+            };
+            for file in &files {
+                if file.extracted_text.is_empty() {
+                    continue;
+                }
+                let _ = search.delete_file_chunks(*pid, file.id).await;
+                let chunks_text = borg_core::knowledge::chunk_text(&file.extracted_text);
+                if chunks_text.is_empty() {
+                    continue;
+                }
+                let metadata = crate::vespa::ChunkMetadata {
+                    doc_type: crate::ingestion::detect_doc_type(
+                        &file.file_name,
+                        &file.mime_type,
+                        &file.extracted_text,
+                    ),
+                    jurisdiction: String::new(),
+                    privileged: file.privileged,
+                    mime_type: file.mime_type.clone(),
+                };
+                let mut chunks_with_embeddings: Vec<(String, Vec<f32>)> = Vec::new();
+                for chunk in &chunks_text {
+                    match embed.embed_single(chunk).await {
+                        Ok(emb) => chunks_with_embeddings.push((chunk.clone(), emb)),
+                        Err(_) => chunks_with_embeddings.push((chunk.clone(), vec![0.0; 768])),
+                    }
+                }
+                total_chunks += chunks_with_embeddings.len();
+                if let Err(e) = search
+                    .index_chunks(*pid, file.id, &file.file_name, &file.file_name, &chunks_with_embeddings, &metadata)
+                    .await
+                {
+                    tracing::warn!("reindex: chunk indexing failed for file {}: {e}", file.id);
+                }
+                total_files += 1;
+            }
+        }
+        tracing::info!(
+            "reindex complete: {total_projects} projects, {total_files} files, {total_chunks} chunks"
+        );
+    });
+
+    Ok(Json(json!({
+        "status": "started",
+        "projects": total_projects,
+    })))
+}
+
 // ── Agent API (LLM-friendly endpoints for on-demand search) ──────────
+
+#[derive(Deserialize)]
+pub(crate) struct FacetsQuery {
+    project_id: i64,
+}
+
+pub(crate) async fn borgsearch_facets(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FacetsQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let search = state.search.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let doc_types = search.facet_counts(query.project_id, "doc_type").await.unwrap_or_default();
+    let jurisdictions = search.facet_counts(query.project_id, "jurisdiction").await.unwrap_or_default();
+    Ok(Json(json!({
+        "doc_types": doc_types.into_iter().map(|(v, c)| json!({"value": v, "count": c})).collect::<Vec<_>>(),
+        "jurisdictions": jurisdictions.into_iter().map(|(v, c)| json!({"value": v, "count": c})).collect::<Vec<_>>(),
+    })))
+}
 
 #[derive(Deserialize)]
 pub(crate) struct AgentSearchQuery {
@@ -5859,6 +5971,10 @@ pub(crate) async fn agent_search(
 
         match search.search_chunks(&query.q, emb_ref, query.project_id, &filters, limit).await {
             Ok(hits) if !hits.is_empty() => {
+                // Deduplicate: keep best chunk per file
+                let mut seen_files: HashSet<i64> = HashSet::new();
+                let hits: Vec<_> = hits.into_iter().filter(|h| seen_files.insert(h.file_id)).collect();
+
                 let mut out = format!("Search results for: {}\n", query.q);
                 if let Some(dt) = &query.doc_type {
                     out.push_str(&format!("Filter: doc_type={}\n", dt));

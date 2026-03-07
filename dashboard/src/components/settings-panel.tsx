@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import {
   useSettings,
   useStatus,
+  useHealth,
   updateSettings,
   useRepos,
   setRepoBackend,
@@ -45,6 +46,7 @@ export function SettingsPanel() {
   const { user } = useAuth();
   const { data: settings, isLoading } = useSettings();
   const { data: status } = useStatus();
+  const { data: health } = useHealth();
   const { mode: uiMode, setMode: setUIMode } = useUIMode();
   const { theme, toggle: toggleTheme } = useTheme();
   const queryClient = useQueryClient();
@@ -537,6 +539,14 @@ export function SettingsPanel() {
               <InfoRow label="Active Tasks" value={String(status?.active_tasks ?? 0)} />
               <InfoRow label="Total Tasks" value={String(status?.total_tasks ?? 0)} />
             </Section>
+            {health?.search && (
+              <Section title="BorgSearch">
+                <InfoRow label="Status" value={(health.search as Record<string, unknown>).healthy ? "Healthy" : "Unhealthy"} />
+                <InfoRow label="Backend" value={String((health.search as Record<string, unknown>).backend ?? "none")} />
+                <InfoRow label="Indexed Documents" value={String((health.search as Record<string, unknown>).documents ?? "--")} />
+                <InfoRow label="Indexed Chunks" value={String((health.search as Record<string, unknown>).chunks ?? "--")} />
+              </Section>
+            )}
           </>
         )}
 

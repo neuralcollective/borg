@@ -4,6 +4,55 @@ use serde_json::{json, Value};
 
 use crate::search::{ChunkSearchHit, SearchHit};
 
+fn expand_legal_query(query: &str) -> String {
+    static SYNONYMS: &[&[&str]] = &[
+        &["statute", "law", "legislation", "act", "enactment"],
+        &["plaintiff", "claimant", "petitioner", "complainant"],
+        &["defendant", "respondent", "accused"],
+        &["contract", "agreement", "covenant"],
+        &["breach", "violation", "infringement"],
+        &["liability", "obligation", "responsibility"],
+        &["indemnification", "indemnity", "hold harmless"],
+        &["termination", "cancellation", "rescission"],
+        &["jurisdiction", "venue", "forum"],
+        &["damages", "compensation", "remedy", "relief"],
+        &["negligence", "carelessness", "fault"],
+        &["arbitration", "mediation", "dispute resolution", "adr"],
+        &["confidential", "proprietary", "trade secret", "nda"],
+        &["intellectual property", "ip", "patent", "trademark", "copyright"],
+        &["amendment", "modification", "addendum", "supplement"],
+        &["warranty", "guarantee", "representation"],
+        &["injunction", "restraining order", "tro"],
+        &["subpoena", "summons", "citation"],
+        &["deposition", "testimony", "interrogatory"],
+        &["privilege", "attorney-client", "work product"],
+        &["fiduciary", "trustee", "duty of care"],
+        &["force majeure", "act of god", "unforeseen circumstances"],
+        &["assignment", "transfer", "novation"],
+        &["severability", "separability"],
+        &["governing law", "choice of law", "applicable law"],
+    ];
+
+    let lower = query.to_lowercase();
+    let mut expanded_terms: Vec<String> = vec![query.to_string()];
+    for group in SYNONYMS {
+        for &term in *group {
+            if lower.contains(term) {
+                for &synonym in *group {
+                    if synonym != term && !lower.contains(synonym) {
+                        expanded_terms.push(synonym.to_string());
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if expanded_terms.len() == 1 {
+        return query.to_string();
+    }
+    expanded_terms.join(" ")
+}
+
 #[derive(Default, Clone)]
 pub struct ChunkMetadata {
     pub doc_type: String,
@@ -96,6 +145,25 @@ impl VespaClient {
         Ok(())
     }
 
+    pub async fn document_count(&self, doc_type: &str) -> Result<i64> {
+        let yql = format!("select * from {doc_type} where true");
+        let resp = self
+            .http
+            .post(format!("{}/search/", self.base_url))
+            .json(&json!({
+                "yql": yql,
+                "hits": 0,
+            }))
+            .send()
+            .await
+            .context("vespa document_count request failed")?;
+        if !resp.status().is_success() {
+            return Ok(-1);
+        }
+        let json: Value = resp.json().await?;
+        Ok(json["root"]["fields"]["totalCount"].as_i64().unwrap_or(0))
+    }
+
     pub async fn index_document(
         &self,
         doc_id: &str,
@@ -147,7 +215,7 @@ impl VespaClient {
             .post(format!("{}/search/", self.base_url))
             .json(&json!({
                 "yql": yql,
-                "query": query,
+                "query": expand_legal_query(query),
                 "hits": limit.max(1),
                 "ranking.profile": "default",
                 "presentation.summary": "default"
@@ -192,42 +260,68 @@ impl VespaClient {
         chunks: &[(String, Vec<f32>)],
         metadata: &ChunkMetadata,
     ) -> Result<()> {
-        let now = chrono::Utc::now().to_rfc3339();
-        for (chunk_index, (chunk_text, embedding)) in chunks.iter().enumerate() {
-            let doc_id = format!("p{project_id}-f{file_id}-c{chunk_index}");
-            let url = format!(
-                "{}/document/v1/{}/project_chunk/docid/{}",
-                self.base_url,
-                self.namespace,
-                Self::percent_encode(&doc_id),
-            );
-            let body = json!({
-                "fields": {
-                    "project_id": project_id,
-                    "file_id": file_id,
-                    "chunk_index": chunk_index,
-                    "file_path": file_path,
-                    "title": title,
-                    "content": chunk_text,
-                    "doc_type": metadata.doc_type,
-                    "jurisdiction": metadata.jurisdiction,
-                    "privileged": metadata.privileged,
-                    "mime_type": metadata.mime_type,
-                    "indexed_at": &now,
-                    "embedding": { "values": embedding },
+        let now = chrono::Utc::now().timestamp_millis();
+        const BATCH_SIZE: usize = 10;
+
+        let all_ops: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(chunk_index, (chunk_text, embedding))| {
+                let doc_id = format!("p{project_id}-f{file_id}-c{chunk_index}");
+                let url = format!(
+                    "{}/document/v1/{}/project_chunk/docid/{}",
+                    self.base_url,
+                    self.namespace,
+                    Self::percent_encode(&doc_id),
+                );
+                let body = json!({
+                    "fields": {
+                        "project_id": project_id,
+                        "file_id": file_id,
+                        "chunk_index": chunk_index,
+                        "file_path": file_path,
+                        "title": title,
+                        "content": chunk_text,
+                        "doc_type": metadata.doc_type,
+                        "jurisdiction": metadata.jurisdiction,
+                        "privileged": metadata.privileged,
+                        "mime_type": metadata.mime_type,
+                        "indexed_at": now,
+                        "embedding": { "values": embedding },
+                    }
+                });
+                (doc_id, url, body)
+            })
+            .collect();
+
+        for batch in all_ops.chunks(BATCH_SIZE) {
+            let mut set = tokio::task::JoinSet::new();
+            for (doc_id, url, body) in batch {
+                let client = self.http.clone();
+                let url = url.clone();
+                let body = body.clone();
+                let doc_id = doc_id.clone();
+                set.spawn(async move {
+                    let resp = client.put(&url).json(&body).send().await;
+                    match resp {
+                        Ok(r) if r.status().is_success() => Ok(()),
+                        Ok(r) => {
+                            let status = r.status();
+                            let text = r.text().await.unwrap_or_default();
+                            Err(anyhow::anyhow!(
+                                "chunk feed failed for {doc_id} ({status}): {text}"
+                            ))
+                        }
+                        Err(e) => {
+                            Err(anyhow::anyhow!("chunk feed failed for {doc_id}: {e}"))
+                        }
+                    }
+                });
+            }
+            while let Some(result) = set.join_next().await {
+                if let Ok(Err(e)) = result {
+                    tracing::warn!("{e}");
                 }
-            });
-            let resp = self
-                .http
-                .put(&url)
-                .json(&body)
-                .send()
-                .await
-                .with_context(|| format!("vespa chunk feed failed for {doc_id}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("vespa chunk feed failed for {doc_id} ({status}): {text}");
             }
         }
         Ok(())
@@ -254,6 +348,72 @@ impl VespaClient {
             anyhow::bail!("vespa delete_file_chunks failed ({status}): {text}");
         }
         Ok(())
+    }
+
+    pub async fn delete_project_chunks(&self, project_id: i64) -> Result<()> {
+        let selection = format!("project_chunk.project_id=={project_id}");
+        let url = format!(
+            "{}/document/v1/{}/project_chunk/docid/",
+            self.base_url, self.namespace,
+        );
+        let resp = self
+            .http
+            .delete(&url)
+            .query(&[("selection", &selection), ("cluster", &"borg".to_string())])
+            .send()
+            .await
+            .context("vespa delete_project_chunks request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("vespa delete_project_chunks failed ({status}): {text}");
+        }
+        Ok(())
+    }
+
+    pub async fn facet_counts(
+        &self,
+        project_id: i64,
+        field: &str,
+    ) -> Result<Vec<(String, i64)>> {
+        let yql = format!(
+            "select * from project_chunk where project_id = {project_id} | all(group({field}) each(output(count())))"
+        );
+        let resp = self
+            .http
+            .post(format!("{}/search/", self.base_url))
+            .json(&serde_json::json!({
+                "yql": yql,
+                "hits": 0,
+            }))
+            .send()
+            .await
+            .context("vespa facet request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("vespa facet failed ({status}): {text}");
+        }
+        let json: serde_json::Value = resp.json().await?;
+        let mut results = Vec::new();
+        if let Some(root_children) = json["root"]["children"].as_array() {
+            for child in root_children {
+                if let Some(group_list) = child["children"].as_array() {
+                    for group in group_list {
+                        let value = group["value"]
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| group["value"].as_i64().map(|n| n.to_string()))
+                            .unwrap_or_default();
+                        let count = group["fields"]["count()"].as_i64().unwrap_or(0);
+                        if !value.is_empty() && count > 0 {
+                            results.push((value, count));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(results)
     }
 
     pub async fn search_chunks(
@@ -292,7 +452,7 @@ impl VespaClient {
 
         let mut request_body = json!({
             "yql": yql,
-            "query": query,
+            "query": expand_legal_query(query),
             "hits": limit.max(1),
             "ranking.profile": ranking,
             "presentation.summary": "default",

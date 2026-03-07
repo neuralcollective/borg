@@ -353,6 +353,14 @@ export function useStatus() {
   });
 }
 
+export function useHealth() {
+  return useQuery<Record<string, unknown>>({
+    queryKey: ["health"],
+    queryFn: () => fetchJson("/api/health"),
+    refetchInterval: 30000,
+  });
+}
+
 export function useProposals() {
   return useQuery<Proposal[]>({
     queryKey: ["proposals"],
