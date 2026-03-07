@@ -106,7 +106,7 @@ function FocusModal({
       <form
         onClick={(e) => e.stopPropagation()}
         onSubmit={onSubmit}
-        className="w-full max-w-md rounded-lg border border-white/[0.08] bg-zinc-900 p-5 shadow-2xl"
+        className="w-full max-w-md rounded-lg border border-[#2a2520] bg-[#1c1a17] p-5 shadow-2xl"
       >
         <div className="mb-3 flex items-center justify-between">
           <div>
@@ -126,7 +126,7 @@ function FocusModal({
           onChange={(e) => setText(e.target.value)}
           placeholder="e.g. improve pipeline error handling and observability"
           rows={3}
-          className="w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[13px] text-zinc-200 placeholder-zinc-600 outline-none focus:border-amber-500/40 resize-none"
+          className="w-full rounded-md border border-[#2a2520] bg-[#232019] px-3 py-2 text-[13px] text-[#e8e0d4] placeholder-[#6b6459] outline-none focus:border-amber-500/30 resize-none"
         />
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-[12px] text-zinc-400 hover:text-zinc-200">

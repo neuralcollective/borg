@@ -2265,7 +2265,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         self.promote_session_privilege_on_phase2_transition(task, mode, next);
         if next == "done" {
             self.read_structured_output(task);
-            self.read_task_deadlines(task);
             self.index_task_documents(task);
 
             self.db.update_task_status(task.id, "done", Some(""))?;
@@ -2405,56 +2404,6 @@ Make only the minimal changes the linter requires. Do not refactor or change log
                             trimmed.len()
                         );
                     }
-                }
-            }
-        }
-    }
-
-    fn read_task_deadlines(&self, task: &Task) {
-        if task.repo_path.is_empty() || task.project_id == 0 {
-            return;
-        }
-        let branch = format!("task-{}", task.id);
-        let path = std::path::Path::new(&task.repo_path);
-        if !path.join(".git").exists() {
-            return;
-        }
-        let out = std::process::Command::new("git")
-            .args([
-                "-C",
-                &task.repo_path,
-                "show",
-                &format!("{branch}:deadlines.json"),
-            ])
-            .stderr(std::process::Stdio::null())
-            .output();
-        if let Ok(output) = out {
-            if output.status.success() {
-                let data = String::from_utf8_lossy(&output.stdout);
-                if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(data.trim()) {
-                    for item in items {
-                        let label = item
-                            .get("label")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Deadline");
-                        let due = item
-                            .get("due_date")
-                            .or_else(|| item.get("date"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let basis = item
-                            .get("rule_basis")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if due.is_empty() {
-                            continue;
-                        }
-                        if let Err(e) = self.db.insert_deadline(task.project_id, label, due, basis)
-                        {
-                            tracing::warn!("task #{}: failed to insert deadline: {e}", task.id);
-                        }
-                    }
-                    tracing::info!("task #{}: imported deadlines from branch", task.id);
                 }
             }
         }

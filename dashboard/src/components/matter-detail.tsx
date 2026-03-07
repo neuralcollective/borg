@@ -4,21 +4,14 @@ import {
   useProjectTasks,
   useProjectFiles,
   useProjectDocuments,
-  useProjectDeadlines,
   useProjectAudit,
-  useUpdateProject,
   useDeleteProject,
   useTaskStream,
   getProjectChatMessages,
   sendProjectChat,
-  checkConflicts,
   getTaskStructuredData,
-  createDeadline,
-  updateDeadline,
-  deleteDeadline,
   uploadProjectFiles,
 } from "@/lib/api";
-import type { ConflictHit, Deadline } from "@/lib/api";
 import type { Project, ProjectTask, ProjectDocument } from "@/lib/types";
 import { StatusBadge } from "./status-badge";
 import { PhaseTracker } from "./phase-tracker";
@@ -29,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { retryTask, patchTask, approveTask, rejectTask, requestRevision, getRevisionHistory, useFullModes, useTemplates } from "@/lib/api";
 import type { RevisionHistory } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, ChevronUp, Edit2, Check, X, FileText, RotateCcw, Mic, MicOff, Trash2 } from "lucide-react";
+import { Edit2, FileText, RotateCcw, Mic, MicOff, Trash2 } from "lucide-react";
 import { useChatEvents } from "@/lib/use-chat-events";
 
 type ChatMessage = {
@@ -44,104 +37,6 @@ interface MatterDetailProps {
   projectId: number;
   onDocumentSelect?: (doc: ProjectDocument) => void;
   onDelete?: () => void;
-}
-
-// ── Inline edit field ────────────────────────────────────────────────────────
-
-function InlineField({
-  label,
-  value,
-  onSave,
-  placeholder,
-}: {
-  label: string;
-  value: string | undefined;
-  onSave: (v: string) => void;
-  placeholder?: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value ?? "");
-
-  function commit() {
-    onSave(draft);
-    setEditing(false);
-  }
-
-  function cancel() {
-    setDraft(value ?? "");
-    setEditing(false);
-  }
-
-  if (editing) {
-    return (
-      <div className="flex flex-col gap-0.5">
-        <span className="text-[11px] text-zinc-400">{label}</span>
-        <div className="flex items-center gap-1">
-          <input
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
-              if (e.key === "Escape") cancel();
-            }}
-            className="flex-1 rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
-          />
-          <button onClick={commit} className="text-emerald-400 hover:text-emerald-300 transition-colors">
-            <Check className="h-3.5 w-3.5" />
-          </button>
-          <button onClick={cancel} className="text-zinc-500 hover:text-zinc-300 transition-colors">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="group flex flex-col gap-0.5">
-      <span className="text-[11px] text-zinc-400">{label}</span>
-      <div className="flex items-center gap-1.5">
-        <span className="text-[13px] text-zinc-300">{value || <span className="text-zinc-500">{placeholder ?? "—"}</span>}</span>
-        <button
-          onClick={() => { setDraft(value ?? ""); setEditing(true); }}
-          className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-600 hover:text-zinc-400"
-        >
-          <Edit2 className="h-2.5 w-2.5" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  options,
-  onSave,
-}: {
-  label: string;
-  value: string | undefined;
-  options: string[];
-  onSave: (v: string) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] text-zinc-400">{label}</span>
-      <select
-        value={value || ""}
-        onChange={(e) => onSave(e.target.value)}
-        className="rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
-      >
-        <option value="">unset</option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt.replace(/_/g, " ")}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
 }
 
 // ── Timeline item ─────────────────────────────────────────────────────────────
@@ -181,15 +76,6 @@ function buildTimeline(tasks: ProjectTask[], docs: ProjectDocument[]): TimelineI
   return items;
 }
 
-function fmtDate(ts: string): string {
-  if (!ts) return "";
-  try {
-    return new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  } catch {
-    return ts;
-  }
-}
-
 function fmtDateTime(ts: string): string {
   if (!ts) return "";
   try {
@@ -224,7 +110,7 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportingAll, setExportingAll] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
-  const [exportTemplateId, setExportTemplateId] = useState<number | null>(project.default_template_id ?? null);
+  const [exportTemplateId, setExportTemplateId] = useState<number | null>(null);
   const { data: templates = [] } = useTemplates("template");
 
   async function exportAll(format: "pdf" | "docx") {
@@ -262,38 +148,14 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[15px] font-semibold text-zinc-100">{project.name}</h2>
-            {project.status && <StatusBadge status={project.status} />}
-            {project.session_privileged && (
-              <span className="rounded-lg bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-300">
-                privileged session
-              </span>
-            )}
-            {project.matter_type && (
-              <span className="rounded-lg bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400">
-                {project.matter_type}
-              </span>
-            )}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-zinc-400">
-            {project.case_number && (
-              <span>
-                <span className="text-zinc-500">case</span>{" "}
-                <span className="font-mono">{project.case_number}</span>
-              </span>
-            )}
-            {project.client_name && (
-              <span>
-                <span className="text-zinc-500">client</span> {project.client_name}
-              </span>
-            )}
             {project.jurisdiction && (
-              <span>
-                <span className="text-zinc-500">jurisdiction</span> {project.jurisdiction}
+              <span className="rounded-lg bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+                {project.jurisdiction}
               </span>
             )}
-            {project.deadline && (
-              <span>
-                <span className="text-zinc-500">deadline</span> {fmtDate(project.deadline)}
+            {project.mode && (
+              <span className="rounded-lg bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400">
+                {project.mode}
               </span>
             )}
           </div>
@@ -353,230 +215,6 @@ function MatterHeader({ project, onDelete }: { project: Project; onDelete?: () =
   );
 }
 
-// ── Metadata panel ────────────────────────────────────────────────────────────
-
-function MetadataPanel({ project, projectId }: { project: Project; projectId: number }) {
-  const [open, setOpen] = useState(false);
-  const [conflicts, setConflicts] = useState<ConflictHit[]>([]);
-  const { mutate: update } = useUpdateProject(projectId);
-  const { data: templates = [] } = useTemplates("template");
-
-  useEffect(() => {
-    if (!project.client_name && !project.opposing_counsel) return;
-    checkConflicts(project.client_name || "", project.opposing_counsel || "", projectId)
-      .then(setConflicts)
-      .catch(() => setConflicts([]));
-  }, [project.client_name, project.opposing_counsel, projectId]);
-
-  function save(field: keyof Project) {
-    return (value: string) => update({ [field]: value });
-  }
-
-  return (
-    <div className="border-b border-white/[0.07]">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-white/[0.02] transition-colors"
-      >
-        <span className="text-[12px] font-semibold text-zinc-400">Matter Details</span>
-        {conflicts.length > 0 && (
-          <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
-        )}
-        <span className="ml-auto text-zinc-500">
-          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-        </span>
-      </button>
-      {open && (
-        <>
-          {conflicts.length > 0 && (
-            <div className="mx-5 mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
-              <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-amber-400">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                Potential Conflict
-              </div>
-              {conflicts.map((c, i) => (
-                <p key={i} className="text-[11px] text-amber-300/80">
-                  <span className="font-medium">{c.party_name}</span>
-                  {" "}({c.party_role === "opposing_counsel" ? "opposing" : c.party_role})
-                  {" in "}<span className="font-medium">{c.project_name}</span>
-                </p>
-              ))}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4 px-5 pb-5 sm:grid-cols-3">
-            <InlineField label="Client" value={project.client_name} onSave={save("client_name")} placeholder="unset" />
-            <InlineField label="Case Number" value={project.case_number} onSave={save("case_number")} placeholder="unset" />
-            <InlineField label="Jurisdiction" value={project.jurisdiction} onSave={save("jurisdiction")} placeholder="unset" />
-            <InlineField label="Matter Type" value={project.matter_type} onSave={save("matter_type")} placeholder="unset" />
-            <InlineField label="Opposing Counsel" value={project.opposing_counsel} onSave={save("opposing_counsel")} placeholder="unset" />
-            <InlineField label="Deadline" value={project.deadline} onSave={save("deadline")} placeholder="unset" />
-            <InlineField label="Privilege Level" value={project.privilege_level} onSave={save("privilege_level")} placeholder="unset" />
-            <SelectField
-              label="Status"
-              value={project.status}
-              options={["active", "pending", "on_hold", "closed", "archived"]}
-              onSave={save("status")}
-            />
-            {templates.length > 0 && (
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[10px] text-zinc-600">Default Template</span>
-                <select
-                  value={project.default_template_id ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value ? Number(e.target.value) : null;
-                    update({ default_template_id: v });
-                  }}
-                  className="rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
-                >
-                  <option value="">none</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.file_name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Deadlines panel ──────────────────────────────────────────────────────────
-
-function deadlineUrgency(dueDate: string): "overdue" | "urgent" | "normal" {
-  const due = new Date(dueDate + "T23:59:59");
-  const now = new Date();
-  if (due < now) return "overdue";
-  const diff = due.getTime() - now.getTime();
-  if (diff < 7 * 24 * 60 * 60 * 1000) return "urgent";
-  return "normal";
-}
-
-const urgencyStyle: Record<string, string> = {
-  overdue: "border-red-500/30 bg-red-500/10 text-red-400",
-  urgent: "border-amber-500/30 bg-amber-500/10 text-amber-400",
-  normal: "border-white/[0.07] bg-white/[0.03] text-zinc-300",
-};
-
-function DeadlinesPanel({ projectId }: { projectId: number }) {
-  const { data: deadlines = [], refetch } = useProjectDeadlines(projectId);
-  const [open, setOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [newLabel, setNewLabel] = useState("");
-  const [newDate, setNewDate] = useState("");
-  const [newBasis, setNewBasis] = useState("");
-
-  const pending = deadlines.filter(d => d.status === "pending");
-  const completed = deadlines.filter(d => d.status !== "pending");
-  const hasOverdue = pending.some(d => deadlineUrgency(d.due_date) === "overdue");
-
-  async function handleAdd() {
-    if (!newLabel.trim() || !newDate.trim()) return;
-    await createDeadline(projectId, newLabel.trim(), newDate.trim(), newBasis.trim());
-    setNewLabel(""); setNewDate(""); setNewBasis(""); setAdding(false);
-    refetch();
-  }
-
-  async function handleComplete(d: Deadline) {
-    await updateDeadline(projectId, d.id, { status: "completed" });
-    refetch();
-  }
-
-  async function handleDelete(d: Deadline) {
-    await deleteDeadline(projectId, d.id);
-    refetch();
-  }
-
-  return (
-    <div className="border-b border-white/[0.07]">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-white/[0.02] transition-colors"
-      >
-        <span className="text-[12px] font-semibold text-zinc-400">Deadlines</span>
-        {pending.length > 0 && (
-          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", hasOverdue ? "bg-red-500/20 text-red-400" : "bg-zinc-700 text-zinc-400")}>
-            {pending.length}
-          </span>
-        )}
-        <span className="ml-auto text-zinc-500">
-          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-        </span>
-      </button>
-      {open && (
-        <div className="px-5 pb-5 space-y-2">
-          {pending.map(d => {
-            const urg = deadlineUrgency(d.due_date);
-            return (
-              <div key={d.id} className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px]", urgencyStyle[urg])}>
-                <button onClick={() => handleComplete(d)} className="shrink-0 opacity-60 hover:opacity-100" title="Mark complete">
-                  <Check className="h-3.5 w-3.5" />
-                </button>
-                <span className="font-medium">{d.label}</span>
-                <span className="font-mono text-[11px] opacity-70">{d.due_date}</span>
-                {d.rule_basis && <span className="text-[11px] opacity-60 truncate">{d.rule_basis}</span>}
-                <button onClick={() => handleDelete(d)} className="ml-auto shrink-0 opacity-40 hover:opacity-100 text-zinc-500 hover:text-red-400" title="Delete">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            );
-          })}
-          {completed.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {completed.map(d => (
-                <div key={d.id} className="flex items-center gap-2 rounded-lg border border-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-500 line-through">
-                  <span>{d.label}</span>
-                  <span className="font-mono">{d.due_date}</span>
-                  <button onClick={() => handleDelete(d)} className="ml-auto shrink-0 opacity-40 hover:opacity-100 hover:text-red-400" title="Delete">
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {adding ? (
-            <div className="mt-2 space-y-2 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
-              <input
-                autoFocus
-                value={newLabel}
-                onChange={e => setNewLabel(e.target.value)}
-                placeholder="Label (e.g. Motion to Dismiss)"
-                className="w-full rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 placeholder:text-zinc-500"
-              />
-              <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={newDate}
-                  onChange={e => setNewDate(e.target.value)}
-                  className="flex-1 rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40"
-                />
-                <input
-                  value={newBasis}
-                  onChange={e => setNewBasis(e.target.value)}
-                  placeholder="Rule basis (optional)"
-                  className="flex-1 rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-blue-500/40 placeholder:text-zinc-500"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={handleAdd} className="rounded-lg bg-blue-500/20 px-3 py-1 text-[12px] text-blue-300 hover:bg-blue-500/30 transition-colors">Add</button>
-                <button onClick={() => setAdding(false)} className="rounded-lg bg-zinc-700 px-3 py-1 text-[12px] text-zinc-400 hover:bg-zinc-600 transition-colors">Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setAdding(true)}
-              className="mt-1.5 text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
-            >
-              + Add deadline
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Timeline tab ──────────────────────────────────────────────────────────────
 
 function TimelineTab({ projectId }: { projectId: number }) {
@@ -594,13 +232,13 @@ function TimelineTab({ projectId }: { projectId: number }) {
   }
 
   return (
-    <div className="space-y-0 overflow-y-auto p-4">
+    <div className="space-y-0 overflow-y-auto p-5">
       {items.map((item, idx) => (
         <div key={item.id} className="flex gap-3">
           <div className="flex flex-col items-center">
             <div
               className={cn(
-                "mt-1 h-2 w-2 shrink-0 rounded-full",
+                "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
                 item.kind === "document"
                   ? "bg-blue-400/60"
                   : item.kind === "task_created"
@@ -609,12 +247,12 @@ function TimelineTab({ projectId }: { projectId: number }) {
               )}
             />
             {idx < items.length - 1 && (
-              <div className="mt-1 w-px flex-1 bg-white/[0.06]" style={{ minHeight: "24px" }} />
+              <div className="mt-1 w-px flex-1 bg-white/[0.07]" style={{ minHeight: "28px" }} />
             )}
           </div>
           <div className="pb-4 min-w-0">
-            <div className="text-[12px] font-medium text-zinc-300 truncate">{item.label}</div>
-            <div className="mt-0.5 text-[11px] text-zinc-600">
+            <div className="text-[13px] font-medium text-zinc-300 truncate">{item.label}</div>
+            <div className="mt-0.5 text-[12px] text-zinc-400">
               {item.sub} · {fmtDateTime(item.ts)}
             </div>
           </div>
@@ -628,11 +266,9 @@ function TimelineTab({ projectId }: { projectId: number }) {
 
 function DocumentsTab({
   projectId,
-  project,
   onDocumentSelect,
 }: {
   projectId: number;
-  project: Project;
   onDocumentSelect?: (doc: ProjectDocument) => void;
 }) {
   const { data: docs = [], isLoading } = useProjectDocuments(projectId);
@@ -650,7 +286,6 @@ function DocumentsTab({
   const files = filePage?.items ?? [];
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [privilegedUpload, setPrivilegedUpload] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -663,7 +298,7 @@ function DocumentsTab({
     setUploading(true);
     setUploadError(null);
     try {
-      await uploadProjectFiles(projectId, selected, { privileged: privilegedUpload });
+      await uploadProjectFiles(projectId, selected);
       setFilePageStack([{ cursor: null, offset: 0 }]);
       await refetchFiles();
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -680,14 +315,14 @@ function DocumentsTab({
   }
 
   if (isLoading || filesLoading) {
-    return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
+    return <div className="flex h-32 items-center justify-center text-[13px] text-zinc-400">Loading...</div>;
   }
 
   if (docs.length === 0 && (filePage?.summary.total_files ?? 0) === 0) {
     return (
-      <div className="space-y-2 p-4">
-        <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
-          <div className="mb-2 text-[11px] font-medium text-zinc-400">Document Intake</div>
+      <div className="space-y-3 p-4">
+        <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
+          <div className="mb-2.5 text-[13px] font-semibold text-zinc-300">Document Intake</div>
           <div className="flex items-center gap-3">
             <input
               ref={fileInputRef}
@@ -695,28 +330,15 @@ function DocumentsTab({
               multiple
               onChange={(e) => void handleUpload(e.target.files)}
               disabled={uploading}
-              className="block w-full text-[11px] text-zinc-500 file:mr-2 file:rounded file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-2 file:py-1 file:text-[10px] file:text-zinc-300"
+              className="block w-full text-[12px] text-zinc-400 file:mr-3 file:rounded-lg file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-3 file:py-1.5 file:text-[12px] file:text-zinc-300"
             />
           </div>
-          <label className="mt-2 flex items-center gap-2 text-[11px] text-zinc-400">
-            <input
-              type="checkbox"
-              checked={privilegedUpload}
-              onChange={(e) => setPrivilegedUpload(e.target.checked)}
-              disabled={!project.session_privileged}
-              className="rounded"
-            />
-            Upload as privileged
-          </label>
-          {!project.session_privileged && (
-            <div className="mt-1 text-[10px] text-amber-500/80">
-              Privileged uploads unlock after this matter enters Phase 2.
-            </div>
-          )}
-          {uploadError && <div className="mt-1 text-[10px] text-red-400">{uploadError}</div>}
+          {uploadError && <div className="mt-1.5 text-[11px] text-red-400">{uploadError}</div>}
         </div>
-        <div className="flex h-24 items-center justify-center text-[12px] text-zinc-600">
-          No documents yet. Upload sources or run a task to generate drafts.
+        <div className="flex h-28 flex-col items-center justify-center text-center">
+          <FileText className="h-6 w-6 text-zinc-600 mb-2" />
+          <div className="text-[13px] text-zinc-400">No documents yet</div>
+          <div className="text-[12px] text-zinc-500 mt-0.5">Upload sources or run a task to generate drafts</div>
         </div>
       </div>
     );
@@ -724,8 +346,8 @@ function DocumentsTab({
 
   return (
     <div className="space-y-3 p-4">
-      <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
-        <div className="mb-2 text-[11px] font-medium text-zinc-400">Document Intake</div>
+      <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
+        <div className="mb-2.5 text-[13px] font-semibold text-zinc-300">Document Intake</div>
         <div className="flex items-center gap-3">
           <input
             ref={fileInputRef}
@@ -733,31 +355,16 @@ function DocumentsTab({
             multiple
             onChange={(e) => void handleUpload(e.target.files)}
             disabled={uploading}
-            className="block w-full text-[11px] text-zinc-500 file:mr-2 file:rounded file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-2 file:py-1 file:text-[10px] file:text-zinc-300"
+            className="block w-full text-[12px] text-zinc-400 file:mr-3 file:rounded-lg file:border file:border-white/[0.12] file:bg-white/[0.04] file:px-3 file:py-1.5 file:text-[12px] file:text-zinc-300"
           />
         </div>
-        <label className="mt-2 flex items-center gap-2 text-[11px] text-zinc-400">
-          <input
-            type="checkbox"
-            checked={privilegedUpload}
-            onChange={(e) => setPrivilegedUpload(e.target.checked)}
-            disabled={!project.session_privileged}
-            className="rounded"
-          />
-          Upload as privileged
-        </label>
-        {!project.session_privileged && (
-          <div className="mt-1 text-[10px] text-amber-500/80">
-            Privileged uploads unlock after this matter enters Phase 2.
-          </div>
-        )}
-        {uploadError && <div className="mt-1 text-[10px] text-red-400">{uploadError}</div>}
+        {uploadError && <div className="mt-1.5 text-[11px] text-red-400">{uploadError}</div>}
       </div>
 
       {(filePage?.summary.total_files ?? 0) > 0 && (
-        <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-[11px] font-medium text-zinc-400">
+        <div className="rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
+          <div className="mb-2.5 flex items-center justify-between gap-3">
+            <div className="text-[13px] font-semibold text-zinc-300">
               Source Files ({filePage?.summary.total_files ?? files.length})
             </div>
             <input
@@ -768,32 +375,33 @@ function DocumentsTab({
                 setFilePageStack([{ cursor: null, offset: 0 }]);
               }}
               placeholder="Filter files"
-              className="w-full max-w-xs rounded border border-white/[0.08] bg-black/20 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600"
+              className="w-full max-w-xs rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500"
             />
           </div>
-          <div className="max-h-44 space-y-1 overflow-y-auto">
+          <div className="max-h-48 space-y-1.5 overflow-y-auto">
             {files.map((f) => (
-              <div key={f.id} className="flex items-center gap-2 rounded border border-white/[0.05] px-2 py-1 text-[11px]">
+              <div key={f.id} className="flex items-center gap-2 rounded-lg border border-white/[0.07] px-3 py-2 text-[12px]">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-zinc-300">{f.file_name}</div>
                   {f.source_path && f.source_path !== f.file_name && (
-                    <div className="truncate text-[10px] text-zinc-600">{f.source_path}</div>
+                    <div className="truncate text-[11px] text-zinc-500">{f.source_path}</div>
                   )}
                 </div>
                 {f.privileged && (
-                  <span className="rounded bg-rose-500/15 px-1 py-0.5 text-[9px] text-rose-300">privileged</span>
+                  <span className="rounded-lg bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-300">privileged</span>
                 )}
-                <span className="ml-auto text-zinc-600">{Math.max(1, Math.round(f.size_bytes / 1024))} KB</span>
+                <span className="ml-auto text-zinc-500">{Math.max(1, Math.round(f.size_bytes / 1024))} KB</span>
               </div>
             ))}
             {files.length === 0 && (
-              <div className="rounded border border-dashed border-white/[0.07] px-2 py-2 text-[11px] text-zinc-600">
+              <div className="rounded-lg border border-dashed border-white/[0.07] px-3 py-3 text-[12px] text-zinc-500 text-center">
                 No files match the current filter.
               </div>
             )}
           </div>
           {filePage && filePage.total > filePage.limit && (
-            <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-600">
+            <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
               <span>
                 Showing {filePage.total === 0 ? 0 : currentFilePage.offset + 1}-{Math.min(currentFilePage.offset + files.length, filePage.total)} of {filePage.total}
               </span>
@@ -801,7 +409,7 @@ function DocumentsTab({
                 <button
                   onClick={() => setFilePageStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))}
                   disabled={filePageStack.length <= 1}
-                  className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                  className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
                 >
                   Prev
                 </button>
@@ -814,7 +422,7 @@ function DocumentsTab({
                     ]);
                   }}
                   disabled={!filePage.has_more || !filePage.next_cursor}
-                  className="rounded border border-white/[0.08] px-2 py-1 disabled:opacity-40"
+                  className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-zinc-400 disabled:opacity-40"
                 >
                   Next
                 </button>
@@ -829,18 +437,18 @@ function DocumentsTab({
         <button
           key={`${doc.task_id}-${doc.file_name}`}
           onClick={() => onDocumentSelect?.(doc)}
-          className="flex flex-col gap-1.5 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 text-left transition-colors hover:border-white/[0.1] hover:bg-white/[0.04]"
+          className="flex flex-col gap-2 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 text-left transition-colors hover:border-white/[0.12] hover:bg-white/[0.05]"
         >
           <div className="flex items-center gap-2">
-            <FileText className="h-3.5 w-3.5 shrink-0 text-blue-400/60" />
-            <span className="text-[12px] font-medium text-zinc-200 truncate">{doc.file_name}</span>
+            <FileText className="h-4 w-4 shrink-0 text-blue-400/60" />
+            <span className="text-[13px] font-medium text-zinc-200 truncate">{doc.file_name}</span>
             <StatusBadge status={doc.task_status} />
           </div>
-          <div className="text-[11px] text-zinc-600 truncate">
+          <div className="text-[12px] text-zinc-400 truncate">
             #{doc.task_id} · {doc.task_title}
           </div>
           {doc.branch && (
-            <div className="font-mono text-[10px] text-zinc-700 truncate">{doc.branch}</div>
+            <div className="font-mono text-[11px] text-zinc-500 truncate">{doc.branch}</div>
           )}
         </button>
       ))}
@@ -882,18 +490,18 @@ function TaskStreamMini({ taskId }: { taskId: number }) {
   if (!streaming && lines.length === 0) return null;
 
   return (
-    <div className="mt-2 rounded border border-white/[0.07] bg-black/30">
-      <div className="flex items-center gap-2 border-b border-white/[0.04] px-2.5 py-1.5">
+    <div className="mt-2 rounded-xl border border-white/[0.07] bg-black/30">
+      <div className="flex items-center gap-2 border-b border-white/[0.07] px-3 py-2">
         {streaming && (
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
         )}
-        <span className="text-[10px] font-medium text-zinc-500">
+        <span className="text-[11px] font-medium text-zinc-400">
           {streaming ? "Live output" : "Output"}
         </span>
       </div>
       <div
         ref={scrollRef}
-        className="max-h-[200px] overflow-y-auto p-2.5 font-mono text-[10px] leading-relaxed text-zinc-500 whitespace-pre-wrap"
+        className="max-h-[200px] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap"
       >
         {lines.length > 0 ? lines[lines.length - 1].slice(-500) : (
           <span className="text-zinc-700">Waiting for output…</span>
@@ -916,8 +524,8 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
       .finally(() => setLoading(false));
   }, [taskId]);
 
-  if (loading) return <div className="mt-2 text-[10px] text-zinc-600">Loading results…</div>;
-  if (!data) return <div className="mt-2 text-[10px] text-zinc-600">No structured data.</div>;
+  if (loading) return <div className="mt-2 text-[11px] text-zinc-500">Loading results…</div>;
+  if (!data) return <div className="mt-2 text-[11px] text-zinc-500">No structured data.</div>;
 
   const summary = data.summary as string | undefined;
   const riskFlags = data.risk_flags as { severity: string; issue: string; section?: string; recommendation?: string }[] | undefined;
@@ -941,17 +549,17 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
   };
 
   return (
-    <div className="mt-2 rounded border border-white/[0.07] bg-black/20 p-3 space-y-3">
+    <div className="mt-2 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 space-y-3">
       {summary && (
-        <p className="text-[11px] text-zinc-300 leading-relaxed">{summary}</p>
+        <p className="text-[12px] text-zinc-300 leading-relaxed">{summary}</p>
       )}
 
       {parties && parties.length > 0 && (
         <div>
-          <div className="text-[10px] font-medium text-zinc-500 mb-1">Parties</div>
+          <div className="text-[11px] font-semibold text-zinc-400 mb-1.5">Parties</div>
           <div className="flex flex-wrap gap-1.5">
             {parties.map((p, i) => (
-              <span key={i} className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-zinc-300">{p}</span>
+              <span key={i} className="rounded-lg bg-white/[0.06] px-2 py-0.5 text-[11px] text-zinc-300">{p}</span>
             ))}
           </div>
         </div>
@@ -959,10 +567,10 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
 
       {keyObligations && keyObligations.length > 0 && (
         <div>
-          <div className="text-[10px] font-medium text-zinc-500 mb-1">Key Obligations</div>
+          <div className="text-[11px] font-semibold text-zinc-400 mb-1.5">Key Obligations</div>
           <div className="space-y-1">
             {keyObligations.map((o, i) => (
-              <div key={i} className="rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+              <div key={i} className="rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px]">
                 <span className="text-zinc-400 font-medium">{o.party}</span>
                 <span className="text-zinc-500"> — </span>
                 <span className="text-zinc-300">{o.obligation}</span>
@@ -975,10 +583,10 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
 
       {riskFlags && riskFlags.length > 0 && (
         <div>
-          <div className="text-[10px] font-medium text-zinc-500 mb-1">Risk Flags</div>
+          <div className="text-[11px] font-semibold text-zinc-400 mb-1.5">Risk Flags</div>
           <div className="space-y-1">
             {riskFlags.map((r, i) => (
-              <div key={i} className={cn("rounded border px-2 py-1.5 text-[10px]", severityColor[r.severity] || severityColor.low)}>
+              <div key={i} className={cn("rounded-lg border px-2.5 py-2 text-[11px]", severityColor[r.severity] || severityColor.low)}>
                 <div className="flex items-center gap-1.5">
                   <span className="font-medium uppercase text-[9px]">{r.severity}</span>
                   <span className="text-zinc-300">{r.issue}</span>
@@ -993,10 +601,10 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
 
       {regulations && regulations.length > 0 && (
         <div>
-          <div className="text-[10px] font-medium text-zinc-500 mb-1">Regulations</div>
+          <div className="text-[11px] font-semibold text-zinc-400 mb-1.5">Regulations</div>
           <div className="space-y-1">
             {regulations.map((r, i) => (
-              <div key={i} className="flex items-center gap-2 rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+              <div key={i} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px]">
                 <span className="text-zinc-300 font-medium">{r.name}</span>
                 {r.jurisdiction && <span className="text-zinc-500">{r.jurisdiction}</span>}
                 {r.status && <span className="ml-auto text-zinc-500">{r.status}</span>}
@@ -1008,10 +616,10 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
 
       {complianceItems && complianceItems.length > 0 && (
         <div>
-          <div className="text-[10px] font-medium text-zinc-500 mb-1">Compliance</div>
+          <div className="text-[11px] font-semibold text-zinc-400 mb-1.5">Compliance</div>
           <div className="space-y-1">
             {complianceItems.map((c, i) => (
-              <div key={i} className="rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+              <div key={i} className="rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px]">
                 <div className="flex items-center gap-2">
                   <span className={cn("font-medium", complianceColor[c.status] || "text-zinc-500")}>
                     {c.status === "compliant" ? "✓" : c.status === "non_compliant" ? "✗" : "○"}
@@ -1028,10 +636,10 @@ function StructuredDataPanel({ taskId }: { taskId: number }) {
 
       {deadlines && deadlines.length > 0 && (
         <div>
-          <div className="text-[10px] font-medium text-zinc-500 mb-1">Deadlines</div>
+          <div className="text-[11px] font-semibold text-zinc-400 mb-1.5">Deadlines</div>
           <div className="space-y-1">
             {deadlines.map((d, i) => (
-              <div key={i} className="flex items-center gap-2 rounded bg-white/[0.03] px-2 py-1.5 text-[10px]">
+              <div key={i} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px]">
                 <span className="font-mono text-zinc-400">{d.date}</span>
                 <span className="text-zinc-300">{d.description}</span>
                 {d.authority && <span className="ml-auto text-zinc-500">{d.authority}</span>}
@@ -1064,13 +672,14 @@ function TasksTab({ projectId }: { projectId: number }) {
   const [editDesc, setEditDesc] = useState("");
 
   if (isLoading) {
-    return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
+    return <div className="flex h-32 items-center justify-center text-[13px] text-zinc-400">Loading...</div>;
   }
 
   if (tasks.length === 0) {
     return (
-      <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">
-        No tasks linked to this matter.
+      <div className="flex h-32 flex-col items-center justify-center text-center">
+        <FileText className="h-6 w-6 text-zinc-600 mb-2" />
+        <div className="text-[13px] text-zinc-400">No tasks linked to this matter</div>
       </div>
     );
   }
@@ -1078,9 +687,9 @@ function TasksTab({ projectId }: { projectId: number }) {
   const totalSecs = tasks.reduce((sum, t) => sum + (t.duration_secs ?? 0), 0);
 
   return (
-    <div className="space-y-2 p-4">
+    <div className="space-y-2.5 p-4">
       {totalSecs > 0 && (
-        <div className="text-[11px] text-zinc-500 pb-1">
+        <div className="text-[12px] text-zinc-400 pb-1">
           Total time: <span className="text-zinc-300">{formatDuration(totalSecs)}</span>
           {" · "}{tasks.filter(t => t.duration_secs != null).length} tracked
         </div>
@@ -1103,16 +712,16 @@ function TasksTab({ projectId }: { projectId: number }) {
           <div
             key={task.id}
             className={cn(
-              "rounded-lg border p-3",
+              "rounded-xl border p-4",
               isHumanReview
                 ? "border-emerald-500/20 bg-emerald-500/[0.03]"
-                : "border-white/[0.07] bg-white/[0.02]"
+                : "border-white/[0.07] bg-white/[0.03]"
             )}
           >
             <div className="flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-[10px] text-zinc-600">#{task.id}</span>
+                  <span className="font-mono text-[11px] text-zinc-500">#{task.id}</span>
                   <StatusBadge status={task.status} />
                   {isHumanReview && (
                     <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-400">
@@ -1141,16 +750,16 @@ function TasksTab({ projectId }: { projectId: number }) {
                     </span>
                   )}
                 </div>
-                <div className="mt-1 text-[12px] font-medium text-zinc-200">{task.title}</div>
+                <div className="mt-1 text-[13px] font-medium text-zinc-200">{task.title}</div>
                 {task.description && (
-                  <div className="mt-0.5 line-clamp-2 text-[11px] text-zinc-600">{task.description}</div>
+                  <div className="mt-0.5 line-clamp-2 text-[12px] text-zinc-400">{task.description}</div>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {(task.status === "done" || task.status === "merged") && (
                   <button
                     onClick={() => setExpandedResults(expandedResults === task.id ? null : task.id)}
-                    className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-emerald-500/30 hover:text-emerald-400 transition-colors"
+                    className="flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] text-zinc-400 hover:border-emerald-500/30 hover:text-emerald-400 transition-colors"
                   >
                     {expandedResults === task.id ? "Hide" : "Results"}
                   </button>
@@ -1158,7 +767,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                 {(task.status === "done" || task.status === "merged" || isHumanReview) && (
                   <button
                     onClick={() => setCitationsId(citationsId === task.id ? null : task.id)}
-                    className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-blue-500/30 hover:text-blue-400 transition-colors"
+                    className="flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 transition-colors"
                   >
                     {citationsId === task.id ? "Hide" : "Citations"}
                   </button>
@@ -1166,7 +775,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                 {(task.revision_count ?? 0) > 0 && (
                   <button
                     onClick={() => setRevisionsId(revisionsId === task.id ? null : task.id)}
-                    className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-amber-500/60 hover:border-amber-500/30 hover:text-amber-400 transition-colors"
+                    className="flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] text-amber-500/60 hover:border-amber-500/30 hover:text-amber-400 transition-colors"
                   >
                     {revisionsId === task.id ? "Hide" : `Revisions (${task.revision_count})`}
                   </button>
@@ -1174,7 +783,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                 {isActive && (
                   <button
                     onClick={() => setExpandedStream(expandedStream === task.id ? null : task.id)}
-                    className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-blue-500/30 hover:text-blue-400 transition-colors"
+                    className="flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 transition-colors"
                   >
                     {expandedStream === task.id ? "Hide" : "Stream"}
                   </button>
@@ -1189,7 +798,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                           setEditingId(task.id);
                         }
                       }}
-                      className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[10px] text-zinc-500 hover:border-amber-500/30 hover:text-amber-400 transition-colors"
+                      className="flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] text-zinc-400 hover:border-amber-500/30 hover:text-amber-400 transition-colors"
                     >
                       <Edit2 className="h-3 w-3" />
                       Edit
@@ -1209,7 +818,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                         }
                       }}
                       disabled={retryingId === task.id}
-                      className="flex items-center gap-1 rounded border border-white/[0.08] px-2 py-1 text-[11px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-50 transition-colors"
+                      className="flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[12px] text-zinc-400 hover:border-blue-500/30 hover:text-blue-400 disabled:opacity-50 transition-colors"
                     >
                       <RotateCcw className="h-3 w-3" />
                       {retryingId === task.id ? "…" : "Retry"}
@@ -1219,27 +828,27 @@ function TasksTab({ projectId }: { projectId: number }) {
               </div>
             </div>
             {editingId === task.id && (
-              <div className="mt-2 space-y-1.5 rounded border border-amber-500/20 bg-amber-500/5 p-2">
+              <div className="mt-2.5 space-y-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
                 <input
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[12px] text-zinc-200 outline-none focus:border-amber-500/40"
+                  className="w-full rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[13px] text-zinc-200 outline-none focus:border-amber-500/40"
                   placeholder="Title"
                 />
                 <textarea
                   value={editDesc}
                   onChange={(e) => setEditDesc(e.target.value)}
                   rows={4}
-                  className="w-full rounded border border-white/[0.08] bg-black/30 px-2 py-1 text-[11px] text-zinc-300 outline-none focus:border-amber-500/40 resize-y"
+                  className="w-full rounded-lg border border-white/[0.08] bg-black/30 px-3 py-1.5 text-[12px] text-zinc-300 outline-none focus:border-amber-500/40 resize-y"
                   placeholder="Description / instructions"
                 />
               </div>
             )}
             {/* Human review panel */}
             {isHumanReview && (
-              <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] p-3 space-y-2">
+              <div className="mt-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4 space-y-2.5">
                 {reviewPhaseInstruction && (
-                  <div className="text-[11px] text-emerald-400/70 leading-relaxed">
+                  <div className="text-[12px] text-emerald-400/70 leading-relaxed">
                     {reviewPhaseInstruction}
                   </div>
                 )}
@@ -1249,13 +858,13 @@ function TasksTab({ projectId }: { projectId: number }) {
                       await approveTask(task.id);
                       queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
                     }}
-                    className="rounded-md bg-emerald-500/15 px-3 py-1.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                    className="rounded-lg bg-emerald-500/15 px-3 py-1.5 text-[12px] font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
                   >
                     Approve
                   </button>
                   <button
                     onClick={() => setReviewingId(reviewingId === task.id ? null : task.id)}
-                    className="rounded-md bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+                    className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-[12px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
                   >
                     Request Revision
                   </button>
@@ -1266,7 +875,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                         queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
                       }
                     }}
-                    className="rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 transition-colors"
+                    className="rounded-lg bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-400 hover:bg-red-500/20 transition-colors"
                   >
                     Reject
                   </button>
@@ -1277,7 +886,7 @@ function TasksTab({ projectId }: { projectId: number }) {
                       value={revisionFeedback}
                       onChange={(e) => setRevisionFeedback(e.target.value)}
                       rows={3}
-                      className="w-full rounded-md border border-amber-500/20 bg-black/30 px-2.5 py-1.5 text-[11px] text-zinc-200 outline-none focus:border-amber-500/40 resize-y placeholder:text-zinc-600"
+                      className="w-full rounded-xl border border-amber-500/20 bg-black/30 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-amber-500/40 resize-y placeholder:text-zinc-500"
                       placeholder="Describe what needs to change..."
                     />
                     <div className="flex items-center gap-2">
@@ -1290,13 +899,13 @@ function TasksTab({ projectId }: { projectId: number }) {
                           queryClient.invalidateQueries({ queryKey: ["project_tasks", projectId] });
                         }}
                         disabled={!revisionFeedback.trim()}
-                        className="rounded-md bg-amber-500/15 px-3 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/25 disabled:opacity-40 transition-colors"
+                        className="rounded-lg bg-amber-500/15 px-3 py-1.5 text-[12px] font-medium text-amber-400 hover:bg-amber-500/25 disabled:opacity-40 transition-colors"
                       >
                         Send Revision Request
                       </button>
                       <button
                         onClick={() => { setReviewingId(null); setRevisionFeedback(""); }}
-                        className="text-[11px] text-zinc-600 hover:text-zinc-400"
+                        className="text-[12px] text-zinc-500 hover:text-zinc-300"
                       >
                         Cancel
                       </button>
@@ -1308,7 +917,7 @@ function TasksTab({ projectId }: { projectId: number }) {
             <div className="mt-2">
               <PhaseTracker status={task.status} mode={task.mode} />
             </div>
-            <div className="mt-1.5 text-[10px] text-zinc-600">
+            <div className="mt-2 text-[11px] text-zinc-500">
               created {fmtDateTime(task.created_at)}
               {task.attempt > 0 && ` · attempt ${task.attempt}/${task.max_attempts}`}
               {task.duration_secs != null && ` · ${formatDuration(task.duration_secs)}`}
@@ -1352,9 +961,9 @@ function CitationPanel({ taskId }: { taskId: number }) {
   };
 
   return (
-    <div className="mt-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 space-y-2">
+    <div className="mt-2 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 space-y-2.5">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium text-zinc-400">
+        <span className="text-[12px] font-semibold text-zinc-300">
           Citations {citations.length > 0 && `(${citations.length})`}
         </span>
         <button
@@ -1369,7 +978,7 @@ function CitationPanel({ taskId }: { taskId: number }) {
             }
           }}
           disabled={verifying}
-          className="rounded-md bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-400 hover:bg-blue-500/20 disabled:opacity-50 transition-colors"
+          className="rounded-lg bg-blue-500/10 px-2.5 py-1 text-[11px] text-blue-400 hover:bg-blue-500/20 disabled:opacity-50 transition-colors"
         >
           {verifying ? "Verifying..." : citations.length > 0 ? "Re-verify" : "Verify All"}
         </button>
@@ -1377,7 +986,7 @@ function CitationPanel({ taskId }: { taskId: number }) {
       {citations.length > 0 && (
         <div className="space-y-1">
           {citations.map((c) => (
-            <div key={c.id} className="flex items-start gap-2 text-[10px]">
+            <div key={c.id} className="flex items-start gap-2 text-[11px]">
               <span className={cn("shrink-0 rounded px-1.5 py-0.5 font-medium", statusColor(c.status))}>
                 {c.status}
               </span>
@@ -1409,16 +1018,16 @@ function RevisionHistoryPanel({ taskId }: { taskId: number }) {
 
   if (!history || history.rounds.length === 0) {
     return (
-      <div className="mt-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
-        <span className="text-[11px] text-zinc-600">No revision history</span>
+      <div className="mt-2 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4">
+        <span className="text-[12px] text-zinc-500">No revision history</span>
       </div>
     );
   }
 
   return (
-    <div className="mt-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 space-y-3">
+    <div className="mt-2 rounded-xl border border-white/[0.07] bg-white/[0.03] p-4 space-y-3">
       <div className="flex items-center gap-2">
-        <span className="text-[11px] font-medium text-zinc-400">
+        <span className="text-[12px] font-semibold text-zinc-300">
           Revision History
         </span>
         <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-400">
@@ -1445,7 +1054,7 @@ function RevisionHistoryPanel({ taskId }: { taskId: number }) {
               <span className="text-[7px] text-zinc-500">{round.round}</span>
             </div>
             <div className="pb-3">
-              <div className="text-[10px] font-medium text-zinc-300">
+              <div className="text-[11px] font-medium text-zinc-300">
                 {round.round === 0 ? "Initial Draft" : `Draft ${round.round + 1}`}
               </div>
               {round.feedback && (
@@ -1460,7 +1069,7 @@ function RevisionHistoryPanel({ taskId }: { taskId: number }) {
               {round.phases.length > 0 && (
                 <div className="mt-1 space-y-1">
                   {round.phases.map((p, j) => (
-                    <div key={j} className="flex items-center gap-2 text-[10px]">
+                    <div key={j} className="flex items-center gap-2 text-[11px]">
                       <span className={cn(
                         "shrink-0 rounded px-1.5 py-0.5 font-medium",
                         p.exit_code === 0 ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
@@ -1498,11 +1107,11 @@ const AUDIT_KIND_LABELS: Record<string, string> = {
 function ActivityTab({ projectId }: { projectId: number }) {
   const { data: events = [], isLoading } = useProjectAudit(projectId);
 
-  if (isLoading) return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">Loading...</div>;
-  if (events.length === 0) return <div className="flex h-32 items-center justify-center text-[12px] text-zinc-600">No activity logged yet.</div>;
+  if (isLoading) return <div className="flex h-32 items-center justify-center text-[13px] text-zinc-400">Loading...</div>;
+  if (events.length === 0) return <div className="flex h-32 flex-col items-center justify-center text-center"><FileText className="h-6 w-6 text-zinc-600 mb-2" /><div className="text-[13px] text-zinc-400">No activity logged yet</div></div>;
 
   return (
-    <div className="space-y-0 overflow-y-auto p-4">
+    <div className="space-y-0 overflow-y-auto p-5">
       {events.map((ev, idx) => {
         let detail = "";
         try {
@@ -1516,15 +1125,15 @@ function ActivityTab({ projectId }: { projectId: number }) {
         return (
           <div key={ev.id} className="flex gap-3">
             <div className="flex flex-col items-center">
-              <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-zinc-500/60" />
-              {idx < events.length - 1 && <div className="mt-1 w-px flex-1 bg-white/[0.06]" style={{ minHeight: "24px" }} />}
+              <div className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-zinc-500/60" />
+              {idx < events.length - 1 && <div className="mt-1 w-px flex-1 bg-white/[0.07]" style={{ minHeight: "28px" }} />}
             </div>
-            <div className="pb-3 min-w-0">
-              <div className="text-[11px] font-medium text-zinc-300">
+            <div className="pb-4 min-w-0">
+              <div className="text-[13px] font-medium text-zinc-300">
                 {AUDIT_KIND_LABELS[ev.kind] || ev.kind}
               </div>
-              {detail && <div className="text-[11px] text-zinc-500 truncate">{detail}</div>}
-              <div className="mt-0.5 text-[10px] text-zinc-600">
+              {detail && <div className="text-[12px] text-zinc-400 truncate">{detail}</div>}
+              <div className="mt-0.5 text-[11px] text-zinc-500">
                 {ev.actor && <span>{ev.actor} · </span>}
                 {fmtDateTime(ev.created_at)}
                 {ev.task_id && <span className="ml-1 font-mono">#{ev.task_id}</span>}
@@ -1580,27 +1189,28 @@ function ChatTab({ projectId }: { projectId: number }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-5">
         {messages.length === 0 && !sending && (
-          <div className="py-8 text-center text-[12px] text-zinc-600">
-            Chat with Borg about this matter.
+          <div className="py-12 text-center">
+            <FileText className="mx-auto h-8 w-8 text-zinc-600 mb-3" />
+            <div className="text-[14px] text-zinc-400">Chat with Borg about this matter</div>
           </div>
         )}
         {messages.map((msg, idx) => (
           <div
             key={`${msg.ts}-${msg.role}-${idx}`}
-            className={cn("mb-2 flex", msg.role === "user" ? "justify-end" : "justify-start")}
+            className={cn("mb-3 flex", msg.role === "user" ? "justify-end" : "justify-start")}
           >
             <div
               className={cn(
-                "max-w-[85%] rounded-lg px-3 py-2 text-[12px] leading-relaxed",
+                "max-w-[85%] rounded-2xl px-4 py-3 text-[14px] leading-relaxed",
                 msg.role === "user"
                   ? "bg-blue-500/[0.15] text-zinc-200"
                   : "bg-white/[0.05] text-zinc-300"
               )}
             >
               {msg.role !== "user" && (
-                <div className="mb-1 text-[10px] text-zinc-500">{msg.sender ?? "Borg"}</div>
+                <div className="mb-1.5 text-[11px] font-medium text-zinc-400">{msg.sender ?? "Borg"}</div>
               )}
               {msg.role === "user" ? (
                 <div className="whitespace-pre-wrap break-words">{msg.text}</div>
@@ -1614,7 +1224,7 @@ function ChatTab({ projectId }: { projectId: number }) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-white/[0.07] p-3">
+      <div className="shrink-0 border-t border-white/[0.07] p-4">
         <div className="flex gap-2">
           <textarea
             value={messageInput}
@@ -1627,17 +1237,17 @@ function ChatTab({ projectId }: { projectId: number }) {
             }}
             placeholder="Message Borg about this matter..."
             rows={2}
-            className="flex-1 resize-none rounded border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600"
+            className="flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[14px] text-zinc-200 outline-none placeholder:text-zinc-500"
           />
           {dictation.supported && (
             <button
               onClick={dictation.toggle}
               title={dictation.listening ? "Stop dictation" : "Start dictation"}
               className={cn(
-                "shrink-0 rounded px-2.5 py-2 transition-colors",
+                "shrink-0 rounded-lg px-3 py-2.5 transition-colors",
                 dictation.listening
                   ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                  : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06]"
               )}
             >
               {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
@@ -1646,7 +1256,7 @@ function ChatTab({ projectId }: { projectId: number }) {
           <button
             onClick={handleSend}
             disabled={sending || !messageInput.trim()}
-            className="rounded bg-blue-500/20 px-3 py-2 text-[12px] font-medium text-blue-300 disabled:cursor-not-allowed disabled:text-zinc-600"
+            className="rounded-lg bg-blue-500/20 px-4 py-2.5 text-[13px] font-medium text-blue-300 hover:bg-blue-500/30 transition-colors disabled:cursor-not-allowed disabled:text-zinc-600"
           >
             Send
           </button>
@@ -1681,7 +1291,7 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
 
   if (isLoading || !project) {
     return (
-      <div className="flex h-full items-center justify-center text-[12px] text-zinc-600">
+      <div className="flex h-full items-center justify-center text-[13px] text-zinc-400">
         Loading matter...
       </div>
     );
@@ -1690,19 +1300,16 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
   return (
     <div className="flex h-full min-h-0 flex-col">
       <MatterHeader project={project} onDelete={handleDelete} />
-      <MetadataPanel project={project} projectId={projectId} />
-      <DeadlinesPanel projectId={projectId} />
-
       <div className="shrink-0 flex gap-0 border-b border-white/[0.07] px-5">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={cn(
-              "border-b-2 px-3 py-2.5 text-[12px] font-medium transition-colors",
+              "border-b-2 px-4 py-3 text-[13px] font-medium transition-colors",
               activeTab === tab.key
                 ? "border-blue-500 text-zinc-200"
-                : "border-transparent text-zinc-500 hover:text-zinc-300"
+                : "border-transparent text-zinc-400 hover:text-zinc-200"
             )}
           >
             {tab.label}
@@ -1718,7 +1325,7 @@ export function MatterDetail({ projectId, onDocumentSelect, onDelete }: MatterDe
         )}
         {activeTab === "documents" && (
           <div className="h-full overflow-y-auto">
-            <DocumentsTab projectId={projectId} project={project} onDocumentSelect={onDocumentSelect} />
+            <DocumentsTab projectId={projectId} onDocumentSelect={onDocumentSelect} />
           </div>
         )}
         {activeTab === "tasks" && (

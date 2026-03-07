@@ -882,7 +882,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects", get(routes::list_projects))
         .route("/api/projects", post(routes::create_project))
         .route("/api/projects/search", get(routes::search_projects))
-        .route("/api/projects/conflicts", get(routes::check_conflicts))
         .route("/api/projects/:id/files", get(routes::list_project_files))
         .route(
             "/api/projects/:id/files/:file_id/content",
@@ -933,15 +932,6 @@ async fn main() -> anyhow::Result<()> {
                 .delete(routes::delete_project),
         )
         .route("/api/projects/:id/tasks", get(routes::list_project_tasks))
-        .route(
-            "/api/projects/:id/deadlines",
-            get(routes::list_project_deadlines).post(routes::create_deadline),
-        )
-        .route(
-            "/api/projects/:id/deadlines/:did",
-            put(routes::update_deadline).delete(routes::delete_deadline),
-        )
-        .route("/api/deadlines", get(routes::list_upcoming_deadlines))
         .route("/api/search", get(routes::search_documents))
         .route("/api/themes", get(routes::summarize_workspace_themes))
         .route(

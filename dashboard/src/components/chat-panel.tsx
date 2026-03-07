@@ -208,26 +208,26 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] px-5">
-        <h2 className="text-[14px] font-semibold text-zinc-100">Chat</h2>
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#2a2520] px-5">
+        <h2 className="text-[14px] font-semibold text-[#e8e0d4]">Chat</h2>
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setShowThreads(!showThreads)}
-            className="flex items-center gap-1.5 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 py-1.5 text-[12px] text-zinc-400 transition-colors hover:border-white/[0.12] hover:text-zinc-300"
+            className="flex items-center gap-1.5 rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[12px] text-[#9c9486] transition-colors hover:border-[#2a2520]/80 hover:text-[#e8e0d4]"
           >
             <span>{threadLabel(thread)}</span>
             <ChevronDown className="h-3 w-3" />
           </button>
           {showThreads && (
-            <div className="absolute right-0 top-full z-50 mt-2 min-w-[200px] overflow-hidden rounded-xl border border-white/[0.08] bg-[#141416] shadow-2xl">
+            <div className="absolute right-0 top-full z-50 mt-2 min-w-[200px] overflow-hidden rounded-xl border border-[#2a2520] bg-[#1c1a17] shadow-2xl">
               <div className="p-1.5">
                 {threads.map((t) => (
                   <button
                     key={t.id}
                     onClick={() => { setThread(t.id); setShowThreads(false); }}
                     className={cn(
-                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.05]",
-                      t.id === thread ? "bg-white/[0.05] text-zinc-100" : "text-zinc-400"
+                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-[#232019]",
+                      t.id === thread ? "bg-[#232019] text-[#e8e0d4]" : "text-[#9c9486]"
                     )}
                   >
                     <span className="truncate">{threadLabel(t.id)}</span>
@@ -235,10 +235,10 @@ export function ChatPanel() {
                   </button>
                 ))}
               </div>
-              <div className="border-t border-white/[0.06] p-1.5">
+              <div className="border-t border-[#2a2520] p-1.5">
                 <button
                   onClick={handleNewThread}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] text-blue-400 transition-colors hover:bg-blue-500/10"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] text-amber-400 transition-colors hover:bg-amber-500/10"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   New Thread
@@ -254,11 +254,11 @@ export function ChatPanel() {
         <div className="mx-auto max-w-3xl px-4 py-6">
           {messages.length === 0 && !sending && (
             <div className="flex flex-col items-center justify-center py-24 text-center">
-              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] ring-1 ring-white/[0.06]">
-                <MessageSquare className="h-6 w-6 text-zinc-600" strokeWidth={1.5} />
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#232019] ring-1 ring-[#2a2520]">
+                <MessageSquare className="h-6 w-6 text-[#6b6459]" strokeWidth={1.5} />
               </div>
-              <p className="text-[15px] font-medium text-zinc-400">Start a conversation with Borg</p>
-              <p className="mt-1.5 text-[13px] text-zinc-600">Messages are processed by the active agent</p>
+              <p className="text-[15px] font-medium text-[#9c9486]">Start a conversation with Borg</p>
+              <p className="mt-1.5 text-[13px] text-[#6b6459]">Messages are processed by the active agent</p>
             </div>
           )}
 
@@ -270,8 +270,8 @@ export function ChatPanel() {
 
           {sending && (
             <div className="mt-5 flex gap-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20 ring-1 ring-white/[0.06]">
-                <span className="text-[11px] font-bold text-violet-300">B</span>
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 ring-1 ring-white/[0.06]">
+                <span className="text-[11px] font-bold text-amber-300">B</span>
               </div>
               <div className="pt-1">
                 <BorgingIndicator />
@@ -283,9 +283,9 @@ export function ChatPanel() {
       </div>
 
       {/* Input */}
-      <div className="shrink-0 border-t border-white/[0.07] bg-[#09090b]/80 backdrop-blur-sm">
+      <div className="shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]/80 backdrop-blur-sm">
         <div className="mx-auto max-w-3xl px-4 py-4">
-          <div className="relative flex items-end gap-2 rounded-2xl border border-white/[0.1] bg-white/[0.03] px-4 py-3 transition-colors focus-within:border-white/[0.16] focus-within:bg-white/[0.04]">
+          <div className="relative flex items-end gap-2 rounded-2xl border border-[#2a2520] bg-[#1c1a17] px-4 py-3 transition-colors focus-within:border-amber-500/20 focus-within:bg-[#232019]">
             <textarea
               ref={inputRef}
               value={input}
@@ -304,7 +304,7 @@ export function ChatPanel() {
                     "rounded-lg p-2 transition-colors",
                     dictation.listening
                       ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                      : "text-zinc-600 hover:text-zinc-400 hover:bg-white/[0.06]"
+                      : "text-[#6b6459] hover:text-[#9c9486] hover:bg-[#232019]"
                   )}
                 >
                   {dictation.listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
@@ -316,8 +316,8 @@ export function ChatPanel() {
                 className={cn(
                   "rounded-lg p-2 transition-all",
                   input.trim() && !sending
-                    ? "bg-blue-500 text-white hover:bg-blue-400 shadow-lg shadow-blue-500/25"
-                    : "text-zinc-700 cursor-not-allowed"
+                    ? "bg-amber-500 text-white hover:bg-amber-400 shadow-lg shadow-amber-500/25"
+                    : "text-[#6b6459] cursor-not-allowed"
                 )}
               >
                 <Send className="h-4 w-4" />
@@ -340,11 +340,11 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1 ring-white/[0.06]",
           isUser
-            ? "bg-gradient-to-br from-blue-500/20 to-cyan-500/20"
-            : "bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20"
+            ? "bg-gradient-to-br from-amber-400/20 to-yellow-500/20"
+            : "bg-gradient-to-br from-amber-500/20 to-orange-500/20"
         )}
       >
-        <span className={cn("text-[11px] font-bold", isUser ? "text-blue-300" : "text-violet-300")}>
+        <span className={cn("text-[11px] font-bold", isUser ? "text-amber-200" : "text-amber-300")}>
           {isUser ? "U" : "B"}
         </span>
       </div>
@@ -360,8 +360,8 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
           className={cn(
             "rounded-2xl px-4 py-3 text-[14px] leading-relaxed",
             isUser
-              ? "bg-blue-500/15 text-zinc-100 rounded-br-md"
-              : "bg-white/[0.04] text-zinc-200 rounded-bl-md"
+              ? "bg-amber-500/15 text-[#e8e0d4] rounded-br-md"
+              : "bg-[#1c1a17] text-[#e8e0d4] rounded-bl-md"
           )}
         >
           {isUser ? (

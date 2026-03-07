@@ -17,16 +17,16 @@ export function PhaseTracker({ status, mode }: { status: string; mode?: string }
             {i > 0 && (
               <div className={cn(
                 "h-px w-6",
-                isDone ? "bg-zinc-500" : "bg-white/[0.06]"
+                isDone ? "bg-[#6b6459]" : "bg-white/[0.06]"
               )} />
             )}
             <div className="flex flex-col items-center gap-1.5">
               <div className={cn(
                 "flex h-5 w-5 items-center justify-center rounded-full transition-all",
                 isDone && "bg-emerald-500 text-white",
-                isCurrent && !isFailed && "bg-blue-500 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)] animate-pulse",
+                isCurrent && !isFailed && "bg-amber-500 text-white shadow-[0_0_10px_rgba(200,160,60,0.4)] animate-pulse",
                 isCurrent && isFailed && "bg-red-500 text-white shadow-[0_0_10px_rgba(239,68,68,0.4)]",
-                !isDone && !isCurrent && "border border-zinc-600 bg-transparent"
+                !isDone && !isCurrent && "border border-[#2a2520] bg-transparent"
               )}>
                 {isDone && (
                   <svg className="h-2.5 w-2.5" viewBox="0 0 12 12" fill="none">
@@ -40,7 +40,7 @@ export function PhaseTracker({ status, mode }: { status: string; mode?: string }
               <span className={cn(
                 "text-[11px] font-medium",
                 isDone && "text-zinc-400",
-                isCurrent && !isFailed && "text-blue-400",
+                isCurrent && !isFailed && "text-amber-400",
                 isCurrent && isFailed && "text-red-400",
                 !isDone && !isCurrent && "text-zinc-600"
               )}>

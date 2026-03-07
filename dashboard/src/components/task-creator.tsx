@@ -89,7 +89,7 @@ export function TaskCreator({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500/15 px-3.5 py-2 text-[12px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 transition-colors hover:bg-blue-500/25"
+        className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3.5 py-2 text-[12px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/25"
       >
         <Plus className="h-3.5 w-3.5" />
         {buttonLabel}
@@ -102,7 +102,7 @@ export function TaskCreator({
       <form
         onClick={(e) => e.stopPropagation()}
         onSubmit={handleSubmit}
-        className="w-full max-w-lg rounded-2xl border border-white/[0.08] bg-[#111113] p-6 shadow-2xl"
+        className="w-full max-w-lg rounded-2xl border border-[#2a2520] bg-[#1c1a17] p-6 shadow-2xl"
       >
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-[16px] font-semibold text-zinc-100">Create Task</h2>
@@ -119,7 +119,7 @@ export function TaskCreator({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="What needs to be done?"
-              className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-white/[0.15]"
+              className="w-full rounded-xl border border-[#2a2520] bg-[#232019] px-4 py-2.5 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-amber-500/30"
             />
           </div>
 
@@ -130,7 +130,7 @@ export function TaskCreator({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Additional context or instructions..."
               rows={3}
-              className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-white/[0.15] resize-none"
+              className="w-full rounded-xl border border-[#2a2520] bg-[#232019] px-4 py-2.5 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-amber-500/30 resize-none"
             />
           </div>
 
@@ -141,7 +141,7 @@ export function TaskCreator({
                 <select
                   value={mode}
                   onChange={(e) => setMode(e.target.value)}
-                  className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-white/[0.15]"
+                  className="w-full rounded-xl border border-[#2a2520] bg-[#232019] px-4 py-2.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-amber-500/30"
                 >
                   {groupedModes.length > 0
                     ? groupedModes.map((g) => (
@@ -164,7 +164,7 @@ export function TaskCreator({
                 <select
                   value={repoPath}
                   onChange={(e) => setRepoPath(e.target.value)}
-                  className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-white/[0.15]"
+                  className="w-full rounded-xl border border-[#2a2520] bg-[#232019] px-4 py-2.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-amber-500/30"
                 >
                   <option value="">Default</option>
                   {repos.map((r) => (
@@ -181,7 +181,7 @@ export function TaskCreator({
               <div className="flex flex-wrap items-center gap-1.5">
                 {phases.map((p, i) => (
                   <span key={p.name} className="flex items-center">
-                    <span className="rounded-lg bg-white/[0.05] px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-inset ring-white/[0.06]">
+                    <span className="rounded-lg bg-[#232019] px-2.5 py-1 text-[12px] text-[#9c9486] ring-1 ring-inset ring-[#2a2520]">
                       {p.label}
                     </span>
                     {i < phases.length - 1 && <ChevronRight className="mx-1 h-3 w-3 text-zinc-700" />}
@@ -197,7 +197,7 @@ export function TaskCreator({
               <select
                 value={taskType}
                 onChange={(e) => setTaskType(e.target.value)}
-                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-white/[0.15]"
+                className="w-full rounded-xl border border-[#2a2520] bg-[#232019] px-4 py-2.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-amber-500/30"
               >
                 {LEGAL_TASK_TYPES.map((t) => (
                   <option key={t.value} value={t.value}>
@@ -226,7 +226,7 @@ export function TaskCreator({
           <button
             type="submit"
             disabled={submitting || !title.trim()}
-            className="rounded-lg bg-blue-500 px-5 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-blue-400 disabled:opacity-50 shadow-lg shadow-blue-500/20"
+            className="rounded-lg bg-amber-500 px-5 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-amber-400 disabled:opacity-50 shadow-lg shadow-amber-500/20"
           >
             {submitting ? "Creating..." : "Create Task"}
           </button>

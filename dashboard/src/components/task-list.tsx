@@ -30,7 +30,7 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Stats row */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.07] px-4">
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[#2a2520] px-4">
         {(status?.failed_tasks ?? 0) > 0 && (
           <button
             onClick={async () => {
@@ -44,12 +44,12 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
               }
             }}
             disabled={retryingAll}
-            className="rounded-lg border border-white/[0.07] px-2.5 py-1 text-[12px] text-zinc-400 hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-50 transition-colors"
+            className="rounded-lg border border-[#2a2520] px-2.5 py-1 text-[12px] text-[#9c9486] hover:border-amber-500/40 hover:text-amber-400 disabled:opacity-50 transition-colors"
           >
             {retryingAll ? "..." : "Retry all failed"}
           </button>
         )}
-        <span className="ml-auto rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[11px] tabular-nums text-zinc-400">
+        <span className="ml-auto rounded-full bg-amber-500/[0.06] px-2.5 py-0.5 text-[11px] tabular-nums text-[#9c9486]">
           {filtered?.length ?? 0} tasks
         </span>
       </div>
@@ -60,16 +60,16 @@ export function TaskList({ selectedId, onSelect, repoFilter }: TaskListProps) {
             <TaskRow key={t.id} task={t} isActive showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {pending.length > 0 && active.length > 0 && (
-            <div className="mx-3.5 my-3 h-px bg-white/[0.04]" />
+            <div className="mx-3.5 my-3 h-px bg-[#2a2520]/50" />
           )}
           {pending.length > 0 && (
-            <div className="px-3.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-widest text-zinc-500">Pending</div>
+            <div className="px-3.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-widest text-[#6b6459]">Pending</div>
           )}
           {pending.map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
           ))}
           {terminal.length > 0 && (active.length > 0 || pending.length > 0) && (
-            <div className="mx-3.5 my-3 h-px bg-white/[0.04]" />
+            <div className="mx-3.5 my-3 h-px bg-[#2a2520]/50" />
           )}
           {terminal.slice(0, 30).map((t) => (
             <TaskRow key={t.id} task={t} showRepo={multiRepo && !repoFilter} selected={selectedId === t.id} onClick={() => onSelect(t.id)} />
@@ -106,17 +106,17 @@ function TaskRow({
       onClick={onClick}
       className={cn(
         "flex w-full flex-col gap-1 rounded-xl px-3.5 py-2.5 text-left transition-all",
-        "hover:bg-white/[0.04]",
-        isActive && !isStuck && "bg-blue-500/[0.03]",
+        "hover:bg-[#1c1a17]",
+        isActive && !isStuck && "bg-amber-500/[0.03]",
         isStuck && "bg-red-500/[0.04]",
-        selected && "bg-blue-500/[0.06] ring-1 ring-blue-500/20"
+        selected && "bg-amber-500/[0.06] ring-1 ring-amber-500/20"
       )}
     >
       <div className="flex w-full items-center gap-2">
-        <span className="min-w-[24px] font-mono text-[11px] text-zinc-500">#{task.id}</span>
+        <span className="min-w-[24px] font-mono text-[11px] text-[#6b6459]">#{task.id}</span>
         <StatusBadge status={task.status} />
         {showRepo && task.repo_path && (
-          <span className="shrink-0 rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
+          <span className="shrink-0 rounded bg-amber-500/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-[#9c9486]">
             {repoName(task.repo_path)}
           </span>
         )}
@@ -127,9 +127,9 @@ function TaskRow({
         )}
       </div>
       <div className="flex items-center gap-2 pl-[32px]">
-        <span className="flex-1 truncate text-[13px] text-zinc-300">{task.title}</span>
+        <span className="flex-1 truncate text-[13px] text-[#e8e0d4]">{task.title}</span>
         {!isMinimal && task.attempt > 0 && (
-          <span className={cn("shrink-0 font-mono text-[11px]", isStuck ? "text-red-400/80" : "text-zinc-500")}>
+          <span className={cn("shrink-0 font-mono text-[11px]", isStuck ? "text-red-400/80" : "text-[#6b6459]")}>
             {task.attempt}/{task.max_attempts}
           </span>
         )}

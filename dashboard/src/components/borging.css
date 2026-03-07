@@ -1,32 +1,7 @@
-.borging-text {
-  font-family: 'Chakra Petch', sans-serif;
-  font-weight: 400;
-  font-size: 14px;
-  color: #f97316;
-  text-shadow:
-    -0.3px 0.3px 0 rgba(160,90,70,0.4),
-    -0.6px 0.6px 0 rgba(160,90,70,0.35),
-    -0.9px 0.9px 0 rgba(160,90,70,0.3);
-  -webkit-text-stroke: 0.2px rgba(255,255,255,0.1);
-  paint-order: stroke fill;
-}
-
-.borging-letter {
-  display: inline-block;
-  animation: borging-wave 3s ease-in-out infinite;
-}
-
-@keyframes borging-wave {
-  0%, 33%, 100% {
-    transform: translateY(0);
-    opacity: 0.6;
-  }
-  10% {
-    transform: translateY(-2px);
-    opacity: 1;
-  }
-  20% {
-    transform: translateY(0);
-    opacity: 0.6;
-  }
+.shimmer-text {
+  background: linear-gradient(90deg, currentColor 40%, hsl(35, 80%, 65%) 50%, currentColor 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmertext 2s ease-in-out infinite;
 }

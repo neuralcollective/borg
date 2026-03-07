@@ -243,13 +243,6 @@ pub(crate) struct ProjectFilesQuery {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ConflictQuery {
-    pub client_name: Option<String>,
-    pub opposing_counsel: Option<String>,
-    pub exclude_project_id: Option<i64>,
-}
-
-#[derive(Deserialize)]
 pub(crate) struct UpdateKnowledgeBody {
     pub description: Option<String>,
     pub inline: Option<bool>,
@@ -1392,13 +1385,7 @@ pub(crate) async fn create_project(
     let jurisdiction = body.jurisdiction.as_deref().unwrap_or("");
     let matter_type = body.matter_type.as_deref().unwrap_or("");
     let privilege_level = body.privilege_level.as_deref().unwrap_or("");
-    let opposing_counsel = body.opposing_counsel.as_deref().unwrap_or("");
-
-    // Check for conflicts before creating
-    let conflicts = state
-        .db
-        .check_conflicts(None, client_name, opposing_counsel)
-        .map_err(internal)?;
+    let _opposing_counsel = body.opposing_counsel.as_deref().unwrap_or("");
 
     // Insert with empty repo_path first to get the ID
     let id = state
@@ -1414,12 +1401,7 @@ pub(crate) async fn create_project(
         )
         .map_err(internal)?;
 
-    // Sync parties for future conflict checks
-    let _ = state
-        .db
-        .sync_project_parties(id, client_name, opposing_counsel);
-
-    // Auto-init a dedicated git repo for legal projects
+    // Auto-init a dedicated git repo for projects
     let repo_dir = format!("{}/legal-repos/{}", state.config.data_dir, id);
     tokio::fs::create_dir_all(&repo_dir)
         .await
@@ -1463,11 +1445,7 @@ pub(crate) async fn create_project(
         &json!({ "name": name, "mode": mode }),
     );
 
-    let mut resp = json!({ "id": id });
-    if !conflicts.is_empty() {
-        resp["conflicts"] = json!(conflicts);
-    }
-    Ok((StatusCode::CREATED, Json(resp)))
+    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
 pub(crate) async fn get_project(
@@ -1513,46 +1491,7 @@ pub(crate) async fn update_project(
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Re-sync parties when client or opposing counsel change
-    if body.client_name.is_some() || body.opposing_counsel.is_some() {
-        let _ = state
-            .db
-            .sync_project_parties(id, &updated.client_name, &updated.opposing_counsel);
-    }
-
-    let mut resp = json!(ProjectJson::from(updated));
-
-    // Return conflicts if party fields changed
-    if body.client_name.is_some() || body.opposing_counsel.is_some() {
-        let project = state
-            .db
-            .get_project(id)
-            .map_err(internal)?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        let conflicts = state
-            .db
-            .check_conflicts(Some(id), &project.client_name, &project.opposing_counsel)
-            .map_err(internal)?;
-        if !conflicts.is_empty() {
-            resp["conflicts"] = json!(conflicts);
-        }
-    }
-
-    Ok(Json(resp))
-}
-
-pub(crate) async fn check_conflicts(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<ConflictQuery>,
-) -> Result<Json<Value>, StatusCode> {
-    let client = params.client_name.as_deref().unwrap_or("");
-    let opposing = params.opposing_counsel.as_deref().unwrap_or("");
-    let exclude = params.exclude_project_id;
-    let conflicts = state
-        .db
-        .check_conflicts(exclude, client, opposing)
-        .map_err(internal)?;
-    Ok(Json(json!({ "conflicts": conflicts })))
+    Ok(Json(json!(ProjectJson::from(updated))))
 }
 
 pub(crate) async fn delete_project(
@@ -1589,118 +1528,6 @@ pub(crate) async fn list_project_tasks(
     }
     let tasks = state.db.list_project_tasks(id).map_err(internal)?;
     Ok(Json(json!(tasks)))
-}
-
-// ── Deadlines ────────────────────────────────────────────────────────────
-
-pub(crate) async fn list_project_deadlines(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-) -> Result<Json<Value>, StatusCode> {
-    if state.db.get_project(id).map_err(internal)?.is_none() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let deadlines = state.db.list_project_deadlines(id).map_err(internal)?;
-    Ok(Json(json!(deadlines)))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CreateDeadlineBody {
-    label: String,
-    due_date: String,
-    #[serde(default)]
-    rule_basis: String,
-}
-
-pub(crate) async fn create_deadline(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<i64>,
-    Json(body): Json<CreateDeadlineBody>,
-) -> Result<Json<Value>, StatusCode> {
-    if state.db.get_project(id).map_err(internal)?.is_none() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let did = state
-        .db
-        .insert_deadline(id, &body.label, &body.due_date, &body.rule_basis)
-        .map_err(internal)?;
-    let _ = state.db.log_event_full(
-        None,
-        None,
-        Some(id),
-        "api",
-        "deadline.created",
-        &json!({ "label": body.label, "due_date": body.due_date }),
-    );
-    Ok(Json(json!({ "id": did })))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpdateDeadlineBody {
-    label: Option<String>,
-    due_date: Option<String>,
-    rule_basis: Option<String>,
-    status: Option<String>,
-}
-
-pub(crate) async fn update_deadline(
-    State(state): State<Arc<AppState>>,
-    Path((_pid, did)): Path<(i64, i64)>,
-    Json(body): Json<UpdateDeadlineBody>,
-) -> Result<StatusCode, StatusCode> {
-    state
-        .db
-        .update_deadline(
-            did,
-            body.label.as_deref(),
-            body.due_date.as_deref(),
-            body.rule_basis.as_deref(),
-            body.status.as_deref(),
-        )
-        .map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub(crate) async fn delete_deadline(
-    State(state): State<Arc<AppState>>,
-    Path((_pid, did)): Path<(i64, i64)>,
-) -> Result<StatusCode, StatusCode> {
-    state.db.delete_deadline(did).map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-pub(crate) struct UpcomingDeadlinesQuery {
-    #[serde(default = "default_deadline_limit")]
-    limit: i64,
-}
-fn default_deadline_limit() -> i64 {
-    50
-}
-
-pub(crate) async fn list_upcoming_deadlines(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<UpcomingDeadlinesQuery>,
-) -> Result<Json<Value>, StatusCode> {
-    let rows = state
-        .db
-        .list_upcoming_deadlines(q.limit)
-        .map_err(internal)?;
-    let items: Vec<Value> = rows
-        .into_iter()
-        .map(|(d, project_name)| {
-            json!({
-                "id": d.id,
-                "project_id": d.project_id,
-                "project_name": project_name,
-                "label": d.label,
-                "due_date": d.due_date,
-                "rule_basis": d.rule_basis,
-                "status": d.status,
-            })
-        })
-        .collect();
-    Ok(Json(json!(items)))
 }
 
 // ── Search ───────────────────────────────────────────────────────────────

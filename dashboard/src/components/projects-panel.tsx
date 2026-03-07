@@ -189,19 +189,37 @@ export function ProjectsPanel() {
   const ftsDebounce = useRef<ReturnType<typeof setTimeout>>(null);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectMode, setNewProjectMode] = useState("general");
+  const [newProjectJurisdiction, setNewProjectJurisdiction] = useState("");
   const [creating, setCreating] = useState(false);
+  const [jurisdictionFilter, setJurisdictionFilter] = useState<string>("all");
+
+  const jurisdictions = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of projects) {
+      if (p.jurisdiction?.trim()) set.add(p.jurisdiction.trim());
+    }
+    return [...set].sort();
+  }, [projects]);
+
+  const isLegalMode = useMemo(() =>
+    projects.some((p) => p.mode === "lawborg" || p.mode === "legal"),
+  [projects]);
 
   const filteredProjects = useMemo(() => {
-    if (!searchQuery.trim()) return projects;
-    const q = searchQuery.toLowerCase();
-    return projects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        (p.client_name && p.client_name.toLowerCase().includes(q)) ||
-        (p.case_number && p.case_number.toLowerCase().includes(q)) ||
-        (p.jurisdiction && p.jurisdiction.toLowerCase().includes(q))
-    );
-  }, [projects, searchQuery]);
+    let filtered = projects;
+    if (jurisdictionFilter !== "all") {
+      filtered = filtered.filter((p) => p.jurisdiction?.trim() === jurisdictionFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.jurisdiction && p.jurisdiction.toLowerCase().includes(q))
+      );
+    }
+    return filtered;
+  }, [projects, searchQuery, jurisdictionFilter]);
 
   const selectedProject =
     projects.find((p) => p.id === selectedProjectId) ?? projects[0] ?? null;
@@ -418,8 +436,12 @@ export function ProjectsPanel() {
     if (!name || creating) return;
     setCreating(true);
     try {
-      const created = await createProject(name, newProjectMode);
+      const opts = newProjectJurisdiction.trim()
+        ? { jurisdiction: newProjectJurisdiction.trim() }
+        : {};
+      const created = await createProject(name, newProjectMode, opts);
       setNewProjectName("");
+      setNewProjectJurisdiction("");
       await refetchProjects();
       setSelectedProjectId(created.id);
     } finally {
@@ -734,8 +756,22 @@ async function uploadChunkQueue(
   return (
     <div className="flex h-full min-h-0">
       <div className="w-[270px] shrink-0 border-r border-white/[0.07] p-4">
-        <div className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-400">
-          Projects
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-[12px] font-semibold uppercase tracking-wide text-zinc-400">
+            Projects
+          </span>
+          {jurisdictions.length > 0 && (
+            <select
+              value={jurisdictionFilter}
+              onChange={(e) => setJurisdictionFilter(e.target.value)}
+              className="rounded-lg border border-white/[0.07] bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 outline-none focus:border-blue-500/40"
+            >
+              <option value="all">All jurisdictions</option>
+              {jurisdictions.map((j) => (
+                <option key={j} value={j}>{j}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div className="relative mb-3">
           <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
@@ -789,7 +825,10 @@ async function uploadChunkQueue(
                   : "text-zinc-400 hover:bg-white/[0.04]"
               )}
             >
-              {p.name}
+              <span className="truncate">{p.name}</span>
+              {p.jurisdiction?.trim() && jurisdictionFilter === "all" && (
+                <span className="mt-0.5 block truncate text-[10px] text-zinc-500">{p.jurisdiction}</span>
+              )}
             </button>
           ))}
           {projects.length === 0 && (
@@ -824,6 +863,14 @@ async function uploadChunkQueue(
               </option>
             ))}
           </select>
+          {(isLegalMode || newProjectMode === "lawborg" || newProjectMode === "legal") && (
+            <input
+              value={newProjectJurisdiction}
+              onChange={(e) => setNewProjectJurisdiction(e.target.value)}
+              placeholder="Jurisdiction (e.g. England & Wales)"
+              className="mt-2.5 w-full rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-300 outline-none placeholder:text-zinc-500 focus:border-blue-500/40"
+            />
+          )}
           <button
             onClick={handleCreateProject}
             disabled={creating || !newProjectName.trim()}
@@ -865,7 +912,7 @@ async function uploadChunkQueue(
               viewMode={docViewMode}
               onBack={() => { setSelectedDoc(null); setDocViewMode("view"); }}
               onToggleMode={() => setDocViewMode(docViewMode === "view" ? "redline" : "view")}
-              defaultTemplateId={selectedProject.default_template_id}
+              defaultTemplateId={undefined}
             />
           ) : (
             <div className="flex h-full flex-col">
@@ -998,7 +1045,7 @@ async function uploadChunkQueue(
                           <Eye className="h-3 w-3" />
                         </button>
                       )}
-                      <span className="text-zinc-600">{formatBytes(f.size_bytes)}</span>
+                      <span className="text-zinc-500">{formatBytes(f.size_bytes)}</span>
                     </div>
                   </div>
                 ))}

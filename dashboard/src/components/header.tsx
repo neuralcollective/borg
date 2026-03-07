@@ -47,7 +47,7 @@ export function Header({
 
   if (mobile) {
     return (
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-white/[0.07] bg-[#09090b] px-5">
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[#2a2520] bg-[#0f0e0c] px-5">
         <div className="flex items-center gap-2.5">
           <div className={`borg-logo h-6 w-6 ${domain.accentBg}`}>
             <BorgLogo size="mobile" />
@@ -57,21 +57,21 @@ export function Header({
               ))}
             </div>
           </div>
-          <span className="text-[14px] font-semibold tracking-tight text-white">Borg</span>
+          <span className="text-[14px] font-semibold tracking-tight text-[#e8e0d4]">Borg</span>
         </div>
 
         <div className="ml-auto flex items-center gap-3">
           <TaskCreator />
           {status?.continuous_mode && (
-            <span className="flex items-center gap-1.5 text-[12px] text-zinc-400">
+            <span className="flex items-center gap-1.5 text-[12px] text-[#9c9486]">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Cont
             </span>
           )}
-          <span className="text-[12px] tabular-nums text-zinc-400">
+          <span className="text-[12px] tabular-nums text-[#6b6459]">
             {status ? formatUptime(status.uptime_s) : "--"}
           </span>
-          <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-red-500"}`} />
+          <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_6px_rgba(200,160,80,0.3)]" : "bg-red-500"}`} />
         </div>
       </header>
     );
@@ -81,28 +81,28 @@ export function Header({
   const multiRepo = repos.length > 1;
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-white/[0.07] px-6">
-      <h1 className="text-[15px] font-semibold text-zinc-100">
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[#2a2520] px-6">
+      <h1 className="text-[15px] font-semibold text-[#e8e0d4]">
         {VIEW_TITLES[view ?? "tasks"]}
       </h1>
 
       {!isMinimal && (
         <>
-          <div className="h-4 w-px bg-white/[0.07]" />
-          <div className="flex items-center gap-4 text-[12px] text-zinc-500">
+          <div className="h-4 w-px bg-[#2a2520]" />
+          <div className="flex items-center gap-4 text-[12px] text-[#6b6459]">
             {status?.continuous_mode && (
-              <span className="flex items-center gap-1.5 text-zinc-400">
+              <span className="flex items-center gap-1.5 text-[#9c9486]">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 Continuous
               </span>
             )}
             <span>
-              Up <span className="text-zinc-300">{status ? formatUptime(status.uptime_s) : "--"}</span>
+              Up <span className="text-[#9c9486]">{status ? formatUptime(status.uptime_s) : "--"}</span>
             </span>
             <span>
-              Model <span className="text-zinc-300">{status?.model ?? "--"}</span>
+              Model <span className="text-[#9c9486]">{status?.model ?? "--"}</span>
             </span>
-            <span className="h-3 w-px bg-white/[0.07]" />
+            <span className="h-3 w-px bg-[#2a2520]" />
             <span>
               Active <span className="text-blue-400 tabular-nums">{status?.active_tasks ?? 0}</span>
             </span>
@@ -116,7 +116,7 @@ export function Header({
               Failed <span className="text-red-400 tabular-nums">{status?.failed_tasks ?? 0}</span>
             </span>
             {status?.version && (
-              <span className="rounded-full bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] text-zinc-600">
+              <span className="rounded-full bg-amber-500/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-[#6b6459]">
                 {status.version}
               </span>
             )}
@@ -130,7 +130,7 @@ export function Header({
           <select
             value={repoFilter ?? ""}
             onChange={(e) => onRepoFilterChange(e.target.value || null)}
-            className="h-7 shrink-0 rounded-lg border border-white/[0.07] bg-white/[0.03] px-2 text-[12px] text-zinc-300 outline-none"
+            className="h-7 shrink-0 rounded-lg border border-[#2a2520] bg-amber-500/[0.03] px-2 text-[12px] text-[#9c9486] outline-none"
           >
             <option value="">All repos</option>
             {repos.map((r) => (

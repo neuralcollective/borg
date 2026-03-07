@@ -751,26 +751,14 @@ export function useProjects() {
 
 export interface CreateProjectOptions {
   mode?: string;
-  client_name?: string;
-  opposing_counsel?: string;
   jurisdiction?: string;
-  matter_type?: string;
-  privilege_level?: string;
-}
-
-export interface ConflictHit {
-  project_id: number;
-  project_name: string;
-  party_name: string;
-  party_role: string;
-  matched_field: string;
 }
 
 export async function createProject(
   name: string,
   mode = "general",
   opts: CreateProjectOptions = {}
-): Promise<{ id: number; conflicts?: ConflictHit[] }> {
+): Promise<{ id: number }> {
   const res = await apiFetch("/api/projects", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -778,21 +766,6 @@ export async function createProject(
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
-}
-
-export async function checkConflicts(
-  clientName: string,
-  opposingCounsel: string,
-  excludeProjectId?: number
-): Promise<ConflictHit[]> {
-  const params = new URLSearchParams();
-  if (clientName) params.set("client_name", clientName);
-  if (opposingCounsel) params.set("opposing_counsel", opposingCounsel);
-  if (excludeProjectId) params.set("exclude_project_id", String(excludeProjectId));
-  const res = await apiFetch(`/api/projects/conflicts?${params}`);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.conflicts || [];
 }
 
 export function useProjectFiles(
@@ -1056,54 +1029,6 @@ export async function reextractProjectFile(
   return res.json();
 }
 
-// ── Deadlines ──────────────────────────────────────────────────────────
-
-export interface Deadline {
-  id: number;
-  project_id: number;
-  label: string;
-  due_date: string;
-  rule_basis: string;
-  status: string;
-  created_at?: string;
-  project_name?: string;
-}
-
-export function useProjectDeadlines(projectId: number | null) {
-  return useQuery<Deadline[]>({
-    queryKey: ["project_deadlines", projectId],
-    queryFn: () => fetchJson(`/api/projects/${projectId}/deadlines`),
-    enabled: projectId !== null,
-    refetchInterval: REFETCH_PROJECTS,
-  });
-}
-
-export async function createDeadline(projectId: number, label: string, dueDate: string, ruleBasis?: string): Promise<{ id: number }> {
-  const res = await apiFetch(`/api/projects/${projectId}/deadlines`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, due_date: dueDate, rule_basis: ruleBasis || "" }),
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
-}
-
-export async function updateDeadline(projectId: number, id: number, updates: Partial<{ label: string; due_date: string; rule_basis: string; status: string }>): Promise<void> {
-  const res = await apiFetch(`/api/projects/${projectId}/deadlines/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(updates),
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
-}
-
-export async function deleteDeadline(projectId: number, id: number): Promise<void> {
-  const res = await apiFetch(`/api/projects/${projectId}/deadlines/${id}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
-}
-
 export function useTemplates(category?: string) {
   return useQuery<KnowledgeFile[]>({
     queryKey: ["templates", category],
@@ -1112,14 +1037,6 @@ export function useTemplates(category?: string) {
       if (category) params.set("category", category);
       return fetchJson(`/api/knowledge/templates?${params}`);
     },
-    refetchInterval: REFETCH_PROJECTS,
-  });
-}
-
-export function useUpcomingDeadlines(limit = 50) {
-  return useQuery<Deadline[]>({
-    queryKey: ["upcoming_deadlines", limit],
-    queryFn: () => fetchJson(`/api/deadlines?limit=${limit}`),
     refetchInterval: REFETCH_PROJECTS,
   });
 }
@@ -1232,25 +1149,6 @@ export function useProjectDetail(projectId: number | null) {
     queryFn: () => fetchJson(`/api/projects/${projectId}`),
     enabled: projectId !== null,
     refetchInterval: REFETCH_PROJECTS,
-  });
-}
-
-export function useUpdateProject(projectId: number) {
-  const queryClient = useQueryClient();
-  return useMutation<Project, Error, Partial<Project>>({
-    mutationFn: async (patch) => {
-      const res = await apiFetch(`/api/projects/${projectId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) throw new Error(`${res.status}`);
-      return res.json();
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(["project", projectId], data);
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
-    },
   });
 }
 

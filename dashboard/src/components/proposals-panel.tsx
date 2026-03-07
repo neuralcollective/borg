@@ -38,7 +38,7 @@ function TriageTooltip({ proposal }: { proposal: Proposal }) {
   ];
 
   return (
-    <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-white/[0.08] bg-zinc-900 p-3 shadow-xl">
+    <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 w-64 rounded-lg border border-[#2a2520] bg-[#1c1a17] p-3 shadow-xl">
       <div className="space-y-2">
         {dims.map((d) => (
           <div key={d.key} className="flex items-center gap-2">
@@ -134,8 +134,8 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.07] px-5">
-        <span className="text-[14px] font-semibold text-zinc-100">Proposals</span>
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#2a2520] px-5">
+        <span className="text-[14px] font-semibold text-[#e8e0d4]">Proposals</span>
         <div className="flex items-center gap-2.5">
           {pending.length > 0 && (
             <button
@@ -146,7 +146,7 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
               {triaging ? "Scoring..." : "Triage"}
             </button>
           )}
-          <span className="rounded-full bg-white/[0.05] px-2.5 py-0.5 text-[11px] tabular-nums text-zinc-500">
+          <span className="rounded-full bg-amber-500/[0.06] px-2.5 py-0.5 text-[11px] tabular-nums text-[#9c9486]">
             {pending.length}
           </span>
         </div>
@@ -154,12 +154,12 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
       <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="p-2 space-y-1">
           {sorted.map((p) => (
-            <div key={p.id} className="rounded-lg border border-white/[0.06] bg-white/[0.02]">
+            <div key={p.id} className="rounded-lg border border-[#2a2520] bg-[#1c1a17]/50">
               <button
                 onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
                 className="flex w-full items-center gap-2.5 px-3 py-2.5 md:py-2 text-left active:bg-white/[0.03]"
               >
-                <span className="font-mono text-[10px] text-zinc-600">#{p.id}</span>
+                <span className="font-mono text-[10px] text-[#6b6459]">#{p.id}</span>
                 {p.triage_score > 0 ? (
                   <span
                     className={`relative inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ring-1 ring-inset ${scoreColor(p.triage_score)}`}
@@ -179,14 +179,14 @@ export function ProposalsPanel({ repoFilter }: ProposalsPanelProps) {
                     {repoName(p.repo_path)}
                   </span>
                 )}
-                <span className="flex-1 truncate text-[13px] md:text-[12px] text-zinc-300">{p.title}</span>
+                <span className="flex-1 truncate text-[13px] md:text-[12px] text-[#e8e0d4]">{p.title}</span>
               </button>
 
               {expandedId === p.id && (
                 <div className="border-t border-white/[0.04] px-3 py-3 md:py-2.5 space-y-2.5 md:space-y-2">
-                  <p className="text-[13px] md:text-[11px] text-zinc-400 leading-relaxed">{p.description}</p>
+                  <p className="text-[13px] md:text-[11px] text-[#9c9486] leading-relaxed">{p.description}</p>
                   {p.rationale && (
-                    <p className="text-[12px] md:text-[11px] text-zinc-500 italic leading-relaxed">{p.rationale}</p>
+                    <p className="text-[12px] md:text-[11px] text-[#6b6459] italic leading-relaxed">{p.rationale}</p>
                   )}
                   {p.triage_score > 0 && (
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-1">

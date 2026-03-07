@@ -53,14 +53,14 @@ export function TaskChat({ taskId }: TaskChatProps) {
   const pendingCount = messages.filter((m) => m.role === "user" && !m.delivered_phase).length;
 
   return (
-    <div className="border-t border-white/[0.07]">
+    <div className="border-t border-[#2a2520]">
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2.5 px-6 py-3 text-left transition-colors hover:bg-white/[0.02]"
       >
         <span className="text-[12px] font-medium text-zinc-400">Chat</span>
         {pendingCount > 0 && (
-          <span className="flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] font-medium text-blue-400">
+          <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-400">
             <Clock className="h-2.5 w-2.5" />
             {pendingCount} pending
           </span>
@@ -87,8 +87,8 @@ export function TaskChat({ taskId }: TaskChatProps) {
             <div ref={bottomRef} />
           </div>
 
-          <div className="shrink-0 border-t border-white/[0.07] px-5 py-3">
-            <div className="flex items-end gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 transition-colors focus-within:border-white/[0.14]">
+          <div className="shrink-0 border-t border-[#2a2520] px-5 py-3">
+            <div className="flex items-end gap-2 rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 transition-colors focus-within:border-amber-500/20">
               <textarea
                 ref={inputRef}
                 value={input}
@@ -119,8 +119,8 @@ export function TaskChat({ taskId }: TaskChatProps) {
                   className={cn(
                     "shrink-0 rounded-lg p-1.5 transition-all",
                     input.trim() && !sending
-                      ? "bg-blue-500 text-white hover:bg-blue-400"
-                      : "cursor-not-allowed text-zinc-700"
+                      ? "bg-amber-500 text-white hover:bg-amber-400 shadow-lg shadow-amber-500/25"
+                      : "cursor-not-allowed text-[#6b6459]"
                   )}
                 >
                   <Send className="h-3.5 w-3.5" />
@@ -144,13 +144,13 @@ function MessageBubble({ msg }: { msg: TaskMessage }) {
         className={cn(
           "flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1 ring-white/[0.06]",
           isUser
-            ? "bg-gradient-to-br from-blue-500/20 to-cyan-500/20"
+            ? "bg-gradient-to-br from-amber-400/20 to-yellow-500/20"
             : msg.role === "system"
               ? "bg-white/[0.04]"
-              : "bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20"
+              : "bg-gradient-to-br from-amber-500/20 to-orange-500/20"
         )}
       >
-        <span className={cn("text-[10px] font-bold", isUser ? "text-blue-300" : msg.role === "system" ? "text-zinc-500" : "text-violet-300")}>
+        <span className={cn("text-[10px] font-bold", isUser ? "text-amber-200" : msg.role === "system" ? "text-zinc-500" : "text-amber-300")}>
           {isUser ? "U" : msg.role === "system" ? "S" : "B"}
         </span>
       </div>
@@ -158,16 +158,16 @@ function MessageBubble({ msg }: { msg: TaskMessage }) {
         className={cn(
           "max-w-[80%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed",
           isUser
-            ? "bg-blue-500/15 text-zinc-100 rounded-br-md"
+            ? "bg-amber-500/15 text-[#e8e0d4] rounded-br-md"
             : msg.role === "system"
               ? "bg-white/[0.03] text-zinc-500 ring-1 ring-inset ring-white/[0.06] rounded-bl-md"
-              : "bg-white/[0.04] text-zinc-200 rounded-bl-md"
+              : "bg-[#1c1a17] text-[#e8e0d4] rounded-bl-md"
         )}
       >
         {!isUser && (
           <div className={cn(
             "mb-0.5 text-[10px] font-medium",
-            msg.role === "system" ? "text-zinc-600" : "text-violet-400/80"
+            msg.role === "system" ? "text-zinc-600" : "text-amber-400/80"
           )}>
             {msg.role}
           </div>

@@ -30,11 +30,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   render() {
     if (this.state.error) {
       return (
-        <div className="flex h-screen items-center justify-center bg-[#09090b] text-zinc-400">
+        <div className="flex h-screen items-center justify-center bg-[#0f0e0c] text-[#9c9486]">
           <div className="max-w-md text-center space-y-3">
-            <p className="text-lg font-semibold text-orange-400">Oh, Borg!</p>
-            <pre className="text-xs text-zinc-600 whitespace-pre-wrap">{(this.state.error as Error).message}</pre>
-            <button onClick={() => this.setState({ error: null })} className="text-xs text-zinc-500 hover:text-zinc-300 underline">
+            <p className="text-lg font-semibold text-amber-400">Oh, Borg!</p>
+            <pre className="text-xs text-[#6b6459] whitespace-pre-wrap">{(this.state.error as Error).message}</pre>
+            <button onClick={() => this.setState({ error: null })} className="text-xs text-[#6b6459] hover:text-[#e8e0d4] underline">
               Try again
             </button>
           </div>
@@ -111,9 +111,9 @@ function AuthGate() {
 
   if (!ready) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#09090b]">
+      <div className="flex h-screen items-center justify-center bg-[#0f0e0c]">
         <div className="flex flex-col items-center gap-4">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-800 border-t-zinc-400" />
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-[#2a2520] border-t-amber-400" />
         </div>
       </div>
     );
@@ -173,7 +173,7 @@ function AppInner() {
 
   if (isMobile) {
     return (
-      <div className="flex flex-col bg-[#09090b] text-foreground antialiased" style={{ height: "100dvh" }}>
+      <div className="flex flex-col bg-[#0f0e0c] text-foreground antialiased" style={{ height: "100dvh" }}>
         <Header connected={connected} mobile />
 
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
@@ -191,13 +191,13 @@ function AppInner() {
 
           {mobileTab === "queue" && (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <div className="flex shrink-0 border-b border-white/[0.06]">
+              <div className="flex shrink-0 border-b border-[#2a2520]">
                 <button
                   onClick={() => setMobileBottomTab("proposals")}
                   className={`flex-1 py-2.5 text-[13px] font-medium transition-colors ${
                     mobileBottomTab === "proposals"
-                      ? "text-zinc-200 border-b-2 border-blue-400"
-                      : "text-zinc-500"
+                      ? "text-[#e8e0d4] border-b-2 border-amber-400"
+                      : "text-[#6b6459]"
                   }`}
                 >
                   Proposals
@@ -206,8 +206,8 @@ function AppInner() {
                   onClick={() => setMobileBottomTab("queue")}
                   className={`flex-1 py-2.5 text-[13px] font-medium transition-colors ${
                     mobileBottomTab === "queue"
-                      ? "text-zinc-200 border-b-2 border-blue-400"
-                      : "text-zinc-500"
+                      ? "text-[#e8e0d4] border-b-2 border-amber-400"
+                      : "text-[#6b6459]"
                   }`}
                 >
                   Queue
@@ -227,7 +227,7 @@ function AppInner() {
         </div>
 
         <nav
-          className="flex shrink-0 border-t border-white/[0.06] bg-[#09090b]"
+          className="flex shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
           {MOBILE_TABS.map(({ key, label, Icon }) => (
@@ -236,7 +236,7 @@ function AppInner() {
               onClick={() => setMobileTab(key)}
               className={cn(
                 "flex flex-1 flex-col items-center gap-0.5 pt-2 pb-1.5 active:opacity-70 transition-colors",
-                mobileTab === key ? "text-blue-400" : "text-zinc-600"
+                mobileTab === key ? "text-amber-400" : "text-[#6b6459]"
               )}
             >
               <Icon className="h-5 w-5" strokeWidth={mobileTab === key ? 2 : 1.5} />
@@ -250,7 +250,7 @@ function AppInner() {
 
   // Desktop layout
   return (
-    <div className="flex h-screen bg-[#09090b] text-foreground antialiased">
+    <div className="flex h-screen bg-[#0f0e0c] text-foreground antialiased">
       {/* Sidebar nav — slim icon bar with overlay expansion */}
       <div className="w-14 shrink-0" />
       <nav
@@ -258,8 +258,8 @@ function AppInner() {
           "group/nav fixed left-0 top-0 z-30 flex h-full w-14 hover:w-[180px] flex-col items-start border-r pb-4 transition-[width] duration-200 ease-out overflow-hidden",
           sidebarAlert
             ? "border-red-500/30 bg-red-950/35"
-            : "border-white/[0.07] bg-[#0a0a0c]",
-          "hover:shadow-[4px_0_24px_rgba(0,0,0,0.5)]"
+            : "border-[#2a2520] bg-gradient-to-b from-[#1c1a17] to-[#151412]",
+          "hover:shadow-[4px_0_24px_rgba(20,15,10,0.6)]"
         )}
       >
         <div className={cn("borg-logo mb-2 w-full shrink-0 h-14", domain.accentBg)}>
@@ -283,10 +283,10 @@ function AppInner() {
                 view === key
                   ? sidebarAlert
                     ? "bg-red-400/20 text-red-50"
-                    : "bg-white/[0.08] text-zinc-100"
+                    : "bg-amber-500/[0.08] text-[#e8e0d4]"
                   : sidebarAlert
                     ? "text-red-200/80 hover:bg-red-400/15 hover:text-red-50"
-                    : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300"
+                    : "text-[#6b6459] hover:bg-amber-500/[0.05] hover:text-[#9c9486]"
               )}
             >
               <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={view === key ? 2 : 1.5} />
@@ -295,7 +295,7 @@ function AppInner() {
                 <div
                   className={cn(
                     "absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full",
-                    sidebarAlert ? "bg-red-300" : "bg-blue-400"
+                    sidebarAlert ? "bg-red-300" : "bg-amber-400"
                   )}
                 />
               )}
@@ -306,15 +306,15 @@ function AppInner() {
         {/* Status indicator at bottom */}
         <div className="mt-auto flex flex-col items-center gap-3 w-14 shrink-0">
           {(status?.dispatched_agents ?? 0) > 0 && (
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/15 ring-1 ring-blue-500/20" title={`${status?.dispatched_agents} active agent(s)`}>
-              <span className="text-[11px] font-bold tabular-nums text-blue-400">{status?.dispatched_agents}</span>
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/20" title={`${status?.dispatched_agents} active agent(s)`}>
+              <span className="text-[11px] font-bold tabular-nums text-amber-400">{status?.dispatched_agents}</span>
             </div>
           )}
           <div
             className={cn(
               "h-2.5 w-2.5 rounded-full transition-colors",
               connected
-                ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                ? "bg-emerald-500 shadow-[0_0_8px_rgba(200,160,80,0.3)]"
                 : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.3)]"
             )}
             title={connected ? "Connected" : "Disconnected"}
@@ -329,7 +329,7 @@ function AppInner() {
         <div className="min-h-0 flex-1 overflow-hidden">
           {view === "tasks" && (
             <div className="flex h-full">
-              <div className="w-[420px] shrink-0 overflow-hidden border-r border-white/[0.07]">
+              <div className="w-[420px] shrink-0 overflow-hidden border-r border-[#2a2520]">
                 <TaskList
                   selectedId={selectedTaskId}
                   onSelect={handleSelectTask}
@@ -363,12 +363,12 @@ function AppInner() {
 function EmptyState({ status }: { status?: { active_tasks: number; merged_tasks: number; ai_requests: number; failed_tasks: number; total_tasks: number } | null }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 text-center">
-      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-white/[0.04] to-white/[0.02] ring-1 ring-white/[0.06]">
-        <ListTodo className="h-8 w-8 text-zinc-600" strokeWidth={1.5} />
+      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-amber-500/[0.04] to-amber-500/[0.02] ring-1 ring-amber-900/15">
+        <ListTodo className="h-8 w-8 text-[#6b6459]" strokeWidth={1.5} />
       </div>
       <div>
-        <p className="text-[15px] font-medium text-zinc-400">Select a task to view details</p>
-        <p className="mt-2 text-[13px] text-zinc-600">or create a new one from the header</p>
+        <p className="text-[15px] font-medium text-[#9c9486]">Select a task to view details</p>
+        <p className="mt-2 text-[13px] text-[#6b6459]">or create a new one from the header</p>
       </div>
       {status && (
         <div className="flex gap-8 mt-2">
@@ -387,7 +387,7 @@ function StatPill({ value, label, color }: { value: number; label: string; color
   return (
     <div className="flex flex-col items-center gap-1">
       <span className={cn("text-2xl font-semibold tabular-nums", color)}>{value}</span>
-      <span className="text-[11px] font-medium text-zinc-600">{label}</span>
+      <span className="text-[11px] font-medium text-[#6b6459]">{label}</span>
     </div>
   );
 }

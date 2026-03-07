@@ -197,17 +197,7 @@ export interface Project {
   name: string;
   mode: string;
   created_at: string;
-  // legal/lawborg fields
-  client_name?: string;
-  case_number?: string;
   jurisdiction?: string;
-  matter_type?: string;
-  opposing_counsel?: string;
-  deadline?: string;
-  privilege_level?: string;
-  status?: string;
-  default_template_id?: number | null;
-  session_privileged?: boolean;
 }
 
 export interface ProjectTask {

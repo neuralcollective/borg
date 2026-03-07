@@ -82,42 +82,78 @@
 }
 
 .dark {
-    --background: oklch(0.141 0.005 285.823);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.21 0.006 285.885);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.21 0.006 285.885);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.92 0.004 286.32);
-    --primary-foreground: oklch(0.21 0.006 285.885);
-    --secondary: oklch(0.274 0.006 286.033);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.274 0.006 286.033);
-    --muted-foreground: oklch(0.705 0.015 286.067);
-    --accent: oklch(0.274 0.006 286.033);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.552 0.016 285.938);
-    --chart-1: oklch(0.488 0.243 264.376);
-    --chart-2: oklch(0.696 0.17 162.48);
-    --chart-3: oklch(0.769 0.188 70.08);
-    --chart-4: oklch(0.627 0.265 303.9);
-    --chart-5: oklch(0.645 0.246 16.439);
-    --sidebar: oklch(0.21 0.006 285.885);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.274 0.006 286.033);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.552 0.016 285.938);
+    /* Warm charcoal/dark brown backgrounds */
+    --background: hsl(30, 5%, 8%);
+    --foreground: hsl(40, 20%, 95%);
+    --card: hsl(35, 4%, 12%);
+    --card-foreground: hsl(40, 20%, 95%);
+    --popover: hsl(35, 4%, 12%);
+    --popover-foreground: hsl(40, 20%, 95%);
+
+    /* Warm primary */
+    --primary: hsl(40, 15%, 90%);
+    --primary-foreground: hsl(30, 5%, 8%);
+
+    /* Warm secondary */
+    --secondary: hsl(30, 5%, 16%);
+    --secondary-foreground: hsl(40, 20%, 95%);
+
+    /* Warm muted */
+    --muted: hsl(30, 5%, 16%);
+    --muted-foreground: hsl(35, 8%, 55%);
+
+    /* Warm accent — pale amber/gold */
+    --accent: hsl(30, 5%, 16%);
+    --accent-foreground: hsl(40, 20%, 95%);
+
+    /* Warm destructive */
+    --destructive: hsl(10, 70%, 55%);
+
+    /* Warm-tinted borders */
+    --border: hsl(35, 10%, 80% / 12%);
+    --input: hsl(35, 10%, 80% / 16%);
+    --ring: hsl(35, 70%, 55%);
+
+    /* Warm chart palette */
+    --chart-1: hsl(35, 70%, 55%);
+    --chart-2: hsl(150, 40%, 45%);
+    --chart-3: hsl(25, 80%, 60%);
+    --chart-4: hsl(45, 65%, 55%);
+    --chart-5: hsl(10, 60%, 55%);
+
+    /* Warm sidebar */
+    --sidebar: hsl(32, 5%, 10%);
+    --sidebar-foreground: hsl(40, 20%, 95%);
+    --sidebar-primary: hsl(35, 70%, 55%);
+    --sidebar-primary-foreground: hsl(30, 5%, 8%);
+    --sidebar-accent: hsl(30, 5%, 16%);
+    --sidebar-accent-foreground: hsl(40, 20%, 95%);
+    --sidebar-border: hsl(35, 10%, 80% / 12%);
+    --sidebar-ring: hsl(35, 70%, 55%);
+
+    /* Semantic warm colors */
+    --warm-success: hsl(145, 50%, 46%);
+    --warm-error: hsl(8, 65%, 56%);
+    --warm-info: hsl(35, 70%, 55%);
+    --warm-amber: hsl(35, 70%, 55%);
+    --warm-amber-dim: hsl(35, 50%, 35%);
 }
+
+/* --- Animations --- */
 
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+@keyframes shimmertext {
+  0% { background-position: 100% 50%; }
+  100% { background-position: -100% 50%; }
+}
+
+@keyframes timeline-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes borg-scramble {
@@ -128,17 +164,83 @@
   49%      { clip-path: inset(40% 0 0 0); }
   50%      { clip-path: inset(0 0 0 0); }
   93%      { clip-path: inset(0 0 0 0); }
-  94%      { clip-path: inset(0 0 0 40%); transform: translateX(1px); }
+  94%      { clip-path: inset(0 0 0 40%); transform: translateX(0.5px); }
   95%      { clip-path: inset(0 0 0 0); transform: translateX(0); }
 }
 
 @keyframes borg-glitch-r {
   0%, 100% { transform: translate(0, 0); opacity: 0; }
-  4%       { transform: translate(2px, -1px); opacity: 0.6; }
+  4%       { transform: translate(1px, -0.5px); opacity: 0.4; }
   5%       { transform: translate(0, 0); opacity: 0; }
-  49%      { transform: translate(-1px, 1px); opacity: 0.5; }
+  49%      { transform: translate(-0.5px, 0.5px); opacity: 0.35; }
   50%      { transform: translate(0, 0); opacity: 0; }
 }
+
+@keyframes timeline-fade-in {
+  0% { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes timeline-collapse {
+  0% { grid-template-rows: 1fr; opacity: 1; }
+  to { grid-template-rows: 0fr; opacity: 0; }
+}
+
+@keyframes shimmertext {
+  0% { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@keyframes pulse-dot {
+  0%, to { transform: scale(0.75); opacity: 0.4; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(1turn); }
+}
+
+/* --- Animation utility classes --- */
+
+.animate-timeline-fade-in {
+  animation: timeline-fade-in 0.3s ease-out both;
+}
+
+.animate-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    hsl(35, 8%, 55%) 0%,
+    hsl(35, 70%, 55%) 40%,
+    hsl(40, 20%, 95%) 50%,
+    hsl(35, 70%, 55%) 60%,
+    hsl(35, 8%, 55%) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmertext 3s ease-in-out infinite;
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out both;
+}
+
+.timeline-block-exit {
+  display: grid;
+  animation: timeline-collapse 0.25s ease-in forwards;
+}
+
+/* --- Borg logo --- */
 
 .borg-logo {
   position: relative;
@@ -169,7 +271,7 @@
 }
 
 .borg-logo-text {
-  animation: borg-scramble 16s steps(1, end) infinite;
+  animation: borg-scramble 20s steps(1, end) infinite;
 }
 
 .borg-logo-ghost {
@@ -182,9 +284,11 @@
   color: #ff4400;
   mix-blend-mode: screen;
   pointer-events: none;
-  animation: borg-glitch-r 16s steps(1, end) infinite;
+  animation: borg-glitch-r 20s steps(1, end) infinite;
   opacity: 0;
 }
+
+/* --- Base layer --- */
 
 @layer base {
   * {
@@ -211,10 +315,10 @@
     }
   }
 
-  /* Scrollbar styling */
+  /* Scrollbar styling — warm tint */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.08) transparent;
+    scrollbar-color: hsla(35, 15%, 40%, 0.2) transparent;
   }
   *::-webkit-scrollbar {
     width: 6px;
@@ -224,15 +328,16 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,0.08);
+    background: hsla(35, 15%, 40%, 0.2);
     border-radius: 3px;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: rgba(255,255,255,0.15);
+    background: hsla(35, 15%, 40%, 0.35);
   }
 
+  /* Warm amber selection */
   ::selection {
-    background: rgba(99, 102, 241, 0.3);
+    background: hsla(35, 70%, 55%, 0.3);
     color: #fff;
   }
 }

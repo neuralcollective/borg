@@ -199,15 +199,6 @@ pub struct KnowledgeFile {
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
-pub struct ConflictHit {
-    pub project_id: i64,
-    pub project_name: String,
-    pub party_name: String,
-    pub party_role: String,
-    pub matched_field: String,
-}
-
-#[derive(Debug, serde::Serialize, Clone)]
 pub struct AuditEvent {
     pub id: i64,
     pub task_id: Option<i64>,
@@ -226,17 +217,6 @@ pub struct FtsResult {
     pub title_snippet: String,
     pub content_snippet: String,
     pub rank: f64,
-}
-
-#[derive(Debug, serde::Serialize, Clone)]
-pub struct DeadlineRow {
-    pub id: i64,
-    pub project_id: i64,
-    pub label: String,
-    pub due_date: String,
-    pub rule_basis: String,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -321,29 +301,6 @@ fn row_to_knowledge(row: &pg::Row<'_>) -> pg::Result<KnowledgeFile> {
     })
 }
 
-fn normalize_party_name(name: &str) -> String {
-    let lower = name.to_lowercase();
-    let stripped: String = lower
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == ' ' {
-                c
-            } else {
-                ' '
-            }
-        })
-        .collect();
-    let tokens: Vec<&str> = stripped
-        .split_whitespace()
-        .filter(|t| {
-            !matches!(
-                *t,
-                "inc" | "llc" | "ltd" | "corp" | "co" | "plc" | "the" | "of" | "and"
-            )
-        })
-        .collect();
-    tokens.join(" ")
-}
 
 fn is_stopword(token: &str) -> bool {
     matches!(
@@ -1355,214 +1312,6 @@ impl Db {
             .execute("DELETE FROM projects WHERE id=?1", params![id])
             .context("delete_project")?;
         Ok(affected > 0)
-    }
-
-    // ── Parties / Conflict Checking ────────────────────────────────────────
-
-    pub fn sync_project_parties(
-        &self,
-        project_id: i64,
-        client_name: &str,
-        opposing_counsel: &str,
-    ) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute(
-            "DELETE FROM parties WHERE project_id=?1",
-            params![project_id],
-        )?;
-        let created_at = now_str();
-        for (name, role) in [
-            (client_name, "client"),
-            (opposing_counsel, "opposing_counsel"),
-        ] {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let normalized = normalize_party_name(trimmed);
-            conn.execute(
-                "INSERT INTO parties (project_id, name, normalized_name, role, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![project_id, trimmed, normalized, role, created_at],
-            )?;
-        }
-        Ok(())
-    }
-
-    pub fn check_conflicts(
-        &self,
-        exclude_project_id: Option<i64>,
-        client_name: &str,
-        opposing_counsel: &str,
-    ) -> Result<Vec<ConflictHit>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let mut hits = Vec::new();
-
-        for (name, field) in [
-            (client_name, "client_name"),
-            (opposing_counsel, "opposing_counsel"),
-        ] {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let normalized = normalize_party_name(trimmed);
-            let pattern = format!("%{normalized}%");
-            let mut stmt = conn.prepare(
-                "SELECT p.project_id, pr.name, p.name, p.role \
-                 FROM parties p \
-                 JOIN projects pr ON pr.id = p.project_id \
-                 WHERE p.normalized_name LIKE ?1 \
-                 AND (?2 IS NULL OR p.project_id != ?2) \
-                 LIMIT 20",
-            )?;
-            let rows = stmt.query_map(params![pattern, exclude_project_id], |row| {
-                Ok(ConflictHit {
-                    project_id: row.get(0)?,
-                    project_name: row.get(1)?,
-                    party_name: row.get(2)?,
-                    party_role: row.get(3)?,
-                    matched_field: field.to_string(),
-                })
-            })?;
-            for r in rows {
-                hits.push(r?);
-            }
-        }
-        Ok(hits)
-    }
-
-    // ── Deadlines ──────────────────────────────────────────────────────────
-
-    pub fn list_project_deadlines(&self, project_id: i64) -> Result<Vec<DeadlineRow>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, project_id, label, due_date, rule_basis, status, created_at \
-             FROM deadlines WHERE project_id = ?1 ORDER BY due_date ASC",
-        )?;
-        let rows = stmt
-            .query_map(params![project_id], |r| {
-                let ts: String = r.get(6)?;
-                Ok(DeadlineRow {
-                    id: r.get(0)?,
-                    project_id: r.get(1)?,
-                    label: r.get(2)?,
-                    due_date: r.get(3)?,
-                    rule_basis: r.get(4)?,
-                    status: r.get(5)?,
-                    created_at: parse_ts(&ts),
-                })
-            })?
-            .collect::<pg::Result<Vec<_>>>()
-            .context("list_project_deadlines")?;
-        Ok(rows)
-    }
-
-    pub fn list_upcoming_deadlines(&self, limit: i64) -> Result<Vec<(DeadlineRow, String)>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let mut stmt = conn.prepare(
-            "SELECT d.id, d.project_id, d.label, d.due_date, d.rule_basis, d.status, d.created_at, p.name \
-             FROM deadlines d JOIN projects p ON d.project_id = p.id \
-             WHERE d.status = 'pending' ORDER BY d.due_date ASC LIMIT ?1"
-        )?;
-        let rows = stmt
-            .query_map(params![limit], |r| {
-                let ts: String = r.get(6)?;
-                Ok((
-                    DeadlineRow {
-                        id: r.get(0)?,
-                        project_id: r.get(1)?,
-                        label: r.get(2)?,
-                        due_date: r.get(3)?,
-                        rule_basis: r.get(4)?,
-                        status: r.get(5)?,
-                        created_at: parse_ts(&ts),
-                    },
-                    r.get::<_, String>(7)?,
-                ))
-            })?
-            .collect::<pg::Result<Vec<_>>>()
-            .context("list_upcoming_deadlines")?;
-        Ok(rows)
-    }
-
-    pub fn insert_deadline(
-        &self,
-        project_id: i64,
-        label: &str,
-        due_date: &str,
-        rule_basis: &str,
-    ) -> Result<i64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let id = conn.execute_returning_id(
-            "INSERT INTO deadlines (project_id, label, due_date, rule_basis, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![project_id, label, due_date, rule_basis, now_str()],
-        ).context("insert_deadline")?;
-        Ok(id)
-    }
-
-    pub fn update_deadline(
-        &self,
-        id: i64,
-        label: Option<&str>,
-        due_date: Option<&str>,
-        rule_basis: Option<&str>,
-        status: Option<&str>,
-    ) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        if let Some(v) = label {
-            conn.execute(
-                "UPDATE deadlines SET label = ?1 WHERE id = ?2",
-                params![v, id],
-            )?;
-        }
-        if let Some(v) = due_date {
-            conn.execute(
-                "UPDATE deadlines SET due_date = ?1 WHERE id = ?2",
-                params![v, id],
-            )?;
-        }
-        if let Some(v) = rule_basis {
-            conn.execute(
-                "UPDATE deadlines SET rule_basis = ?1 WHERE id = ?2",
-                params![v, id],
-            )?;
-        }
-        if let Some(v) = status {
-            conn.execute(
-                "UPDATE deadlines SET status = ?1 WHERE id = ?2",
-                params![v, id],
-            )?;
-        }
-        Ok(())
-    }
-
-    pub fn delete_deadline(&self, id: i64) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        conn.execute("DELETE FROM deadlines WHERE id = ?1", params![id])
-            .context("delete_deadline")?;
-        Ok(())
     }
 
     // ── Full-text search ──────────────────────────────────────────────────
@@ -4402,38 +4151,3 @@ impl Db {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::normalize_party_name;
-
-    #[test]
-    fn punctuation_and_hyphens_stripped() {
-        assert_eq!(normalize_party_name("Smith-Jones, LLC"), "smith jones");
-    }
-
-    #[test]
-    fn all_stop_words_removed() {
-        // Each legal stop-word must be filtered out on its own.
-        for word in &["inc", "llc", "ltd", "corp", "co", "plc", "the", "of", "and"] {
-            let result = normalize_party_name(&format!("Acme {}", word));
-            assert_eq!(result, "acme", "stop word '{word}' was not removed");
-        }
-    }
-
-    #[test]
-    fn mixed_case_normalised() {
-        assert_eq!(normalize_party_name("ACME CORP"), "acme");
-        assert_eq!(normalize_party_name("Smith And Jones"), "smith jones");
-    }
-
-    #[test]
-    fn multiple_spaces_collapsed() {
-        assert_eq!(normalize_party_name("Foo   Bar   Inc"), "foo bar");
-    }
-
-    #[test]
-    fn fully_empty_after_stop_word_removal() {
-        // A name composed solely of stop words should yield an empty string.
-        assert_eq!(normalize_party_name("The Co LLC Inc"), "");
-    }
-}

@@ -25,16 +25,16 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[#09090b]">
+    <div className="flex h-screen items-center justify-center bg-[#0f0e0c]">
       <div className="w-full max-w-[400px] space-y-8 px-6">
         <div className="flex flex-col items-center gap-4">
           <div className="relative h-16 w-16">
-            <div className="absolute inset-0 rounded-full bg-blue-500/20 blur-xl" />
+            <div className="absolute inset-0 rounded-full bg-amber-500/20 blur-xl" />
             <div className="relative h-16 w-16">
               <BorgLogo expanded />
             </div>
           </div>
-          <h1 className="text-xl font-semibold text-zinc-200">
+          <h1 className="text-xl font-semibold text-[#e8e0d4]">
             {needsSetup ? "Create Admin Account" : "Sign In"}
           </h1>
           {needsSetup && (
@@ -51,7 +51,7 @@ export function LoginPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoFocus
-              className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[14px] text-zinc-200 outline-none focus:border-blue-500/40"
+              className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
               placeholder="admin"
             />
           </div>
@@ -62,7 +62,7 @@ export function LoginPage() {
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[14px] text-zinc-200 outline-none focus:border-blue-500/40"
+                className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
                 placeholder="Your Name"
               />
             </div>
@@ -74,7 +74,7 @@ export function LoginPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-2.5 text-[14px] text-zinc-200 outline-none focus:border-blue-500/40"
+              className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
               placeholder={needsSetup ? "Min 4 characters" : "••••••"}
             />
           </div>
@@ -88,7 +88,7 @@ export function LoginPage() {
           <button
             type="submit"
             disabled={busy || !username.trim() || !password}
-            className="w-full rounded-xl bg-blue-500/20 py-2.5 text-[14px] font-medium text-blue-400 ring-1 ring-inset ring-blue-500/20 transition-colors hover:bg-blue-500/30 disabled:opacity-50"
+            className="w-full rounded-xl bg-amber-500/20 py-2.5 text-[14px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
           >
             {busy ? "..." : needsSetup ? "Create Account" : "Sign In"}
           </button>
