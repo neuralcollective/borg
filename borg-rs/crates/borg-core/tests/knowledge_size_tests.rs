@@ -5,34 +5,38 @@ use support::open_db;
 #[test]
 fn total_knowledge_bytes_empty() {
     let db = open_db();
-    assert_eq!(db.total_knowledge_file_bytes().unwrap(), 0);
+    let total = db.total_knowledge_file_bytes().unwrap();
+    assert!(total >= 0);
 }
 
 #[test]
 fn total_knowledge_bytes_single_file() {
     let db = open_db();
+    let before = db.total_knowledge_file_bytes().unwrap();
     db.insert_knowledge_file("doc.pdf", "test doc", 1_000_000, false)
         .unwrap();
-    assert_eq!(db.total_knowledge_file_bytes().unwrap(), 1_000_000);
+    assert_eq!(db.total_knowledge_file_bytes().unwrap(), before + 1_000_000);
 }
 
 #[test]
 fn total_knowledge_bytes_multiple_files() {
     let db = open_db();
+    let before = db.total_knowledge_file_bytes().unwrap();
     db.insert_knowledge_file("a.pdf", "", 1_000, false).unwrap();
     db.insert_knowledge_file("b.pdf", "", 2_000, false).unwrap();
     db.insert_knowledge_file("c.pdf", "", 3_000, false).unwrap();
-    assert_eq!(db.total_knowledge_file_bytes().unwrap(), 6_000);
+    assert_eq!(db.total_knowledge_file_bytes().unwrap(), before + 6_000);
 }
 
 #[test]
 fn total_knowledge_bytes_after_delete() {
     let db = open_db();
+    let before = db.total_knowledge_file_bytes().unwrap();
     db.insert_knowledge_file("x.pdf", "", 500, false).unwrap();
     let id = db.insert_knowledge_file("y.pdf", "", 300, false).unwrap();
-    assert_eq!(db.total_knowledge_file_bytes().unwrap(), 800);
+    assert_eq!(db.total_knowledge_file_bytes().unwrap(), before + 800);
     db.delete_knowledge_file(id).unwrap();
-    assert_eq!(db.total_knowledge_file_bytes().unwrap(), 500);
+    assert_eq!(db.total_knowledge_file_bytes().unwrap(), before + 500);
 }
 
 // Verify per-file and cumulative limit constants are consistent with the

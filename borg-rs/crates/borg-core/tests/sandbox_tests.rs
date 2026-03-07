@@ -144,11 +144,12 @@ fn bwrap_args_zero_writable_dirs() {
     assert!(s.contains(&"--"));
     assert!(s.contains(&"echo"));
 
-    // Only /tmp should be bound (no extra writable dirs)
+    // /tmp uses --tmpfs, no extra --bind dirs
+    assert!(has_seq(&s, &["--tmpfs", "/tmp"]));
     let bind_count = s.windows(3).filter(|w| w[0] == "--bind").count();
     assert_eq!(
-        bind_count, 1,
-        "zero writable dirs → only /tmp should be bound"
+        bind_count, 0,
+        "zero writable dirs → no --bind entries"
     );
 }
 

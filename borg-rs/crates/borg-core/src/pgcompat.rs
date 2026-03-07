@@ -529,9 +529,11 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         tokio::task::block_in_place(|| handle.block_on(f))
     } else {
-        let rt = tokio::runtime::Runtime::new()
-            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"));
-        rt.block_on(f)
+        thread_local! {
+            static RT: tokio::runtime::Runtime = tokio::runtime::Runtime::new()
+                .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"));
+        }
+        RT.with(|rt| rt.block_on(f))
     }
 }
 

@@ -2151,7 +2151,7 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let total = conn
             .query_row(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM knowledge_files",
+                "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM knowledge_files",
                 [],
                 |r| r.get(0),
             )
