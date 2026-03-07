@@ -1220,18 +1220,44 @@ pub(crate) async fn run_chat_agent(
             .as_ref()
             .map(|p| format!("Current project_id: {}\n", p.id))
             .unwrap_or_default();
+        let mode_hint = project_for_chat
+            .as_ref()
+            .map(|p| format!("Current project mode: {}\n", p.mode))
+            .unwrap_or_default();
         let agent_claude_md = format!(
-            "# BorgSearch — Project Document Search\n\n\
+            "# Borg Chat Agent\n\n\
              {project_id_hint}\
+             {mode_hint}\
+             ## Creating Tasks\n\n\
+             When the user asks you to do something that requires long-running work (code changes, research, document drafting, \
+             analysis that would take multiple steps), you should file it as a pipeline task rather than trying to do it inline.\n\n\
+             Before filing, ask any clarifying questions needed to write a good task description. For example:\n\
+             - What is the desired outcome or deliverable?\n\
+             - Are there constraints, deadlines, or specific requirements?\n\
+             - Which files or areas should be focused on?\n\n\
+             Only ask what's genuinely needed — if the request is already clear, file it directly.\n\n\
+             To create a task:\n\
+             ```\n\
+             curl -s -X POST $BORG_API_URL/api/tasks/create \\\n\
+               -H \"Authorization: Bearer $BORG_API_TOKEN\" \\\n\
+               -H \"Content-Type: application/json\" \\\n\
+               -d '{{\"title\": \"<concise title>\", \"description\": \"<detailed description with all context>\"{project_id_field}{mode_field}}}'\n\
+             ```\n\n\
+             The task will enter the pipeline and be worked on autonomously. Tell the user the task ID so they can track it.\n\n\
+             ## BorgSearch — Project Document Search\n\n\
              You have access to BorgSearch, a project document search API. Use curl or WebFetch to query it.\n\
              This is NOT the same as Claude's built-in Grep/Glob/Read tools — BorgSearch searches uploaded project documents (contracts, filings, memos, etc.) via Vespa.\n\n\
-             ## Endpoints\n\n\
+             ### Endpoints\n\n\
              All requests need: `Authorization: Bearer $BORG_API_TOKEN`\n\n\
              - `GET $BORG_API_URL/api/borgsearch/query?q=<query>&project_id=<id>&limit=20&doc_type=<type>&jurisdiction=<jur>&privileged_only=true` \
              — hybrid keyword+semantic search with optional filters. doc_type: contract, filing, statute, memo, document, data. jurisdiction: e.g. US-CA, UK, EU.\n\
              - `GET $BORG_API_URL/api/borgsearch/files?project_id=<id>&q=<filter>&limit=50&offset=0` — list project files\n\
              - `GET $BORG_API_URL/api/borgsearch/file/<file_id>?project_id=<id>` — read full file content\n\n\
-             Responses are plain text. Use BorgSearch to find relevant documents before answering questions about project content.\n"
+             Responses are plain text. Use BorgSearch to find relevant documents before answering questions about project content.\n",
+            project_id_hint = project_id_hint,
+            mode_hint = mode_hint,
+            project_id_field = project_for_chat.as_ref().map(|p| format!(", \"project_id\": {}", p.id)).unwrap_or_default(),
+            mode_field = project_for_chat.as_ref().map(|p| format!(", \"mode\": \"{}\"", p.mode)).unwrap_or_default(),
         );
         let claude_md_path = format!("{session_dir}/CLAUDE.md");
         let _ = std::fs::write(&claude_md_path, &agent_claude_md);
