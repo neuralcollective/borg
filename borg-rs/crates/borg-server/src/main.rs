@@ -1140,6 +1140,7 @@ async fn main() -> anyhow::Result<()> {
         // Settings
         .route("/api/settings", get(routes::get_settings))
         .route("/api/settings", put(routes::put_settings))
+        .route("/api/mcp/status", get(routes::get_mcp_status))
         // SSE logs
         .route("/api/logs", get(routes::sse_logs))
         // Events (queryable log)

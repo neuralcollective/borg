@@ -5376,6 +5376,22 @@ impl Db {
         Ok(None)
     }
 
+    pub fn get_api_key_exact(&self, owner: &str, provider: &str) -> Result<Option<String>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let result = conn
+            .query_row(
+                "SELECT key_value FROM api_keys WHERE owner = ?1 AND provider = ?2",
+                params![owner, provider],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("get_api_key_exact")?;
+        Ok(result.map(|val| Self::decrypt_secret(&val)))
+    }
+
     pub fn list_api_keys(&self, owner: &str) -> Result<Vec<ApiKeyEntry>> {
         let conn = self
             .conn

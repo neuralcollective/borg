@@ -21,6 +21,7 @@ use borg_core::{
         Db, LegacyEvent, ProjectFileMetaRow, ProjectFilePageCursor, ProjectFileRow, ProjectRow,
         ProjectTaskCounts, TaskMessage, TaskOutput,
     },
+    linked_credentials::{PROVIDER_CLAUDE, PROVIDER_OPENAI},
     types::{PhaseConfig, PhaseContext, RepoConfig, Task},
 };
 use chrono::Utc;
@@ -1562,6 +1563,332 @@ pub(crate) async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "search": search_info,
         "backup": backup,
     }))
+}
+
+fn mcp_service_specs() -> [(&'static str, &'static str); 9] {
+    [
+        ("lexisnexis", "LexisNexis"),
+        ("westlaw", "Westlaw"),
+        ("clio", "Clio"),
+        ("imanage", "iManage"),
+        ("netdocuments", "NetDocuments"),
+        ("congress", "Congress.gov"),
+        ("openstates", "OpenStates"),
+        ("canlii", "CanLII"),
+        ("regulations_gov", "Regulations.gov"),
+    ]
+}
+
+fn mcp_status_item(
+    key: &str,
+    label: &str,
+    status: &str,
+    detail: impl Into<String>,
+    source: Option<&str>,
+    checked_at: Option<String>,
+) -> Value {
+    json!({
+        "key": key,
+        "label": label,
+        "status": status,
+        "detail": detail.into(),
+        "source": source.unwrap_or(""),
+        "checked_at": checked_at.unwrap_or_default(),
+    })
+}
+
+pub(crate) async fn get_mcp_status(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+) -> Result<Json<Value>, StatusCode> {
+    let linked_credentials = state
+        .db
+        .list_user_linked_credentials(user.id)
+        .map_err(internal)?;
+    let linked_by_provider: HashMap<_, _> = linked_credentials
+        .into_iter()
+        .map(|entry| (entry.provider.clone(), entry))
+        .collect();
+    let available_keys = state
+        .db
+        .list_api_keys(&format!("workspace:{}", workspace.id))
+        .map_err(internal)?;
+    let mut effective_key_by_provider = HashMap::new();
+    for entry in available_keys {
+        let provider = entry.provider.clone();
+        let replace = effective_key_by_provider.get(&provider).is_none_or(
+            |current: &borg_core::db::ApiKeyEntry| {
+                current.owner == "global" && entry.owner != "global"
+            },
+        );
+        if replace {
+            effective_key_by_provider.insert(provider, entry);
+        }
+    }
+
+    let search_result = if let Some(search) = &state.search {
+        search.healthcheck().await
+    } else {
+        Ok(())
+    };
+    let search_backend = state
+        .search
+        .as_ref()
+        .map(|s| s.backend_name())
+        .unwrap_or("none");
+    let search_target = state
+        .search
+        .as_ref()
+        .map(|s| s.target())
+        .unwrap_or_default();
+
+    let borg_mcp_path = if let Ok(path) = std::env::var("BORG_MCP_SERVER") {
+        path
+    } else {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../sidecar/borg-mcp/server.js")
+            .to_string_lossy()
+            .to_string()
+    };
+    let lawborg_mcp_path = if let Ok(path) = std::env::var("LAWBORG_MCP_SERVER") {
+        path
+    } else {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../sidecar/lawborg-mcp/server.js")
+            .to_string_lossy()
+            .to_string()
+    };
+
+    let agent_access = vec![
+        match linked_by_provider.get(PROVIDER_CLAUDE) {
+            Some(entry) if entry.status == "connected" => mcp_status_item(
+                "claude",
+                "Claude Code",
+                "verified",
+                if entry.account_email.is_empty() {
+                    "Linked and validated for agent use".to_string()
+                } else {
+                    format!("{} linked and validated", entry.account_email)
+                },
+                Some("user"),
+                Some(entry.last_validated_at.clone()),
+            ),
+            Some(entry) => mcp_status_item(
+                "claude",
+                "Claude Code",
+                "degraded",
+                if entry.last_error.is_empty() {
+                    "Linked account needs reconnect".to_string()
+                } else {
+                    entry.last_error.clone()
+                },
+                Some("user"),
+                Some(entry.last_validated_at.clone()),
+            ),
+            None => mcp_status_item(
+                "claude",
+                "Claude Code",
+                "missing",
+                "No linked Claude account for this user",
+                Some("user"),
+                None,
+            ),
+        },
+        match linked_by_provider.get(PROVIDER_OPENAI) {
+            Some(entry) if entry.status == "connected" => mcp_status_item(
+                "openai",
+                "Codex / ChatGPT",
+                "verified",
+                if entry.account_email.is_empty() {
+                    "Linked and validated for agent use".to_string()
+                } else {
+                    format!("{} linked and validated", entry.account_email)
+                },
+                Some("user"),
+                Some(entry.last_validated_at.clone()),
+            ),
+            Some(entry) => mcp_status_item(
+                "openai",
+                "Codex / ChatGPT",
+                "degraded",
+                if entry.last_error.is_empty() {
+                    "Linked account needs reconnect".to_string()
+                } else {
+                    entry.last_error.clone()
+                },
+                Some("user"),
+                Some(entry.last_validated_at.clone()),
+            ),
+            None => mcp_status_item(
+                "openai",
+                "Codex / ChatGPT",
+                "missing",
+                "No linked OpenAI account for this user",
+                Some("user"),
+                None,
+            ),
+        },
+    ];
+
+    let runtime = vec![
+        if std::path::Path::new(&borg_mcp_path).exists() {
+            mcp_status_item(
+                "borg_mcp",
+                "Borg MCP",
+                "verified",
+                format!("Sidecar present at {borg_mcp_path}"),
+                Some("filesystem"),
+                Some(Utc::now().to_rfc3339()),
+            )
+        } else {
+            mcp_status_item(
+                "borg_mcp",
+                "Borg MCP",
+                "missing",
+                format!("Sidecar missing at {borg_mcp_path}"),
+                Some("filesystem"),
+                None,
+            )
+        },
+        if search_backend == "none" {
+            mcp_status_item(
+                "borgsearch",
+                "BorgSearch Tools",
+                "missing",
+                "No search backend configured",
+                Some("runtime"),
+                None,
+            )
+        } else if search_result.is_ok() {
+            mcp_status_item(
+                "borgsearch",
+                "BorgSearch Tools",
+                "verified",
+                format!("{search_backend} healthy at {search_target}"),
+                Some("endpoint"),
+                Some(Utc::now().to_rfc3339()),
+            )
+        } else {
+            mcp_status_item(
+                "borgsearch",
+                "BorgSearch Tools",
+                "degraded",
+                search_result
+                    .err()
+                    .map(|err| err.to_string())
+                    .unwrap_or_else(|| "Search healthcheck failed".to_string()),
+                Some("endpoint"),
+                Some(Utc::now().to_rfc3339()),
+            )
+        },
+        if std::path::Path::new(&lawborg_mcp_path).exists() {
+            mcp_status_item(
+                "lawborg_mcp",
+                "Lawborg MCP",
+                "verified",
+                format!("Sidecar present at {lawborg_mcp_path}"),
+                Some("filesystem"),
+                Some(Utc::now().to_rfc3339()),
+            )
+        } else {
+            mcp_status_item(
+                "lawborg_mcp",
+                "Lawborg MCP",
+                "missing",
+                format!("Sidecar missing at {lawborg_mcp_path}"),
+                Some("filesystem"),
+                None,
+            )
+        },
+    ];
+
+    let services: Vec<Value> = mcp_service_specs()
+        .into_iter()
+        .map(|(provider, label)| {
+            if let Some(entry) = effective_key_by_provider.get(provider) {
+                let source = if entry.owner == "global" {
+                    "global"
+                } else {
+                    "workspace"
+                };
+                mcp_status_item(
+                    provider,
+                    label,
+                    "configured",
+                    format!("Credential configured via {source} scope"),
+                    Some(source),
+                    Some(entry.created_at.clone()),
+                )
+            } else {
+                mcp_status_item(
+                    provider,
+                    label,
+                    "missing",
+                    "No credential configured via workspace or global scope",
+                    None,
+                    None,
+                )
+            }
+        })
+        .collect();
+
+    let mut verified = 0;
+    let mut configured = 0;
+    let mut degraded = 0;
+    let mut missing = 0;
+    for item in agent_access
+        .iter()
+        .chain(runtime.iter())
+        .chain(services.iter())
+    {
+        match item
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("missing")
+        {
+            "verified" => verified += 1,
+            "configured" => configured += 1,
+            "degraded" => degraded += 1,
+            _ => missing += 1,
+        }
+    }
+
+    let mut service_counts: HashMap<&str, i64> = HashMap::new();
+    service_counts.insert("verified", 0);
+    service_counts.insert("configured", 0);
+    service_counts.insert("degraded", 0);
+    service_counts.insert("missing", 0);
+    for item in &services {
+        let status = item
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("missing");
+        *service_counts.entry(status).or_insert(0) += 1;
+    }
+
+    Ok(Json(json!({
+        "generated_at": Utc::now().to_rfc3339(),
+        "summary": {
+            "verified": verified,
+            "configured": configured,
+            "degraded": degraded,
+            "missing": missing,
+        },
+        "agent_access": agent_access,
+        "runtime": runtime,
+        "services": services,
+        "workspace": {
+            "id": workspace.id,
+            "name": workspace.name,
+        },
+        "service_rollup": {
+            "verified": service_counts.get("verified").copied().unwrap_or(0),
+            "configured": service_counts.get("configured").copied().unwrap_or(0),
+            "degraded": service_counts.get("degraded").copied().unwrap_or(0),
+            "missing": service_counts.get("missing").copied().unwrap_or(0),
+        }
+    })))
 }
 
 // Projects

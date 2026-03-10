@@ -19,9 +19,11 @@ import { ProjectsPanel } from "@/components/projects-panel";
 import { ModeCreatorPanel } from "@/components/mode-creator-panel";
 import { AutoTasksPanel } from "@/components/auto-tasks-panel";
 import { SettingsPanel } from "@/components/settings-panel";
+import { StatusPanel } from "@/components/status-panel";
 import { LoginPage } from "@/components/login-page";
 import { BorgLogo, PRODUCT_WORD } from "@/components/borg-logo";
 import {
+  Activity,
   ListTodo,
   Terminal,
   GitMerge,
@@ -63,7 +65,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-type View = "tasks" | "projects" | "creator" | "auto-tasks" | "proposals" | "logs" | "queue" | "settings";
+type View = "tasks" | "projects" | "creator" | "auto-tasks" | "proposals" | "logs" | "queue" | "status" | "settings";
 type MobileTab = "tasks" | "projects" | "queue" | "chat";
 type DashboardNavigateDetail = { view: View };
 const SHOW_SETTINGS_NAV = import.meta.env.VITE_SHOW_SETTINGS !== "false";
@@ -85,6 +87,7 @@ const ALL_NAV_ITEMS = [
   { key: "creator" as const, label: "Pipelines", Icon: Wrench, minimalVisible: true },
   { key: "auto-tasks" as const, label: "Auto Tasks", Icon: Zap, minimalVisible: true },
   { key: "proposals" as const, label: "Proposals", Icon: Lightbulb, minimalVisible: false },
+  { key: "status" as const, label: "MCP", Icon: Activity, minimalVisible: true },
   { key: "logs" as const, label: "Logs", Icon: Terminal, minimalVisible: false },
   { key: "queue" as const, label: "Queue", Icon: GitMerge, minimalVisible: false },
   { key: "settings" as const, label: "Settings", Icon: Settings, minimalVisible: true },
@@ -456,6 +459,7 @@ function AppInner() {
             {view === "creator" && <ModeCreatorPanel />}
             {view === "auto-tasks" && <AutoTasksPanel />}
             {view === "proposals" && <ProposalsPanel repoFilter={repoFilter} />}
+            {view === "status" && <StatusPanel />}
             {view === "logs" && <LogViewer logs={logs} />}
             {view === "queue" && <QueuePanel repoFilter={repoFilter} />}
             {view === "settings" && SHOW_SETTINGS_NAV && <SettingsPanel />}

@@ -21,6 +21,7 @@ type View =
   | "proposals"
   | "logs"
   | "queue"
+  | "status"
   | "chat"
   | "knowledge"
   | "settings";
@@ -33,6 +34,7 @@ const VIEW_TITLES: Record<View, string> = {
   proposals: "Proposals",
   logs: "System Logs",
   queue: "Integration Queue",
+  status: "MCP Status",
   chat: "Chat",
   knowledge: "Knowledge Base",
   settings: "Settings",

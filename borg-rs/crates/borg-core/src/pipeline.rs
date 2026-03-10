@@ -412,11 +412,9 @@ impl Pipeline {
                 .unwrap_or_else(|_| self.config.container_setup.clone())
         };
         let mut api_keys = std::collections::HashMap::new();
-        let key_owner = if task.created_by.is_empty() {
-            "global"
-        } else {
-            &task.created_by
-        };
+        let workspace_owner =
+            (task.workspace_id > 0).then(|| format!("workspace:{}", task.workspace_id));
+        let user_owner = (!task.created_by.is_empty()).then(|| task.created_by.clone());
         for provider in [
             "lexisnexis",
             "lexmachina",
@@ -434,7 +432,16 @@ impl Pipeline {
             "plaid_secret",
             "plaid_env",
         ] {
-            if let Ok(Some(key)) = self.db.get_api_key(key_owner, provider) {
+            let resolved = workspace_owner
+                .as_deref()
+                .and_then(|owner| self.db.get_api_key_exact(owner, provider).ok().flatten())
+                .or_else(|| {
+                    user_owner
+                        .as_deref()
+                        .and_then(|owner| self.db.get_api_key_exact(owner, provider).ok().flatten())
+                })
+                .or_else(|| self.db.get_api_key_exact("global", provider).ok().flatten());
+            if let Some(key) = resolved {
                 api_keys.insert(provider.to_string(), key);
             }
         }

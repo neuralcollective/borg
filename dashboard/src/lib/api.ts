@@ -492,6 +492,46 @@ export function useHealth() {
   });
 }
 
+export interface McpStatusItem {
+  key: string;
+  label: string;
+  status: "verified" | "configured" | "degraded" | "missing";
+  detail: string;
+  source: string;
+  checked_at: string;
+}
+
+export interface McpStatusResponse {
+  generated_at: string;
+  summary: {
+    verified: number;
+    configured: number;
+    degraded: number;
+    missing: number;
+  };
+  service_rollup: {
+    verified: number;
+    configured: number;
+    degraded: number;
+    missing: number;
+  };
+  workspace: {
+    id: number;
+    name: string;
+  };
+  agent_access: McpStatusItem[];
+  runtime: McpStatusItem[];
+  services: McpStatusItem[];
+}
+
+export function useMcpStatus() {
+  return useQuery<McpStatusResponse>({
+    queryKey: ["mcp-status"],
+    queryFn: () => fetchJson("/api/mcp/status"),
+    refetchInterval: 30000,
+  });
+}
+
 export function useProposals() {
   return useQuery<Proposal[]>({
     queryKey: ["proposals"],
