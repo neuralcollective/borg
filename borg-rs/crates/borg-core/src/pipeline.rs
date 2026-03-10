@@ -4419,11 +4419,22 @@ Make only the minimal changes the linter requires. Do not refactor or change log
         let queued_count = self.db.count_queue_with_status("queued").unwrap_or(0)
             + self.db.count_queue_with_status("merging").unwrap_or(0);
         let last_merge_ts = self.db.get_ts("last_release_ts");
-        if queued_count > 0 && now - last_merge_ts >= 60 * 60 {
+        let backlog_started_ts = self.db.get_ts("last_no_merge_backlog_started_ts");
+        let (baseline_ts, next_backlog_started_ts) = no_merge_guardrail_baseline(
+            queued_count,
+            last_merge_ts,
+            backlog_started_ts,
+            now,
+        );
+        if next_backlog_started_ts != backlog_started_ts {
+            self.db
+                .set_ts("last_no_merge_backlog_started_ts", next_backlog_started_ts);
+        }
+        if let Some(baseline_ts) = baseline_ts.filter(|baseline| now - baseline >= 60 * 60) {
             let last_alert = self.db.get_ts("last_alert_no_merge_ts");
             if now - last_alert >= 15 * 60 {
                 self.db.set_ts("last_alert_no_merge_ts", now);
-                let mins = (now - last_merge_ts) / 60;
+                let mins = (now - baseline_ts) / 60;
                 let msg = format!(
                     "Guardrail alert: {queued_count} queued/merging entries and no merge for {mins} minutes."
                 );
@@ -5026,6 +5037,26 @@ fn parse_triage_item(
     ))
 }
 
+fn no_merge_guardrail_baseline(
+    queued_count: i64,
+    last_release_ts: i64,
+    backlog_started_ts: i64,
+    now: i64,
+) -> (Option<i64>, i64) {
+    if queued_count <= 0 {
+        return (None, 0);
+    }
+    if last_release_ts > 0 {
+        return (Some(last_release_ts), 0);
+    }
+    let started = if backlog_started_ts > 0 {
+        backlog_started_ts
+    } else {
+        now
+    };
+    (Some(started), started)
+}
+
 /// Collect session directory paths under `sessions_dir` that are stale and
 /// eligible for removal.
 ///
@@ -5472,5 +5503,42 @@ mod phase_completion_verdict_tests {
             err.contains("missing_requirements"),
             "unexpected error: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod guardrail_alert_tests {
+    use super::no_merge_guardrail_baseline;
+
+    #[test]
+    fn queue_absence_clears_no_merge_baseline() {
+        let (baseline, next_started) = no_merge_guardrail_baseline(0, 0, 123, 900);
+
+        assert_eq!(baseline, None);
+        assert_eq!(next_started, 0);
+    }
+
+    #[test]
+    fn first_backlog_without_merge_starts_timer_now() {
+        let (baseline, next_started) = no_merge_guardrail_baseline(5, 0, 0, 900);
+
+        assert_eq!(baseline, Some(900));
+        assert_eq!(next_started, 900);
+    }
+
+    #[test]
+    fn existing_backlog_without_merge_preserves_first_seen_time() {
+        let (baseline, next_started) = no_merge_guardrail_baseline(5, 0, 600, 900);
+
+        assert_eq!(baseline, Some(600));
+        assert_eq!(next_started, 600);
+    }
+
+    #[test]
+    fn last_release_takes_precedence_and_clears_backlog_timer() {
+        let (baseline, next_started) = no_merge_guardrail_baseline(5, 750, 600, 900);
+
+        assert_eq!(baseline, Some(750));
+        assert_eq!(next_started, 0);
     }
 }
