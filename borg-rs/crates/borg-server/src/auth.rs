@@ -235,8 +235,8 @@ fn external_email_is_admin(config: &borg_core::config::Config, email: &str) -> b
 }
 
 fn provision_external_user(state: &AppState, email: &str) -> Result<AuthUser, Response> {
-    let is_first_user = state.db.count_users().unwrap_or(0) == 0;
-    let desired_admin = external_email_is_admin(&state.config, email) || is_first_user;
+    let has_admins = state.db.count_admin_users().unwrap_or(0) > 0;
+    let desired_admin = external_email_is_admin(&state.config, email) || !has_admins;
     let existing = state.db.get_user_by_username(email).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

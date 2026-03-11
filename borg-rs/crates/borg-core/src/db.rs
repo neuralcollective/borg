@@ -4510,6 +4510,17 @@ impl Db {
         Ok(count)
     }
 
+    pub fn count_admin_users(&self) -> Result<i64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users WHERE is_admin = true", params![], |row| row.get(0))
+            .context("count_admin_users")?;
+        Ok(count)
+    }
+
     pub fn create_user(
         &self,
         username: &str,
