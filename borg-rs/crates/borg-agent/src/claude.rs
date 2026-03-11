@@ -182,74 +182,19 @@ impl AgentBackend for ClaudeBackend {
 
         // Wire MCP servers for pipeline tasks
         if !ctx.borg_api_token.is_empty() && !ctx.borg_api_url.is_empty() {
-            let mut mcp_servers = serde_json::Map::new();
-            let mut borg_mcp_loaded = false;
-
-            // borg-mcp: document search + task management
-            let borg_mcp_path = if let Ok(p) = std::env::var("BORG_MCP_SERVER") {
-                std::path::PathBuf::from(p)
-            } else {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../../sidecar/borg-mcp/server.js")
-            };
-            if let Ok(mcp_server) = borg_mcp_path.canonicalize() {
-                let mut env_vars = serde_json::Map::new();
-                env_vars.insert("API_BASE_URL".into(), json!(ctx.borg_api_url));
-                env_vars.insert("API_TOKEN".into(), json!(ctx.borg_api_token));
-                if task.project_id > 0 {
-                    env_vars.insert("PROJECT_ID".into(), json!(task.project_id.to_string()));
-                    env_vars.insert("PROJECT_MODE".into(), json!(&task.mode));
-                }
-                mcp_servers.insert(
-                    "borg".into(),
-                    json!({
-                        "command": "bun",
-                        "args": ["run", mcp_server],
-                        "env": env_vars,
-                    }),
-                );
-                borg_mcp_loaded = true;
-            }
-
-            // lawborg-mcp: external legal research tools (legal tasks only)
-            let is_legal = matches!(task.mode.as_str(), "lawborg" | "legal");
-            if is_legal {
-                let legal_mcp_path = if let Ok(p) = std::env::var("LAWBORG_MCP_SERVER") {
-                    std::path::PathBuf::from(p)
-                } else {
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../../sidecar/lawborg-mcp/server.js")
-                };
-                if let Ok(mcp_server) = legal_mcp_path.canonicalize() {
-                    let mut env_vars = serde_json::Map::new();
-                    for (provider, key) in &ctx.api_keys {
-                        let env_name = match provider.as_str() {
-                            "lexisnexis" => "LEXISNEXIS_API_KEY",
-                            "westlaw" => "WESTLAW_API_KEY",
-                            "clio" => "CLIO_API_KEY",
-                            "imanage" => "IMANAGE_API_KEY",
-                            "netdocuments" => "NETDOCUMENTS_API_KEY",
-                            "congress" => "CONGRESS_API_KEY",
-                            "openstates" => "OPENSTATES_API_KEY",
-                            "canlii" => "CANLII_API_KEY",
-                            "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                            _ => continue,
-                        };
-                        env_vars.insert(env_name.into(), json!(key));
-                    }
-                    mcp_servers.insert(
-                        "legal".into(),
-                        json!({
-                            "command": "bun",
-                            "args": ["run", mcp_server],
-                            "env": env_vars,
-                        }),
-                    );
-                }
-            }
-
+            let api_keys_vec: Vec<(String, String)> =
+                ctx.api_keys.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mcp_servers = crate::mcp::build_mcp_servers_json(
+                &ctx.borg_api_url,
+                &ctx.borg_api_token,
+                &task.mode,
+                task.project_id,
+                None,
+                &api_keys_vec,
+            );
             if !mcp_servers.is_empty() {
-                if borg_mcp_loaded {
+                let borg_loaded = mcp_servers.contains_key("borg");
+                if borg_loaded {
                     effective_allowed_tools =
                         merge_allowed_tools(&phase.allowed_tools, BORG_MCP_READ_ONLY_TOOLS);
                 }

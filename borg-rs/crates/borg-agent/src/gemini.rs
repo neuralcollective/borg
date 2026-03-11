@@ -6,8 +6,9 @@ use borg_core::{
     agent::AgentBackend,
     types::{PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::{debug, info, warn};
+use tracing::info;
+
+use crate::drain::{drain_child, DrainConfig};
 
 /// Runs Gemini CLI (@google/gemini-cli) as the agent backend.
 ///
@@ -93,93 +94,37 @@ impl AgentBackend for GeminiBackend {
             .spawn()
             .with_context(|| format!("failed to spawn gemini binary: {}", self.gemini_bin))?;
 
-        let stdout = child.stdout.take().context("failed to take stdout")?;
-        let stderr = child.stderr.take().context("failed to take stderr")?;
-        let stream_tx = ctx.stream_tx.clone();
-
-        let mut output_lines = Vec::new();
-        let mut had_fatal_stderr = false;
-        let mut stdout_reader = BufReader::new(stdout).lines();
-        let mut stderr_reader = BufReader::new(stderr).lines();
-        let mut stdout_done = false;
-        let mut stderr_done = false;
-        let mut timed_out = false;
-        let timeout_enabled = self.timeout_s > 0;
-        let timeout_secs = self.timeout_s.max(1);
-        let timeout = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
-        tokio::pin!(timeout);
-
-        while !(stdout_done && stderr_done) {
-            tokio::select! {
-                _ = &mut timeout, if timeout_enabled => {
-                    timed_out = true;
-                    warn!(
-                        task_id = task.id,
-                        phase = %phase.name,
-                        timeout_s = timeout_secs,
-                        "gemini phase timed out, terminating subprocess"
-                    );
-                    let _ = child.start_kill();
-                    break;
-                }
-                line = stdout_reader.next_line(), if !stdout_done => {
-                    match line.context("error reading stdout")? {
-                        Some(l) => {
-                            if let Some(tx) = &stream_tx {
-                                let _ = tx.send(l.clone());
-                            }
-                            if output_lines.len() < 50_000 {
-                                output_lines.push(l);
-                            }
-                        }
-                        None => {
-                            stdout_done = true;
-                        }
-                    }
-                }
-                line = stderr_reader.next_line(), if !stderr_done => {
-                    match line {
-                        Ok(Some(l)) => {
-                            if !l.is_empty() {
-                                if Self::is_warning_stderr(&l) {
-                                    had_fatal_stderr = true;
-                                    warn!(task_id = task.id, phase = %phase.name, "gemini stderr: {}", l);
-                                } else {
-                                    debug!(task_id = task.id, phase = %phase.name, "gemini stderr: {}", l);
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            stderr_done = true;
-                        }
-                        Err(e) => {
-                            warn!(task_id = task.id, phase = %phase.name, "gemini stderr read error: {e}");
-                            stderr_done = true;
-                        }
-                    }
-                }
-            }
-        }
+        let drain = drain_child(
+            &mut child,
+            DrainConfig {
+                backend: "gemini",
+                task_id: task.id,
+                phase_name: &phase.name,
+                timeout_s: self.timeout_s,
+                stream_tx: ctx.stream_tx.clone(),
+                is_warning_stderr: Self::is_warning_stderr,
+            },
+        )
+        .await?;
 
         let exit_status = child
             .wait()
             .await
             .context("failed to wait for gemini process")?;
-        let output = output_lines.join("\n");
 
         info!(
             task_id = task.id,
             phase = %phase.name,
-            success = exit_status.success() && !had_fatal_stderr,
-            output_len = output.len(),
+            success = exit_status.success() && !drain.had_fatal_stderr,
+            output_len = drain.output.len(),
             "gemini subprocess finished"
         );
 
         Ok(PhaseOutput {
-            output,
+            output: drain.output,
             new_session_id: None,
             raw_stream: String::new(),
-            success: !timed_out && exit_status.success() && !had_fatal_stderr,
+            success: !drain.timed_out && exit_status.success() && !drain.had_fatal_stderr,
             signal_json: None,
             ran_in_docker: false,
             container_test_results: Vec::new(),

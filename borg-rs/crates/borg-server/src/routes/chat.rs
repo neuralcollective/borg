@@ -243,86 +243,31 @@ pub(crate) async fn run_chat_agent(
     let api_token =
         std::fs::read_to_string(format!("{}/.api-token", config.data_dir)).unwrap_or_default();
 
-    let mut mcp_servers = serde_json::Map::new();
-
-    let borg_mcp_path = if let Ok(p) = std::env::var("BORG_MCP_SERVER") {
-        std::path::PathBuf::from(p)
+    // Collect legal provider keys from DB for legal mode chat
+    let legal_linked_creds: Vec<(String, String)> = if is_legal {
+        borg_agent::mcp::LEGAL_PROVIDERS
+            .iter()
+            .filter_map(|(provider, _env, _label)| {
+                db.get_api_key("global", provider)
+                    .ok()
+                    .flatten()
+                    .map(|key| (provider.to_string(), key))
+            })
+            .collect()
     } else {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../sidecar/borg-mcp/server.js")
+        Vec::new()
     };
-    if let Ok(mcp_server) = borg_mcp_path.canonicalize() {
-        let mut env_vars = serde_json::Map::new();
-        env_vars.insert("API_BASE_URL".into(), json!(api_url));
-        if !api_token.is_empty() {
-            env_vars.insert("API_TOKEN".into(), json!(api_token));
-        }
-        env_vars.insert("CHAT_THREAD".into(), json!(chat_key));
-        if let Some(ref p) = project_for_chat {
-            env_vars.insert("PROJECT_ID".into(), json!(p.id.to_string()));
-            env_vars.insert("PROJECT_MODE".into(), json!(&p.mode));
-        }
-        mcp_servers.insert(
-            "borg".into(),
-            json!({
-                "command": "bun",
-                "args": ["run", mcp_server],
-                "env": env_vars,
-            }),
-        );
-    } else {
-        tracing::warn!(chat_key, path = %borg_mcp_path.display(), "borg-mcp not found");
-    }
 
-    if is_legal {
-        let legal_mcp_path = if let Ok(p) = std::env::var("LAWBORG_MCP_SERVER") {
-            std::path::PathBuf::from(p)
-        } else {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../sidecar/lawborg-mcp/server.js")
-        };
-        if let Ok(mcp_server) = legal_mcp_path.canonicalize() {
-            tracing::info!(chat_key, path = %mcp_server.display(), "wiring lawborg-mcp for chat");
-            let mut env_vars = serde_json::Map::new();
-            let providers = [
-                "lexisnexis",
-                "westlaw",
-                "clio",
-                "imanage",
-                "netdocuments",
-                "congress",
-                "openstates",
-                "canlii",
-                "regulations_gov",
-            ];
-            for provider in providers {
-                if let Ok(Some(key)) = db.get_api_key("global", provider) {
-                    let env_name = match provider {
-                        "lexisnexis" => "LEXISNEXIS_API_KEY",
-                        "westlaw" => "WESTLAW_API_KEY",
-                        "clio" => "CLIO_API_KEY",
-                        "imanage" => "IMANAGE_API_KEY",
-                        "netdocuments" => "NETDOCUMENTS_API_KEY",
-                        "congress" => "CONGRESS_API_KEY",
-                        "openstates" => "OPENSTATES_API_KEY",
-                        "canlii" => "CANLII_API_KEY",
-                        "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                        _ => continue,
-                    };
-                    env_vars.insert(env_name.into(), serde_json::Value::String(key));
-                }
-            }
-            mcp_servers.insert(
-                "legal".into(),
-                json!({
-                    "command": "bun",
-                    "args": ["run", mcp_server],
-                    "env": env_vars,
-                }),
-            );
-        } else {
-            tracing::warn!(chat_key, path = %legal_mcp_path.display(), "lawborg-mcp not found");
-        }
-    }
+    let project_mode = project_mode.as_deref().unwrap_or("swe");
+    let project_id = project_for_chat.as_ref().map(|p| p.id).unwrap_or(0);
+    let mcp_servers = borg_agent::mcp::build_mcp_servers_json(
+        &api_url,
+        &api_token,
+        project_mode,
+        project_id,
+        Some(chat_key),
+        &legal_linked_creds,
+    );
 
     if !mcp_servers.is_empty() {
         let config_json = json!({ "mcpServers": mcp_servers });

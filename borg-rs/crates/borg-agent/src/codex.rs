@@ -7,8 +7,9 @@ use borg_core::{
     types::{PhaseConfig, PhaseContext, PhaseOutput, Task},
 };
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
+
+use crate::drain::{drain_child, DrainConfig};
 
 /// Runs Codex (openai/codex) as the agent backend.
 ///
@@ -117,87 +118,59 @@ impl CodexBackend {
             return Ok(());
         }
 
-        let borg_mcp_path = if let Ok(p) = std::env::var("BORG_MCP_SERVER") {
-            std::path::PathBuf::from(p)
+        if let Some(borg_server) = crate::mcp::resolve_mcp_server_path(
+            "BORG_MCP_SERVER",
+            "../../../sidecar/borg-mcp/server.js",
+        ) {
+            let server_str = borg_server.to_string_lossy().to_string();
+            Self::push_config_arg(args, "mcp_servers.borg.command", json!("bun"));
+            Self::push_config_arg(args, "mcp_servers.borg.args", json!(["run", server_str]));
+            Self::push_config_arg(
+                args,
+                "mcp_servers.borg.env.API_BASE_URL",
+                json!(&ctx.borg_api_url),
+            );
+            Self::push_config_arg(
+                args,
+                "mcp_servers.borg.env.API_TOKEN",
+                json!(&ctx.borg_api_token),
+            );
+            if task.project_id > 0 {
+                Self::push_config_arg(
+                    args,
+                    "mcp_servers.borg.env.PROJECT_ID",
+                    json!(task.project_id.to_string()),
+                );
+                Self::push_config_arg(
+                    args,
+                    "mcp_servers.borg.env.PROJECT_MODE",
+                    json!(&task.mode),
+                );
+            }
         } else {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../sidecar/borg-mcp/server.js")
-        };
-        match borg_mcp_path.canonicalize() {
-            Ok(mcp_server) => {
-                Self::push_config_arg(args, "mcp_servers.borg.command", json!("bun"));
-                Self::push_config_arg(
-                    args,
-                    "mcp_servers.borg.args",
-                    json!(["run", mcp_server.to_string_lossy().to_string()]),
-                );
-                Self::push_config_arg(
-                    args,
-                    "mcp_servers.borg.env.API_BASE_URL",
-                    json!(&ctx.borg_api_url),
-                );
-                Self::push_config_arg(
-                    args,
-                    "mcp_servers.borg.env.API_TOKEN",
-                    json!(&ctx.borg_api_token),
-                );
-                if task.project_id > 0 {
-                    Self::push_config_arg(
-                        args,
-                        "mcp_servers.borg.env.PROJECT_ID",
-                        json!(task.project_id.to_string()),
-                    );
-                    Self::push_config_arg(
-                        args,
-                        "mcp_servers.borg.env.PROJECT_MODE",
-                        json!(&task.mode),
-                    );
-                }
-            },
-            Err(e) => {
-                warn!(task_id = task.id, path = %borg_mcp_path.display(), "failed to load borg-mcp: {e}");
-                return Ok(());
-            },
+            warn!(task_id = task.id, "failed to resolve borg-mcp server path");
+            return Ok(());
         }
 
         if matches!(task.mode.as_str(), "lawborg" | "legal") {
-            let legal_mcp_path = if let Ok(p) = std::env::var("LAWBORG_MCP_SERVER") {
-                std::path::PathBuf::from(p)
-            } else {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../../sidecar/lawborg-mcp/server.js")
-            };
-            match legal_mcp_path.canonicalize() {
-                Ok(mcp_server) => {
-                    Self::push_config_arg(args, "mcp_servers.legal.command", json!("bun"));
-                    Self::push_config_arg(
-                        args,
-                        "mcp_servers.legal.args",
-                        json!(["run", mcp_server.to_string_lossy().to_string()]),
-                    );
-                    for (provider, key) in &ctx.api_keys {
-                        let env_name = match provider.as_str() {
-                            "lexisnexis" => "LEXISNEXIS_API_KEY",
-                            "westlaw" => "WESTLAW_API_KEY",
-                            "clio" => "CLIO_API_KEY",
-                            "imanage" => "IMANAGE_API_KEY",
-                            "netdocuments" => "NETDOCUMENTS_API_KEY",
-                            "congress" => "CONGRESS_API_KEY",
-                            "openstates" => "OPENSTATES_API_KEY",
-                            "canlii" => "CANLII_API_KEY",
-                            "regulations_gov" => "REGULATIONS_GOV_API_KEY",
-                            _ => continue,
-                        };
+            if let Some(legal_server) = crate::mcp::resolve_mcp_server_path(
+                "LAWBORG_MCP_SERVER",
+                "../../../sidecar/lawborg-mcp/server.js",
+            ) {
+                let server_str = legal_server.to_string_lossy().to_string();
+                Self::push_config_arg(args, "mcp_servers.legal.command", json!("bun"));
+                Self::push_config_arg(args, "mcp_servers.legal.args", json!(["run", server_str]));
+                for (provider, key) in &ctx.api_keys {
+                    if let Some(env_name) = crate::mcp::legal_provider_env_name(provider) {
                         Self::push_config_arg(
                             args,
                             &format!("mcp_servers.legal.env.{env_name}"),
                             json!(key),
                         );
                     }
-                },
-                Err(e) => {
-                    warn!(task_id = task.id, path = %legal_mcp_path.display(), "failed to load lawborg-mcp: {e}");
-                },
+                }
+            } else {
+                warn!(task_id = task.id, "failed to resolve lawborg-mcp server path");
             }
         }
 
@@ -258,93 +231,37 @@ impl AgentBackend for CodexBackend {
             .spawn()
             .with_context(|| format!("failed to spawn codex binary: {}", self.codex_bin))?;
 
-        let stdout = child.stdout.take().context("failed to take stdout")?;
-        let stderr = child.stderr.take().context("failed to take stderr")?;
-        let stream_tx = ctx.stream_tx.clone();
-
-        let mut output_lines = Vec::new();
-        let mut had_fatal_stderr = false;
-        let mut stdout_reader = BufReader::new(stdout).lines();
-        let mut stderr_reader = BufReader::new(stderr).lines();
-        let mut stdout_done = false;
-        let mut stderr_done = false;
-        let mut timed_out = false;
-        let timeout_enabled = self.timeout_s > 0;
-        let timeout_secs = self.timeout_s.max(1);
-        let timeout = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs));
-        tokio::pin!(timeout);
-
-        while !(stdout_done && stderr_done) {
-            tokio::select! {
-                _ = &mut timeout, if timeout_enabled => {
-                    timed_out = true;
-                    warn!(
-                        task_id = task.id,
-                        phase = %phase.name,
-                        timeout_s = timeout_secs,
-                        "codex phase timed out, terminating subprocess"
-                    );
-                    let _ = child.start_kill();
-                    break;
-                }
-                line = stdout_reader.next_line(), if !stdout_done => {
-                    match line.context("error reading stdout")? {
-                        Some(l) => {
-                            if let Some(tx) = &stream_tx {
-                                let _ = tx.send(l.clone());
-                            }
-                            if output_lines.len() < 50_000 {
-                                output_lines.push(l);
-                            }
-                        }
-                        None => {
-                            stdout_done = true;
-                        }
-                    }
-                }
-                line = stderr_reader.next_line(), if !stderr_done => {
-                    match line {
-                        Ok(Some(l)) => {
-                            if !l.is_empty() {
-                                if Self::is_warning_stderr(&l) {
-                                    had_fatal_stderr = true;
-                                    warn!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
-                                } else {
-                                    debug!(task_id = task.id, phase = %phase.name, "codex stderr: {}", l);
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            stderr_done = true;
-                        }
-                        Err(e) => {
-                            warn!(task_id = task.id, phase = %phase.name, "codex stderr read error: {e}");
-                            stderr_done = true;
-                        }
-                    }
-                }
-            }
-        }
+        let drain = drain_child(
+            &mut child,
+            DrainConfig {
+                backend: "codex",
+                task_id: task.id,
+                phase_name: &phase.name,
+                timeout_s: self.timeout_s,
+                stream_tx: ctx.stream_tx.clone(),
+                is_warning_stderr: Self::is_warning_stderr,
+            },
+        )
+        .await?;
 
         let exit_status = child
             .wait()
             .await
             .context("failed to wait for codex process")?;
-        let output = output_lines.join("\n");
 
         info!(
             task_id = task.id,
             phase = %phase.name,
-            success = exit_status.success() && !had_fatal_stderr,
-            output_len = output.len(),
+            success = exit_status.success() && !drain.had_fatal_stderr,
+            output_len = drain.output.len(),
             "codex subprocess finished"
         );
 
         Ok(PhaseOutput {
-            output,
+            output: drain.output,
             new_session_id: None,
             raw_stream: String::new(),
-            success: !timed_out && exit_status.success() && !had_fatal_stderr,
+            success: !drain.timed_out && exit_status.success() && !drain.had_fatal_stderr,
             signal_json: None,
             ran_in_docker: false,
             container_test_results: Vec::new(),

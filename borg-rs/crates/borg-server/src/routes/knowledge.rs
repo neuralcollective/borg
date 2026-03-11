@@ -293,12 +293,40 @@ pub(crate) async fn list_templates(
     Ok(Json(json!(templates)))
 }
 
+// --- Shared inner: content download ---
+
+fn knowledge_file_path(data_dir: &str, workspace_id: i64, user_id: Option<i64>, file_name: &str) -> String {
+    match user_id {
+        Some(uid) => format!("{}/knowledge/workspaces/{}/users/{}/{}", data_dir, workspace_id, uid, file_name),
+        None => safe_knowledge_path(data_dir, Some(workspace_id), file_name)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
+}
+
+async fn inner_get_knowledge_content(
+    file_name: &str,
+    path: &str,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::response::IntoResponse;
+    let bytes = std::fs::read(path).map_err(|_| StatusCode::NOT_FOUND)?;
+    let disp = format!("attachment; filename=\"{}\"", file_name.replace('"', "_"));
+    Ok((
+        axum::http::StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (axum::http::header::CONTENT_DISPOSITION, disp),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 pub(crate) async fn get_knowledge_content(
     State(state): State<Arc<AppState>>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<axum::response::Response, StatusCode> {
-    use axum::response::IntoResponse;
     let file = state
         .db
         .get_knowledge_file_in_workspace(workspace.id, id)
@@ -306,23 +334,22 @@ pub(crate) async fn get_knowledge_content(
         .ok_or(StatusCode::NOT_FOUND)?;
     let path = safe_knowledge_path(&state.config.data_dir, Some(workspace.id), &file.file_name)
         .ok_or(StatusCode::BAD_REQUEST)?;
-    let bytes = std::fs::read(&path).map_err(|_| StatusCode::NOT_FOUND)?;
-    let disp = format!(
-        "attachment; filename=\"{}\"",
-        file.file_name.replace('"', "_")
-    );
-    Ok((
-        axum::http::StatusCode::OK,
-        [
-            (
-                axum::http::header::CONTENT_TYPE,
-                "application/octet-stream".to_string(),
-            ),
-            (axum::http::header::CONTENT_DISPOSITION, disp),
-        ],
-        bytes,
-    )
-        .into_response())
+    inner_get_knowledge_content(&file.file_name, path.to_str().unwrap_or_default()).await
+}
+
+pub(crate) async fn get_user_knowledge_content(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, StatusCode> {
+    let file = state
+        .db
+        .get_user_knowledge_file(workspace.id, user.id, id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let path = knowledge_file_path(&state.config.data_dir, workspace.id, Some(user.id), &file.file_name);
+    inner_get_knowledge_content(&file.file_name, &path).await
 }
 
 pub(crate) async fn list_user_knowledge(
@@ -447,10 +474,7 @@ pub(crate) async fn delete_user_knowledge(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
     if let Ok(Some(file)) = state.db.get_user_knowledge_file(workspace.id, user.id, id) {
-        let path = format!(
-            "{}/knowledge/workspaces/{}/users/{}/{}",
-            state.config.data_dir, workspace.id, user.id, file.file_name
-        );
+        let path = knowledge_file_path(&state.config.data_dir, workspace.id, Some(user.id), &file.file_name);
         let _ = std::fs::remove_file(&path);
     }
     state
@@ -470,10 +494,7 @@ pub(crate) async fn delete_all_user_knowledge(
         .list_user_knowledge_files(workspace.id, user.id)
         .map_err(internal)?;
     for file in &files {
-        let path = format!(
-            "{}/knowledge/workspaces/{}/users/{}/{}",
-            state.config.data_dir, workspace.id, user.id, file.file_name
-        );
+        let path = knowledge_file_path(&state.config.data_dir, workspace.id, Some(user.id), &file.file_name);
         let _ = std::fs::remove_file(&path);
     }
     let deleted = state
@@ -483,53 +504,22 @@ pub(crate) async fn delete_all_user_knowledge(
     Ok(Json(json!({ "ok": true, "deleted": deleted })))
 }
 
-pub(crate) async fn get_user_knowledge_content(
-    State(state): State<Arc<AppState>>,
-    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
-    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
-    Path(id): Path<i64>,
-) -> Result<axum::response::Response, StatusCode> {
-    use axum::response::IntoResponse;
-    let file = state
-        .db
-        .get_user_knowledge_file(workspace.id, user.id, id)
-        .map_err(internal)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let path = format!(
-        "{}/knowledge/workspaces/{}/users/{}/{}",
-        state.config.data_dir, workspace.id, user.id, file.file_name
-    );
-    let bytes = std::fs::read(&path).map_err(|_| StatusCode::NOT_FOUND)?;
-    let disp = format!(
-        "attachment; filename=\"{}\"",
-        file.file_name.replace('"', "_")
-    );
-    Ok((
-        axum::http::StatusCode::OK,
-        [
-            (
-                axum::http::header::CONTENT_TYPE,
-                "application/octet-stream".to_string(),
-            ),
-            (axum::http::header::CONTENT_DISPOSITION, disp),
-        ],
-        bytes,
-    )
-        .into_response())
-}
+// --- Shared inner: repo handlers ---
 
-pub(crate) async fn list_knowledge_repos(
-    State(state): State<Arc<AppState>>,
-    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+async fn inner_list_knowledge_repos(
+    state: &Arc<AppState>,
+    workspace_id: i64,
+    user_id: Option<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let repos = state.db.list_knowledge_repos(workspace.id, None).map_err(internal)?;
+    let repos = state.db.list_knowledge_repos(workspace_id, user_id).map_err(internal)?;
     Ok(Json(json!({ "repos": repos })))
 }
 
-pub(crate) async fn add_knowledge_repo(
-    State(state): State<Arc<AppState>>,
-    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
-    Json(body): Json<AddKnowledgeRepoBody>,
+async fn inner_add_knowledge_repo(
+    state: Arc<AppState>,
+    workspace_id: i64,
+    user_id: Option<i64>,
+    body: AddKnowledgeRepoBody,
 ) -> Result<Json<Value>, StatusCode> {
     let url = body.url.trim().to_string();
     if url.is_empty() {
@@ -541,14 +531,29 @@ pub(crate) async fn add_knowledge_repo(
     } else {
         name.trim().to_string()
     };
-    let id = state.db.insert_knowledge_repo(workspace.id, None, &url, &name).map_err(internal)?;
+    let id = state.db.insert_knowledge_repo(workspace_id, user_id, &url, &name).map_err(internal)?;
     let data_dir = state.config.data_dir.clone();
     let db = Arc::clone(&state.db);
     tokio::spawn(async move {
         clone_knowledge_repo(id, &url, &data_dir, &db).await;
     });
-    let repos = state.db.list_knowledge_repos(workspace.id, None).map_err(internal)?;
+    let repos = state.db.list_knowledge_repos(workspace_id, user_id).map_err(internal)?;
     Ok(Json(json!({ "repos": repos })))
+}
+
+pub(crate) async fn list_knowledge_repos(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+) -> Result<Json<Value>, StatusCode> {
+    inner_list_knowledge_repos(&state, workspace.id, None).await
+}
+
+pub(crate) async fn add_knowledge_repo(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Json(body): Json<AddKnowledgeRepoBody>,
+) -> Result<Json<Value>, StatusCode> {
+    inner_add_knowledge_repo(state, workspace.id, None, body).await
 }
 
 pub(crate) async fn delete_knowledge_repo_handler(
@@ -560,8 +565,7 @@ pub(crate) async fn delete_knowledge_repo_handler(
     if !local_path.is_empty() {
         let _ = tokio::fs::remove_dir_all(&local_path).await;
     }
-    let repos = state.db.list_knowledge_repos(workspace.id, None).map_err(internal)?;
-    Ok(Json(json!({ "repos": repos })))
+    inner_list_knowledge_repos(&state, workspace.id, None).await
 }
 
 pub(crate) async fn list_user_knowledge_repos(
@@ -569,8 +573,7 @@ pub(crate) async fn list_user_knowledge_repos(
     axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
 ) -> Result<Json<Value>, StatusCode> {
-    let repos = state.db.list_knowledge_repos(workspace.id, Some(user.id)).map_err(internal)?;
-    Ok(Json(json!({ "repos": repos })))
+    inner_list_knowledge_repos(&state, workspace.id, Some(user.id)).await
 }
 
 pub(crate) async fn add_user_knowledge_repo(
@@ -579,24 +582,7 @@ pub(crate) async fn add_user_knowledge_repo(
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Json(body): Json<AddKnowledgeRepoBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    let url = body.url.trim().to_string();
-    if url.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let name = body.name.unwrap_or_default();
-    let name = if name.trim().is_empty() {
-        url.trim_end_matches('/').rsplit('/').next().unwrap_or("repo").trim_end_matches(".git").to_string()
-    } else {
-        name.trim().to_string()
-    };
-    let id = state.db.insert_knowledge_repo(workspace.id, Some(user.id), &url, &name).map_err(internal)?;
-    let data_dir = state.config.data_dir.clone();
-    let db = Arc::clone(&state.db);
-    tokio::spawn(async move {
-        clone_knowledge_repo(id, &url, &data_dir, &db).await;
-    });
-    let repos = state.db.list_knowledge_repos(workspace.id, Some(user.id)).map_err(internal)?;
-    Ok(Json(json!({ "repos": repos })))
+    inner_add_knowledge_repo(state, workspace.id, Some(user.id), body).await
 }
 
 pub(crate) async fn delete_user_knowledge_repo_handler(
@@ -613,8 +599,7 @@ pub(crate) async fn delete_user_knowledge_repo_handler(
     if !local_path.is_empty() {
         let _ = tokio::fs::remove_dir_all(&local_path).await;
     }
-    let repos = state.db.list_knowledge_repos(workspace.id, Some(user.id)).map_err(internal)?;
-    Ok(Json(json!({ "repos": repos })))
+    inner_list_knowledge_repos(&state, workspace.id, Some(user.id)).await
 }
 
 fn inject_git_token(url: &str, username: &str, token: &str) -> String {

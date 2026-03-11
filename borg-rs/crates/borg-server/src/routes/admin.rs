@@ -192,19 +192,6 @@ fn default_conv_limit() -> i64 {
     200
 }
 
-fn mcp_service_specs() -> [(&'static str, &'static str); 9] {
-    [
-        ("lexisnexis", "LexisNexis"),
-        ("westlaw", "Westlaw"),
-        ("clio", "Clio"),
-        ("imanage", "iManage"),
-        ("netdocuments", "NetDocuments"),
-        ("congress", "Congress.gov"),
-        ("openstates", "OpenStates"),
-        ("canlii", "CanLII"),
-        ("regulations_gov", "Regulations.gov"),
-    ]
-}
 
 fn linked_credential_status_item(
     key: &str,
@@ -461,10 +448,10 @@ pub(crate) async fn get_mcp_status(
         },
     ];
 
-    let services: Vec<Value> = mcp_service_specs()
-        .into_iter()
-        .map(|(provider, label)| {
-            if let Some(entry) = effective_key_by_provider.get(provider) {
+    let services: Vec<Value> = borg_agent::mcp::LEGAL_PROVIDERS
+        .iter()
+        .map(|(provider, _env_var, label)| {
+            if let Some(entry) = effective_key_by_provider.get(*provider) {
                 let source = if entry.owner == "global" {
                     "global"
                 } else {
