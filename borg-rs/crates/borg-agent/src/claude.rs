@@ -408,7 +408,13 @@ impl AgentBackend for ClaudeBackend {
                     ctx.session_dir.as_str(),
                     &git_dir_str,
                 ];
-                let mut cmd = Sandbox::bwrap_command(&writable, &ctx.work_dir, &full_cmd);
+                // Hide user home dirs to prevent credential/key exposure,
+                // then restore only the tool paths the agent actually needs.
+                let hide: Vec<&str> = vec![&real_home, "/root"];
+                let ro_restore: Vec<&str> = vec![&rustup_home, &cargo_home];
+                let mut cmd = Sandbox::bwrap_command(
+                    &writable, &hide, &ro_restore, &ctx.work_dir, &full_cmd,
+                );
                 cmd.kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
@@ -432,8 +438,15 @@ impl AgentBackend for ClaudeBackend {
                     .context("failed to spawn bwrap")?
             },
             SandboxMode::Docker => {
+                let workspace_host = if !task.repo_path.is_empty()
+                    && Path::new(&task.repo_path).join(".git").exists()
+                {
+                    task.repo_path.clone()
+                } else {
+                    ctx.work_dir.clone()
+                };
                 let binds = vec![
-                    (ctx.work_dir.clone(), "/workspace".to_string(), false),
+                    (workspace_host, "/workspace".to_string(), false),
                     (ctx.session_dir.clone(), "/home/bun".to_string(), false),
                 ];
                 let volumes_owned = vec![
@@ -564,14 +577,10 @@ impl AgentBackend for ClaudeBackend {
                     "systemPrompt": phase.system_prompt.clone(),
                     "allowedTools": effective_allowed_tools.clone(),
                     "maxTurns": 200,
-                    "repoUrl": task.repo_path.clone(),
-                    "branch": task.branch.clone(),
                     "projectId": task.project_id,
                     "testCmd": repo_test_cmd,
                     "compileCheckCmd": compile_check_cmd,
                     "lintCmd": ctx.repo_config.lint_cmd,
-                    "gitAuthorName": self.git_author_name,
-                    "gitAuthorEmail": self.git_author_email,
                 });
                 let payload = serde_json::to_vec(&input).unwrap_or_default();
                 let _ = stdin.write_all(&payload).await;
@@ -620,7 +629,8 @@ impl AgentBackend for ClaudeBackend {
                         match line {
                             Ok(Some(l)) => {
                                 if !l.is_empty() {
-                                    if let Ok(res) = serde_json::from_str::<ContainerTestResult>(&l) {
+                                    let test_line = l.strip_prefix("---BORG_TEST_RESULT---").unwrap_or(&l);
+                                    if let Ok(res) = serde_json::from_str::<ContainerTestResult>(test_line) {
                                         container_test_results.push(res);
                                     } else {
                                         if let Some(tx) = &stream_tx {

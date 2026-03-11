@@ -1150,6 +1150,19 @@ impl Db {
         Ok(())
     }
 
+    pub fn update_task_repo_path(&self, id: i64, repo_path: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE pipeline_tasks SET repo_path = ?1 WHERE id = ?2",
+            params![repo_path, id],
+        )
+        .context("update_task_repo_path")?;
+        Ok(())
+    }
+
     pub fn update_task_session(&self, id: i64, session_id: &str) -> Result<()> {
         let conn = self
             .conn

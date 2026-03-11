@@ -94,7 +94,7 @@ fn has_seq(haystack: &[&str], needle: &[&str]) -> bool {
 
 #[test]
 fn bwrap_args_contains_unshare_all() {
-    let args = Sandbox::bwrap_args(&[], "/work", &[]);
+    let args = Sandbox::bwrap_args(&[], &[], &[], "/work", &[]);
     assert!(
         strs(&args).contains(&"--unshare-all"),
         "args must contain --unshare-all for full namespace isolation"
@@ -103,7 +103,7 @@ fn bwrap_args_contains_unshare_all() {
 
 #[test]
 fn bwrap_args_working_dir_set_via_chdir() {
-    let args = Sandbox::bwrap_args(&[], "/some/working/dir", &[]);
+    let args = Sandbox::bwrap_args(&[], &[], &[], "/some/working/dir", &[]);
     let s = strs(&args);
     assert!(
         has_seq(&s, &["--chdir", "/some/working/dir"]),
@@ -113,7 +113,7 @@ fn bwrap_args_working_dir_set_via_chdir() {
 
 #[test]
 fn bwrap_args_ro_bind_covers_slash() {
-    let args = Sandbox::bwrap_args(&[], "/work", &[]);
+    let args = Sandbox::bwrap_args(&[], &[], &[], "/work", &[]);
     let s = strs(&args);
     assert!(
         has_seq(&s, &["--ro-bind", "/", "/"]),
@@ -124,7 +124,7 @@ fn bwrap_args_ro_bind_covers_slash() {
 #[test]
 fn bwrap_args_command_appended_after_separator() {
     let cmd = vec!["sh".to_string(), "-c".to_string(), "echo hello".to_string()];
-    let args = Sandbox::bwrap_args(&[], "/work", &cmd);
+    let args = Sandbox::bwrap_args(&[], &[], &[], "/work", &cmd);
     let s = strs(&args);
     let sep = s
         .iter()
@@ -136,7 +136,7 @@ fn bwrap_args_command_appended_after_separator() {
 #[test]
 fn bwrap_args_zero_writable_dirs() {
     let cmd = vec!["echo".to_string(), "ok".to_string()];
-    let args = Sandbox::bwrap_args(&[], "/tmp/work", &cmd);
+    let args = Sandbox::bwrap_args(&[], &[], &[], "/tmp/work", &cmd);
     let s = strs(&args);
 
     assert!(s.contains(&"--unshare-all"));
@@ -155,7 +155,7 @@ fn bwrap_args_single_writable_dir_bound() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap();
 
-    let args = Sandbox::bwrap_args(&[path], "/work", &[]);
+    let args = Sandbox::bwrap_args(&[path], &[], &[], "/work", &[]);
     let s = strs(&args);
 
     assert!(
@@ -175,7 +175,7 @@ fn bwrap_args_multiple_writable_dirs_all_bound() {
         .collect();
 
     let cmd = vec!["cargo".to_string(), "test".to_string()];
-    let args = Sandbox::bwrap_args(&paths, paths[0], &cmd);
+    let args = Sandbox::bwrap_args(&paths, &[], &[], paths[0], &cmd);
     let s = strs(&args);
 
     for path in &paths {
@@ -196,7 +196,7 @@ fn bwrap_args_multiple_writable_dirs_all_bound() {
 #[test]
 fn bwrap_args_nonexistent_dir_skipped() {
     let path = "/nonexistent/borg/test/dir/that/cannot/exist";
-    let args = Sandbox::bwrap_args(&[path], "/work", &[]);
+    let args = Sandbox::bwrap_args(&[path], &[], &[], "/work", &[]);
     let s = strs(&args);
 
     // Non-existent dir must not appear in --bind args

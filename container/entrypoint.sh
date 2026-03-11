@@ -51,14 +51,6 @@ process.stdout.write('SESSION_ID=\'' + esc(d.resumeSessionId||d.sessionId||'') +
 process.stdout.write('SYSTEM_PROMPT=\'' + esc(d.systemPrompt||'') + \"'\\n\");
 process.stdout.write('ALLOWED_TOOLS=\'' + esc(d.allowedTools||'') + \"'\\n\");
 process.stdout.write('MAX_TURNS=\'' + esc(String(d.maxTurns||'200')) + \"'\\n\");
-process.stdout.write('REPO_URL=\'' + esc(d.repoUrl||'') + \"'\\n\");
-process.stdout.write('MIRROR_PATH=\'' + esc(d.mirrorPath||'') + \"'\\n\");
-process.stdout.write('BRANCH=\'' + esc(d.branch||'') + \"'\\n\");
-process.stdout.write('BASE=\'' + esc(d.base||'origin/main') + \"'\\n\");
-process.stdout.write('COMMIT_MSG=\'' + esc(d.commitMessage||'feat: borg agent changes') + \"'\\n\");
-process.stdout.write('GIT_AUTHOR_NAME=\'' + esc(d.gitAuthorName||'Borg') + \"'\\n\");
-process.stdout.write('GIT_AUTHOR_EMAIL=\'' + esc(d.gitAuthorEmail||'borg@localhost') + \"'\\n\");
-process.stdout.write('PUSH_AFTER_COMMIT=\'' + esc(d.pushAfterCommit ? '1' : '') + \"'\\n\");
 process.stdout.write('COMPILE_CHECK_CMD=\'' + esc(d.compileCheckCmd||'') + \"'\\n\");
 process.stdout.write('LINT_CMD=\'' + esc(d.lintCmd||'') + \"'\\n\");
 process.stdout.write('TEST_CMD=\'' + esc(d.testCmd||'') + \"'\\n\");
@@ -75,7 +67,7 @@ cat <<EOF > /usr/local/bin/web_search
 QUERY="\$*"
 curl -s -X POST http://\${BORG_HOST_IP}:3132/v1/search \\
      -H "Content-Type: application/json" \\
-     -d "\$(jq -n --arg q "\$QUERY" --argjson pid "\${PROJECT_ID:-0}" '{query: \$q, project_id: \$pid}')" | bun -e "
+     -d "{\"query\": \"\$QUERY\", \"project_id\": \${PROJECT_ID:-0}}" | bun -e "
 let s=''; process.stdin.on('data', c=>s+=c); process.stdin.on('end', ()=>{
   try {
     const d=JSON.parse(s);
@@ -87,43 +79,10 @@ let s=''; process.stdin.on('data', c=>s+=c); process.stdin.on('end', ()=>{
 EOF
 chmod +x /usr/local/bin/web_search
 
-REPO_DIR=/workspace/repo
+# The host bind-mounts the task worktree as /workspace
+cd /workspace
 
-log_event "{\"type\":\"container_event\",\"event\":\"agent_started\",\"model\":$(json_encode "${MODEL}"),\"repo\":$(json_encode "${REPO_URL}")}"
-
-if [ -n "$REPO_URL" ]; then
-    CLONE_START=$(date +%s%3N)
-    log_event "{\"type\":\"container_event\",\"event\":\"clone_started\",\"repo\":$(json_encode "${REPO_URL}"),\"branch\":$(json_encode "${BRANCH}")}"
-
-    # Clone to temp dir first, then move into repo dir (which may have mounted volumes)
-    CLONE_TMP=$(mktemp -d /workspace/clone.XXXXXX)
-    CLONE_ARGS=(--depth 50)
-    if [ -n "$MIRROR_PATH" ] && [ -d "$MIRROR_PATH" ]; then
-        CLONE_ARGS+=(--reference "$MIRROR_PATH")
-    fi
-    git clone "${CLONE_ARGS[@]}" "$REPO_URL" "$CLONE_TMP/src"
-    # Move cloned contents into repo dir (preserves mounted volumes like target/)
-    find "$REPO_DIR" -mindepth 1 -maxdepth 1 ! -name target ! -name node_modules -exec rm -rf {} + 2>/dev/null || true
-    shopt -s dotglob
-    mv "$CLONE_TMP/src"/* "$CLONE_TMP/src"/.* "$REPO_DIR/" 2>/dev/null || true
-    shopt -u dotglob
-    rm -rf "$CLONE_TMP"
-    cd "$REPO_DIR"
-    if [ -n "$BRANCH" ]; then
-        # Fetch the task branch if it exists on remote
-        git fetch --depth 50 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
-        if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-            git checkout -b -- "$BRANCH" "origin/$BRANCH"
-        else
-            git checkout -b -- "$BRANCH" "$BASE"
-        fi
-    fi
-
-    CLONE_END=$(date +%s%3N)
-    log_event "{\"type\":\"container_event\",\"event\":\"clone_complete\",\"duration_ms\":$(( CLONE_END - CLONE_START ))}"
-else
-    cd /workspace
-fi
+log_event "{\"type\":\"container_event\",\"event\":\"agent_started\",\"model\":$(json_encode "${MODEL}")}"
 
 if [ -f /workspace/setup.sh ]; then
     log_event "{\"type\":\"container_event\",\"event\":\"setup_started\"}"
@@ -169,41 +128,17 @@ else
     log_event "{\"type\":\"container_event\",\"event\":\"agent_error\",\"exit_code\":${exitcode},\"stderr_tail\":${STDERR_TAIL}}"
 fi
 
-# Run test/lint/compile checks before committing (only when a repo was cloned)
-if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR" ]; then
-    cd "$REPO_DIR"
+# Run compile/lint/test checks (results sent to stderr for Rust to parse)
+if [ -d "/workspace/.git" ]; then
     run_check "compileCheck" "$COMPILE_CHECK_CMD"
     run_check "lint" "$LINT_CMD"
     run_check "test" "$TEST_CMD"
 fi
 
-if [ -n "$REPO_URL" ] && [ -d "$REPO_DIR/.git" ]; then
-    cd "$REPO_DIR"
-    git config user.name "$GIT_AUTHOR_NAME"
-    git config user.email "$GIT_AUTHOR_EMAIL"
-
-    if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-        # Exclude secrets from commits
-        printf '.env\n.env.*\ncredentials*\n*.key\n*.pem\n' >> .gitignore 2>/dev/null || true
-        git add -A
-        git commit -m "$COMMIT_MSG" || true
-        log_event "{\"type\":\"container_event\",\"event\":\"commit_complete\",\"message\":\"${COMMIT_MSG}\"}"
-    else
-        log_event "{\"type\":\"container_event\",\"event\":\"commit_skipped\"}"
-    fi
-
-    if [ -n "$PUSH_AFTER_COMMIT" ] && [ -n "$BRANCH" ]; then
-        if git push origin -- "$BRANCH"; then
-            log_event "{\"type\":\"container_event\",\"event\":\"push_complete\",\"branch\":\"${BRANCH}\"}"
-        else
-            log_event "{\"type\":\"container_event\",\"event\":\"push_failed\",\"branch\":\"${BRANCH}\"}"
-        fi
-    fi
-
-    SIGNAL_FILE="$REPO_DIR/.borg/signal.json"
-    if [ -f "$SIGNAL_FILE" ]; then
-        echo "BORG_SIGNAL:$(cat "$SIGNAL_FILE")"
-    fi
+# Signal file for agent → pipeline communication
+SIGNAL_FILE="/workspace/.borg/signal.json"
+if [ -f "$SIGNAL_FILE" ]; then
+    echo "BORG_SIGNAL:$(cat "$SIGNAL_FILE")"
 fi
 
 log_event "{\"type\":\"container_event\",\"event\":\"container_exiting\",\"exit_code\":${exitcode}}"

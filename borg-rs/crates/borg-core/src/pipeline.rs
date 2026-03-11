@@ -1264,8 +1264,7 @@ impl Pipeline {
 
     // ── Phase handlers ────────────────────────────────────────────────────
 
-    /// Setup phase: record branch name and advance to first agent phase.
-    /// In non-Docker mode, also creates the git branch so the agent works on it.
+    /// Setup phase: record branch name, create per-task worktree, and advance.
     async fn setup_branch(&self, task: &Task, mode: &PipelineMode) -> Result<()> {
         let next = mode
             .phases
@@ -1276,6 +1275,22 @@ impl Pipeline {
 
         let branch = format!("task-{}", task.id);
         self.db.update_task_branch(task.id, &branch)?;
+
+        // Create per-task worktree for concurrent agent isolation
+        if !task.repo_path.is_empty() {
+            let git = crate::git::Git::new(&task.repo_path);
+            let _ = git.fetch_origin();
+            let worktree_dir = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
+            match git.create_worktree(&worktree_dir, &branch, "origin/main") {
+                Ok(()) => {
+                    self.db.update_task_repo_path(task.id, &worktree_dir)?;
+                    info!("task #{} created worktree at {}", task.id, worktree_dir);
+                }
+                Err(e) => {
+                    warn!("task #{} worktree creation failed: {e}", task.id);
+                }
+            }
+        }
 
         self.db.update_task_status(task.id, next, None)?;
 
@@ -1399,7 +1414,15 @@ impl Pipeline {
         tokio::fs::create_dir_all(&session_dir_rel).await.ok();
         let session_dir = Self::task_session_dir(task.id);
 
-        let work_dir = session_dir.clone();
+        // Use the task worktree as work_dir when available (created in setup_branch).
+        // This ensures Docker containers bind-mount the actual repo, not the session dir.
+        let work_dir = if !task.repo_path.is_empty()
+            && std::path::Path::new(&task.repo_path).join(".git").exists()
+        {
+            task.repo_path.clone()
+        } else {
+            session_dir.clone()
+        };
 
         let pending_messages = self
             .db
@@ -1588,6 +1611,19 @@ impl Pipeline {
             if !crate::ipc::check_artifact(&work_dir, artifact) {
                 self.fail_or_retry(task, &phase.name, &format!("missing artifact: {artifact}"))?;
                 return Ok(());
+            }
+        }
+
+        // For Docker phases, commit agent changes from the host (the container
+        // bind-mounts the worktree but cannot push).
+        if result.ran_in_docker && !task.repo_path.is_empty() {
+            let git = crate::git::Git::new(&task.repo_path);
+            let (_, user_coauthor) = self.git_coauthor_settings();
+            let msg = Self::with_user_coauthor("feat: borg agent changes", &user_coauthor);
+            match git.commit_all(&work_dir, &msg, self.git_author()) {
+                Ok(true) => info!("task #{} committed Docker agent changes", task.id),
+                Ok(false) => info!("task #{} Docker phase: no changes to commit", task.id),
+                Err(e) => warn!("task #{} post-Docker commit failed: {e}", task.id),
             }
         }
 

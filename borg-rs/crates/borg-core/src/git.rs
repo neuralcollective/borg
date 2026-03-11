@@ -209,6 +209,31 @@ impl Git {
         Ok(out)
     }
 
+    /// Create a git worktree with a new branch at the given path.
+    pub fn create_worktree(&self, path: &str, branch: &str, start: &str) -> Result<()> {
+        let _ = self.exec(&self.repo_path, &["branch", "-D", branch]);
+        let _ = std::fs::remove_dir_all(path);
+        let _ = self.exec(&self.repo_path, &["worktree", "prune"]);
+        let result = self.exec(
+            &self.repo_path,
+            &["worktree", "add", "-b", branch, path, start],
+        )?;
+        if !result.success() {
+            return Err(anyhow!(
+                "git worktree add -b {branch} {path} {start} failed: {}",
+                result.combined_output()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Remove a worktree directory and prune git's worktree list.
+    pub fn remove_worktree(&self, path: &str) -> Result<()> {
+        let _ = std::fs::remove_dir_all(path);
+        let _ = self.exec(&self.repo_path, &["worktree", "prune"]);
+        Ok(())
+    }
+
     /// Create and checkout a new branch from a given start point.
     pub fn checkout_new_branch(&self, branch: &str, start: &str) -> Result<()> {
         // Delete the branch if it already exists locally (stale leftover from a previous attempt)

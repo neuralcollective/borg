@@ -34,7 +34,7 @@ stack-logs:
 
 # Run the local ingest/retrieval load harness against a running Borg server.
 local-loadtest *ARGS='':
-    python3 deploy/local_loadtest.py {{ARGS}}
+    cd deploy/loadtest && bun run src/index.ts {{ARGS}}
 
 # Install sidecar dependencies
 sidecar:

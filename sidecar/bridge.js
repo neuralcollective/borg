@@ -6,8 +6,6 @@
 // All stdin commands include a "target" field: "discord" | "whatsapp"
 
 import { createInterface } from 'readline';
-import { spawn } from 'child_process';
-import { killWithFallback, waitForExit, KILL_TIMEOUT_MS } from './process-utils.js';
 
 const ASSISTANT_NAME = (process.argv[2] || process.env.ASSISTANT_NAME || 'Borg').toLowerCase();
 
@@ -303,123 +301,6 @@ async function handleSlackCommand(cmd) {
   }
 }
 
-// ── Agent session manager ────────────────────────────────────────────────
-
-const agentSessions = new Map(); // session_id → { process }
-
-function handleAgentCommand(cmd) {
-  const { action, session_id } = cmd;
-
-  if (action === 'start') {
-    startAgentSession(session_id, cmd);
-  } else if (action === 'inject') {
-    // Injection mid-run is not yet supported — log it
-    emit('agent', { event: 'inject_queued', session_id, message: cmd.message });
-  } else if (action === 'interrupt') {
-    const sess = agentSessions.get(session_id);
-    if (sess) {
-      killWithFallback(sess.process);
-      agentSessions.delete(session_id);
-      emit('agent', { event: 'interrupted', session_id });
-    }
-  }
-}
-
-function startAgentSession(session_id, cmd) {
-  const existing = agentSessions.get(session_id);
-  if (existing) {
-    killWithFallback(existing.process);
-    agentSessions.delete(session_id);
-    emit('agent', { event: 'replaced', session_id });
-  }
-
-  const { instruction, model, oauth_token, worktree_path, session_dir, allowed_tools, resume_session } = cmd;
-
-  const args = [
-    '--output-format', 'stream-json',
-    '--model', model || 'claude-sonnet-4-6',
-    '--allowedTools', allowed_tools || 'Read,Glob,Grep,Write,Edit,Bash',
-    '--max-turns', '200',
-  ];
-
-  if (resume_session) {
-    args.push('--resume', resume_session);
-  }
-
-  args.push('--print', instruction);
-
-  const envWhitelist = [
-    'PATH', 'HOME', 'SHELL', 'LANG', 'LC_ALL', 'TERM', 'USER',
-    'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN',
-    'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
-    'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
-    'ANTHROPIC_MODEL', 'GOOGLE_CLOUD_PROJECT', 'CLOUD_ML_REGION',
-  ];
-  const env = {};
-  for (const k of envWhitelist) {
-    if (process.env[k] !== undefined) env[k] = process.env[k];
-  }
-  env.HOME = session_dir || process.env.HOME;
-  env.ANTHROPIC_API_KEY = oauth_token || process.env.ANTHROPIC_API_KEY || '';
-  env.CLAUDE_CODE_OAUTH_TOKEN = oauth_token || process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
-
-  const proc = spawn('claude', args, {
-    cwd: worktree_path || process.cwd(),
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  agentSessions.set(session_id, { process: proc });
-
-  let lastResult = '';
-  let lastSessionId = null;
-  let stdoutBuf = '';
-
-  proc.stdout.on('data', (data) => {
-    stdoutBuf += data.toString();
-    const parts = stdoutBuf.split('\n');
-    stdoutBuf = parts.pop();
-    for (const line of parts) {
-      if (!line.trim()) continue;
-      emit('agent', { event: 'stream_line', session_id, line });
-      try {
-        const obj = JSON.parse(line);
-        if (obj.type === 'result' && obj.result) lastResult = obj.result;
-        if ((obj.type === 'system' || obj.type === 'result') && obj.session_id)
-          lastSessionId = obj.session_id;
-      } catch {}
-    }
-  });
-
-  proc.stderr.on('data', (data) => {
-    const lines = data.toString().split('\n').filter(l => l.trim());
-    for (const line of lines) {
-      emit('agent', { event: 'stderr', session_id, line });
-    }
-  });
-
-  proc.on('close', (code) => {
-    if (agentSessions.get(session_id)?.process !== proc) return;
-    if (stdoutBuf.trim()) {
-      emit('agent', { event: 'stream_line', session_id, line: stdoutBuf });
-      try {
-        const obj = JSON.parse(stdoutBuf);
-        if (obj.type === 'result' && obj.result) lastResult = obj.result;
-        if ((obj.type === 'system' || obj.type === 'result') && obj.session_id)
-          lastSessionId = obj.session_id;
-      } catch {}
-    }
-    agentSessions.delete(session_id);
-    emit('agent', { event: 'complete', session_id, output: lastResult, new_session_id: lastSessionId, exit_code: code ?? 0 });
-  });
-
-  proc.on('error', (err) => {
-    if (agentSessions.get(session_id)?.process !== proc) return;
-    agentSessions.delete(session_id);
-    emit('agent', { event: 'error', session_id, message: err.message });
-  });
-}
-
 // ── Per-user Discord bots ────────────────────────────────────────────────
 
 const userDiscordBots = new Map(); // user_id -> { client, botId }
@@ -531,17 +412,12 @@ rl.on('line', async (line) => {
     }
     else if (cmd.target === 'whatsapp') await handleWhatsAppCommand(cmd);
     else if (cmd.target === 'slack') await handleSlackCommand(cmd);
-    else if (cmd.target === 'agent') handleAgentCommand(cmd);
   } catch (e) {
     emit('system', { event: 'error', target: cmd?.target, message: e.message, stack: e.stack });
   }
 });
 
 rl.on('close', async () => {
-  const procs = [...agentSessions.values()].map(s => s.process);
-  agentSessions.clear();
-  for (const p of procs) killWithFallback(p, KILL_TIMEOUT_MS);
-  await Promise.all(procs.map(p => waitForExit(p, KILL_TIMEOUT_MS + 1000)));
   if (discordClient) discordClient.destroy();
   for (const bot of userDiscordBots.values()) bot.client.destroy();
   userDiscordBots.clear();

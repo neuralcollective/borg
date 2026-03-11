@@ -92,26 +92,43 @@ impl Sandbox {
 
     /// Build bwrap argument list for `command`.
     ///
-    /// Mount order (mirrors OpenAI Codex linux-sandbox/bwrap.rs):
-    /// 1. `--ro-bind / /`    — read-only root filesystem
-    /// 2. `--dev /dev`       — minimal device tree (null, random, urandom, tty)
-    /// 3. `--bind X X`       — per writable_dir (repo, session dir)
-    /// 4. `--tmpfs /tmp`     — per-sandbox /tmp (needed by compilers, git, etc.)
-    /// 5. `--unshare-all`    — isolate all namespaces (pid, user, uts, ipc, cgroup)
-    /// 5b. `--share-net`     — restore network namespace so agents can call APIs
-    /// 6. `--new-session`    — setsid (detach terminal)
-    /// 7. `--die-with-parent`— auto-cleanup
-    /// 8. `--proc /proc`     — fresh procfs for PID namespace
-    /// 9. `--chdir`          — working directory inside sandbox
-    /// 10. `--`              — command separator
+    /// Mount order:
+    /// 1. `--ro-bind / /`      — read-only root filesystem baseline
+    /// 2. `--dev /dev`         — minimal device tree
+    /// 3. `--tmpfs` per hide_dir — overlay sensitive dirs (e.g. user home) with empty tmpfs
+    /// 4. `--ro-bind` per ro_dir — restore specific read-only paths within hidden dirs
+    /// 5. `--bind X X`         — per writable_dir (worktree, session dir)
+    /// 6. `--tmpfs /tmp`       — per-sandbox /tmp
+    /// 7. `--unshare-all`      — isolate all namespaces (pid, user, uts, ipc, cgroup, net)
+    /// 7b. `--share-net`       — restore network (agents need API access)
+    /// 8. `--new-session`      — setsid
+    /// 9. `--die-with-parent`  — auto-cleanup
+    /// 10. `--proc /proc`      — fresh procfs for PID namespace
+    /// 11. `--chdir`           — working directory inside sandbox
     pub fn bwrap_args(
         writable_dirs: &[&str],
+        hide_dirs: &[&str],
+        ro_restore_dirs: &[&str],
         working_dir: &str,
         command: &[String],
     ) -> Vec<String> {
         let mut args: Vec<String> = Vec::new();
 
         args.extend(["--ro-bind", "/", "/", "--dev", "/dev"].map(str::to_string));
+
+        // Hide sensitive directories (user home, /root) with empty tmpfs
+        for dir in hide_dirs {
+            if Path::new(dir).exists() {
+                args.extend(["--tmpfs", dir].map(str::to_string));
+            }
+        }
+
+        // Restore specific read-only paths within hidden dirs (e.g. cargo, rustup)
+        for dir in ro_restore_dirs {
+            if Path::new(dir).exists() {
+                args.extend(["--ro-bind", dir, dir].map(str::to_string));
+            }
+        }
 
         for dir in writable_dirs {
             if !Path::new(dir).exists() {
@@ -147,8 +164,14 @@ impl Sandbox {
     ///
     /// Env vars set on the returned `Command` are inherited by the sandboxed
     /// process (bwrap passes them through by default).
-    pub fn bwrap_command(writable_dirs: &[&str], working_dir: &str, command: &[String]) -> Command {
-        let args = Self::bwrap_args(writable_dirs, working_dir, command);
+    pub fn bwrap_command(
+        writable_dirs: &[&str],
+        hide_dirs: &[&str],
+        ro_restore_dirs: &[&str],
+        working_dir: &str,
+        command: &[String],
+    ) -> Command {
+        let args = Self::bwrap_args(writable_dirs, hide_dirs, ro_restore_dirs, working_dir, command);
         let mut cmd = Command::new("bwrap");
         cmd.args(args);
         cmd
