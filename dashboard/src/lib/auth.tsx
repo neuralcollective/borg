@@ -9,38 +9,65 @@ import {
   setAuthToken,
   setSelectedWorkspaceId,
   setupAdmin,
+  startSsoLogin,
   tokenReady,
 } from "./api";
 
 interface AuthState {
   ready: boolean;
   needsSetup: boolean;
+  ssoProviders: ("google" | "microsoft")[];
+  authError: string | null;
   user: AuthUser | null;
   login: (username: string, password: string) => Promise<string | null>;
   setup: (username: string, password: string, displayName?: string) => Promise<string | null>;
+  loginWithSso: (provider: "google" | "microsoft") => void;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthState>({
   ready: false,
   needsSetup: false,
+  ssoProviders: [],
+  authError: null,
   user: null,
   login: async () => "not ready",
   setup: async () => "not ready",
+  loginWithSso: () => {},
   logout: () => {},
 });
+
+function consumeAuthRedirect(): { token: string | null; error: string | null } {
+  const raw = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  const params = new URLSearchParams(raw);
+  const token = params.get("auth_token");
+  const error = params.get("auth_error");
+  if (token || error) {
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  return { token, error };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [ssoProviders, setSsoProviders] = useState<("google" | "microsoft")[]>([]);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
     (async () => {
+      const redirect = consumeAuthRedirect();
+      if (redirect.token) {
+        setAuthToken(redirect.token);
+      }
+      setAuthError(redirect.error);
+
       await tokenReady;
 
       // Check if users exist
       const status = await fetchAuthStatus();
+      setSsoProviders(status.sso_providers ?? []);
       if (status.auth_disabled) {
         setUser({ id: 0, username: "admin", display_name: "Admin", is_admin: true, default_workspace_id: 0 });
         setReady(true);
@@ -76,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (username: string, password: string): Promise<string | null> => {
+    setAuthError(null);
     const res = await loginUser(username, password);
     if (res.error) return res.error;
     if (!res.token) return "login failed";
@@ -90,6 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setup = useCallback(
     async (username: string, password: string, displayName?: string): Promise<string | null> => {
+      setAuthError(null);
       const res = await setupAdmin(username, password, displayName);
       if (res.error) return res.error;
       if (!res.token) return "setup failed";
@@ -104,6 +133,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const loginWithSso = useCallback((provider: "google" | "microsoft") => {
+    setAuthError(null);
+    startSsoLogin(provider);
+  }, []);
+
   const logout = useCallback(() => {
     setAuthToken(null);
     setSelectedWorkspaceId(null);
@@ -112,7 +146,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ ready, needsSetup, user, login, setup, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider
+      value={{ ready, needsSetup, ssoProviders, authError, user, login, setup, loginWithSso, logout }}
+    >
+      {children}
+    </AuthContext.Provider>
   );
 }
 

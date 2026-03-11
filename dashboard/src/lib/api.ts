@@ -105,6 +105,7 @@ export interface AuthStatus {
   user_count: number;
   auth_disabled?: boolean;
   auth_mode?: "disabled" | "local" | "cloudflare_access";
+  sso_providers?: ("google" | "microsoft")[];
 }
 
 export interface AuthUser {
@@ -131,6 +132,10 @@ export interface LoginResponse {
 export async function fetchAuthStatus(): Promise<AuthStatus> {
   const r = await fetch(`${apiBase()}/api/auth/status`);
   return r.json();
+}
+
+export function startSsoLogin(provider: "google" | "microsoft") {
+  window.location.href = `${apiBase()}/api/auth/sso/${provider}/start`;
 }
 
 export async function loginUser(username: string, password: string): Promise<LoginResponse> {

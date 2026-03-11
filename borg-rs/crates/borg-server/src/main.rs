@@ -957,6 +957,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/status", get(auth::auth_status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/sso/:provider/start", get(auth::sso_start))
+        .route("/api/auth/sso/:provider/callback", get(auth::sso_callback))
         .route("/api/auth/me", get(auth::get_me))
         .route("/api/workspaces", get(routes::list_workspaces))
         .route("/api/workspaces", post(routes::create_workspace))

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 export const PRODUCT_WORD = "Borg";
-const LETTERS = PRODUCT_WORD.split("");
+const LETTERS = "BORG".split("");
 
 // Unicode ranges for glitch characters — [start, end] inclusive
 // Only standalone visible glyphs with near-universal font support

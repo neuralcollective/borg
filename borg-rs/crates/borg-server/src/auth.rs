@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -15,6 +15,7 @@ use crate::AppState;
 
 const MAX_LOGIN_ATTEMPTS: u32 = 5;
 const LOGIN_WINDOW_SECS: u64 = 300;
+const SSO_STATE_EXPIRY_SECS: i64 = 600;
 pub const WORKSPACE_HEADER: &str = "x-workspace-id";
 pub const DEFAULT_CLOUDFLARE_ACCESS_EMAIL_HEADER: &str = "cf-access-authenticated-user-email";
 
@@ -36,6 +37,12 @@ pub struct JwtClaims {
     pub username: String,
     pub is_admin: bool,
     pub exp: usize, // expiry (unix timestamp)
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SsoStateClaims {
+    pub provider: String,
+    pub exp: usize,
 }
 
 pub fn create_jwt(user_id: i64, username: &str, is_admin: bool, secret: &str) -> String {
@@ -62,6 +69,36 @@ pub fn create_jwt(user_id: i64, username: &str, is_admin: bool, secret: &str) ->
 
 pub fn verify_jwt(token: &str, secret: &str) -> Option<JwtClaims> {
     decode::<JwtClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .ok()
+    .map(|data| data.claims)
+}
+
+fn create_sso_state(provider: &str, secret: &str) -> String {
+    let exp = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::seconds(SSO_STATE_EXPIRY_SECS))
+        .unwrap_or_else(chrono::Utc::now)
+        .timestamp() as usize;
+    let claims = SsoStateClaims {
+        provider: provider.to_string(),
+        exp,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .unwrap_or_else(|e| {
+        tracing::error!("SSO state encode failed: {e}");
+        String::new()
+    })
+}
+
+fn verify_sso_state(token: &str, secret: &str) -> Option<SsoStateClaims> {
+    decode::<SsoStateClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::default(),
@@ -190,15 +227,16 @@ pub fn resolve_auth_user_from_headers(
     None
 }
 
-fn cloudflare_email_is_admin(config: &borg_core::config::Config, email: &str) -> bool {
+fn external_email_is_admin(config: &borg_core::config::Config, email: &str) -> bool {
     config
         .cloudflare_admin_emails
         .iter()
         .any(|allowed| allowed.eq_ignore_ascii_case(email))
 }
 
-fn provision_cloudflare_user(state: &AppState, email: &str) -> Result<AuthUser, Response> {
-    let desired_admin = cloudflare_email_is_admin(&state.config, email);
+fn provision_external_user(state: &AppState, email: &str) -> Result<AuthUser, Response> {
+    let is_first_user = state.db.count_users().unwrap_or(0) == 0;
+    let desired_admin = external_email_is_admin(&state.config, email) || is_first_user;
     let existing = state.db.get_user_by_username(email).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -283,6 +321,7 @@ fn is_exempt(path: &str) -> bool {
         || path == "/api/auth/login"
         || path == "/api/auth/setup"
         || path == "/api/auth/status"
+        || path.starts_with("/api/auth/sso/")
         || !path.starts_with("/api/")
 }
 
@@ -321,7 +360,7 @@ pub async fn auth_middleware(
             )
                 .into_response();
         };
-        match provision_cloudflare_user(state.as_ref(), &email) {
+        match provision_external_user(state.as_ref(), &email) {
             Ok(user) => {
                 request.extensions_mut().insert(user);
                 return next.run(request).await;
@@ -460,12 +499,44 @@ pub async fn get_token(State(state): State<Arc<AppState>>) -> Response {
 
 // GET /api/auth/status — whether setup is needed, and user count
 pub async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
+    let google_configured = state
+        .db
+        .get_config("google_client_id")
+        .ok()
+        .flatten()
+        .is_some_and(|v| !v.trim().is_empty())
+        && state
+            .db
+            .get_config("google_client_secret")
+            .ok()
+            .flatten()
+            .is_some_and(|v| !v.trim().is_empty());
+    let microsoft_configured = state
+        .db
+        .get_config("ms_client_id")
+        .ok()
+        .flatten()
+        .is_some_and(|v| !v.trim().is_empty())
+        && state
+            .db
+            .get_config("ms_client_secret")
+            .ok()
+            .flatten()
+            .is_some_and(|v| !v.trim().is_empty());
+    let mut sso_providers = Vec::new();
+    if google_configured {
+        sso_providers.push("google");
+    }
+    if microsoft_configured {
+        sso_providers.push("microsoft");
+    }
     if state.config.disable_auth {
         return Json(json!({
             "needs_setup": false,
             "user_count": 1,
             "auth_disabled": true,
             "auth_mode": "disabled",
+            "sso_providers": sso_providers,
         }))
         .into_response();
     }
@@ -476,6 +547,7 @@ pub async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
             "user_count": user_count,
             "auth_disabled": false,
             "auth_mode": "cloudflare_access",
+            "sso_providers": sso_providers,
         }))
         .into_response();
     }
@@ -485,6 +557,7 @@ pub async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
         "user_count": user_count,
         "auth_disabled": false,
         "auth_mode": "local",
+        "sso_providers": sso_providers,
     }))
     .into_response()
 }
@@ -704,6 +777,229 @@ pub async fn get_me(request: axum::extract::Request) -> Response {
         )
             .into_response(),
     }
+}
+
+#[derive(Deserialize)]
+pub struct SsoCallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}
+
+fn sso_redirect_uri(config: &borg_core::config::Config, provider: &str) -> String {
+    format!("{}/api/auth/sso/{provider}/callback", config.get_base_url())
+}
+
+fn sso_client_credentials(state: &AppState, provider: &str) -> Result<(String, String), Response> {
+    let (id_key, secret_key) = match provider {
+        "google" => ("google_client_id", "google_client_secret"),
+        "microsoft" => ("ms_client_id", "ms_client_secret"),
+        _ => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "unknown provider"})),
+            )
+                .into_response());
+        },
+    };
+    let client_id = state
+        .db
+        .get_config(id_key)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("config lookup failed: {e}")})),
+            )
+                .into_response()
+        })?
+        .unwrap_or_default();
+    let client_secret = state
+        .db
+        .get_config(secret_key)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("config lookup failed: {e}")})),
+            )
+                .into_response()
+        })?
+        .unwrap_or_default();
+    if client_id.trim().is_empty() || client_secret.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "provider credentials not configured"})),
+        )
+            .into_response());
+    }
+    Ok((client_id, client_secret))
+}
+
+fn sso_error_redirect(message: &str) -> Response {
+    axum::response::Redirect::temporary(&format!("/#auth_error={message}")).into_response()
+}
+
+pub async fn sso_start(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> Response {
+    if state.config.disable_auth {
+        return sso_error_redirect("sso_disabled_when_auth_is_disabled");
+    }
+    if auth_mode_is_cloudflare_access(&state.config.auth_mode) {
+        return sso_error_redirect("sso_disabled_when_auth_mode_is_cloudflare_access");
+    }
+    let Ok((client_id, _)) = sso_client_credentials(state.as_ref(), &provider) else {
+        return sso_error_redirect("missing_provider_credentials");
+    };
+    let redirect_uri = sso_redirect_uri(&state.config, &provider);
+    let state_token = create_sso_state(&provider, &state.jwt_secret);
+    if state_token.is_empty() {
+        return sso_error_redirect("state_encode_failed");
+    }
+    let auth_url = match provider.as_str() {
+        "google" => format!(
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}\
+             &redirect_uri={redirect}&response_type=code\
+             &scope=openid%20email%20profile&prompt=select_account&state={state}",
+            redirect = urlencoding::encode(&redirect_uri),
+            state = urlencoding::encode(&state_token),
+        ),
+        "microsoft" => format!(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={client_id}\
+             &redirect_uri={redirect}&response_type=code\
+             &scope=openid%20profile%20email%20offline_access%20User.Read\
+             &prompt=select_account&state={state}",
+            redirect = urlencoding::encode(&redirect_uri),
+            state = urlencoding::encode(&state_token),
+        ),
+        _ => return sso_error_redirect("unknown_provider"),
+    };
+    axum::response::Redirect::temporary(&auth_url).into_response()
+}
+
+pub async fn sso_callback(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+    Query(query): Query<SsoCallbackQuery>,
+) -> Response {
+    if let Some(error) = query.error {
+        return sso_error_redirect(&error);
+    }
+    let Some(code) = query.code else {
+        return sso_error_redirect("missing_code");
+    };
+    let Some(state_token) = query.state else {
+        return sso_error_redirect("missing_state");
+    };
+    let Some(claims) = verify_sso_state(&state_token, &state.jwt_secret) else {
+        return sso_error_redirect("invalid_state");
+    };
+    if claims.provider != provider {
+        return sso_error_redirect("provider_mismatch");
+    }
+    let Ok((client_id, client_secret)) = sso_client_credentials(state.as_ref(), &provider) else {
+        return sso_error_redirect("missing_provider_credentials");
+    };
+    let redirect_uri = sso_redirect_uri(&state.config, &provider);
+    let token_url = match provider.as_str() {
+        "google" => "https://oauth2.googleapis.com/token",
+        "microsoft" => "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        _ => return sso_error_redirect("unknown_provider"),
+    };
+    let client = reqwest::Client::new();
+    let token_resp = match client
+        .post(token_url)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+        ])
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(err) => {
+            tracing::error!("sso token exchange failed: {err}");
+            return sso_error_redirect("token_exchange_failed");
+        },
+    };
+    if !token_resp.status().is_success() {
+        let body = token_resp.text().await.unwrap_or_default();
+        tracing::error!("sso token exchange failed for {provider}: {body}");
+        return sso_error_redirect("token_exchange_failed");
+    }
+    let token_json: serde_json::Value = match token_resp.json().await {
+        Ok(json) => json,
+        Err(err) => {
+            tracing::error!("sso token parse failed: {err}");
+            return sso_error_redirect("token_parse_failed");
+        },
+    };
+    let Some(access_token) = token_json["access_token"].as_str() else {
+        return sso_error_redirect("missing_access_token");
+    };
+    let user_info_resp = match provider.as_str() {
+        "google" => {
+            client
+                .get("https://openidconnect.googleapis.com/v1/userinfo")
+                .bearer_auth(access_token)
+                .send()
+                .await
+        },
+        "microsoft" => {
+            client
+                .get("https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName")
+                .bearer_auth(access_token)
+                .send()
+                .await
+        },
+        _ => return sso_error_redirect("unknown_provider"),
+    };
+    let user_info_resp = match user_info_resp {
+        Ok(resp) => resp,
+        Err(err) => {
+            tracing::error!("sso userinfo request failed: {err}");
+            return sso_error_redirect("userinfo_failed");
+        },
+    };
+    if !user_info_resp.status().is_success() {
+        let body = user_info_resp.text().await.unwrap_or_default();
+        tracing::error!("sso userinfo failed for {provider}: {body}");
+        return sso_error_redirect("userinfo_failed");
+    }
+    let user_info: serde_json::Value = match user_info_resp.json().await {
+        Ok(json) => json,
+        Err(err) => {
+            tracing::error!("sso userinfo parse failed: {err}");
+            return sso_error_redirect("userinfo_parse_failed");
+        },
+    };
+    let email = match provider.as_str() {
+        "google" => user_info["email"].as_str().unwrap_or("").trim().to_string(),
+        "microsoft" => user_info["mail"]
+            .as_str()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| user_info["userPrincipalName"].as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    };
+    if email.is_empty() {
+        return sso_error_redirect("missing_email");
+    }
+    let user = match provision_external_user(state.as_ref(), &email) {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    let token = create_jwt(user.id, &user.username, user.is_admin, &state.jwt_secret);
+    axum::response::Redirect::temporary(&format!(
+        "/#auth_token={}&auth_provider={provider}",
+        urlencoding::encode(&token)
+    ))
+    .into_response()
 }
 
 #[cfg(test)]

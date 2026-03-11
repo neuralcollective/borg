@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { BorgLogo, PRODUCT_WORD } from "./borg-logo";
 
 export function LoginPage() {
-  const { needsSetup, login, setup } = useAuth();
+  const { needsSetup, login, setup, loginWithSso, ssoProviders, authError } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -23,6 +23,15 @@ export function LoginPage() {
     if (err) setError(err);
     setBusy(false);
   }
+
+  function formatAuthError(message: string) {
+    return message.replaceAll("_", " ");
+  }
+
+  const providerButtons = [
+    ssoProviders.includes("google") ? { id: "google" as const, label: "Continue with Google" } : null,
+    ssoProviders.includes("microsoft") ? { id: "microsoft" as const, label: "Continue with Microsoft" } : null,
+  ].filter((provider): provider is { id: "google" | "microsoft"; label: string } => provider !== null);
 
   return (
     <div className="flex h-screen items-center justify-center bg-[#0f0e0c]">
@@ -48,6 +57,26 @@ export function LoginPage() {
             </p>
           )}
         </div>
+
+        {providerButtons.length > 0 && (
+          <div className="space-y-3">
+            {providerButtons.map((provider) => (
+              <button
+                key={provider.id}
+                type="button"
+                onClick={() => loginWithSso(provider.id)}
+                className="w-full rounded-xl border border-[#2a2520] bg-[#161412] py-2.5 text-[14px] font-medium text-[#e8e0d4] transition-colors hover:border-amber-500/30 hover:bg-[#1c1a17]"
+              >
+                {provider.label}
+              </button>
+            ))}
+            <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.24em] text-zinc-600">
+              <div className="h-px flex-1 bg-[#2a2520]" />
+              <span>or</span>
+              <div className="h-px flex-1 bg-[#2a2520]" />
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -84,9 +113,9 @@ export function LoginPage() {
             />
           </div>
 
-          {error && (
+          {(error || authError) && (
             <div className="rounded-xl border border-red-500/20 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-400">
-              {error}
+              {formatAuthError(error || authError || "")}
             </div>
           )}
 
