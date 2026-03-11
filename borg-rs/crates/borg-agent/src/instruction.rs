@@ -262,6 +262,18 @@ pub fn select_relevant_knowledge_files(
     project_id: Option<i64>,
     max_files: usize,
 ) -> Vec<KnowledgeFile> {
+    select_relevant_knowledge_files_for_user(files, topic, mode_hint, jurisdiction_hint, project_id, None, max_files)
+}
+
+pub fn select_relevant_knowledge_files_for_user(
+    files: &[KnowledgeFile],
+    topic: &str,
+    mode_hint: Option<&str>,
+    jurisdiction_hint: Option<&str>,
+    project_id: Option<i64>,
+    user_id: Option<i64>,
+    max_files: usize,
+) -> Vec<KnowledgeFile> {
     if files.is_empty() || max_files == 0 {
         return Vec::new();
     }
@@ -280,6 +292,13 @@ pub fn select_relevant_knowledge_files(
                 file.file_name, file.description, file.tags, file.category, file.jurisdiction
             )
             .to_ascii_lowercase();
+
+            // User-scoped: boost own files, exclude other users'
+            match (user_id, file.user_id) {
+                (Some(uid), Some(fuid)) if fuid == uid => score += 40,
+                (_, Some(_)) => score -= 30,
+                _ => {},
+            }
 
             if let Some(pid) = project_id {
                 match file.project_id {

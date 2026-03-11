@@ -1,5 +1,7 @@
 import { Activity, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
+import { useMemo } from "react";
 import { type McpStatusItem, useMcpStatus } from "@/lib/api";
+import { useDashboardMode } from "@/lib/dashboard-mode";
 import { cn } from "@/lib/utils";
 
 const STATUS_STYLES: Record<
@@ -113,8 +115,24 @@ function StatusSection({ title, desc, items }: { title: string; desc: string; it
   );
 }
 
+const LEGAL_RUNTIME_KEYS = new Set(["lawborg_mcp"]);
+
 export function StatusPanel() {
   const { data, isLoading, error } = useMcpStatus();
+  const { isLegal } = useDashboardMode();
+
+  const filtered = useMemo(() => {
+    if (!data) return null;
+    const runtime = isLegal ? data.runtime : data.runtime.filter((i) => !LEGAL_RUNTIME_KEYS.has(i.key));
+    const services = isLegal ? data.services : [];
+    const all = [...data.agent_access, ...runtime, ...services];
+    const summary = { verified: 0, configured: 0, degraded: 0, missing: 0 };
+    for (const item of all) {
+      const s = item.status as keyof typeof summary;
+      if (s in summary) summary[s]++;
+    }
+    return { ...data, runtime, services, summary };
+  }, [data, isLegal]);
 
   if (isLoading && !data) {
     return <div className="flex h-full items-center justify-center text-xs text-[#6b6459]">Loading MCP status...</div>;
@@ -130,7 +148,7 @@ export function StatusPanel() {
     );
   }
 
-  if (!data) {
+  if (!filtered) {
     return null;
   }
 
@@ -144,7 +162,7 @@ export function StatusPanel() {
                 <Activity className="h-5 w-5" strokeWidth={1.8} />
               </div>
               <div>
-                <h1 className="text-[22px] font-semibold text-[#f1e7d8]">MCP Status</h1>
+                <h1 className="text-[22px] font-semibold text-[#f1e7d8]">System Status</h1>
                 <p className="mt-1 text-[12px] text-[#7e7568]">
                   Green means verified by Borg. Amber means configured but not actively probed. Red means missing or
                   failing.
@@ -154,35 +172,37 @@ export function StatusPanel() {
           </div>
           <div className="rounded-xl border border-[#2a2520] bg-[#151310]/80 px-4 py-3 text-right">
             <div className="text-[10px] uppercase tracking-[0.14em] text-[#6b6459]">Workspace</div>
-            <div className="mt-1 text-[13px] font-medium text-[#e8e0d4]">{data.workspace.name}</div>
-            <div className="mt-1 text-[11px] text-[#7e7568]">Updated {formatCheckedAt(data.generated_at)}</div>
+            <div className="mt-1 text-[13px] font-medium text-[#e8e0d4]">{filtered.workspace.name}</div>
+            <div className="mt-1 text-[11px] text-[#7e7568]">Updated {formatCheckedAt(filtered.generated_at)}</div>
           </div>
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
-          <SummaryCard label="Verified" value={data.summary.verified} tone="verified" Icon={CheckCircle2} />
-          <SummaryCard label="Configured" value={data.summary.configured} tone="configured" Icon={AlertTriangle} />
-          <SummaryCard label="Issues" value={data.summary.degraded} tone="degraded" Icon={XCircle} />
-          <SummaryCard label="Missing" value={data.summary.missing} tone="missing" Icon={XCircle} />
+          <SummaryCard label="Verified" value={filtered.summary.verified} tone="verified" Icon={CheckCircle2} />
+          <SummaryCard label="Configured" value={filtered.summary.configured} tone="configured" Icon={AlertTriangle} />
+          <SummaryCard label="Issues" value={filtered.summary.degraded} tone="degraded" Icon={XCircle} />
+          <SummaryCard label="Missing" value={filtered.summary.missing} tone="missing" Icon={XCircle} />
         </div>
 
         <StatusSection
           title="Agent Access"
           desc="Per-user Claude and OpenAI accounts that Borg can restore into the task sandbox."
-          items={data.agent_access}
+          items={filtered.agent_access}
         />
 
         <StatusSection
           title="MCP Runtime"
           desc="Core MCP runtime pieces Borg can actually verify right now."
-          items={data.runtime}
+          items={filtered.runtime}
         />
 
-        <StatusSection
-          title="External Services"
-          desc="Workspace or global MCP service credentials available to legal and domain-specific tools."
-          items={data.services}
-        />
+        {isLegal && (
+          <StatusSection
+            title="External Services"
+            desc="Workspace or global MCP service credentials available to legal and domain-specific tools."
+            items={filtered.services}
+          />
+        )}
       </div>
     </div>
   );

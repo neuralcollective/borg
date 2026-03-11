@@ -1,16 +1,24 @@
+import { useState } from "react";
 import "./borging.css";
 
+function pickWorkingLabel() {
+  return Math.random() < 0.2 ? "Borging..." : "Working...";
+}
+
 export function BorgingIndicator() {
+  const [label] = useState(pickWorkingLabel);
   return (
     <div className="flex items-center gap-2 py-1">
       <span className="relative flex h-2 w-2">
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
         <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
       </span>
-      <span className="shimmer-text text-sm font-medium text-amber-400">Working...</span>
+      <span className="shimmer-text text-sm font-medium text-amber-400">{label}</span>
     </div>
   );
 }
+
+export { pickWorkingLabel };
 
 export function TimelineItem({
   icon,

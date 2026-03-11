@@ -18,6 +18,7 @@ import { parseStreamEvents, rawStreamToEvents, type TermLine } from "@/lib/strea
 import { useChatEvents } from "@/lib/use-chat-events";
 import { cn } from "@/lib/utils";
 import { ActionActivity } from "./action-card";
+import { pickWorkingLabel } from "./borging";
 import { ChatMarkdown } from "./chat-markdown";
 
 interface ChatMessage {
@@ -42,6 +43,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
   const [sending, setSending] = useState(false);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [completedStreams, setCompletedStreams] = useState<Map<number, StreamEvent[]>>(new Map());
+  const [workingLabel, setWorkingLabel] = useState("Working...");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastTsRef = useRef<number>(0);
@@ -203,6 +205,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
 
     setInput("");
     setSending(true);
+    setWorkingLabel(pickWorkingLabel());
     setStreamEvents([]);
 
     if (sendingTimeoutRef.current) clearTimeout(sendingTimeoutRef.current);
@@ -316,7 +319,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-400" />
                 </span>
-                <span className="animate-shimmer-text text-[12px] font-medium text-amber-400">Working...</span>
+                <span className="animate-shimmer-text text-[12px] font-medium text-amber-400">{workingLabel}</span>
               </div>
             </div>
           )}

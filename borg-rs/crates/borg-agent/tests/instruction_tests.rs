@@ -90,6 +90,7 @@ fn make_knowledge_file(file_name: &str, description: &str) -> KnowledgeFile {
         category: String::new(),
         jurisdiction: String::new(),
         project_id: None,
+        user_id: None,
         created_at: String::new(),
     }
 }

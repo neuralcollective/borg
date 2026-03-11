@@ -1576,6 +1576,69 @@ fn mcp_service_specs() -> [(&'static str, &'static str); 9] {
     ]
 }
 
+fn linked_credential_status_item(
+    key: &str,
+    label: &str,
+    entry: Option<&borg_core::db::LinkedCredentialEntry>,
+) -> Value {
+    let Some(entry) = entry else {
+        return mcp_status_item(
+            key,
+            label,
+            "missing",
+            format!("No linked {label} account for this user"),
+            Some("user"),
+            None,
+        );
+    };
+
+    let expiry_suffix = if !entry.expires_at.is_empty() {
+        if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(&entry.expires_at) {
+            let now = Utc::now();
+            let until = exp.with_timezone(&Utc).signed_duration_since(now);
+            if until.num_seconds() <= 0 {
+                " — token expired".to_string()
+            } else if until.num_hours() < 1 {
+                format!(" — expires in {}m", until.num_minutes())
+            } else if until.num_hours() < 24 {
+                format!(" — expires in {}h", until.num_hours())
+            } else {
+                format!(" — expires in {}d", until.num_days())
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let is_expiring_soon = entry.expires_at.parse::<chrono::DateTime<chrono::FixedOffset>>().ok()
+        .is_some_and(|exp| exp.with_timezone(&Utc).signed_duration_since(Utc::now()).num_hours() < 2);
+
+    if entry.status == "connected" && !is_expiring_soon {
+        let detail = if entry.account_email.is_empty() {
+            format!("Linked and validated{expiry_suffix}")
+        } else {
+            format!("{} linked and validated{expiry_suffix}", entry.account_email)
+        };
+        mcp_status_item(key, label, "verified", detail, Some("user"), Some(entry.last_validated_at.clone()))
+    } else if entry.status == "connected" && is_expiring_soon {
+        let detail = if entry.account_email.is_empty() {
+            format!("Token expiring soon{expiry_suffix}")
+        } else {
+            format!("{}{expiry_suffix}", entry.account_email)
+        };
+        mcp_status_item(key, label, "degraded", detail, Some("user"), Some(entry.last_validated_at.clone()))
+    } else {
+        let detail = if !entry.last_error.is_empty() {
+            format!("{}{expiry_suffix}", entry.last_error)
+        } else {
+            format!("Linked account needs reconnect{expiry_suffix}")
+        };
+        mcp_status_item(key, label, "degraded", detail, Some("user"), Some(entry.last_validated_at.clone()))
+    }
+}
+
 fn mcp_status_item(
     key: &str,
     label: &str,
@@ -1658,74 +1721,8 @@ pub(crate) async fn get_mcp_status(
     };
 
     let agent_access = vec![
-        match linked_by_provider.get(PROVIDER_CLAUDE) {
-            Some(entry) if entry.status == "connected" => mcp_status_item(
-                "claude",
-                "Claude Code",
-                "verified",
-                if entry.account_email.is_empty() {
-                    "Linked and validated for agent use".to_string()
-                } else {
-                    format!("{} linked and validated", entry.account_email)
-                },
-                Some("user"),
-                Some(entry.last_validated_at.clone()),
-            ),
-            Some(entry) => mcp_status_item(
-                "claude",
-                "Claude Code",
-                "degraded",
-                if entry.last_error.is_empty() {
-                    "Linked account needs reconnect".to_string()
-                } else {
-                    entry.last_error.clone()
-                },
-                Some("user"),
-                Some(entry.last_validated_at.clone()),
-            ),
-            None => mcp_status_item(
-                "claude",
-                "Claude Code",
-                "missing",
-                "No linked Claude account for this user",
-                Some("user"),
-                None,
-            ),
-        },
-        match linked_by_provider.get(PROVIDER_OPENAI) {
-            Some(entry) if entry.status == "connected" => mcp_status_item(
-                "openai",
-                "Codex / ChatGPT",
-                "verified",
-                if entry.account_email.is_empty() {
-                    "Linked and validated for agent use".to_string()
-                } else {
-                    format!("{} linked and validated", entry.account_email)
-                },
-                Some("user"),
-                Some(entry.last_validated_at.clone()),
-            ),
-            Some(entry) => mcp_status_item(
-                "openai",
-                "Codex / ChatGPT",
-                "degraded",
-                if entry.last_error.is_empty() {
-                    "Linked account needs reconnect".to_string()
-                } else {
-                    entry.last_error.clone()
-                },
-                Some("user"),
-                Some(entry.last_validated_at.clone()),
-            ),
-            None => mcp_status_item(
-                "openai",
-                "Codex / ChatGPT",
-                "missing",
-                "No linked OpenAI account for this user",
-                Some("user"),
-                None,
-            ),
-        },
+        linked_credential_status_item("claude", "Claude Code", linked_by_provider.get(PROVIDER_CLAUDE)),
+        linked_credential_status_item("openai", "Codex / ChatGPT", linked_by_provider.get(PROVIDER_OPENAI)),
     ];
 
     let runtime = vec![

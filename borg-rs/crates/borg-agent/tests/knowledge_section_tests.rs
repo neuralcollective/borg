@@ -16,6 +16,7 @@ fn kf(id: i64, file_name: &str, description: &str, inline: bool) -> KnowledgeFil
         category: String::new(),
         jurisdiction: String::new(),
         project_id: None,
+        user_id: None,
         created_at: String::new(),
     }
 }

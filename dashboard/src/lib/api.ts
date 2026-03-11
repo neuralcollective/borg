@@ -1549,6 +1549,59 @@ export async function deleteAllKnowledgeFiles(): Promise<{ ok: boolean; deleted:
   return res.json();
 }
 
+// ── User knowledge ("My Knowledge") ───────────────────────────────────────
+
+export function useUserKnowledgeFiles(options?: { limit?: number; offset?: number; q?: string }) {
+  return useQuery<KnowledgeFilePage>({
+    queryKey: ["my-knowledge", options?.limit ?? 50, options?.offset ?? 0, options?.q ?? ""],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("limit", String(options?.limit ?? 50));
+      if (options?.offset) params.set("offset", String(options.offset));
+      if (options?.q?.trim()) params.set("q", options.q.trim());
+      return fetchJson(`/api/knowledge/my?${params}`);
+    },
+    staleTime: 30_000,
+  });
+}
+
+export async function uploadUserKnowledgeFile(
+  file: File,
+  description: string,
+  inline: boolean,
+): Promise<{ id: number; file_name: string }> {
+  await tokenReady;
+  const form = new FormData();
+  form.append("file", file);
+  form.append("description", description);
+  form.append("inline", inline ? "true" : "false");
+  const res = await fetch(`${apiBase()}/api/knowledge/my/upload`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function fetchUserKnowledgeContent(id: number): Promise<ArrayBuffer> {
+  const res = await apiFetch(`/api/knowledge/my/${id}/content`);
+  if (!res.ok) throw new Error(`Failed to load knowledge file (${res.status})`);
+  return res.arrayBuffer();
+}
+
+export async function deleteUserKnowledgeFile(id: number): Promise<{ ok: boolean }> {
+  const res = await apiFetch(`/api/knowledge/my/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function deleteAllUserKnowledgeFiles(): Promise<{ ok: boolean; deleted: number }> {
+  const res = await apiFetch("/api/knowledge/my", { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 // ── Container & cache ───────────────────────────────────────────────────────
 
 export interface ContainerInfo {

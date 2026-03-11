@@ -1203,6 +1203,20 @@ async fn main() -> anyhow::Result<()> {
             "/api/knowledge/:id/content",
             get(routes::get_knowledge_content),
         )
+        // User knowledge ("My Knowledge")
+        .route(
+            "/api/knowledge/my",
+            get(routes::list_user_knowledge).delete(routes::delete_all_user_knowledge),
+        )
+        .route(
+            "/api/knowledge/my/upload",
+            post(routes::upload_user_knowledge).layer(DefaultBodyLimit::max(55 * 1024 * 1024)),
+        )
+        .route("/api/knowledge/my/:id", delete(routes::delete_user_knowledge))
+        .route(
+            "/api/knowledge/my/:id/content",
+            get(routes::get_user_knowledge_content),
+        )
         // BorgSearch (LLM-friendly text endpoints for project document search)
         .route("/api/borgsearch/facets", get(routes::borgsearch_facets))
         .route("/api/borgsearch/reindex", post(routes::borgsearch_reindex))

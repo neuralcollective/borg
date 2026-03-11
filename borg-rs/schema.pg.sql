@@ -522,3 +522,10 @@ CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id, id D
 CREATE INDEX IF NOT EXISTS idx_pipeline_tasks_workspace ON pipeline_tasks(workspace_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_knowledge_files_workspace ON knowledge_files(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_keys_workspace ON api_keys(workspace_id, provider);
+
+DO $$ BEGIN
+  ALTER TABLE knowledge_files ADD COLUMN user_id BIGINT REFERENCES users(id);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_files_user ON knowledge_files(user_id, workspace_id, created_at DESC);

@@ -712,7 +712,10 @@ function GitHubTokenField() {
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
           <Label>GitHub Token</Label>
-          <Desc>Personal access token for pushing branches and creating PRs under your account. Leave blank to use the system default.</Desc>
+          <Desc>
+            Personal access token for pushing branches and creating PRs under your account. Leave blank to use the
+            system default.
+          </Desc>
         </div>
         {!editing && (
           <div className="flex items-center gap-2">
@@ -760,7 +763,10 @@ function GitHubTokenField() {
             Save
           </button>
           <button
-            onClick={() => { setEditing(false); setToken(""); }}
+            onClick={() => {
+              setEditing(false);
+              setToken("");
+            }}
             className="rounded-md border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[12px] text-[#9c9486] hover:text-[#e8e0d4] transition-colors"
           >
             Cancel

@@ -15,6 +15,7 @@ import {
 import { useMemo, useState } from "react";
 import type { TermLine } from "@/lib/stream-utils";
 import { cn } from "@/lib/utils";
+import { pickWorkingLabel } from "./borging";
 import { ChatMarkdown } from "./chat-markdown";
 
 // Human-readable tool labels
@@ -404,6 +405,7 @@ function ToolActionCard({
 }
 
 function ThinkingCard({ compact }: { compact?: boolean }) {
+  const [label] = useState(pickWorkingLabel);
   return (
     <div
       className={cn(
@@ -418,7 +420,7 @@ function ThinkingCard({ compact }: { compact?: boolean }) {
             <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-400" />
           </span>
         </span>
-        <span className="shimmer-text text-[13px] font-medium text-amber-400">Working...</span>
+        <span className="shimmer-text text-[13px] font-medium text-amber-400">{label}</span>
       </div>
       <div className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite] bg-gradient-to-r from-transparent via-amber-400/[0.03] to-transparent" />
     </div>
@@ -460,7 +462,7 @@ function ErrorCard({ lines }: { lines: TermLine[] }) {
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-400/80">
           <AlertTriangle className="h-3.5 w-3.5" />
         </span>
-        <span className="text-[13px] font-medium text-red-400/90">Error</span>
+        <span className="text-[13px] font-medium text-red-400/90">Oh, Borg!</span>
       </div>
       <div className="border-t border-red-500/10 px-3.5 py-2.5">
         <pre className="max-h-[200px] overflow-y-auto font-mono text-[11px] leading-relaxed text-red-400/70 whitespace-pre-wrap break-words">

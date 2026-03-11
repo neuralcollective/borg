@@ -10,6 +10,7 @@ import {
   Search,
   Trash2,
   Upload,
+  User,
   Wrench,
   X,
 } from "lucide-react";
@@ -22,10 +23,13 @@ import {
   createProjectUploadSession,
   deleteAllKnowledgeFiles,
   deleteAllProjectFiles,
+  deleteAllUserKnowledgeFiles,
   deleteKnowledgeFile,
   deleteProjectCloudConnection,
+  deleteUserKnowledgeFile,
   fetchKnowledgeContent,
   fetchProjectFileText,
+  fetchUserKnowledgeContent,
   getProjectUploadSessionStatus,
   importProjectCloudFiles,
   listProjectUploadSessions,
@@ -34,6 +38,7 @@ import {
   searchDocuments,
   uploadKnowledgeFile,
   uploadProjectUploadChunk,
+  uploadUserKnowledgeFile,
   useCustomModes,
   useDeleteProject,
   useKnowledgeFiles,
@@ -42,6 +47,7 @@ import {
   useProjectDocumentVersions,
   useProjects,
   useSettings,
+  useUserKnowledgeFiles,
 } from "@/lib/api";
 import { useDashboardMode } from "@/lib/dashboard-mode";
 import type { KnowledgeFile, ProjectDocument } from "@/lib/types";
@@ -220,7 +226,7 @@ export function ProjectsPanel() {
   const { data: settings } = useSettings();
   const vocab = useVocabulary();
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
-  const [showMemory, setShowMemory] = useState(false);
+  const [showMemory, setShowMemory] = useState<false | "org" | "my">(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [ftsQuery, setFtsQuery] = useState("");
   const [ftsResults, setFtsResults] = useState<FtsSearchResult[]>([]);
@@ -873,21 +879,36 @@ export function ProjectsPanel() {
             className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] pl-8 pr-3 py-2.5 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
         </div>
-        {/* Memory — pinned global knowledge item */}
+        {/* Knowledge — org-wide + personal */}
         <button
           onClick={() => {
-            setShowMemory(true);
+            setShowMemory("org");
             setSelectedProjectId(null);
           }}
           className={cn(
-            "mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] transition-colors",
-            showMemory
+            "mb-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] transition-colors",
+            showMemory === "org"
               ? "bg-violet-500/[0.08] text-[#e8e0d4] font-medium ring-1 ring-violet-500/20"
               : "text-[#9c9486] hover:bg-[#1c1a17]",
           )}
         >
-          <Brain className={cn("h-4 w-4 shrink-0", showMemory ? "text-violet-400" : "text-[#6b6459]")} />
-          <span>Memory</span>
+          <Brain className={cn("h-4 w-4 shrink-0", showMemory === "org" ? "text-violet-400" : "text-[#6b6459]")} />
+          <span>Org Knowledge</span>
+        </button>
+        <button
+          onClick={() => {
+            setShowMemory("my");
+            setSelectedProjectId(null);
+          }}
+          className={cn(
+            "mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] transition-colors",
+            showMemory === "my"
+              ? "bg-amber-500/[0.08] text-[#e8e0d4] font-medium ring-1 ring-amber-500/20"
+              : "text-[#9c9486] hover:bg-[#1c1a17]",
+          )}
+        >
+          <User className={cn("h-4 w-4 shrink-0", showMemory === "my" ? "text-amber-400" : "text-[#6b6459]")} />
+          <span>My Knowledge</span>
         </button>
         <div className="mb-2 h-px bg-[#2a2520]" />
 
@@ -1167,8 +1188,10 @@ export function ProjectsPanel() {
           isSWE || showMemory || !selectedProject || selectedDoc ? "min-w-0 flex-1" : "w-[525px] shrink-0",
         )}
       >
-        {showMemory ? (
-          <MemoryView />
+        {showMemory === "org" ? (
+          <KnowledgeView scope="org" />
+        ) : showMemory === "my" ? (
+          <KnowledgeView scope="my" />
         ) : !selectedProject ? (
           <div className="flex h-full items-center justify-center">
             <div className="max-w-[360px] text-center">
@@ -1755,11 +1778,28 @@ function MatterStatusDot({ counts }: { counts?: import("@/lib/types").ProjectTas
   return null;
 }
 
-function MemoryView() {
+function KnowledgeView({ scope }: { scope: "org" | "my" }) {
+  const isOrg = scope === "org";
+  const queryKey = isOrg ? "knowledge" : "my-knowledge";
+  const title = isOrg ? "Org Knowledge" : "My Knowledge";
+  const subtitle = isOrg
+    ? "Shared across all projects in this workspace"
+    : "Personal knowledge — only your agents see this";
+  const emptyTitle = isOrg ? "No org documents yet" : "No personal documents yet";
+  const emptySubtitle = isOrg
+    ? "Upload files to make them available to all users and projects"
+    : "Upload files that only your agents will use";
+  const accentBg = isOrg ? "bg-violet-500/10" : "bg-amber-500/10";
+  const accentRing = isOrg ? "ring-violet-500/20" : "ring-amber-500/20";
+  const accentText = isOrg ? "text-violet-400" : "text-amber-400";
+  const Icon = isOrg ? Brain : User;
+
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [pageSize, setPageSize] = useState(20);
-  const { data: page, isLoading } = useKnowledgeFiles({ limit: pageSize, offset, q: search });
+  const orgPage = useKnowledgeFiles(isOrg ? { limit: pageSize, offset, q: search } : undefined);
+  const myPage = useUserKnowledgeFiles(!isOrg ? { limit: pageSize, offset, q: search } : undefined);
+  const { data: page, isLoading } = isOrg ? orgPage : myPage;
   const files = page?.files ?? [];
   const queryClient = useQueryClient();
   const [previewFile, setPreviewFile] = useState<KnowledgeFile | null>(null);
@@ -1769,38 +1809,54 @@ function MemoryView() {
   const [deletingAll, setDeletingAll] = useState(false);
 
   function invalidate() {
-    queryClient.invalidateQueries({ queryKey: ["knowledge"] });
+    queryClient.invalidateQueries({ queryKey: [queryKey] });
   }
 
-  async function handleKnowledgeUpload(fileList: File[]) {
+  async function handleUpload(fileList: File[]) {
     for (const file of fileList) {
-      await uploadKnowledgeFile(file, "", false);
+      if (isOrg) await uploadKnowledgeFile(file, "", false);
+      else await uploadUserKnowledgeFile(file, "", false);
     }
     invalidate();
   }
 
-  async function handleDeleteAllKnowledge() {
+  async function handleDeleteAll() {
     if (deletingAll) return;
-    if (
-      !confirm(
-        "Delete all documents in Memory? This removes every global document, not just the current search results.",
-      )
-    ) {
-      return;
-    }
+    if (!confirm(`Delete all documents in ${title}? This cannot be undone.`)) return;
     setDeleteError(null);
     setDeletingAll(true);
     try {
-      await deleteAllKnowledgeFiles();
+      if (isOrg) await deleteAllKnowledgeFiles();
+      else await deleteAllUserKnowledgeFiles();
       setPreviewFile(null);
       setPreviewBuffer(null);
       setSearch("");
       setOffset(0);
       invalidate();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete memory documents");
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete");
     } finally {
       setDeletingAll(false);
+    }
+  }
+
+  async function handleDeleteOne(file: KnowledgeFile) {
+    if (!confirm(`Delete "${file.file_name}"?`)) return;
+    if (isOrg) await deleteKnowledgeFile(file.id);
+    else await deleteUserKnowledgeFile(file.id);
+    invalidate();
+  }
+
+  async function handlePreview(file: KnowledgeFile) {
+    setPreviewFile(file);
+    setPreviewLoading(true);
+    try {
+      const buf = isOrg ? await fetchKnowledgeContent(file.id) : await fetchUserKnowledgeContent(file.id);
+      setPreviewBuffer(buf);
+    } catch {
+      setPreviewBuffer(null);
+    } finally {
+      setPreviewLoading(false);
     }
   }
 
@@ -1811,24 +1867,20 @@ function MemoryView() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Sticky top: header + upload + search + pagination */}
       <div className="shrink-0 space-y-3 p-5 pb-3">
-        {/* Header */}
         <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-violet-500/10 ring-1 ring-violet-500/20">
-            <Brain className="h-6 w-6 text-violet-400" />
+          <div
+            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${accentBg} ring-1 ${accentRing}`}
+          >
+            <Icon className={`h-6 w-6 ${accentText}`} />
           </div>
           <div>
-            <div className="text-[16px] font-semibold text-[#e8e0d4]">Memory</div>
-            <div className="text-[13px] text-[#6b6459]">Global knowledge available across all projects</div>
+            <div className="text-[16px] font-semibold text-[#e8e0d4]">{title}</div>
+            <div className="text-[13px] text-[#6b6459]">{subtitle}</div>
           </div>
         </div>
 
-        <FileUploadArea
-          onUploadFiles={handleKnowledgeUpload}
-          onUploaded={invalidate}
-          subtitle="Global documents available to all projects"
-        />
+        <FileUploadArea onUploadFiles={handleUpload} onUploaded={invalidate} subtitle={emptySubtitle} />
 
         {deleteError && <div className="text-[12px] text-red-400">{deleteError}</div>}
 
@@ -1862,7 +1914,7 @@ function MemoryView() {
               actions={
                 <button
                   type="button"
-                  onClick={handleDeleteAllKnowledge}
+                  onClick={handleDeleteAll}
                   disabled={deletingAll}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/[0.08] px-3 py-1.5 text-[12px] font-medium text-red-300 transition-colors hover:bg-red-500/[0.14] disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -1875,7 +1927,6 @@ function MemoryView() {
         )}
       </div>
 
-      {/* Scrollable file list */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 space-y-1.5">
         {isLoading && (
           <div className="flex items-center justify-center py-12">
@@ -1885,11 +1936,13 @@ function MemoryView() {
 
         {!isLoading && files.length === 0 && !hasFiles && !search && (
           <div className="flex flex-col items-center py-12 text-center">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-500/10 ring-1 ring-violet-500/20">
-              <Brain className="h-6 w-6 text-violet-400" />
+            <div
+              className={`mb-4 flex h-14 w-14 items-center justify-center rounded-2xl ${accentBg} ring-1 ${accentRing}`}
+            >
+              <Icon className={`h-6 w-6 ${accentText}`} />
             </div>
-            <p className="text-[14px] text-[#9c9486]">No global documents yet</p>
-            <p className="mt-1 text-[12px] text-[#6b6459]">Upload files to make them available across all projects</p>
+            <p className="text-[14px] text-[#9c9486]">{emptyTitle}</p>
+            <p className="mt-1 text-[12px] text-[#6b6459]">{emptySubtitle}</p>
           </div>
         )}
 
@@ -1904,29 +1957,12 @@ function MemoryView() {
             key={file.id}
             file={file}
             index={offset + i + 1}
-            onClick={
-              isPreviewableKnowledge(file)
-                ? async () => {
-                    setPreviewFile(file);
-                    setPreviewLoading(true);
-                    try {
-                      const buf = await fetchKnowledgeContent(file.id);
-                      setPreviewBuffer(buf);
-                    } catch {
-                      setPreviewBuffer(null);
-                    } finally {
-                      setPreviewLoading(false);
-                    }
-                  }
-                : undefined
-            }
+            onClick={isPreviewableKnowledge(file) ? () => handlePreview(file) : undefined}
             extraActions={
               <button
                 onClick={async (e) => {
                   e.stopPropagation();
-                  if (!confirm(`Delete "${file.file_name}"?`)) return;
-                  await deleteKnowledgeFile(file.id);
-                  invalidate();
+                  handleDeleteOne(file);
                 }}
                 className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
                 title="Delete"

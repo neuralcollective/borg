@@ -255,6 +255,7 @@ pub struct KnowledgeFile {
     pub category: String,
     pub jurisdiction: String,
     pub project_id: Option<i64>,
+    pub user_id: Option<i64>,
     pub created_at: String,
 }
 
@@ -400,6 +401,7 @@ fn row_to_knowledge(row: &pg::Row<'_>) -> pg::Result<KnowledgeFile> {
             .unwrap_or_else(|| "general".to_string()),
         jurisdiction: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
         project_id: row.get::<_, Option<i64>>(10)?,
+        user_id: row.get::<_, Option<i64>>(11)?,
     })
 }
 
@@ -2709,7 +2711,7 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], row_to_knowledge)?;
@@ -2730,8 +2732,8 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
-             FROM knowledge_files WHERE workspace_id = ?1 ORDER BY created_at",
+                    tags, category, jurisdiction, project_id, user_id \
+             FROM knowledge_files WHERE workspace_id = ?1 AND user_id IS NULL ORDER BY created_at",
         )?;
         let rows = stmt.query_map(params![workspace_id], row_to_knowledge)?;
         let mut out = Vec::new();
@@ -2792,7 +2794,7 @@ impl Db {
             page_params.iter().map(|p| p.as_ref()).collect();
         let sql = format!(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files WHERE {where_sql} \
              ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
         );
@@ -2819,7 +2821,7 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let mut where_clauses = vec!["workspace_id = ?".to_string()];
+        let mut where_clauses = vec!["workspace_id = ?".to_string(), "user_id IS NULL".to_string()];
         let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = vec![Box::new(workspace_id)];
 
         if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
@@ -2858,7 +2860,7 @@ impl Db {
             page_params.iter().map(|p| p.as_ref()).collect();
         let sql = format!(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files WHERE {where_sql} \
              ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
         );
@@ -2872,6 +2874,53 @@ impl Db {
         Ok((items, total))
     }
 
+    /// Like list_knowledge_file_page_in_workspace but includes user-scoped files too.
+    pub fn list_all_knowledge_in_workspace(
+        &self,
+        workspace_id: i64,
+        query: Option<&str>,
+        jurisdiction: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<KnowledgeFile>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut where_clauses = vec!["workspace_id = ?".to_string()];
+        let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = vec![Box::new(workspace_id)];
+        if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+            where_clauses.push(
+                "(lower(file_name) LIKE ? OR lower(description) LIKE ? OR lower(tags) LIKE ?)"
+                    .to_string(),
+            );
+            let pattern = format!("%{}%", q.to_ascii_lowercase());
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern));
+        }
+        if let Some(jur) = jurisdiction.map(str::trim).filter(|j| !j.is_empty()) {
+            where_clauses.push("(jurisdiction = ? OR jurisdiction = '')".to_string());
+            params_vec.push(Box::new(jur.to_string()));
+        }
+        let lim = limit.clamp(1, 200);
+        params_vec.push(Box::new(lim));
+        let where_sql = where_clauses.join(" AND ");
+        let page_refs: Vec<&dyn pg::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let sql = format!(
+            "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
+                    tags, category, jurisdiction, project_id, user_id \
+             FROM knowledge_files WHERE {where_sql} \
+             ORDER BY created_at DESC, id DESC LIMIT ?"
+        );
+        let mut stmt = conn.prepare(&sql).context("list_all_knowledge_in_workspace")?;
+        let items = stmt
+            .query_map(page_refs.as_slice(), row_to_knowledge)?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_all_knowledge_in_workspace rows")?;
+        Ok(items)
+    }
+
     pub fn get_knowledge_file(&self, id: i64) -> Result<Option<KnowledgeFile>> {
         let conn = self
             .conn
@@ -2879,7 +2928,7 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files WHERE id=?1",
             params![id],
             row_to_knowledge,
@@ -2899,7 +2948,7 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.query_row(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files WHERE id=?1 AND workspace_id = ?2",
             params![id, workspace_id],
             row_to_knowledge,
@@ -2934,7 +2983,7 @@ impl Db {
         };
         let sql = format!(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files{where_sql} \
              ORDER BY category, file_name"
         );
@@ -2972,7 +3021,7 @@ impl Db {
         let where_sql = format!(" WHERE {}", where_clauses.join(" AND "));
         let sql = format!(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
-                    tags, category, jurisdiction, project_id \
+                    tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files{where_sql} \
              ORDER BY category, file_name"
         );
@@ -2995,14 +3044,26 @@ impl Db {
         size_bytes: i64,
         inline: bool,
     ) -> Result<i64> {
+        self.insert_knowledge_file_for_user(workspace_id, None, file_name, description, size_bytes, inline)
+    }
+
+    pub fn insert_knowledge_file_for_user(
+        &self,
+        workspace_id: i64,
+        user_id: Option<i64>,
+        file_name: &str,
+        description: &str,
+        size_bytes: i64,
+        inline: bool,
+    ) -> Result<i64> {
         let conn = self
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let id = conn.execute_returning_id(
-            "INSERT INTO knowledge_files (workspace_id, file_name, description, size_bytes, \"inline\") \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![workspace_id, file_name, description, size_bytes, inline as i64],
+            "INSERT INTO knowledge_files (workspace_id, user_id, file_name, description, size_bytes, \"inline\") \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![workspace_id, user_id, file_name, description, size_bytes, inline as i64],
         )?;
         Ok(id)
     }
@@ -3046,11 +3107,148 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let deleted = conn
             .execute(
-                "DELETE FROM knowledge_files WHERE workspace_id = ?1",
+                "DELETE FROM knowledge_files WHERE workspace_id = ?1 AND user_id IS NULL",
                 params![workspace_id],
             )
             .context("delete_all_knowledge_files_in_workspace")?;
         Ok(deleted as i64)
+    }
+
+    // ── User-scoped knowledge ("My Knowledge") ──────────────────────────
+
+    pub fn list_user_knowledge_page(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        query: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<KnowledgeFile>, i64)> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut where_clauses = vec!["workspace_id = ?".to_string(), "user_id = ?".to_string()];
+        let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = vec![Box::new(workspace_id), Box::new(user_id)];
+        if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
+            where_clauses.push(
+                "(lower(file_name) LIKE ? OR lower(description) LIKE ? OR lower(tags) LIKE ?)"
+                    .to_string(),
+            );
+            let pattern = format!("%{}%", q.to_ascii_lowercase());
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern));
+        }
+        let where_sql = where_clauses.join(" AND ");
+        let total_sql = format!("SELECT COUNT(*) FROM knowledge_files WHERE {where_sql}");
+        let total_params: Vec<&dyn pg::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let total: i64 = conn
+            .query_row(&total_sql, total_params.as_slice(), |row| row.get(0))
+            .context("list_user_knowledge_page count")?;
+        let lim = limit.clamp(1, 200);
+        let off = offset.max(0);
+        let mut page_params: Vec<Box<dyn pg::types::ToSql>> = params_vec;
+        page_params.push(Box::new(lim));
+        page_params.push(Box::new(off));
+        let page_refs: Vec<&dyn pg::types::ToSql> =
+            page_params.iter().map(|p| p.as_ref()).collect();
+        let sql = format!(
+            "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
+                    tags, category, jurisdiction, project_id, user_id \
+             FROM knowledge_files WHERE {where_sql} \
+             ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .context("list_user_knowledge_page prepare")?;
+        let items = stmt
+            .query_map(page_refs.as_slice(), row_to_knowledge)?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_user_knowledge_page rows")?;
+        Ok((items, total))
+    }
+
+    pub fn list_user_knowledge_files(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> Result<Vec<KnowledgeFile>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
+                    tags, category, jurisdiction, project_id, user_id \
+             FROM knowledge_files WHERE workspace_id = ?1 AND user_id = ?2 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![workspace_id, user_id], row_to_knowledge)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_user_knowledge_file(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        id: i64,
+    ) -> Result<Option<KnowledgeFile>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.query_row(
+            "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
+                    tags, category, jurisdiction, project_id, user_id \
+             FROM knowledge_files WHERE id=?1 AND workspace_id = ?2 AND user_id = ?3",
+            params![id, workspace_id, user_id],
+            row_to_knowledge,
+        )
+        .optional()
+        .context("get_user_knowledge_file")
+    }
+
+    pub fn delete_user_knowledge_file(&self, workspace_id: i64, user_id: i64, id: i64) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "DELETE FROM knowledge_files WHERE id=?1 AND workspace_id = ?2 AND user_id = ?3",
+            params![id, workspace_id, user_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_all_user_knowledge_files(&self, workspace_id: i64, user_id: i64) -> Result<i64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM knowledge_files WHERE workspace_id = ?1 AND user_id = ?2",
+                params![workspace_id, user_id],
+            )
+            .context("delete_all_user_knowledge_files")?;
+        Ok(deleted as i64)
+    }
+
+    pub fn total_user_knowledge_bytes(&self, workspace_id: i64, user_id: i64) -> Result<i64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let total = conn
+            .query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM knowledge_files WHERE workspace_id = ?1 AND user_id = ?2",
+                params![workspace_id, user_id],
+                |r| r.get(0),
+            )
+            .context("total_user_knowledge_bytes")?;
+        Ok(total)
     }
 
     pub fn update_knowledge_file(
