@@ -1643,7 +1643,7 @@ async fn main() -> anyhow::Result<()> {
 
     let bind = config.web_bind.clone();
     let addr = format!("{bind}:{}", config.web_port);
-    let proxy_addr = format!("{bind}:3132");
+    let proxy_addr = format!("{bind}:{}", config.proxy_port);
 
     info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;

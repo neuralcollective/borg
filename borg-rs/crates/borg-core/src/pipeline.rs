@@ -1281,10 +1281,16 @@ impl Pipeline {
             let git = crate::git::Git::new(&task.repo_path);
             let _ = git.fetch_origin();
             let worktree_dir = format!("{}/.worktrees/task-{}", task.repo_path, task.id);
-            match git.create_worktree(&worktree_dir, &branch, "origin/main") {
+            let start_ref = git
+                .resolve_start_ref(&["origin/main", "origin/master", "main", "master", "HEAD"])
+                .unwrap_or_else(|_| "HEAD".to_string());
+            match git.create_worktree(&worktree_dir, &branch, &start_ref) {
                 Ok(()) => {
                     self.db.update_task_repo_path(task.id, &worktree_dir)?;
-                    info!("task #{} created worktree at {}", task.id, worktree_dir);
+                    info!(
+                        "task #{} created worktree at {} from {}",
+                        task.id, worktree_dir, start_ref
+                    );
                 }
                 Err(e) => {
                     warn!("task #{} worktree creation failed: {e}", task.id);

@@ -74,6 +74,18 @@ impl Git {
         Ok(result.stdout.trim().to_string())
     }
 
+    pub fn resolve_start_ref(&self, candidates: &[&str]) -> Result<String> {
+        for candidate in candidates {
+            if self.rev_parse(candidate).is_ok() {
+                return Ok((*candidate).to_string());
+            }
+        }
+        Err(anyhow!(
+            "could not resolve any usable git start ref from: {}",
+            candidates.join(", ")
+        ))
+    }
+
     pub fn fetch_origin(&self) -> Result<()> {
         let result = self.exec(&self.repo_path, &["fetch", "origin"])?;
         if !result.success() {

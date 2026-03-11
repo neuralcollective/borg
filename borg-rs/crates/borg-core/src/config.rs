@@ -40,6 +40,7 @@ pub struct Config {
     // Web dashboard
     pub web_bind: String,
     pub web_port: u16,
+    pub proxy_port: u16,
     pub dashboard_dist_dir: String,
 
     // Container / sandbox
@@ -954,6 +955,9 @@ impl Config {
             &pipeline_mode,
         );
 
+        let web_port = get_u16("WEB_PORT", &dotenv, 3131);
+        let proxy_port = get_u16("PROXY_PORT", &dotenv, web_port.saturating_add(1));
+
         Ok(Config {
             telegram_token: get_str("TELEGRAM_BOT_TOKEN", &dotenv, ""),
             oauth_token,
@@ -985,7 +989,8 @@ impl Config {
             chat_rate_limit: get_u32("CHAT_RATE_LIMIT", &dotenv, 5),
             pipeline_max_agents: get_u32("PIPELINE_MAX_AGENTS", &dotenv, 2),
             web_bind: get_str("WEB_BIND", &dotenv, "127.0.0.1"),
-            web_port: get_u16("WEB_PORT", &dotenv, 3131),
+            web_port,
+            proxy_port,
             dashboard_dist_dir: get_str("DASHBOARD_DIST_DIR", &dotenv, "dashboard/dist"),
             container_setup: get_str("CONTAINER_SETUP", &dotenv, ""),
             container_memory_mb: get_u64("CONTAINER_MEMORY_MB", &dotenv, 2048),
