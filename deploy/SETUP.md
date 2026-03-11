@@ -164,7 +164,7 @@ Dashboard is now live at `https://app.example.com` behind Cloudflare Access.
 
 ```bash
 # From your dev machine:
-BORG_HOST=root@$(hcloud server ip borg) bash deploy/deploy.sh
+BORG_HOST=root@$(hcloud server ip borg) deploy/agent-deploy.sh
 ```
 
 Or manually on the VPS:

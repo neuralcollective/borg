@@ -361,14 +361,6 @@ export function getPhaseLabel(phase: string, mode?: string, taskType?: string): 
   return SWE_PHASE_LABELS[phase] ?? phase;
 }
 
-// Keep legacy exports for backward compat
-export const PHASES = SWE_DISPLAY_PHASES;
-export const PHASE_LABELS = SWE_PHASE_LABELS;
-
 export function isActiveStatus(status: string) {
   return !["done", "merged", "failed", "blocked"].includes(status);
-}
-
-export function effectivePhase(status: string, _mode?: string): string {
-  return status;
 }

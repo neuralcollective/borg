@@ -240,11 +240,6 @@ impl EmbeddingClient {
             .ok_or_else(|| anyhow::anyhow!("empty embedding response"))
     }
 
-    /// Backward-compatible: embed without specifying input_type
-    pub async fn embed_single(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed_document(text).await
-    }
-
     pub async fn is_available(&self) -> bool {
         match self.backend {
             EmbeddingBackend::Ollama => self
@@ -646,7 +641,7 @@ pub async fn index_task_embeddings(
             if chunk.split_whitespace().count() < 10 {
                 continue;
             }
-            match embed_client.embed_single(chunk).await {
+            match embed_client.embed_document(chunk).await {
                 Ok(embedding) => {
                     if let Err(e) =
                         db.upsert_embedding(project_id, Some(task_id), chunk, file, &embedding)

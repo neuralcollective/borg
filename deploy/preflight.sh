@@ -57,10 +57,10 @@ public_url="$(printf '%s' "${settings}" | jq -r '.public_url // ""')"
 project_max_bytes="$(printf '%s' "${settings}" | jq -r '.project_max_bytes // 0')"
 pipeline_max_agents="$(printf '%s' "${settings}" | jq -r '.pipeline_max_agents // 0')"
 
-if [[ "${backend}" == "codex" ]]; then
-  ok "agent backend is codex"
+if [[ "${backend}" == "claude" || "${backend}" == "codex" ]]; then
+  ok "agent backend is ${backend}"
 elif [[ -n "${backend}" ]]; then
-  warn "agent backend is '${backend}' (expected codex)"
+  warn "agent backend is '${backend}' (expected claude or codex)"
 else
   warn "agent backend is empty"
 fi

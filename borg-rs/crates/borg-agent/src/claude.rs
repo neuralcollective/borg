@@ -40,14 +40,7 @@ pub fn extract_phase_result(output: &str) -> Option<String> {
     }
 }
 
-pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
-    let trimmed = test_cmd.trim();
-    if trimmed.starts_with("cargo test") {
-        Some(format!("{trimmed} --no-run"))
-    } else {
-        None
-    }
-}
+pub use borg_core::pipeline::derive_compile_check;
 
 fn merge_allowed_tools(base: &str, extras: &[&str]) -> String {
     // Keep empty allowlists empty so unrestricted phases preserve existing semantics.

@@ -1,15 +1,6 @@
 pub mod benchmark;
 pub mod citations;
-pub mod clio;
-pub mod cognitive;
 pub mod courtlistener;
-pub mod edgar;
-pub mod federal_register;
-pub mod intelligize;
-pub mod lexis;
-pub mod lexmachina;
-pub mod statenet;
-pub mod westlaw;
 
 use borg_core::types::{IntegrationType, PhaseConfig, PipelineMode, SeedConfig, SeedOutputType};
 

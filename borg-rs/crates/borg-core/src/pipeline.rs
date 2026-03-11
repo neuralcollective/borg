@@ -2110,18 +2110,8 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Run a rebase phase — uses GitHub API to update the PR branch.
-    async fn run_rebase_phase(
-        &self,
-        task: &Task,
-        phase: &PhaseConfig,
-        mode: &PipelineMode,
-    ) -> Result<()> {
-        self.run_rebase_phase_docker(task, phase, mode).await
-    }
-
     /// Rebase: try GitHub update-branch API first; on conflict spawn a Docker agent.
-    async fn run_rebase_phase_docker(
+    async fn run_rebase_phase(
         &self,
         task: &Task,
         phase: &PhaseConfig,

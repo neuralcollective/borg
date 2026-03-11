@@ -1,10 +1,9 @@
-import { effectivePhase, getDisplayPhases, getPhaseLabel } from "@/lib/types";
+import { getDisplayPhases, getPhaseLabel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function PhaseTracker({ status, mode }: { status: string; mode?: string }) {
   const phases = getDisplayPhases(mode);
-  const effective = effectivePhase(status, mode);
-  const currentIdx = phases.indexOf(effective);
+  const currentIdx = phases.indexOf(status);
   const isFailed = status === "failed";
 
   return (

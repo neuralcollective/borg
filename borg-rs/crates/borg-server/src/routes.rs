@@ -58,12 +58,6 @@ pub(crate) fn internal(e: impl std::fmt::Debug + std::fmt::Display) -> StatusCod
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
-pub(crate) fn require_workspace(
-    workspace: &crate::auth::WorkspaceContext,
-) -> &crate::auth::WorkspaceContext {
-    workspace
-}
-
 pub(crate) fn require_project_access(
     state: &AppState,
     workspace: &crate::auth::WorkspaceContext,
@@ -249,7 +243,6 @@ pub(crate) struct CreateProjectBody {
     pub name: String,
     pub mode: Option<String>,
     pub client_name: Option<String>,
-    pub opposing_counsel: Option<String>,
     pub jurisdiction: Option<String>,
     pub matter_type: Option<String>,
     pub privilege_level: Option<String>,
@@ -2027,7 +2020,7 @@ pub(crate) async fn list_projects(
 ) -> Result<Json<Value>, StatusCode> {
     let projects = state
         .db
-        .list_projects_in_workspace(require_workspace(&workspace).id)
+        .list_projects_in_workspace(workspace.id)
         .map_err(internal)?;
     let out: Vec<ProjectJson> = projects
         .into_iter()
@@ -2050,7 +2043,7 @@ pub(crate) async fn search_projects(
     }
     let projects = state
         .db
-        .search_projects_in_workspace(require_workspace(&workspace).id, &q)
+        .search_projects_in_workspace(workspace.id, &q)
         .map_err(internal)?;
     let out: Vec<ProjectJson> = projects
         .into_iter()
@@ -2077,8 +2070,6 @@ pub(crate) async fn create_project(
     let jurisdiction = body.jurisdiction.as_deref().unwrap_or("");
     let matter_type = body.matter_type.as_deref().unwrap_or("");
     let privilege_level = body.privilege_level.as_deref().unwrap_or("");
-    let _opposing_counsel = body.opposing_counsel.as_deref().unwrap_or("");
-
     // Insert with empty repo_path first to get the ID
     let id = state
         .db

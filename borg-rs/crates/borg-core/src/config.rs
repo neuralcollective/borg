@@ -66,7 +66,6 @@ pub struct Config {
     pub git_author_email: String,
     pub git_committer_name: String,
     pub git_committer_email: String,
-    pub git_via_borg: bool,
     /// When false (default), tell agent not to add Co-Authored-By Claude trailers.
     pub git_claude_coauthor: bool,
     /// If set, append Co-Authored-By: <value> to every pipeline commit.
@@ -744,7 +743,6 @@ impl Config {
             ("git_author_email", self.git_author_email.clone()),
             ("git_committer_name", self.git_committer_name.clone()),
             ("git_committer_email", self.git_committer_email.clone()),
-            ("git_via_borg", self.git_via_borg.to_string()),
             ("git_claude_coauthor", self.git_claude_coauthor.to_string()),
             ("git_user_coauthor", self.git_user_coauthor.clone()),
             ("build_cmd", "cargo build --release".into()),
@@ -870,7 +868,6 @@ impl Config {
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
         c.continuous_mode = get_bool("continuous_mode", c.continuous_mode);
-        c.git_via_borg = get_bool("git_via_borg", c.git_via_borg);
         c.git_claude_coauthor = get_bool("git_claude_coauthor", c.git_claude_coauthor);
         c.wa_disabled = get_bool("wa_disabled", c.wa_disabled);
         load_i64!("session_max_age_hours", c.session_max_age_hours);
@@ -1007,7 +1004,6 @@ impl Config {
             git_author_email: get_str("GIT_AUTHOR_EMAIL", &dotenv, ""),
             git_committer_name: get_str("GIT_COMMITTER_NAME", &dotenv, ""),
             git_committer_email: get_str("GIT_COMMITTER_EMAIL", &dotenv, ""),
-            git_via_borg: get_bool("GIT_VIA_BORG", &dotenv, false),
             git_claude_coauthor: get_bool("GIT_CLAUDE_COAUTHOR", &dotenv, false),
             git_user_coauthor: get_str("GIT_USER_COAUTHOR", &dotenv, ""),
             github_token: get("GH_TOKEN", &dotenv)
