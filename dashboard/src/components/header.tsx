@@ -16,6 +16,7 @@ function formatUptime(seconds: number) {
 type View =
   | "tasks"
   | "projects"
+  | "connections"
   | "creator"
   | "auto-tasks"
   | "proposals"
@@ -29,6 +30,7 @@ type View =
 const VIEW_TITLES: Record<View, string> = {
   tasks: "Pipeline Tasks",
   projects: "Projects",
+  connections: "Connections",
   creator: "Pipelines",
   "auto-tasks": "Auto Tasks",
   proposals: "Proposals",

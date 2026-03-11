@@ -241,6 +241,7 @@ export async function changeUserPassword(id: number, password: string) {
 export interface UserSettings {
   model: string;
   backend: string;
+  dashboard_mode: string;
   model_override: string;
   model_override_active: boolean;
   github_token_set: boolean;

@@ -5,6 +5,7 @@ import {
   Lightbulb,
   ListTodo,
   MessageSquare,
+  Plug,
   Settings,
   Terminal,
   Wrench,
@@ -13,6 +14,7 @@ import {
 import type { ErrorInfo, ReactNode } from "react";
 import { Component, useCallback, useEffect, useMemo, useState } from "react";
 import { AutoTasksPanel } from "@/components/auto-tasks-panel";
+import { ConnectionsPanel } from "@/components/connections-panel";
 import { BorgLogo, PRODUCT_WORD } from "@/components/borg-logo";
 import { ChatDrawer } from "@/components/chat-drawer";
 import { ChatPanel } from "@/components/chat-panel";
@@ -65,7 +67,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-type View = "tasks" | "projects" | "creator" | "auto-tasks" | "proposals" | "logs" | "queue" | "status" | "settings";
+type View = "tasks" | "projects" | "connections" | "creator" | "auto-tasks" | "proposals" | "logs" | "queue" | "status" | "settings";
 type MobileTab = "tasks" | "projects" | "queue" | "chat";
 type DashboardNavigateDetail = { view: View };
 const SHOW_SETTINGS_NAV = import.meta.env.VITE_SHOW_SETTINGS !== "false";
@@ -83,6 +85,7 @@ function useIsMobile() {
 
 const ALL_NAV_ITEMS = [
   { key: "projects" as const, label: "Projects", Icon: FolderOpen, minimalVisible: true },
+  { key: "connections" as const, label: "Connections", Icon: Plug, minimalVisible: true },
   { key: "tasks" as const, label: "Tasks", Icon: ListTodo, minimalVisible: false },
   { key: "creator" as const, label: "Pipelines", Icon: Wrench, minimalVisible: true },
   { key: "auto-tasks" as const, label: "Auto Tasks", Icon: Zap, minimalVisible: true },
@@ -456,6 +459,7 @@ function AppInner() {
             )}
 
             {view === "projects" && <ProjectsPanel />}
+            {view === "connections" && <ConnectionsPanel />}
             {view === "creator" && <ModeCreatorPanel />}
             {view === "auto-tasks" && <AutoTasksPanel />}
             {view === "proposals" && <ProposalsPanel repoFilter={repoFilter} />}
