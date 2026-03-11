@@ -5,7 +5,7 @@
 //! materials (rubrics, answer banks, evidence maps) never enter this module —
 //! scoring is handled entirely by borgbench's scorer.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -130,4 +130,37 @@ pub fn tuning_prompt(weaknesses: &[Weakness], hard_fail_reasons: &[String]) -> S
     );
 
     parts.join("\n")
+}
+
+/// Read the benchmark tuning context for injection into lawborg system prompts.
+/// Checks $BORG_BENCH_TUNING env var first, falls back to .borg/bench-tuning.md.
+pub fn read_tuning_context() -> Option<String> {
+    let path = std::env::var("BORG_BENCH_TUNING")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".borg/bench-tuning.md"));
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.trim().is_empty() {
+        None
+    } else {
+        Some(content)
+    }
+}
+
+/// Load all scorecards from a directory of run bundles.
+pub fn load_scorecards(dir: &Path) -> Result<Vec<BenchScorecard>> {
+    let mut cards = Vec::new();
+    for entry in std::fs::read_dir(dir).context("reading scorecards directory")? {
+        let path = entry?.path();
+        if path.is_dir() {
+            let sc_path = path.join("scorecard.json");
+            if sc_path.exists() {
+                let sc: BenchScorecard = serde_json::from_str(
+                    &std::fs::read_to_string(&sc_path)?,
+                )
+                .with_context(|| format!("parsing {}", sc_path.display()))?;
+                cards.push(sc);
+            }
+        }
+    }
+    Ok(cards)
 }

@@ -16,7 +16,12 @@ use borg_core::types::{IntegrationType, PhaseConfig, PipelineMode, SeedConfig, S
 use crate::{agent_phase, setup_phase};
 
 fn legal_system(base: &str) -> String {
-    format!("{base}{LEGAL_TOOL_INVENTORY}")
+    let mut prompt = format!("{base}{LEGAL_TOOL_INVENTORY}");
+    if let Some(tuning) = benchmark::read_tuning_context() {
+        prompt.push_str("\n\n");
+        prompt.push_str(&tuning);
+    }
+    prompt
 }
 
 pub fn legal_mode() -> PipelineMode {
@@ -194,6 +199,20 @@ pub fn legal_mode() -> PipelineMode {
                     Use uspto_search_patents and uspto_search_trademarks to check for relevant \
                     IP filings, potential conflicts, and prior art. Create a task for each \
                     IP concern that needs attention.".into(),
+                allowed_tools: String::new(),
+                target_primary_repo: false,
+            },
+            SeedConfig {
+                name: "benchmark".into(),
+                label: "Benchmark Evaluation".into(),
+                output_type: SeedOutputType::Task,
+                prompt: "You are running a borgbench legal evaluation. \
+                    For each matter directory under the borgbench matters path, read the \
+                    visible/brief.md, visible/deliverable_spec.json, and list visible/corpus/ files. \
+                    Create one task per matter with the full brief and corpus listing. \
+                    Never read or reference anything in hidden/ directories — \
+                    those contain scoring materials you must not see. \
+                    Handle each matter as an independent legal task through the full pipeline.".into(),
                 allowed_tools: String::new(),
                 target_primary_repo: false,
             },
