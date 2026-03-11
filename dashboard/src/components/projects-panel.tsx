@@ -1177,8 +1177,8 @@ export function ProjectsPanel() {
               </div>
               <div className="text-[16px] font-semibold text-[#e8e0d4]">Get Started</div>
               <div className="mt-2 text-[13px] leading-relaxed text-[#9c9486]">
-                Create a {vocab.projectSingular} in the sidebar to start. Each {vocab.projectSingular} gets its own
-                document store and AI assistant.
+                <p>Create a {vocab.projectSingular} in the sidebar to start.</p>
+                <p>Each {vocab.projectSingular} gets its own document store and AI agent.</p>
               </div>
               <div className="mt-5 space-y-2.5 text-left text-[13px] text-[#9c9486]">
                 <div className="rounded-xl border border-[#2a2520] bg-[#151412] px-4 py-3">
