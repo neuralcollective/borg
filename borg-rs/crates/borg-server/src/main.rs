@@ -1502,6 +1502,30 @@ async fn main() -> anyhow::Result<()> {
     let ingestion_queue = Arc::new(ingestion::IngestionQueue::from_config(&config).await?);
     let search = search::SearchClient::from_config(&config).map(Arc::new);
 
+    if config.search_backend.eq_ignore_ascii_case("vespa") {
+        if config.vespa_url.trim().is_empty() {
+            tracing::warn!(
+                "SEARCH_BACKEND=vespa but VESPA_URL is empty; BorgSearch tools will be unavailable"
+            );
+        } else if let Some(search) = &search {
+            tracing::info!(
+                "search backend configured: {} ({})",
+                search.backend_name(),
+                search.target()
+            );
+        } else {
+            tracing::warn!(
+                "search backend requested for VESPA_URL={} but initialization failed; BorgSearch tools will be unavailable",
+                config.vespa_url
+            );
+        }
+    } else {
+        tracing::info!(
+            "search backend disabled or non-vespa configuration: {}",
+            config.search_backend
+        );
+    }
+
     match &*ingestion_queue {
         ingestion::IngestionQueue::Disabled => info!("ingestion queue backend: disabled"),
         ingestion::IngestionQueue::Sqs { queue_url, .. } => {
