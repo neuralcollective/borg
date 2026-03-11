@@ -518,6 +518,8 @@ pub struct PhaseContext {
     pub borg_api_token: String,
     /// Originating chat messages (sender, content) from the chat thread that created this task.
     pub chat_context: Vec<(String, String)>,
+    /// Resolved GitHub token for this task (per-user override or global fallback).
+    pub github_token: String,
 }
 
 /// A single in-container test/lint/compile result emitted by the entrypoint.

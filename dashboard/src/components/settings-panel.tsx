@@ -126,6 +126,7 @@ export function SettingsPanel() {
             />
           </div>
           <UserModelPicker />
+          <GitHubTokenField />
         </Section>
 
         {user && (
@@ -670,6 +671,102 @@ function UserModelPicker() {
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+function GitHubTokenField() {
+  const { data: userSettings, refetch } = useUserSettings();
+  const [editing, setEditing] = useState(false);
+  const [token, setToken] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  if (!userSettings) return null;
+
+  const isSet = userSettings.github_token_set;
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateUserSettings({ github_token: token } as Partial<import("@/lib/api").UserSettings>);
+      setToken("");
+      setEditing(false);
+      await refetch();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleClear() {
+    setSaving(true);
+    try {
+      await updateUserSettings({ github_token: "" } as Partial<import("@/lib/api").UserSettings>);
+      await refetch();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <Label>GitHub Token</Label>
+          <Desc>Personal access token for pushing branches and creating PRs under your account. Leave blank to use the system default.</Desc>
+        </div>
+        {!editing && (
+          <div className="flex items-center gap-2">
+            {isSet && (
+              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-400">
+                Configured
+              </span>
+            )}
+            <button
+              onClick={() => setEditing(true)}
+              className="rounded-md border border-[#2a2520] bg-[#1c1a17] px-2.5 py-1.5 text-[12px] text-[#9c9486] hover:text-[#e8e0d4] transition-colors"
+            >
+              {isSet ? "Update" : "Set token"}
+            </button>
+            {isSet && (
+              <button
+                onClick={handleClear}
+                disabled={saving}
+                className="rounded-md border border-[#2a2520] bg-[#1c1a17] px-2.5 py-1.5 text-[12px] text-red-400/70 hover:text-red-400 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {editing && (
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="ghp_..."
+            className="flex-1 rounded-md border border-[#2a2520] bg-[#1c1a17] px-2.5 py-1.5 text-[12px] text-[#e8e0d4] outline-none focus:border-amber-500/40 placeholder:text-[#4a4540]"
+            autoFocus
+          />
+          <button
+            onClick={handleSave}
+            disabled={saving || !token.trim()}
+            className={cn(
+              "rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[12px] font-medium text-amber-400 transition-colors hover:bg-amber-500/20",
+              (saving || !token.trim()) && "opacity-50 cursor-not-allowed",
+            )}
+          >
+            Save
+          </button>
+          <button
+            onClick={() => { setEditing(false); setToken(""); }}
+            className="rounded-md border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[12px] text-[#9c9486] hover:text-[#e8e0d4] transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   );
 }

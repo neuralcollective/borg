@@ -1182,15 +1182,12 @@ pub(crate) async fn run_chat_agent(
     let knowledge_files = project_for_chat
         .as_ref()
         .and_then(|project| {
-            db.list_knowledge_file_page_in_workspace(
+            db.list_all_knowledge_in_workspace(
                 project.workspace_id,
                 Some(&retrieval_query),
-                None,
                 Some(project.jurisdiction.as_str()),
                 80,
-                0,
             )
-            .map(|(files, _)| files)
             .ok()
         })
         .unwrap_or_default();
@@ -4683,6 +4680,7 @@ pub(crate) async fn triage_proposals(State(state): State<Arc<AppState>>) -> Json
                 borg_api_url: format!("http://127.0.0.1:{}", state.config.web_port),
                 borg_api_token: state.api_token.clone(),
                 chat_context: Vec::new(),
+                github_token: state.config.github_token.clone(),
             };
 
             tokio::fs::create_dir_all(&ctx.session_dir).await.ok();
@@ -5032,7 +5030,7 @@ pub(crate) async fn add_workspace_member(
 
 // ── Per-user settings ────────────────────────────────────────────────────
 
-const USER_SETTINGS_KEYS: &[&str] = &["model", "backend"];
+const USER_SETTINGS_KEYS: &[&str] = &["model", "backend", "github_token"];
 
 pub(crate) async fn get_user_settings(
     State(state): State<Arc<AppState>>,
@@ -5047,7 +5045,11 @@ pub(crate) async fn get_user_settings(
     let mut obj = serde_json::Map::new();
     for key in USER_SETTINGS_KEYS {
         let val = settings.get(*key).cloned().unwrap_or_default();
-        obj.insert(key.to_string(), json!(val));
+        if *key == "github_token" {
+            obj.insert("github_token_set".to_string(), json!(!val.is_empty()));
+        } else {
+            obj.insert(key.to_string(), json!(val));
+        }
     }
     obj.insert(
         "model_override".to_string(),
@@ -5906,6 +5908,201 @@ pub(crate) async fn get_knowledge_content(
         .ok_or(StatusCode::NOT_FOUND)?;
     let path = safe_knowledge_path(&state.config.data_dir, Some(workspace.id), &file.file_name)
         .ok_or(StatusCode::BAD_REQUEST)?;
+    let bytes = std::fs::read(&path).map_err(|_| StatusCode::NOT_FOUND)?;
+    let disp = format!(
+        "attachment; filename=\"{}\"",
+        file.file_name.replace('"', "_")
+    );
+    Ok((
+        axum::http::StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
+            (axum::http::header::CONTENT_DISPOSITION, disp),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+// ── User knowledge ("My Knowledge") ───────────────────────────────────────
+
+pub(crate) async fn list_user_knowledge(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Query(q): Query<ListKnowledgeQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let (files, total) = state
+        .db
+        .list_user_knowledge_page(workspace.id, user.id, Some(&q.q), q.limit, q.offset)
+        .map_err(internal)?;
+    let limit = q.limit.clamp(1, 200);
+    let offset = q.offset.max(0);
+    Ok(Json(json!({
+        "files": files,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + (files.len() as i64) < total,
+        "total_bytes": state.db.total_user_knowledge_bytes(workspace.id, user.id).map_err(internal)?,
+    })))
+}
+
+pub(crate) async fn upload_user_knowledge(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, StatusCode> {
+    const MAX_KNOWLEDGE_FILE_BYTES: i64 = 50 * 1024 * 1024;
+    let max_knowledge_total_bytes = state.config.knowledge_max_bytes.max(1);
+
+    let knowledge_dir = format!(
+        "{}/knowledge/workspaces/{}/users/{}",
+        state.config.data_dir, workspace.id, user.id
+    );
+    std::fs::create_dir_all(&knowledge_dir).map_err(internal)?;
+
+    let mut file_name = String::new();
+    let mut description = String::new();
+    let mut inline = false;
+    let mut file_bytes: Vec<u8> = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
+        match field.name() {
+            Some("file") => {
+                if let Some(name) = field.file_name() {
+                    file_name = sanitize_upload_name(name);
+                }
+                file_bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|_| StatusCode::BAD_REQUEST)?
+                    .to_vec();
+            },
+            Some("description") => {
+                description = field.text().await.unwrap_or_default();
+            },
+            Some("inline") => {
+                let v = field.text().await.unwrap_or_default();
+                inline = v == "true" || v == "1";
+            },
+            _ => {},
+        }
+    }
+
+    if file_name.is_empty() || file_bytes.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let file_size = file_bytes.len() as i64;
+    if file_size > MAX_KNOWLEDGE_FILE_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let total_bytes = state
+        .db
+        .total_user_knowledge_bytes(workspace.id, user.id)
+        .map_err(internal)?;
+    if total_bytes + file_size > max_knowledge_total_bytes {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let dest = format!("{knowledge_dir}/{file_name}");
+    if std::path::Path::new(&dest).exists() {
+        return Err(StatusCode::CONFLICT);
+    }
+    std::fs::write(&dest, &file_bytes).map_err(internal)?;
+
+    let id = state
+        .db
+        .insert_knowledge_file_for_user(
+            workspace.id,
+            Some(user.id),
+            &file_name,
+            &description,
+            file_bytes.len() as i64,
+            inline,
+        )
+        .map_err(internal)?;
+
+    tracing::info!(
+        target: "instrumentation.storage",
+        message = "user knowledge file uploaded",
+        user_id = user.id,
+        knowledge_id = id,
+        size_bytes = file_size,
+    );
+
+    Ok(Json(json!({ "id": id, "file_name": file_name })))
+}
+
+pub(crate) async fn delete_user_knowledge(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    if let Ok(Some(file)) = state.db.get_user_knowledge_file(workspace.id, user.id, id) {
+        let path = format!(
+            "{}/knowledge/workspaces/{}/users/{}/{}",
+            state.config.data_dir, workspace.id, user.id, file.file_name
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+    state
+        .db
+        .delete_user_knowledge_file(workspace.id, user.id, id)
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub(crate) async fn delete_all_user_knowledge(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+) -> Result<Json<Value>, StatusCode> {
+    let files = state
+        .db
+        .list_user_knowledge_files(workspace.id, user.id)
+        .map_err(internal)?;
+    for file in &files {
+        let path = format!(
+            "{}/knowledge/workspaces/{}/users/{}/{}",
+            state.config.data_dir, workspace.id, user.id, file.file_name
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+    let deleted = state
+        .db
+        .delete_all_user_knowledge_files(workspace.id, user.id)
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true, "deleted": deleted })))
+}
+
+pub(crate) async fn get_user_knowledge_content(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::response::IntoResponse;
+    let file = state
+        .db
+        .get_user_knowledge_file(workspace.id, user.id, id)
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let path = format!(
+        "{}/knowledge/workspaces/{}/users/{}/{}",
+        state.config.data_dir, workspace.id, user.id, file.file_name
+    );
     let bytes = std::fs::read(&path).map_err(|_| StatusCode::NOT_FOUND)?;
     let disp = format!(
         "attachment; filename=\"{}\"",

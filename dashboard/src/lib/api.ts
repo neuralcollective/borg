@@ -243,6 +243,8 @@ export interface UserSettings {
   backend: string;
   model_override: string;
   model_override_active: boolean;
+  github_token_set: boolean;
+  github_token?: string;
 }
 
 export function useUserSettings() {

@@ -381,7 +381,9 @@ impl AgentBackend for ClaudeBackend {
         let cargo_home =
             std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{real_home}/.cargo"));
 
-        let gh_token = if is_docker {
+        let gh_token = if !ctx.github_token.is_empty() {
+            ctx.github_token.clone()
+        } else if is_docker {
             tokio::task::spawn_blocking(Self::resolve_gh_token)
                 .await
                 .unwrap_or_default()
@@ -413,6 +415,9 @@ impl AgentBackend for ClaudeBackend {
                     .env("CARGO_HOME", &cargo_home)
                     .env("API_BASE_URL", &ctx.borg_api_url)
                     .env("API_TOKEN", &ctx.borg_api_token);
+                if !gh_token.is_empty() {
+                    cmd.env("GH_TOKEN", &gh_token);
+                }
                 if !has_linked_auth && !oauth_token.is_empty() {
                     cmd.env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token);
                 }
@@ -526,6 +531,9 @@ impl AgentBackend for ClaudeBackend {
                     .env("PATH", &augmented_path)
                     .env("API_BASE_URL", &ctx.borg_api_url)
                     .env("API_TOKEN", &ctx.borg_api_token);
+                if !gh_token.is_empty() {
+                    cmd.env("GH_TOKEN", &gh_token);
+                }
                 if !has_linked_auth && !oauth_token.is_empty() {
                     cmd.env("CLAUDE_CODE_OAUTH_TOKEN", &oauth_token);
                 }

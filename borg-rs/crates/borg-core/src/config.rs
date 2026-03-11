@@ -71,6 +71,9 @@ pub struct Config {
     pub git_claude_coauthor: bool,
     /// If set, append Co-Authored-By: <value> to every pipeline commit.
     pub git_user_coauthor: String,
+    /// GitHub token for pushing branches and creating PRs.
+    /// Users can override this per-account via the `github_token` user setting.
+    pub github_token: String,
 
     pub watched_repos: Vec<RepoConfig>,
 
@@ -991,6 +994,9 @@ impl Config {
             git_via_borg: get_bool("GIT_VIA_BORG", &dotenv, false),
             git_claude_coauthor: get_bool("GIT_CLAUDE_COAUTHOR", &dotenv, false),
             git_user_coauthor: get_str("GIT_USER_COAUTHOR", &dotenv, ""),
+            github_token: get("GH_TOKEN", &dotenv)
+                .or_else(|| get("GITHUB_TOKEN", &dotenv))
+                .unwrap_or_default(),
             watched_repos,
             build_cmd: "cargo build --release".into(),
             self_update_enabled: get_bool("SELF_UPDATE_ENABLED", &dotenv, false),

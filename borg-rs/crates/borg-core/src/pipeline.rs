@@ -393,6 +393,30 @@ impl Pipeline {
         let _ = self.ensure_tmp_capacity(0, "tick_guardrail");
     }
 
+    /// Resolve the GitHub token for a task: per-user setting → global config → `gh auth token`.
+    fn resolve_gh_token(&self, created_by: &str) -> String {
+        if !created_by.is_empty() {
+            if let Ok(Some((uid, _, _, _, _))) = self.db.get_user_by_username(created_by) {
+                if let Ok(Some(tok)) = self.db.get_user_setting(uid, "github_token") {
+                    if !tok.is_empty() {
+                        return tok;
+                    }
+                }
+            }
+        }
+        if !self.config.github_token.is_empty() {
+            return self.config.github_token.clone();
+        }
+        std::process::Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+
     /// Build a PhaseContext for a task phase.
     fn make_context(
         &self,
@@ -535,6 +559,7 @@ impl Pipeline {
                 .trim()
                 .to_string(),
             chat_context,
+            github_token: self.resolve_gh_token(&task.created_by),
         }
     }
 
@@ -2304,19 +2329,7 @@ impl Pipeline {
             }
         }
 
-        // Ensure push targets GitHub branch (not local checkout path remote).
-        let gh_token = std::env::var("GH_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
-            .ok()
-            .or_else(|| {
-                Command::new("gh")
-                    .args(["auth", "token"])
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            })
-            .unwrap_or_default();
+        let gh_token = self.resolve_gh_token(&task.created_by);
         let origin_url = if !gh_token.is_empty() {
             format!("https://x-access-token:{gh_token}@github.com/{slug}.git")
         } else {
@@ -3250,10 +3263,12 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     /// Run a `gh` command without a working directory.
     async fn gh(&self, args: &[&str]) -> Result<TestOutput> {
         let timeout = std::time::Duration::from_secs(self.config.agent_timeout_s.max(300) as u64);
-        let output = tokio::time::timeout(
-            timeout,
-            tokio::process::Command::new("gh").args(args).output(),
-        )
+        let mut cmd = tokio::process::Command::new("gh");
+        cmd.args(args);
+        if !self.config.github_token.is_empty() {
+            cmd.env("GH_TOKEN", &self.config.github_token);
+        }
+        let output = tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| {
             anyhow::anyhow!(
