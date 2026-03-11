@@ -293,9 +293,7 @@ export function ProjectsPanel() {
   const filteredProjects = useMemo(() => {
     if (!searchQuery.trim()) return projects;
     const q = searchQuery.toLowerCase();
-    return projects.filter(
-      (p) => p.name.toLowerCase().includes(q) || (p.jurisdiction && p.jurisdiction.toLowerCase().includes(q)),
-    );
+    return projects.filter((p) => p.name.toLowerCase().includes(q) || p.jurisdiction?.toLowerCase().includes(q));
   }, [projects, searchQuery]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? projects[0] ?? null;
@@ -1008,157 +1006,140 @@ export function ProjectsPanel() {
             placeholder={vocab.newProjectPlaceholder}
             className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
           />
-          {isSWE && (
-            <select
-              value={newProjectMode}
-              onChange={(e) => setNewProjectMode(e.target.value)}
-              className="mt-2.5 w-full rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none"
-            >
-              <option value="general">general</option>
-              {modes.map((mode) => (
-                <option key={mode.name} value={mode.name}>
-                  {mode.experimental ? `${mode.label ?? mode.name} (experimental)` : (mode.label ?? mode.name)}
-                </option>
-              ))}
-            </select>
-          )}
+          {/* Mode picker hidden — defaults to "general" */}
           {isLegalProjectWorkflow && (
-            <>
-              <div className="mt-2 rounded-xl border border-[#2a2520] bg-[#151412] px-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-[#e8e0d4]">{legalWorkflowTitle}</div>
-                  <div className="mt-1 text-[11px] text-[#6b6459]">
-                    This {LEGAL_VOCAB.projectSingular} will use this workflow automatically.
-                  </div>
-                </div>
-                <div className="mt-2 rounded-lg border border-[#2a2520] bg-[#1c1a17]">
-                  <button
-                    type="button"
-                    onClick={() => setShowLegalWorkflowPicker((open) => !open)}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[#151412]"
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-[11px] font-medium text-[#e8e0d4]">Workflow</span>
-                      <span className="block text-[10px] text-[#6b6459]">
-                        {selectedLegalWorkflow?.label ?? legalWorkflowTitle}
-                      </span>
-                    </span>
-                    <ChevronDown
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0 text-[#6b6459] transition-transform",
-                        showLegalWorkflowPicker && "rotate-180",
-                      )}
-                    />
-                  </button>
-                  {selectedLegalWorkflow?.phases?.length ? (
-                    <div className="border-t border-[#2a2520] px-3 py-2.5">
-                      <span className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[#6b6459]">
-                        Workflow stages
-                      </span>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        {selectedLegalWorkflow.phases
-                          .slice()
-                          .sort(
-                            (a, b) => (a.priority ?? Number.MAX_SAFE_INTEGER) - (b.priority ?? Number.MAX_SAFE_INTEGER),
-                          )
-                          .map((phase, i, arr) => (
-                            <span key={phase.name} className="flex items-center">
-                              <span className="rounded-lg bg-[#151412] px-2 py-0.5 text-[10px] text-[#9c9486] ring-1 ring-inset ring-[#2a2520]">
-                                {LEGAL_VOCAB.statusLabels[phase.name] ?? phase.label ?? phase.name}
-                              </span>
-                              {i < arr.length - 1 && <span className="mx-1 text-[10px] text-[#6b6459]">→</span>}
-                            </span>
-                          ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  {showLegalWorkflowPicker && (
-                    <div className="border-t border-[#2a2520] px-3 py-2.5">
-                      <div className="space-y-1 rounded-lg border border-[#2a2520] bg-[#151412] p-1.5">
-                        {legalWorkflowOptions.map((mode) => {
-                          const selected = mode.name === (selectedLegalWorkflow?.name ?? defaultLegalMode);
-                          return (
-                            <button
-                              key={mode.name}
-                              type="button"
-                              onClick={() => {
-                                setNewProjectMode(mode.name);
-                                setShowLegalWorkflowPicker(false);
-                              }}
-                              className={cn(
-                                "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors",
-                                selected ? "bg-amber-500/[0.08] text-[#e8e0d4]" : "text-[#9c9486] hover:bg-[#1c1a17]",
-                              )}
-                            >
-                              <span className="min-w-0">
-                                <span className="block truncate text-[11px] font-medium">
-                                  {mode.label ?? mode.name}
-                                </span>
-                                <span className="block truncate text-[10px] text-[#6b6459]">{mode.name}</span>
-                              </span>
-                              {selected && <Check className="h-3.5 w-3.5 shrink-0 text-amber-400" />}
-                            </button>
-                          );
-                        })}
-                        <div className="mt-1 rounded-md border border-dashed border-[#2a2520] bg-[#1c1a17] px-2 py-2">
-                          <div className="text-[10px] text-[#6b6459]">
-                            {legalWorkflowOptions.length > 1
-                              ? "Need to edit or add workflows?"
-                              : "No custom workflows yet. Create one in Pipelines."}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={openPipelinesView}
-                            className="mt-2 inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-300 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/20"
-                          >
-                            <Wrench className="h-3 w-3" />
-                            Open Pipelines
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-2 rounded-lg border border-[#2a2520] bg-[#1c1a17]">
-                  <button
-                    type="button"
-                    onClick={() => setShowLegalMatterDetails((open) => !open)}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[#151412]"
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-[11px] font-medium text-[#e8e0d4]">Matter details</span>
-                      <span className="block text-[10px] text-[#6b6459]">
-                        {newProjectJurisdiction.trim()
-                          ? `Jurisdiction: ${newProjectJurisdiction.trim()}`
-                          : "Jurisdiction is optional. Add it if it helps agents target the right law."}
-                      </span>
-                    </span>
-                    <ChevronDown
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0 text-[#6b6459] transition-transform",
-                        showLegalMatterDetails && "rotate-180",
-                      )}
-                    />
-                  </button>
-                  {showLegalMatterDetails && (
-                    <div className="border-t border-[#2a2520] px-3 py-2.5">
-                      <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.14em] text-[#6b6459]">
-                        Jurisdiction (Optional)
-                      </label>
-                      <input
-                        value={newProjectJurisdiction}
-                        onChange={(e) => setNewProjectJurisdiction(e.target.value)}
-                        placeholder="England & Wales, Delaware, SDNY..."
-                        className="w-full rounded-lg border border-[#2a2520] bg-[#151412] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
-                      />
-                      <div className="mt-1.5 text-[10px] text-[#6b6459]">
-                        Helps agents ground research and retrieval. You can also add or edit it later.
-                      </div>
-                    </div>
-                  )}
+            <div className="mt-2 rounded-xl border border-[#2a2520] bg-[#151412] px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium text-[#e8e0d4]">{legalWorkflowTitle}</div>
+                <div className="mt-1 text-[11px] text-[#6b6459]">
+                  This {LEGAL_VOCAB.projectSingular} will use this workflow automatically.
                 </div>
               </div>
-            </>
+              <div className="mt-2 rounded-lg border border-[#2a2520] bg-[#1c1a17]">
+                <button
+                  type="button"
+                  onClick={() => setShowLegalWorkflowPicker((open) => !open)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[#151412]"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-medium text-[#e8e0d4]">Workflow</span>
+                    <span className="block text-[10px] text-[#6b6459]">
+                      {selectedLegalWorkflow?.label ?? legalWorkflowTitle}
+                    </span>
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 text-[#6b6459] transition-transform",
+                      showLegalWorkflowPicker && "rotate-180",
+                    )}
+                  />
+                </button>
+                {selectedLegalWorkflow?.phases?.length ? (
+                  <div className="border-t border-[#2a2520] px-3 py-2.5">
+                    <span className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[#6b6459]">
+                      Workflow stages
+                    </span>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {selectedLegalWorkflow.phases
+                        .slice()
+                        .sort(
+                          (a, b) => (a.priority ?? Number.MAX_SAFE_INTEGER) - (b.priority ?? Number.MAX_SAFE_INTEGER),
+                        )
+                        .map((phase, i, arr) => (
+                          <span key={phase.name} className="flex items-center">
+                            <span className="rounded-lg bg-[#151412] px-2 py-0.5 text-[10px] text-[#9c9486] ring-1 ring-inset ring-[#2a2520]">
+                              {LEGAL_VOCAB.statusLabels[phase.name] ?? phase.label ?? phase.name}
+                            </span>
+                            {i < arr.length - 1 && <span className="mx-1 text-[10px] text-[#6b6459]">→</span>}
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                ) : null}
+                {showLegalWorkflowPicker && (
+                  <div className="border-t border-[#2a2520] px-3 py-2.5">
+                    <div className="space-y-1 rounded-lg border border-[#2a2520] bg-[#151412] p-1.5">
+                      {legalWorkflowOptions.map((mode) => {
+                        const selected = mode.name === (selectedLegalWorkflow?.name ?? defaultLegalMode);
+                        return (
+                          <button
+                            key={mode.name}
+                            type="button"
+                            onClick={() => {
+                              setNewProjectMode(mode.name);
+                              setShowLegalWorkflowPicker(false);
+                            }}
+                            className={cn(
+                              "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors",
+                              selected ? "bg-amber-500/[0.08] text-[#e8e0d4]" : "text-[#9c9486] hover:bg-[#1c1a17]",
+                            )}
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-[11px] font-medium">{mode.label ?? mode.name}</span>
+                              <span className="block truncate text-[10px] text-[#6b6459]">{mode.name}</span>
+                            </span>
+                            {selected && <Check className="h-3.5 w-3.5 shrink-0 text-amber-400" />}
+                          </button>
+                        );
+                      })}
+                      <div className="mt-1 rounded-md border border-dashed border-[#2a2520] bg-[#1c1a17] px-2 py-2">
+                        <div className="text-[10px] text-[#6b6459]">
+                          {legalWorkflowOptions.length > 1
+                            ? "Need to edit or add workflows?"
+                            : "No custom workflows yet. Create one in Pipelines."}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={openPipelinesView}
+                          className="mt-2 inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-300 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/20"
+                        >
+                          <Wrench className="h-3 w-3" />
+                          Open Pipelines
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="mt-2 rounded-lg border border-[#2a2520] bg-[#1c1a17]">
+                <button
+                  type="button"
+                  onClick={() => setShowLegalMatterDetails((open) => !open)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[#151412]"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-medium text-[#e8e0d4]">Matter details</span>
+                    <span className="block text-[10px] text-[#6b6459]">
+                      {newProjectJurisdiction.trim()
+                        ? `Jurisdiction: ${newProjectJurisdiction.trim()}`
+                        : "Jurisdiction is optional. Add it if it helps agents target the right law."}
+                    </span>
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 text-[#6b6459] transition-transform",
+                      showLegalMatterDetails && "rotate-180",
+                    )}
+                  />
+                </button>
+                {showLegalMatterDetails && (
+                  <div className="border-t border-[#2a2520] px-3 py-2.5">
+                    <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.14em] text-[#6b6459]">
+                      Jurisdiction (Optional)
+                    </label>
+                    <input
+                      value={newProjectJurisdiction}
+                      onChange={(e) => setNewProjectJurisdiction(e.target.value)}
+                      placeholder="England & Wales, Delaware, SDNY..."
+                      className="w-full rounded-lg border border-[#2a2520] bg-[#151412] px-3 py-2 text-[13px] text-[#e8e0d4] outline-none placeholder:text-[#6b6459] focus:border-amber-500/30"
+                    />
+                    <div className="mt-1.5 text-[10px] text-[#6b6459]">
+                      Helps agents ground research and retrieval. You can also add or edit it later.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
           <button
             onClick={handleCreateProject}
@@ -1458,7 +1439,7 @@ export function ProjectsPanel() {
                         fl.setFilePageStack((prev) => [
                           ...prev,
                           {
-                            cursor: filePage!.next_cursor ?? null,
+                            cursor: filePage?.next_cursor ?? null,
                             offset: fl.currentFilePage.offset + files.length,
                           },
                         ]);
@@ -1866,7 +1847,7 @@ function MemoryView() {
               }
             />
             <FileListPagination
-              filePage={{ total: page!.total, has_more: page!.has_more }}
+              filePage={{ total: page?.total, has_more: page?.has_more }}
               currentOffset={offset}
               fileCount={files.length}
               pageSize={pageSize}
@@ -1876,7 +1857,7 @@ function MemoryView() {
               }}
               canGoPrev={offset > 0}
               onPrev={() => setOffset((prev) => Math.max(0, prev - pageSize))}
-              canGoNext={page!.has_more}
+              canGoNext={page?.has_more}
               onNext={() => setOffset((prev) => prev + pageSize)}
               actions={
                 <button

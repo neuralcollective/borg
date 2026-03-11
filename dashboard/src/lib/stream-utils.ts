@@ -139,7 +139,7 @@ export function formatToolInput(tool: string, input: unknown): { label: string; 
   if (tool === "Edit") {
     const fp = (obj.file_path as string) || "";
     const old = (obj.old_string as string) || "";
-    const preview = old.length > 80 ? old.slice(0, 80) + "..." : old;
+    const preview = old.length > 80 ? `${old.slice(0, 80)}...` : old;
     return { label: fp, detail: preview ? `replacing: ${preview}` : "" };
   }
   if (tool === "Glob" || tool === "Grep") {
@@ -210,7 +210,7 @@ export function parseStreamEvents(events: StreamEvent[]): TermLine[] {
             ? raw.map((c: { text?: string }) => c.text || "").join("\n")
             : JSON.stringify(raw);
       if (text.trim()) {
-        const preview = text.length > 300 ? text.slice(0, 300) + "..." : text;
+        const preview = text.length > 300 ? `${text.slice(0, 300)}...` : text;
         lines.push({
           type: "tool_result",
           tool: ev.tool_name || ev.name || "",
@@ -243,7 +243,7 @@ export function rawStreamToEvents(raw: string): StreamEvent[] {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
-      if (parsed && parsed.type) events.push(parsed);
+      if (parsed?.type) events.push(parsed);
     } catch {
       // skip non-JSON lines
     }

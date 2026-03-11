@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const PANEL_PATH = join(import.meta.dir, "../mode-creator-panel.tsx");
 const STRIP_PATH = join(import.meta.dir, "phase-strip.tsx");

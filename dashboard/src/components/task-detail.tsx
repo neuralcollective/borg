@@ -500,7 +500,7 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
             {ev.tool}
           </span>
           <span className="truncate text-[11px] text-[#9c9486]">
-            {ev.label || (ev.input && ev.input.length > 80 ? ev.input.slice(0, 80) + "..." : ev.input)}
+            {ev.label || (ev.input && ev.input.length > 80 ? `${ev.input.slice(0, 80)}...` : ev.input)}
           </span>
           <span className="ml-auto shrink-0 text-[9px] text-[#6b6459]">{expanded ? "^" : "v"}</span>
         </button>
@@ -514,7 +514,7 @@ function StreamEventBlock({ event: ev }: { event: ParsedStreamEvent }) {
   }
 
   if (ev.type === "tool_result") {
-    const preview = ev.output && ev.output.length > 200 ? ev.output.slice(0, 200) + "..." : ev.output;
+    const preview = ev.output && ev.output.length > 200 ? `${ev.output.slice(0, 200)}...` : ev.output;
     return (
       <div className="rounded border border-[#2a2520] bg-[#1c1a17]/30">
         <button onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left">
@@ -585,9 +585,9 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
   }, [outputs]);
 
   const lastLabeled = labeled[labeled.length - 1];
-  const [selectedKey, setSelectedKey] = useState(lastLabeled ? lastLabeled.phase + "-" + lastLabeled.id : "");
+  const [selectedKey, setSelectedKey] = useState(lastLabeled ? `${lastLabeled.phase}-${lastLabeled.id}` : "");
 
-  const selected = labeled.find((o) => o.phase + "-" + o.id === selectedKey) ?? lastLabeled;
+  const selected = labeled.find((o) => `${o.phase}-${o.id}` === selectedKey) ?? lastLabeled;
 
   if (!selected) return null;
   const isDiff = selected.phase.endsWith("_diff");
@@ -602,7 +602,7 @@ function OutputSelector({ outputs }: { outputs: TaskOutput[] }) {
           className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-1.5 text-[12px] font-medium uppercase tracking-wide text-[#e8e0d4] outline-none focus:border-amber-500/40"
         >
           {labeled.map((o) => {
-            const key = o.phase + "-" + o.id;
+            const key = `${o.phase}-${o.id}`;
             const status = o.exit_code === 0 ? " \u2713" : ` x${o.exit_code}`;
             return (
               <option key={key} value={key}>

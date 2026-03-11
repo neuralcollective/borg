@@ -128,7 +128,7 @@ function summarizeResult(tool: string, resultText: string): string | null {
   if (tool === "Agent") {
     if (lines.length === 0) return "done";
     const last = lines[lines.length - 1];
-    return last.length > 60 ? last.slice(0, 57) + "..." : last;
+    return last.length > 60 ? `${last.slice(0, 57)}...` : last;
   }
   if (tool.startsWith("mcp__borg__")) {
     if (resultText.includes("No matches") || resultText.includes("No documents")) return "no results";

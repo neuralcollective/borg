@@ -191,7 +191,7 @@ export function ChatPanel() {
     setInput(e.target.value);
     const el = e.target;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }
 
   return (

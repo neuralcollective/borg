@@ -1238,8 +1238,8 @@ function NumberField({
           min={min}
           max={max}
           onChange={(e) => {
-            const v = parseInt(e.target.value);
-            if (!isNaN(v)) onChange(clamp(v));
+            const v = parseInt(e.target.value, 10);
+            if (!Number.isNaN(v)) onChange(clamp(v));
           }}
           className="w-14 bg-transparent px-1 py-1 text-center text-[12px] tabular-nums text-[#e8e0d4] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
         />

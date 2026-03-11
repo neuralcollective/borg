@@ -72,7 +72,7 @@ export function useDictation(currentInput: string, setInput: (value: string) => 
       }
       const dictated = (finals + interim).trim();
       const base = baseRef.current;
-      setInputRef.current(base ? base + " " + dictated : dictated);
+      setInputRef.current(base ? `${base} ${dictated}` : dictated);
     };
 
     rec.onend = () => {

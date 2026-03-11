@@ -9,6 +9,7 @@ export function LoginPage() {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showManual, setShowManual] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -70,63 +71,105 @@ export function LoginPage() {
                 {provider.label}
               </button>
             ))}
-            <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.24em] text-zinc-600">
-              <div className="h-px flex-1 bg-[#2a2520]" />
-              <span>or</span>
-              <div className="h-px flex-1 bg-[#2a2520]" />
-            </div>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-[12px] text-zinc-500">Username</label>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoFocus
-              className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
-              placeholder="admin"
-            />
+        {(error || authError) && (
+          <div className="rounded-xl border border-red-500/20 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-400">
+            {formatAuthError(error || authError || "")}
           </div>
+        )}
 
-          {needsSetup && (
+        {providerButtons.length > 0 && !needsSetup ? (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowManual(!showManual)}
+              className="flex w-full items-center justify-center gap-2 text-[12px] text-zinc-500 transition-colors hover:text-zinc-400"
+            >
+              <span>Sign in with password</span>
+              <svg
+                className={`h-3 w-3 transition-transform ${showManual ? "rotate-180" : ""}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {showManual && (
+              <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-[12px] text-zinc-500">Username</label>
+                  <input
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
+                    placeholder="admin"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[12px] text-zinc-500">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
+                    placeholder="••••••"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={busy || !username.trim() || !password}
+                  className="w-full rounded-xl bg-amber-500/20 py-2.5 text-[14px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
+                >
+                  {busy ? "..." : "Sign In"}
+                </button>
+              </form>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-[12px] text-zinc-500">Display Name</label>
+              <label className="mb-1.5 block text-[12px] text-zinc-500">Username</label>
               <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoFocus
                 className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
-                placeholder="Your Name"
+                placeholder="admin"
               />
             </div>
-          )}
-
-          <div>
-            <label className="mb-1.5 block text-[12px] text-zinc-500">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
-              placeholder={needsSetup ? "Min 4 characters" : "••••••"}
-            />
-          </div>
-
-          {(error || authError) && (
-            <div className="rounded-xl border border-red-500/20 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-400">
-              {formatAuthError(error || authError || "")}
+            {needsSetup && (
+              <div>
+                <label className="mb-1.5 block text-[12px] text-zinc-500">Display Name</label>
+                <input
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
+                  placeholder="Your Name"
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-1.5 block text-[12px] text-zinc-500">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-[#2a2520] bg-[#1c1a17] px-4 py-2.5 text-[14px] text-[#e8e0d4] outline-none focus:border-amber-500/30"
+                placeholder={needsSetup ? "Min 4 characters" : "••••••"}
+              />
             </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={busy || !username.trim() || !password}
-            className="w-full rounded-xl bg-amber-500/20 py-2.5 text-[14px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
-          >
-            {busy ? "..." : needsSetup ? "Create Account" : "Sign In"}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={busy || !username.trim() || !password}
+              className="w-full rounded-xl bg-amber-500/20 py-2.5 text-[14px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20 transition-colors hover:bg-amber-500/30 disabled:opacity-50"
+            >
+              {busy ? "..." : needsSetup ? "Create Account" : "Sign In"}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

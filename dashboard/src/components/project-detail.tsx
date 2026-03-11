@@ -531,7 +531,7 @@ function DocumentsTab({
                   fl.setFilePageStack((prev) => [
                     ...prev,
                     {
-                      cursor: fl.filePage!.next_cursor ?? null,
+                      cursor: fl.filePage?.next_cursor ?? null,
                       offset: fl.currentFilePage.offset + fl.files.length,
                     },
                   ]);
@@ -626,7 +626,7 @@ function TaskStreamMini({ taskId }: { taskId: number }) {
     return events
       .filter((e) => e.type === "assistant" && e.message?.content)
       .map((e) => {
-        const content = e.message!.content;
+        const content = e.message?.content;
         if (typeof content === "string") return content;
         if (Array.isArray(content)) {
           return content

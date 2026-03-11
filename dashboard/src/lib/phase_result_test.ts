@@ -11,8 +11,8 @@
  */
 
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const API_PATH = join(import.meta.dir, "api.ts");
 const TERMINAL_PATH = join(import.meta.dir, "../components/live-terminal.tsx");

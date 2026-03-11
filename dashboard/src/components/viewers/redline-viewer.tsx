@@ -196,7 +196,7 @@ function SideCell({ line, side }: { line: LineDiff | null; side: "left" | "right
     return (
       <div className="min-h-[1.4em] border-l-2 border-l-red-600/60 bg-red-900/20 px-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
         {hasWordChanges ? (
-          line.wordChanges!.map((c, i) => {
+          line.wordChanges?.map((c, i) => {
             if (c.removed) {
               return (
                 <span key={i} className="rounded-sm bg-red-700/40 text-red-300 line-through">
@@ -222,7 +222,7 @@ function SideCell({ line, side }: { line: LineDiff | null; side: "left" | "right
     return (
       <div className="min-h-[1.4em] border-l-2 border-l-blue-600/60 bg-blue-900/20 px-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
         {hasWordChanges ? (
-          line.wordChanges!.map((c, i) => {
+          line.wordChanges?.map((c, i) => {
             if (c.added) {
               return (
                 <span key={i} className="rounded-sm bg-blue-700/40 text-blue-300 underline underline-offset-2">
@@ -272,7 +272,7 @@ function VersionSelect({
       >
         {versions.map((v) => (
           <option key={v.sha} value={v.sha}>
-            {v.sha.slice(0, 7)} — {v.message.length > 40 ? v.message.slice(0, 40) + "…" : v.message}
+            {v.sha.slice(0, 7)} — {v.message.length > 40 ? `${v.message.slice(0, 40)}…` : v.message}
           </option>
         ))}
       </select>
