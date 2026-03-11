@@ -64,7 +64,7 @@ function BorgLogo({ size = "desktop", expanded }: { size?: "desktop" | "mobile";
 
     function scheduleFlicker() {
       if (stopped) return;
-      const delay = 4000 + Math.random() * 12000;
+      const delay = 4800 + Math.random() * 14400;
       const timer = setTimeout(() => {
         timers.delete(timer);
         const r = Math.random();
