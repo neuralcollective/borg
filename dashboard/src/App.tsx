@@ -241,8 +241,8 @@ function OnboardingModal() {
             const hasAuthUrl = isPending && !!session?.auth_url && provider === "claude";
             return (
               <div key={provider} className="rounded-xl border border-[#2a2520] bg-[#0e0c0a] p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
                     <div className="text-[14px] font-medium text-[#e8e0d4]">{label}</div>
                     <div className="text-[12px] text-[#6b6459]">{hint}</div>
                   </div>
@@ -286,7 +286,7 @@ function OnboardingModal() {
                   </div>
                 )}
                 {isPending && !hasAuthUrl && (
-                  <div className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[11px] text-[#9c9486]">
+                  <div className="rounded-lg border border-[#2a2520] bg-[#1c1a17] px-3 py-2 text-[11px] text-[#9c9486] break-all overflow-hidden">
                     {session.message || "Follow the instructions in the opened tab, then wait here."}
                   </div>
                 )}
