@@ -55,6 +55,10 @@ Key mode boundaries in the dashboard:
 - Use `bun` for all JavaScript and TypeScript package management and script execution. Do not use `npm`, `yarn`, or `pnpm`.
 - Prefer `just <recipe>` for standard project workflows before reaching for raw commands.
 
+## Hetzner Server (root@65.21.67.137)
+
+- NEVER touch `/root/zcash` or anything inside it.
+
 ## Git Commits
 
 - Use your preferred local git author identity.
