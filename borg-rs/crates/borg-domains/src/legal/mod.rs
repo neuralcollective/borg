@@ -1,3 +1,4 @@
+pub mod benchmark;
 pub mod citations;
 pub mod clio;
 pub mod cognitive;
