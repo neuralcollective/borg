@@ -1299,10 +1299,10 @@ impl Pipeline {
                         "task #{} created worktree at {} from {}",
                         task.id, worktree_dir, start_ref
                     );
-                }
+                },
                 Err(e) => {
                     warn!("task #{} worktree creation failed: {e}", task.id);
-                }
+                },
             }
         }
 
@@ -1683,6 +1683,15 @@ impl Pipeline {
             self.fail_or_retry(task, &phase.name, &protocol_error)?;
             return Ok(());
         }
+        if let Some(clarification_error) = Self::enforce_legal_benchmark_clarification_guard(
+            task,
+            phase,
+            &work_dir,
+            &result.output,
+        ) {
+            self.fail_or_retry(task, &phase.name, &clarification_error)?;
+            return Ok(());
+        }
 
         if phase.runs_tests && mode.uses_test_cmd && !test_cmd.is_empty() {
             let out = if result.ran_in_docker {
@@ -1992,6 +2001,67 @@ impl Pipeline {
         if let Ok(serialized) = serde_json::to_string(&base) {
             let _ = self.db.update_task_structured_data(task_id, &serialized);
         }
+    }
+
+    fn enforce_legal_benchmark_clarification_guard(
+        task: &Task,
+        phase: &PhaseConfig,
+        work_dir: &str,
+        phase_output: &str,
+    ) -> Option<String> {
+        if !Self::is_legal_benchmark_task(task) {
+            return None;
+        }
+        if !matches!(
+            phase.name.as_str(),
+            "implement" | "impl" | "retry" | "review"
+        ) {
+            return None;
+        }
+
+        for (source, text) in Self::benchmark_guard_sources(work_dir, phase_output) {
+            if let Some(excerpt) = detect_benchmark_clarification_escape(&text) {
+                return Some(format!(
+                    "Benchmark clarification guard failed.\n\
+                     The task output still treats an unresolved pre-sign/pre-close fact as a caveat instead of blocking for clarification.\n\
+                     Source: {}\n\
+                     Evidence: {}\n\
+                     If signing or closing depends on confirming a material fact that is not answerable from the corpus, write `.borg/signal.json` with `{{\"status\":\"blocked\",\"reason\":\"Material fact missing\",\"question\":\"...\"}}` before finalising deliverables.",
+                    source, excerpt
+                ));
+            }
+        }
+
+        None
+    }
+
+    fn is_legal_benchmark_task(task: &Task) -> bool {
+        matches!(task.mode.as_str(), "lawborg" | "legal")
+            && task.task_type.trim() == "benchmark_analysis"
+    }
+
+    fn benchmark_guard_sources(work_dir: &str, phase_output: &str) -> Vec<(String, String)> {
+        let mut sources = Vec::new();
+        if !phase_output.trim().is_empty() {
+            sources.push(("phase output".to_string(), phase_output.to_string()));
+        }
+
+        let candidate_names = [
+            "intake_note.md",
+            "advice_memo.md",
+            "dd_report.md",
+            "action_plan.json",
+            "review_notes.md",
+        ];
+        for name in candidate_names {
+            let path = std::path::Path::new(work_dir).join(name);
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if !raw.trim().is_empty() {
+                    sources.push((name.to_string(), raw));
+                }
+            }
+        }
+        sources
     }
 
     /// Run a purge phase: delete vectors, messages, and raw files for a task.
@@ -3318,15 +3388,15 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             cmd.env("GH_TOKEN", &self.config.github_token);
         }
         let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "gh {} timed out after {}s",
-                args.join(" "),
-                timeout.as_secs()
-            )
-        })?
-        .context("gh command")?;
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "gh {} timed out after {}s",
+                    args.join(" "),
+                    timeout.as_secs()
+                )
+            })?
+            .context("gh command")?;
         Ok(TestOutput {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -4484,12 +4554,8 @@ Make only the minimal changes the linter requires. Do not refactor or change log
             + self.db.count_queue_with_status("merging").unwrap_or(0);
         let last_merge_ts = self.db.get_ts("last_release_ts");
         let backlog_started_ts = self.db.get_ts("last_no_merge_backlog_started_ts");
-        let (baseline_ts, next_backlog_started_ts) = no_merge_guardrail_baseline(
-            queued_count,
-            last_merge_ts,
-            backlog_started_ts,
-            now,
-        );
+        let (baseline_ts, next_backlog_started_ts) =
+            no_merge_guardrail_baseline(queued_count, last_merge_ts, backlog_started_ts, now);
         if next_backlog_started_ts != backlog_started_ts {
             self.db
                 .set_ts("last_no_merge_backlog_started_ts", next_backlog_started_ts);
@@ -4565,6 +4631,93 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     fn emit(&self, event: PipelineEvent) {
         let _ = self.event_tx.send(event);
     }
+}
+
+fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
+    let normalized = text.to_ascii_lowercase();
+    let has_sign_or_close_position = contains_any(
+        &normalized,
+        &[
+            "sign position",
+            "signing is supportable",
+            "sign is supportable",
+            "sign remains supportable",
+            "supportable with",
+            "recommend sign",
+            "recommend signing",
+            "proceed to sign",
+            "ready to sign",
+            "closing position",
+            "close is supportable",
+            "closing is supportable",
+            "recommend close",
+            "proceed to close",
+        ],
+    );
+    if !has_sign_or_close_position {
+        return None;
+    }
+
+    let has_pre_sign_timing = contains_any(
+        &normalized,
+        &[
+            "pre-sign",
+            "pre sign",
+            "before sign",
+            "before signing",
+            "prior to sign",
+            "prior to signing",
+            "pre-close",
+            "pre close",
+            "before close",
+            "before closing",
+            "prior to close",
+            "prior to closing",
+        ],
+    );
+    if !has_pre_sign_timing {
+        return None;
+    }
+
+    let has_unresolved_fact_language = contains_any(
+        &normalized,
+        &[
+            "confirm",
+            "confirmation",
+            "verify",
+            "verification",
+            "check before",
+            "must be checked",
+            "must be confirmed",
+            "must confirm",
+            "not confirmed",
+            "not yet confirmed",
+            "seller confirmation",
+            "open question",
+            "clarification",
+            "unresolved",
+            "unknown",
+            "pending",
+        ],
+    );
+    if !has_unresolved_fact_language {
+        return None;
+    }
+
+    Some(first_sentence_like_excerpt(text, 220))
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn first_sentence_like_excerpt(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.len() <= max_chars {
+        return compact;
+    }
+    let end = compact.floor_char_boundary(max_chars);
+    format!("{}...", &compact[..end])
 }
 
 fn issue_seed_marker(url: &str) -> String {
@@ -5566,6 +5719,132 @@ mod phase_completion_verdict_tests {
         assert!(
             err.contains("missing_requirements"),
             "unexpected error: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod legal_benchmark_clarification_guard_tests {
+    use std::fs;
+
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    use super::{detect_benchmark_clarification_escape, Pipeline};
+    use crate::types::{PhaseConfig, Task};
+
+    fn sample_task() -> Task {
+        Task {
+            id: 11,
+            title: "legal-ew-003".into(),
+            description: "benchmark".into(),
+            repo_path: String::new(),
+            branch: "task-1".into(),
+            status: "implement".into(),
+            attempt: 0,
+            max_attempts: 5,
+            last_error: String::new(),
+            created_by: "test".into(),
+            notify_chat: String::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            session_id: String::new(),
+            mode: "legal".into(),
+            backend: String::new(),
+            workspace_id: 0,
+            project_id: 1,
+            task_type: "benchmark_analysis".into(),
+            requires_exhaustive_corpus_review: true,
+            started_at: None,
+            completed_at: None,
+            duration_secs: None,
+            review_status: None,
+            revision_count: 0,
+            chat_thread: String::new(),
+        }
+    }
+
+    #[test]
+    fn detects_supportable_with_pre_sign_confirmations_escape_hatch() {
+        let text = "Sign position: Sign on 13 March is supportable with two pre-sign seller confirmations.";
+
+        let excerpt = detect_benchmark_clarification_escape(text)
+            .expect("guard should detect unresolved pre-sign confirmation language");
+
+        assert!(
+            excerpt.contains("supportable"),
+            "unexpected excerpt: {excerpt}"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_outputs_without_unresolved_pre_sign_confirmation_language() {
+        let text = "Sign position: Do not sign until TitanBank written approval is in hand.";
+
+        assert!(
+            detect_benchmark_clarification_escape(text).is_none(),
+            "clean blocked-style recommendation should not trip the guard"
+        );
+    }
+
+    #[test]
+    fn benchmark_guard_reads_written_deliverables() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("advice_memo.md"),
+            "Recommended sign-off position\n\nSign is supportable with pre-sign seller confirmation of the live GenAssist state.",
+        )
+        .expect("write advice memo");
+
+        let task = sample_task();
+        let phase = PhaseConfig {
+            name: "implement".into(),
+            ..Default::default()
+        };
+
+        let error = Pipeline::enforce_legal_benchmark_clarification_guard(
+            &task,
+            &phase,
+            dir.path().to_str().expect("path"),
+            "",
+        )
+        .expect("deliverable text should trigger benchmark guard");
+
+        assert!(
+            error.contains("Benchmark clarification guard failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("advice_memo.md"),
+            "unexpected error source: {error}"
+        );
+    }
+
+    #[test]
+    fn benchmark_guard_is_scoped_to_legal_benchmark_tasks() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("advice_memo.md"),
+            "Sign is supportable with pre-sign seller confirmation.",
+        )
+        .expect("write advice memo");
+
+        let mut task = sample_task();
+        task.task_type = "contract_review".into();
+        let phase = PhaseConfig {
+            name: "implement".into(),
+            ..Default::default()
+        };
+
+        assert!(
+            Pipeline::enforce_legal_benchmark_clarification_guard(
+                &task,
+                &phase,
+                dir.path().to_str().expect("path"),
+                ""
+            )
+            .is_none(),
+            "non-benchmark legal tasks should not use the benchmark clarification guard"
         );
     }
 }
