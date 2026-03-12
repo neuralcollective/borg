@@ -18,14 +18,28 @@ pub const LEGAL_PROVIDERS: &[(&str, &str, &str)] = &[
 /// Resolves an MCP server path via env var override or CWD-relative fallback.
 /// Returns `Some(canonicalized_path)` if the file exists, `None` otherwise.
 pub fn resolve_mcp_server_path(env_var: &str, relative_fallback: &str) -> Option<PathBuf> {
-    let raw = if let Ok(p) = std::env::var(env_var) {
-        PathBuf::from(p)
-    } else {
-        // Strip leading "../" components — paths are relative to the project root (CWD)
-        let clean = relative_fallback.trim_start_matches("../");
-        std::env::current_dir().unwrap_or_default().join(clean)
-    };
-    raw.canonicalize().ok()
+    if let Ok(p) = std::env::var(env_var) {
+        return PathBuf::from(p).canonicalize().ok();
+    }
+
+    let manifest_relative = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_fallback);
+    if let Ok(path) = manifest_relative.canonicalize() {
+        return Some(path);
+    }
+
+    let cwd_relative = std::env::current_dir()
+        .unwrap_or_default()
+        .join(relative_fallback);
+    if let Ok(path) = cwd_relative.canonicalize() {
+        return Some(path);
+    }
+
+    let clean = relative_fallback.trim_start_matches("../");
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join(clean)
+        .canonicalize()
+        .ok()
 }
 
 /// Returns the env var name for a legal API provider, or `None` if unknown.
@@ -97,4 +111,16 @@ pub fn build_mcp_servers_json(
     }
 
     mcp_servers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_mcp_server_path;
+
+    #[test]
+    fn resolves_borg_sidecar_relative_to_manifest_dir() {
+        let path = resolve_mcp_server_path("BORG_MCP_SERVER_DOES_NOT_EXIST", "../../../sidecar/borg-mcp/server.js")
+            .expect("expected borg MCP server path to resolve");
+        assert!(path.ends_with("sidecar/borg-mcp/server.js"));
+    }
 }
