@@ -678,9 +678,10 @@ impl Pipeline {
     /// builds a summary of previous attempts so the new session has context.
     fn fail_or_retry(&self, task: &Task, retry_status: &str, error: &str) -> Result<()> {
         let repeat_count = self.note_failure_signature(task.id, retry_status, error);
-        if repeat_count >= 3 {
+        let stuck_loop_threshold = failure_repeat_block_threshold(error);
+        if repeat_count >= stuck_loop_threshold {
             let reason = format!(
-                "stuck loop detected in phase '{retry_status}' (same failure signature repeated {repeat_count}x): {error}"
+                "stuck loop detected in phase '{retry_status}' (same failure signature repeated {repeat_count}x, threshold {stuck_loop_threshold}): {error}"
             );
             self.db
                 .update_task_status(task.id, "blocked", Some(&reason))?;
@@ -698,6 +699,7 @@ impl Pipeline {
                 &serde_json::json!({
                     "phase": retry_status,
                     "repeat_count": repeat_count,
+                    "threshold": stuck_loop_threshold,
                     "error": error,
                 }),
             );
@@ -4784,6 +4786,14 @@ fn trim_issue_body(body: &str) -> String {
     format!("{clipped}...")
 }
 
+fn failure_repeat_block_threshold(error: &str) -> u32 {
+    if error.starts_with("Benchmark clarification guard failed.") {
+        2
+    } else {
+        3
+    }
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 pub(crate) struct TestOutput {
@@ -5777,7 +5787,7 @@ mod legal_benchmark_clarification_guard_tests {
     use chrono::Utc;
     use tempfile::tempdir;
 
-    use super::{detect_benchmark_clarification_escape, Pipeline};
+    use super::{detect_benchmark_clarification_escape, failure_repeat_block_threshold, Pipeline};
     use crate::types::{PhaseConfig, Task};
 
     fn sample_task() -> Task {
@@ -5931,6 +5941,20 @@ mod legal_benchmark_clarification_guard_tests {
             )
             .is_none(),
             "non-benchmark legal tasks should not use the benchmark clarification guard"
+        );
+    }
+
+    #[test]
+    fn clarification_guard_failures_block_stuck_loops_faster() {
+        assert_eq!(
+            failure_repeat_block_threshold(
+                "Benchmark clarification guard failed.\nThe task output still treats ..."
+            ),
+            2
+        );
+        assert_eq!(
+            failure_repeat_block_threshold("ordinary transient error"),
+            3
         );
     }
 }
