@@ -4663,6 +4663,10 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
         &[
             "sign position",
             "sign recommendation",
+            "sign-and-fix route",
+            "sign and fix route",
+            "sign-and-close route",
+            "sign and close route",
             "recommended position: sign",
             "recommended sign-off position",
             "recommended sign off position",
@@ -4682,6 +4686,10 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
             "recommend signing",
             "proceed to sign",
             "ready to sign",
+            "no absolute sign-blockers",
+            "no absolute sign blockers",
+            "no sign-blockers",
+            "no sign blockers",
             "no hard blockers to signing",
             "no hard blocker to signing",
             "closing position",
@@ -4735,6 +4743,7 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
             "must be checked",
             "must be confirmed",
             "must confirm",
+            "must be resolved",
             "not confirmed",
             "not yet confirmed",
             "seller confirmation",
@@ -6058,6 +6067,20 @@ mod legal_benchmark_clarification_guard_tests {
         assert!(
             excerpt.contains("same in all scenarios")
                 || excerpt.contains("does not depend on resolving"),
+            "unexpected excerpt: {excerpt}"
+        );
+    }
+
+    #[test]
+    fn detects_no_sign_blockers_but_pre_sign_requirement_escape_hatch() {
+        let text = "There are no absolute sign-blockers on the current corpus. The sign-and-fix route is viable. However, two issues must be resolved before sign.";
+
+        let excerpt = detect_benchmark_clarification_escape(text)
+            .expect("guard should detect no-sign-blockers with pre-sign requirements");
+
+        assert!(
+            excerpt.contains("no absolute sign-blockers")
+                || excerpt.contains("sign-and-fix route is viable"),
             "unexpected excerpt: {excerpt}"
         );
     }
