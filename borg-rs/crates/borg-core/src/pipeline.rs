@@ -4728,10 +4728,6 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
             "prior to closing",
         ],
     );
-    if !has_pre_sign_timing {
-        return None;
-    }
-
     let has_unresolved_fact_language = contains_any(
         &normalized,
         &[
@@ -6067,6 +6063,21 @@ mod legal_benchmark_clarification_guard_tests {
         assert!(
             excerpt.contains("same in all scenarios")
                 || excerpt.contains("does not depend on resolving"),
+            "unexpected excerpt: {excerpt}"
+        );
+    }
+
+    #[test]
+    fn detects_same_recommendation_without_explicit_pre_sign_timing() {
+        let text = "The sign recommendation is the same whichever way the unresolved BoroughCare configuration question resolves. It is not a blocker and does not change the recommendation.";
+
+        let excerpt = detect_benchmark_clarification_escape(text).expect(
+            "guard should detect unresolved-fact override without explicit pre-sign timing",
+        );
+
+        assert!(
+            excerpt.contains("same whichever way")
+                || excerpt.contains("does not change the recommendation"),
             "unexpected excerpt: {excerpt}"
         );
     }
