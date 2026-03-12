@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    path::{Component, Path as FsPath},
     sync::Arc,
 };
 
@@ -18,14 +19,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 
+use super::{internal, require_project_access, require_task_access};
 use crate::{
     ingestion::{detect_doc_type, extract_text_from_bytes, IngestionQueue},
     storage::FileStorage,
     vespa::ChunkMetadata,
     AppState,
 };
-
-use super::{internal, require_project_access, require_task_access};
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -523,7 +523,7 @@ fn preprocess_legal_markdown(md: &str) -> String {
 
 /// Read a file from git: tries local `git show ref:path` first, falls back to `gh api`.
 async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) -> Option<Vec<u8>> {
-    if !repo_path.is_empty() && std::path::Path::new(repo_path).join(".git").exists() {
+    if !repo_path.is_empty() && FsPath::new(repo_path).join(".git").exists() {
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             tokio::process::Command::new("git")
@@ -566,6 +566,78 @@ async fn git_show_file(repo_path: &str, slug: &str, ref_name: &str, path: &str) 
         }
     }
     None
+}
+
+fn can_read_worktree_ref(ref_name: Option<&str>, task_branch: &str) -> bool {
+    match ref_name {
+        None => true,
+        Some(ref_name) => ref_name == task_branch || ref_name == "worktree",
+    }
+}
+
+fn is_safe_repo_relative_path(path: &str) -> bool {
+    let candidate = FsPath::new(path);
+    !candidate.is_absolute()
+        && candidate
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+async fn read_worktree_file(repo_path: &str, path: &str) -> Option<Vec<u8>> {
+    if repo_path.is_empty() || !is_safe_repo_relative_path(path) {
+        return None;
+    }
+    let file_path = FsPath::new(repo_path).join(path);
+    if !file_path.is_file() {
+        return None;
+    }
+    tokio::fs::read(file_path).await.ok()
+}
+
+async fn list_worktree_files(repo_path: &str) -> Option<Vec<String>> {
+    if repo_path.is_empty() || !FsPath::new(repo_path).join(".git").exists() {
+        return None;
+    }
+
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("git")
+            .args([
+                "-C",
+                repo_path,
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ])
+            .stderr(std::process::Stdio::null())
+            .output(),
+    )
+    .await;
+
+    let output = match out {
+        Ok(Ok(output)) if output.status.success() => output,
+        _ => return None,
+    };
+
+    let mut files = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in output.stdout.split(|byte| *byte == 0) {
+        if raw.is_empty() {
+            continue;
+        }
+        let path = String::from_utf8_lossy(raw).to_string();
+        if !is_safe_repo_relative_path(&path) {
+            continue;
+        }
+        let absolute = FsPath::new(repo_path).join(&path);
+        if absolute.is_file() && seen.insert(path.clone()) {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Some(files)
 }
 
 // ── Context building ──────────────────────────────────────────────────────
@@ -1750,27 +1822,8 @@ pub(crate) async fn list_project_documents(
         let slug = repo.map(|r| r.repo_slug.as_str()).unwrap_or("");
         let repo_path = &task.repo_path;
 
-        let file_list = if std::path::Path::new(repo_path).join(".git").exists() {
-            let out = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                tokio::process::Command::new("git")
-                    .args(["-C", repo_path, "ls-tree", "--name-only", &task.branch])
-                    .stderr(std::process::Stdio::null())
-                    .output(),
-            )
-            .await;
-            match out {
-                Ok(Ok(output)) if output.status.success() => {
-                    Some(String::from_utf8_lossy(&output.stdout).to_string())
-                },
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        let file_list = match file_list {
-            Some(f) => f,
+        let file_list = match list_worktree_files(repo_path).await {
+            Some(files) => files,
             None if !slug.is_empty() => {
                 let out = tokio::time::timeout(
                     std::time::Duration::from_secs(10),
@@ -1786,17 +1839,25 @@ pub(crate) async fn list_project_documents(
                 )
                 .await;
                 match out {
-                    Ok(Ok(output)) if output.status.success() => {
-                        String::from_utf8_lossy(&output.stdout).to_string()
-                    },
+                    Ok(Ok(output)) if output.status.success() => output
+                        .stdout
+                        .split(|byte| *byte == b'\n')
+                        .filter_map(|line| {
+                            let entry = String::from_utf8_lossy(line).trim().to_string();
+                            if entry.is_empty() {
+                                None
+                            } else {
+                                Some(entry)
+                            }
+                        })
+                        .collect(),
                     _ => continue,
                 }
             },
             _ => continue,
         };
 
-        for line in file_list.lines() {
-            let name = line.trim();
+        for name in file_list {
             if !name.is_empty() && !name.starts_with('.') {
                 documents.push(json!({
                     "task_id": task.id,
@@ -1835,9 +1896,15 @@ pub(crate) async fn get_project_document_content(
     let path = q.path.as_deref().unwrap_or("research.md");
     let ref_name = q.ref_name.as_deref().unwrap_or(&task.branch);
 
-    let bytes = git_show_file(&task.repo_path, slug, ref_name, path)
-        .await
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let bytes = if can_read_worktree_ref(q.ref_name.as_deref(), &task.branch) {
+        match read_worktree_file(&task.repo_path, path).await {
+            Some(bytes) => Some(bytes),
+            None => git_show_file(&task.repo_path, slug, ref_name, path).await,
+        }
+    } else {
+        git_show_file(&task.repo_path, slug, ref_name, path).await
+    }
+    .ok_or(StatusCode::NOT_FOUND)?;
 
     tracing::info!(project_id = id, task_id, path, "document accessed");
 
@@ -1983,9 +2050,15 @@ pub(crate) async fn export_project_document(
             .unwrap());
     }
 
-    let raw_md_bytes = git_show_file(&task.repo_path, slug, ref_name, path)
-        .await
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let raw_md_bytes = if can_read_worktree_ref(q.ref_name.as_deref(), &task.branch) {
+        match read_worktree_file(&task.repo_path, path).await {
+            Some(bytes) => Some(bytes),
+            None => git_show_file(&task.repo_path, slug, ref_name, path).await,
+        }
+    } else {
+        git_show_file(&task.repo_path, slug, ref_name, path).await
+    }
+    .ok_or(StatusCode::NOT_FOUND)?;
 
     let add_toc = q.toc.unwrap_or(false);
     let number_sections = q.number_sections.unwrap_or(false);
@@ -3114,5 +3187,77 @@ pub(crate) async fn get_task_outputs_handler(
                 outputs.into_iter().map(TaskOutputJson::from).collect();
             Ok(Json(json!({ "outputs": outputs_json })))
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::Path, process::Command};
+
+    use super::{is_safe_repo_relative_path, list_worktree_files, read_worktree_file};
+
+    fn run_git(repo_path: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(["-C", repo_path.to_str().expect("repo path utf8")])
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_worktree_files_includes_untracked_outputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo_path = temp.path();
+
+        run_git(repo_path, &["init"]);
+        run_git(repo_path, &["config", "user.name", "Borg Test"]);
+        run_git(repo_path, &["config", "user.email", "borg@example.com"]);
+
+        fs::write(repo_path.join("brief.md"), "brief").expect("write tracked file");
+        run_git(repo_path, &["add", "brief.md"]);
+        run_git(repo_path, &["commit", "-m", "initial"]);
+
+        fs::write(repo_path.join("intake_note.md"), "draft deliverable")
+            .expect("write untracked file");
+        fs::create_dir_all(repo_path.join(".borg")).expect("create hidden dir");
+        fs::write(repo_path.join(".borg/phase-verdict.json"), "{}").expect("write hidden file");
+
+        let files = list_worktree_files(repo_path.to_str().expect("repo path utf8"))
+            .await
+            .expect("worktree files");
+
+        assert!(files.contains(&"brief.md".to_string()));
+        assert!(files.contains(&"intake_note.md".to_string()));
+        assert!(files.contains(&".borg/phase-verdict.json".to_string()));
+    }
+
+    #[tokio::test]
+    async fn read_worktree_file_rejects_parent_traversal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo_path = temp.path();
+
+        run_git(repo_path, &["init"]);
+        fs::write(repo_path.join("brief.md"), "brief").expect("write tracked file");
+
+        let bytes = read_worktree_file(repo_path.to_str().expect("repo path utf8"), "brief.md")
+            .await
+            .expect("read safe file");
+        assert_eq!(String::from_utf8_lossy(&bytes), "brief");
+
+        assert!(
+            read_worktree_file(repo_path.to_str().expect("repo path utf8"), "../secret.txt")
+                .await
+                .is_none()
+        );
+        assert!(!is_safe_repo_relative_path("../secret.txt"));
+        assert!(!is_safe_repo_relative_path("/tmp/secret.txt"));
+        assert!(is_safe_repo_relative_path("nested/file.md"));
     }
 }

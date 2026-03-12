@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -54,6 +57,10 @@ pub enum SidecarEvent {
 /// Uses a shared cmd_tx that is replaced on restart, so callers hold a stable Arc<Sidecar>.
 pub struct Sidecar {
     cmd_tx: Arc<Mutex<Option<mpsc::UnboundedSender<String>>>>,
+}
+
+fn sidecar_bridge_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../sidecar/bridge.js")
 }
 
 impl Sidecar {
@@ -182,7 +189,13 @@ impl Sidecar {
         self.send_raw(cmd.to_string());
     }
 
-    pub fn send_user_discord(&self, user_id: i64, channel_id: &str, text: &str, reply_to: Option<&str>) {
+    pub fn send_user_discord(
+        &self,
+        user_id: i64,
+        channel_id: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) {
         let mut obj = serde_json::json!({
             "target": "discord", "cmd": "send",
             "user_id": user_id, "channel_id": channel_id, "text": text,
@@ -225,7 +238,9 @@ async fn spawn_once(
     tokio::sync::oneshot::Receiver<()>,
 )> {
     let mut cmd = Command::new("bun");
-    cmd.args(["sidecar/bridge.js", assistant_name]);
+    let bridge_path = sidecar_bridge_path();
+    cmd.arg(&bridge_path);
+    cmd.arg(assistant_name);
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::inherit());
@@ -245,7 +260,9 @@ async fn spawn_once(
         cmd.env("SLACK_APP_TOKEN", slack_app_token);
     }
 
-    let mut child = cmd.spawn().context("failed to spawn sidecar/bridge.js")?;
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", bridge_path.display()))?;
     let stdin = child.stdin.take().context("sidecar stdin unavailable")?;
     let stdout = child.stdout.take().context("sidecar stdout unavailable")?;
 
@@ -337,10 +354,7 @@ fn parse_event(line: &str) -> Option<SidecarEvent> {
                             let url = a["url"].as_str()?.to_string();
                             Some(SidecarAttachment {
                                 url,
-                                filename: a["filename"]
-                                    .as_str()
-                                    .unwrap_or("file")
-                                    .to_string(),
+                                filename: a["filename"].as_str().unwrap_or("file").to_string(),
                                 content_type: a["content_type"]
                                     .as_str()
                                     .unwrap_or("application/octet-stream")
@@ -428,6 +442,14 @@ fn str_val(v: &Value, key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_bridge_path_from_repo_root() {
+        let bridge_path = sidecar_bridge_path();
+
+        assert!(bridge_path.ends_with("sidecar/bridge.js"));
+        assert!(bridge_path.is_file());
+    }
 
     #[test]
     fn parse_discord_message() {
