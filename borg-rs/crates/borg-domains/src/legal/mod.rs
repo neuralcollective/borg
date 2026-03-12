@@ -393,6 +393,11 @@ workflow from the toolkit). Confirm Bluebook format. Replace any authority with 
 6. **Confidence Markers** — Verify ratings are justified. High requires verified citations. \
 Add missing markers. Downgrade any High on unverified citations.
 
+If the workspace includes an explicit deliverable contract such as `deliverable_spec.json`, \
+treat it as a literal review checklist: required files must exist, markdown deliverables \
+must preserve the required section labels in their headings, and structured outputs must \
+match any stated schema or required fields.
+
 If this is a project-document review task, use the read-only BorgSearch tools to independently spot check the corpus: \
 inventory with get_document_categories/list_documents, rerun key search_documents queries, use check_coverage on any \
 \"not present\" conclusion, and read full documents to validate snippets against source text. If `structured.json` \
