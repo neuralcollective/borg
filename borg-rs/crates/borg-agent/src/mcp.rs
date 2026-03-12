@@ -15,13 +15,15 @@ pub const LEGAL_PROVIDERS: &[(&str, &str, &str)] = &[
     ("regulations_gov", "REGULATIONS_GOV_API_KEY", "Regulations.gov"),
 ];
 
-/// Resolves an MCP server path via env var override or CARGO_MANIFEST_DIR-relative fallback.
+/// Resolves an MCP server path via env var override or CWD-relative fallback.
 /// Returns `Some(canonicalized_path)` if the file exists, `None` otherwise.
-pub fn resolve_mcp_server_path(env_var: &str, relative_to_manifest: &str) -> Option<PathBuf> {
+pub fn resolve_mcp_server_path(env_var: &str, relative_fallback: &str) -> Option<PathBuf> {
     let raw = if let Ok(p) = std::env::var(env_var) {
         PathBuf::from(p)
     } else {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_to_manifest)
+        // Strip leading "../" components — paths are relative to the project root (CWD)
+        let clean = relative_fallback.trim_start_matches("../");
+        std::env::current_dir().unwrap_or_default().join(clean)
     };
     raw.canonicalize().ok()
 }

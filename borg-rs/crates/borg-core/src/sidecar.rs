@@ -60,7 +60,9 @@ pub struct Sidecar {
 }
 
 fn sidecar_bridge_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../sidecar/bridge.js")
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join("sidecar/bridge.js")
 }
 
 impl Sidecar {

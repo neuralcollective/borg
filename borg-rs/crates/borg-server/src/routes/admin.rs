@@ -354,19 +354,20 @@ pub(crate) async fn get_mcp_status(
         .map(|s| s.target())
         .unwrap_or_default();
 
+    let base_dir = std::env::current_dir().unwrap_or_default();
     let borg_mcp_path = if let Ok(path) = std::env::var("BORG_MCP_SERVER") {
         path
     } else {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../sidecar/borg-mcp/server.js")
+        base_dir
+            .join("sidecar/borg-mcp/server.js")
             .to_string_lossy()
             .to_string()
     };
     let lawborg_mcp_path = if let Ok(path) = std::env::var("LAWBORG_MCP_SERVER") {
         path
     } else {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../sidecar/lawborg-mcp/server.js")
+        base_dir
+            .join("sidecar/lawborg-mcp/server.js")
             .to_string_lossy()
             .to_string()
     };
