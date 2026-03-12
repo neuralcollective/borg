@@ -1070,23 +1070,6 @@ fn init_db(env_config: &Config) -> anyhow::Result<(Db, Config)> {
     Ok((db, config))
 }
 
-async fn init_sandbox(config: &Config) -> (borg_core::sandbox::SandboxMode, bool) {
-    let sandbox_mode = Sandbox::detect(&config.sandbox_backend).await;
-    let agent_network_available = if sandbox_mode == borg_core::sandbox::SandboxMode::Docker {
-        Sandbox::prune_orphan_containers().await;
-        let net_ok = Sandbox::ensure_agent_network().await;
-        let _ = Sandbox::ensure_isolated_network().await;
-        if net_ok && !Sandbox::install_network_rules().await {
-            tracing::warn!(
-                "sandbox: iptables rules not installed — agent containers have unrestricted network access"
-            );
-        }
-        net_ok
-    } else {
-        false
-    };
-    (sandbox_mode, agent_network_available)
-}
 
 fn build_backends(
     config: &Config,
@@ -1621,6 +1604,10 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    // Grab socket FDs immediately so the kernel knows we own them and can
+    // queue incoming connections while we initialise.
+    let early_fds = systemd_listen_fds();
+
     let (log_tx, _log_rx) = broadcast::channel::<String>(1024);
     let log_ring: Arc<std::sync::Mutex<VecDeque<String>>> =
         Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(500)));
@@ -1674,7 +1661,36 @@ async fn main() -> anyhow::Result<()> {
         },
     }
 
-    let (sandbox_mode, agent_network_available) = init_sandbox(&config).await;
+    // Defer sandbox init (Docker prune, network setup) to background
+    let sandbox_mode_slot: Arc<TokioMutex<Option<borg_core::sandbox::SandboxMode>>> =
+        Arc::new(TokioMutex::new(None));
+    let agent_network_slot: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (sandbox_mode, agent_network_available) = {
+        // Quick synchronous detection — fast path for the backends struct
+        let mode = borg_core::sandbox::Sandbox::detect(&config.sandbox_backend).await;
+        let sm_slot = Arc::clone(&sandbox_mode_slot);
+        let an_slot = Arc::clone(&agent_network_slot);
+        let mode_clone = mode.clone();
+        tokio::spawn(async move {
+            let net_ok = if mode_clone == borg_core::sandbox::SandboxMode::Docker {
+                borg_core::sandbox::Sandbox::prune_orphan_containers().await;
+                let net_ok = borg_core::sandbox::Sandbox::ensure_agent_network().await;
+                let _ = borg_core::sandbox::Sandbox::ensure_isolated_network().await;
+                if net_ok && !borg_core::sandbox::Sandbox::install_network_rules().await {
+                    tracing::warn!(
+                        "sandbox: iptables rules not installed — agent containers have unrestricted network access"
+                    );
+                }
+                net_ok
+            } else {
+                false
+            };
+            an_slot.store(net_ok, std::sync::atomic::Ordering::Relaxed);
+            *sm_slot.lock().await = Some(mode_clone);
+        });
+        (mode, false)
+    };
     let backends = build_backends(&config, &db, sandbox_mode.clone())?;
     let force_restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -1733,19 +1749,32 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Always spawn sidecar — needed for per-user Discord bots even without global tokens
-    spawn_sidecar_manager(
-        Arc::clone(&config),
-        Arc::clone(&db),
-        Arc::clone(&file_storage),
-        search.clone(),
-        chat_event_tx.clone(),
-        Arc::clone(&ai_request_count),
-        Arc::clone(&sidecar_slot),
-        Arc::clone(&wa_status),
-        Arc::clone(&slack_status),
-    )
-    .await;
+    // Spawn sidecar in background — don't block HTTP server startup
+    {
+        let config = Arc::clone(&config);
+        let db = Arc::clone(&db);
+        let file_storage = Arc::clone(&file_storage);
+        let search = search.clone();
+        let chat_event_tx = chat_event_tx.clone();
+        let ai_request_count = Arc::clone(&ai_request_count);
+        let sidecar_slot = Arc::clone(&sidecar_slot);
+        let wa_status = Arc::clone(&wa_status);
+        let slack_status = Arc::clone(&slack_status);
+        tokio::spawn(async move {
+            spawn_sidecar_manager(
+                config,
+                db,
+                file_storage,
+                search,
+                chat_event_tx,
+                ai_request_count,
+                sidecar_slot,
+                wa_status,
+                slack_status,
+            )
+            .await;
+        });
+    }
 
     if !config.observer_config.is_empty() {
         let observer_api_key =
@@ -1823,7 +1852,7 @@ async fn main() -> anyhow::Result<()> {
     let proxy_addr = format!("{bind}:{}", config.proxy_port);
 
     // Use systemd socket activation if available, otherwise bind normally
-    let (listener, proxy_listener) = if let Some(fds) = systemd_listen_fds() {
+    let (listener, proxy_listener) = if let Some(fds) = early_fds {
         if fds.len() >= 2 {
             info!("Using systemd socket activation ({} fds)", fds.len());
             let main = listener_from_fd(fds[0])?;
