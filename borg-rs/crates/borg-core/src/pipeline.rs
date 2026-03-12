@@ -4663,9 +4663,14 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
         &[
             "sign position",
             "sign recommendation",
+            "recommended position: sign",
+            "recommended sign-off position",
+            "recommended sign off position",
             "signing can proceed",
             "sign can proceed",
             "can sign",
+            "sign on ",
+            "sign subject to",
             "signing is supportable",
             "sign is supportable",
             "sign remains supportable",
@@ -4699,6 +4704,7 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
             "before signing",
             "prior to sign",
             "prior to signing",
+            "subject to",
             "pre-close",
             "pre close",
             "before close",
@@ -4725,6 +4731,12 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
             "not confirmed",
             "not yet confirmed",
             "seller confirmation",
+            "management-presentation answers",
+            "management presentation answers",
+            "management presentation",
+            "human review",
+            "flagged for human review",
+            "conditioned on",
             "open question",
             "clarification",
             "unresolved",
@@ -5984,6 +5996,19 @@ mod legal_benchmark_clarification_guard_tests {
 
         assert!(
             excerpt.contains("Signing can proceed"),
+            "unexpected excerpt: {excerpt}"
+        );
+    }
+
+    #[test]
+    fn detects_recommended_position_sign_on_conditioned_on_answers_escape_hatch() {
+        let text = "Recommended position: sign on 13 March subject to SPA protections. The BoroughCare recommendation is conditioned on management-presentation answers about the live GenAssist configuration and written approvals.";
+
+        let excerpt = detect_benchmark_clarification_escape(text)
+            .expect("guard should detect sign-on conditioned-on-answers language");
+
+        assert!(
+            excerpt.contains("Recommended position: sign on 13 March"),
             "unexpected excerpt: {excerpt}"
         );
     }
