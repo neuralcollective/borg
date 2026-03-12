@@ -219,6 +219,19 @@ pub(crate) async fn run_chat_agent(
         }
     }
 
+    // Include cloned knowledge repos in system prompt
+    if let Some(project) = project_for_chat.as_ref() {
+        let all_repos = db.list_knowledge_repos(project.workspace_id, None).unwrap_or_default();
+        let ready_repos: Vec<_> = all_repos.iter().filter(|r| r.status == "ready" && !r.local_path.is_empty()).collect();
+        if !ready_repos.is_empty() {
+            system_prompt.push_str("\n\n## Available Git Repositories\n\n");
+            system_prompt.push_str("The following repos have been cloned and are available for you to read using your Read, Grep, and Glob tools:\n\n");
+            for repo in &ready_repos {
+                system_prompt.push_str(&format!("- **{}** ({}): `{}`\n", repo.name, repo.url, repo.local_path));
+            }
+        }
+    }
+
     let mut args = vec![
         "--model".to_string(),
         config.model.clone(),
