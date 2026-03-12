@@ -5121,8 +5121,20 @@ fn should_reuse_prior_retrieval_pass(
         return false;
     }
     let last_error = task.last_error.trim();
-    (last_error.starts_with("Material fact missing") && last_error.contains("\n\nQuestion:"))
-        || last_error.starts_with("Benchmark clarification guard failed.")
+    let clarification_retry =
+        last_error.starts_with("Material fact missing") && last_error.contains("\n\nQuestion:");
+    let clarification_guard_retry = last_error.starts_with("Benchmark clarification guard failed.");
+    let summarized_latest_error = last_error
+        .split("\nLatest error:\n")
+        .nth(1)
+        .map(str::trim)
+        .unwrap_or("");
+
+    clarification_retry
+        || clarification_guard_retry
+        || ((summarized_latest_error.starts_with("Material fact missing")
+            && summarized_latest_error.contains("\n\nQuestion:"))
+            || summarized_latest_error.starts_with("Benchmark clarification guard failed."))
 }
 
 fn inspect_legal_retrieval_trace(raw_stream: &str) -> LegalRetrievalTrace {
@@ -5844,6 +5856,31 @@ mod legal_retrieval_protocol_tests {
         assert!(
             should_reuse_prior_retrieval_pass(&task, true, false),
             "clarification-guard retries should not need to rerun an already-passed exhaustive review"
+        );
+    }
+
+    #[test]
+    fn summarized_fresh_retry_still_reuses_prior_passed_retrieval() {
+        let mut task = sample_task(
+            "benchmark_analysis",
+            "legal-ew-003",
+            "Summarized clarification retry",
+        );
+        task.mode = "legal".into();
+        task.requires_exhaustive_corpus_review = true;
+        task.attempt = 4;
+        task.last_error = "FRESH RETRY — previous approaches failed. Summary of attempts:\n\
+\n\
+Attempt 1 (implement): blocked clarification already happened.\n\
+\n\
+Latest error:\n\
+Benchmark clarification guard failed.\n\
+The task output still treats an unresolved pre-sign/pre-close fact as a caveat instead of blocking for clarification."
+            .into();
+
+        assert!(
+            should_reuse_prior_retrieval_pass(&task, true, false),
+            "fresh-retry summaries should preserve clarification-driven retrieval reuse"
         );
     }
 }
