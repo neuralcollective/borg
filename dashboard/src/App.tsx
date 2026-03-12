@@ -48,23 +48,29 @@ import { UIModeProvider, useUIMode } from "@/lib/ui-mode";
 import { cn } from "@/lib/utils";
 import { useVocabulary } from "@/lib/vocabulary";
 
-class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null };
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null; stack: string | null }> {
+  state: { error: Error | null; stack: string | null } = { error: null, stack: null };
   static getDerivedStateFromError(error: Error) {
-    return { error };
+    return { error, stack: error.stack ?? null };
   }
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Dashboard error:", error, info.componentStack);
+    this.setState({ stack: (error.stack ?? "") + "\n\nComponent stack:" + (info.componentStack ?? "") });
   }
   render() {
     if (this.state.error) {
       return (
         <div className="flex h-screen items-center justify-center bg-[#0f0e0c] text-[#9c9486]">
-          <div className="max-w-md text-center space-y-3">
+          <div className="max-w-lg text-center space-y-3">
             <p className="text-lg font-semibold text-amber-400">Oh, Borg!</p>
             <pre className="text-xs text-[#6b6459] whitespace-pre-wrap">{(this.state.error as Error).message}</pre>
+            {this.state.stack && (
+              <pre className="mt-2 max-h-48 overflow-auto text-left text-[10px] text-[#4a443d] whitespace-pre-wrap">
+                {this.state.stack}
+              </pre>
+            )}
             <button
-              onClick={() => this.setState({ error: null })}
+              onClick={() => this.setState({ error: null, stack: null })}
               className="text-xs text-[#6b6459] hover:text-[#e8e0d4] underline"
             >
               Try again

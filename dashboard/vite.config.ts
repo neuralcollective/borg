@@ -18,6 +18,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     chunkSizeWarningLimit: 1300,
+    sourcemap: true,
   },
   define: {
     // Replaced at build time; runtime override via window.__API_BASE_URL__ takes precedence
