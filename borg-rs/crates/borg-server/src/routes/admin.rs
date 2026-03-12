@@ -1,9 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::Ordering,
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
 };
 
 use axum::{
@@ -192,7 +189,6 @@ fn default_conv_limit() -> i64 {
     200
 }
 
-
 fn linked_credential_status_item(
     key: &str,
     label: &str,
@@ -229,30 +225,62 @@ fn linked_credential_status_item(
         String::new()
     };
 
-    let is_expiring_soon = entry.expires_at.parse::<chrono::DateTime<chrono::FixedOffset>>().ok()
-        .is_some_and(|exp| exp.with_timezone(&Utc).signed_duration_since(Utc::now()).num_hours() < 2);
+    let is_expiring_soon = entry
+        .expires_at
+        .parse::<chrono::DateTime<chrono::FixedOffset>>()
+        .ok()
+        .is_some_and(|exp| {
+            exp.with_timezone(&Utc)
+                .signed_duration_since(Utc::now())
+                .num_hours()
+                < 2
+        });
 
     if entry.status == "connected" && !is_expiring_soon {
         let detail = if entry.account_email.is_empty() {
             format!("Linked and validated{expiry_suffix}")
         } else {
-            format!("{} linked and validated{expiry_suffix}", entry.account_email)
+            format!(
+                "{} linked and validated{expiry_suffix}",
+                entry.account_email
+            )
         };
-        mcp_status_item(key, label, "verified", detail, Some("user"), Some(entry.last_validated_at.clone()))
+        mcp_status_item(
+            key,
+            label,
+            "verified",
+            detail,
+            Some("user"),
+            Some(entry.last_validated_at.clone()),
+        )
     } else if entry.status == "connected" && is_expiring_soon {
         let detail = if entry.account_email.is_empty() {
             format!("Token expiring soon{expiry_suffix}")
         } else {
             format!("{}{expiry_suffix}", entry.account_email)
         };
-        mcp_status_item(key, label, "degraded", detail, Some("user"), Some(entry.last_validated_at.clone()))
+        mcp_status_item(
+            key,
+            label,
+            "degraded",
+            detail,
+            Some("user"),
+            Some(entry.last_validated_at.clone()),
+        )
     } else {
         let detail = if !entry.last_error.is_empty() {
             format!("{}{expiry_suffix}", entry.last_error)
         } else {
             format!("Linked account needs reconnect{expiry_suffix}")
         };
-        mcp_status_item(key, label, "degraded", detail, Some("user"), Some(entry.last_validated_at.clone()))
+        mcp_status_item(
+            key,
+            label,
+            "degraded",
+            detail,
+            Some("user"),
+            Some(entry.last_validated_at.clone()),
+        )
     }
 }
 
@@ -373,8 +401,16 @@ pub(crate) async fn get_mcp_status(
     };
 
     let agent_access = vec![
-        linked_credential_status_item("claude", "Claude Code", linked_by_provider.get(PROVIDER_CLAUDE)),
-        linked_credential_status_item("openai", "Codex / ChatGPT", linked_by_provider.get(PROVIDER_OPENAI)),
+        linked_credential_status_item(
+            "claude",
+            "Claude Code",
+            linked_by_provider.get(PROVIDER_CLAUDE),
+        ),
+        linked_credential_status_item(
+            "openai",
+            "Codex / ChatGPT",
+            linked_by_provider.get(PROVIDER_OPENAI),
+        ),
     ];
 
     let runtime = vec![
@@ -611,14 +647,32 @@ pub(crate) async fn get_status(
     state.db.set_ts("ai_request_count", ai_requests as i64);
     let backup = crate::backup::backup_status_snapshot(&state.db, &state.config).await;
 
+    let has_claude = !state.config.oauth_token.is_empty()
+        || !std::env::var("ANTHROPIC_API_KEY")
+            .unwrap_or_default()
+            .is_empty()
+        || state
+            .db
+            .list_all_linked_credentials()
+            .unwrap_or_default()
+            .iter()
+            .any(|c| c.provider == "claude" && c.status == "connected");
+    let has_codex = !state.config.codex_api_key.is_empty()
+        || state
+            .db
+            .list_all_linked_credentials()
+            .unwrap_or_default()
+            .iter()
+            .any(|c| c.provider == "openai" && c.status == "connected");
     let mut available_models = vec![];
-    if !state.config.oauth_token.is_empty()
-        || !std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty()
-    {
-        available_models.push(json!({"model": "claude-opus-4-6", "backend": "claude", "label": "Opus 4.6"}));
-        available_models.push(json!({"model": "claude-sonnet-4-6", "backend": "claude", "label": "Sonnet 4.6"}));
+    if has_claude {
+        available_models
+            .push(json!({"model": "claude-opus-4-6", "backend": "claude", "label": "Opus 4.6"}));
+        available_models.push(
+            json!({"model": "claude-sonnet-4-6", "backend": "claude", "label": "Sonnet 4.6"}),
+        );
     }
-    if !state.config.codex_api_key.is_empty() {
+    if has_codex {
         available_models.push(json!({"model": "gpt-5.4", "backend": "codex", "label": "GPT 5.4"}));
     }
 
@@ -1271,7 +1325,10 @@ pub(crate) async fn get_user_settings(
     );
     obj.insert("model_override_active".to_string(), json!(has_override));
 
-    let tg_username = settings.get("telegram_bot_username").cloned().unwrap_or_default();
+    let tg_username = settings
+        .get("telegram_bot_username")
+        .cloned()
+        .unwrap_or_default();
     let tg_connected = !settings
         .get("telegram_bot_token")
         .map(|t| t.is_empty())
@@ -1279,7 +1336,10 @@ pub(crate) async fn get_user_settings(
     obj.insert("telegram_bot_connected".to_string(), json!(tg_connected));
     obj.insert("telegram_bot_username".to_string(), json!(tg_username));
 
-    let dc_username = settings.get("discord_bot_username").cloned().unwrap_or_default();
+    let dc_username = settings
+        .get("discord_bot_username")
+        .cloned()
+        .unwrap_or_default();
     let dc_connected = !settings
         .get("discord_bot_token")
         .map(|t| t.is_empty())
@@ -1464,9 +1524,7 @@ pub(crate) async fn disconnect_discord_bot(
     Ok(Json(json!({ "ok": true })))
 }
 
-pub(crate) async fn get_whatsapp_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+pub(crate) async fn get_whatsapp_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let status = state
         .wa_status
         .lock()
@@ -1479,7 +1537,9 @@ pub(crate) async fn logout_whatsapp(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     let sidecar_guard = state.sidecar_slot.lock().await;
-    let sidecar = sidecar_guard.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let sidecar = sidecar_guard
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     sidecar.logout_whatsapp();
     if let Ok(mut s) = state.wa_status.lock() {
         s.connected = false;
@@ -1490,9 +1550,7 @@ pub(crate) async fn logout_whatsapp(
     Ok(Json(json!({ "ok": true })))
 }
 
-pub(crate) async fn get_slack_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+pub(crate) async fn get_slack_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let status = state
         .slack_status
         .lock()
@@ -2027,15 +2085,21 @@ pub(crate) async fn email_inbound(
     let user = state.db.get_user_by_email(&email.from).ok().flatten();
     let (sender_name, _user_id) = match user {
         Some((id, _, display_name, _)) => {
-            let name = if display_name.is_empty() { email.from_name.clone() } else { display_name };
+            let name = if display_name.is_empty() {
+                email.from_name.clone()
+            } else {
+                display_name
+            };
             (name, Some(id))
         },
-        None => {
-            (
-                if email.from_name.is_empty() { email.from.clone() } else { email.from_name.clone() },
-                None,
-            )
-        },
+        None => (
+            if email.from_name.is_empty() {
+                email.from.clone()
+            } else {
+                email.from_name.clone()
+            },
+            None,
+        ),
     };
 
     let att_dir = format!(
