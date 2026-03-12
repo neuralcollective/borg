@@ -114,7 +114,11 @@ impl Telegram {
             let from = msg.get("from").unwrap_or(&Value::Null);
             let reply = msg.get("reply_to_message").unwrap_or(&Value::Null);
 
-            let text = msg.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            let text = msg
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
 
             // Collect attached files (document, photo, audio, video, voice)
             let mut files: Vec<TgFile> = Vec::new();
@@ -327,12 +331,18 @@ impl Telegram {
             .json()
             .await?;
 
-        let file_path = resp["result"]["file_path"].as_str().unwrap_or("").to_string();
+        let file_path = resp["result"]["file_path"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         if file_path.is_empty() {
             anyhow::bail!("getFile returned empty file_path for {file_id}");
         }
 
-        let dl_url = format!("https://api.telegram.org/file/bot{}/{}", self.token, file_path);
+        let dl_url = format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            self.token, file_path
+        );
         let bytes = self
             .client
             .get(&dl_url)

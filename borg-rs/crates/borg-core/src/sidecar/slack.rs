@@ -153,7 +153,7 @@ impl SlackManager {
             Err(e) => {
                 warn!("Failed to create Slack connector for user {user_id}: {e}");
                 return;
-            }
+            },
         };
         let user_client = Arc::new(SlackClient::new(connector));
         let user_token = SlackApiToken::new(bot_token.into());
@@ -170,7 +170,7 @@ impl SlackManager {
                     bot_name,
                 });
                 bot_id
-            }
+            },
             Err(e) => {
                 warn!("Slack user bot auth failed for {user_id}: {e}");
                 let _ = self.event_tx.send(SidecarEvent::Error {
@@ -178,7 +178,7 @@ impl SlackManager {
                     message: e.to_string(),
                 });
                 return;
-            }
+            },
         };
 
         let event_tx = self.event_tx.clone();
@@ -232,8 +232,14 @@ impl SlackManager {
     ) {
         let bots = self.user_bots.lock().await;
         if let Some(bot) = bots.get(&user_id) {
-            self.send(channel_id, text, reply_to, Some(&bot.client), Some(&bot.token))
-                .await;
+            self.send(
+                channel_id,
+                text,
+                reply_to,
+                Some(&bot.client),
+                Some(&bot.token),
+            )
+            .await;
         }
     }
 
@@ -270,15 +276,12 @@ async fn run_socket_mode(
     };
 
     let listener_env = Arc::new(
-        SlackClientEventsListenerEnvironment::new(Arc::clone(&client))
-            .with_user_state(ctx),
+        SlackClientEventsListenerEnvironment::new(Arc::clone(&client)).with_user_state(ctx),
     );
 
-    let callbacks =
-        SlackSocketModeListenerCallbacks::new().with_push_events(push_events_handler);
+    let callbacks = SlackSocketModeListenerCallbacks::new().with_push_events(push_events_handler);
 
-    let listener =
-        SlackClientSocketModeListener::new(&config, listener_env, callbacks);
+    let listener = SlackClientSocketModeListener::new(&config, listener_env, callbacks);
 
     tokio::select! {
         result = listener.listen_for(&app_token) => {
@@ -376,10 +379,7 @@ async fn handle_slack_message(msg_event: SlackMessageEvent, ctx: &SlackContext) 
                         .unwrap_or_else(|| "application/octet-stream".to_string());
                     match http_client
                         .get(url.as_str())
-                        .header(
-                            "Authorization",
-                            format!("Bearer {}", ctx.bot_token_value),
-                        )
+                        .header("Authorization", format!("Bearer {}", ctx.bot_token_value))
                         .send()
                         .await
                     {
@@ -397,7 +397,7 @@ async fn handle_slack_message(msg_event: SlackMessageEvent, ctx: &SlackContext) 
                                     Ok(sa) => attachments.push(sa),
                                     Err(e) => warn!("Failed to save Slack attachment: {e}"),
                                 }
-                            }
+                            },
                             Err(e) => warn!("Failed to download Slack file bytes: {e}"),
                         },
                         Err(e) => warn!("Failed to download Slack file: {e}"),

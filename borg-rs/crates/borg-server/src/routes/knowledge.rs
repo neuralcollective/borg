@@ -295,9 +295,17 @@ pub(crate) async fn list_templates(
 
 // --- Shared inner: content download ---
 
-fn knowledge_file_path(data_dir: &str, workspace_id: i64, user_id: Option<i64>, file_name: &str) -> String {
+fn knowledge_file_path(
+    data_dir: &str,
+    workspace_id: i64,
+    user_id: Option<i64>,
+    file_name: &str,
+) -> String {
     match user_id {
-        Some(uid) => format!("{}/knowledge/workspaces/{}/users/{}/{}", data_dir, workspace_id, uid, file_name),
+        Some(uid) => format!(
+            "{}/knowledge/workspaces/{}/users/{}/{}",
+            data_dir, workspace_id, uid, file_name
+        ),
         None => safe_knowledge_path(data_dir, Some(workspace_id), file_name)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
@@ -314,7 +322,10 @@ async fn inner_get_knowledge_content(
     Ok((
         axum::http::StatusCode::OK,
         [
-            (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
             (axum::http::header::CONTENT_DISPOSITION, disp),
         ],
         bytes,
@@ -348,7 +359,12 @@ pub(crate) async fn get_user_knowledge_content(
         .get_user_knowledge_file(workspace.id, user.id, id)
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let path = knowledge_file_path(&state.config.data_dir, workspace.id, Some(user.id), &file.file_name);
+    let path = knowledge_file_path(
+        &state.config.data_dir,
+        workspace.id,
+        Some(user.id),
+        &file.file_name,
+    );
     inner_get_knowledge_content(&file.file_name, &path).await
 }
 
@@ -474,7 +490,12 @@ pub(crate) async fn delete_user_knowledge(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
     if let Ok(Some(file)) = state.db.get_user_knowledge_file(workspace.id, user.id, id) {
-        let path = knowledge_file_path(&state.config.data_dir, workspace.id, Some(user.id), &file.file_name);
+        let path = knowledge_file_path(
+            &state.config.data_dir,
+            workspace.id,
+            Some(user.id),
+            &file.file_name,
+        );
         let _ = std::fs::remove_file(&path);
     }
     state
@@ -494,7 +515,12 @@ pub(crate) async fn delete_all_user_knowledge(
         .list_user_knowledge_files(workspace.id, user.id)
         .map_err(internal)?;
     for file in &files {
-        let path = knowledge_file_path(&state.config.data_dir, workspace.id, Some(user.id), &file.file_name);
+        let path = knowledge_file_path(
+            &state.config.data_dir,
+            workspace.id,
+            Some(user.id),
+            &file.file_name,
+        );
         let _ = std::fs::remove_file(&path);
     }
     let deleted = state
@@ -511,7 +537,10 @@ async fn inner_list_knowledge_repos(
     workspace_id: i64,
     user_id: Option<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let repos = state.db.list_knowledge_repos(workspace_id, user_id).map_err(internal)?;
+    let repos = state
+        .db
+        .list_knowledge_repos(workspace_id, user_id)
+        .map_err(internal)?;
     Ok(Json(json!({ "repos": repos })))
 }
 
@@ -528,18 +557,29 @@ async fn inner_add_knowledge_repo(
     }
     let name = body.name.unwrap_or_default();
     let name = if name.trim().is_empty() {
-        url.trim_end_matches('/').rsplit('/').next().unwrap_or("repo").trim_end_matches(".git").to_string()
+        url.trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("repo")
+            .trim_end_matches(".git")
+            .to_string()
     } else {
         name.trim().to_string()
     };
-    let id = state.db.insert_knowledge_repo(workspace_id, user_id, &url, &name).map_err(internal)?;
+    let id = state
+        .db
+        .insert_knowledge_repo(workspace_id, user_id, &url, &name)
+        .map_err(internal)?;
     let data_dir = state.config.data_dir.clone();
     let db = Arc::clone(&state.db);
     let cuid = clone_user_id.or(user_id);
     tokio::spawn(async move {
         clone_knowledge_repo(id, &url, &data_dir, &db, cuid).await;
     });
-    let repos = state.db.list_knowledge_repos(workspace_id, user_id).map_err(internal)?;
+    let repos = state
+        .db
+        .list_knowledge_repos(workspace_id, user_id)
+        .map_err(internal)?;
     Ok(Json(json!({ "repos": repos })))
 }
 
@@ -564,7 +604,10 @@ pub(crate) async fn delete_knowledge_repo_handler(
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let local_path = state.db.delete_knowledge_repo(id, workspace.id).map_err(internal)?;
+    let local_path = state
+        .db
+        .delete_knowledge_repo(id, workspace.id)
+        .map_err(internal)?;
     if !local_path.is_empty() {
         let _ = tokio::fs::remove_dir_all(&local_path).await;
     }
@@ -594,11 +637,17 @@ pub(crate) async fn delete_user_knowledge_repo_handler(
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let repos = state.db.list_knowledge_repos(workspace.id, Some(user.id)).map_err(internal)?;
+    let repos = state
+        .db
+        .list_knowledge_repos(workspace.id, Some(user.id))
+        .map_err(internal)?;
     if !repos.iter().any(|r| r.id == id) {
         return Err(StatusCode::NOT_FOUND);
     }
-    let local_path = state.db.delete_knowledge_repo(id, workspace.id).map_err(internal)?;
+    let local_path = state
+        .db
+        .delete_knowledge_repo(id, workspace.id)
+        .map_err(internal)?;
     if !local_path.is_empty() {
         let _ = tokio::fs::remove_dir_all(&local_path).await;
     }
@@ -611,8 +660,14 @@ pub(crate) async fn retry_knowledge_repo(
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let repos = state.db.list_knowledge_repos(workspace.id, None).map_err(internal)?;
-    let user_repos = state.db.list_knowledge_repos(workspace.id, Some(user.id)).map_err(internal)?;
+    let repos = state
+        .db
+        .list_knowledge_repos(workspace.id, None)
+        .map_err(internal)?;
+    let user_repos = state
+        .db
+        .list_knowledge_repos(workspace.id, Some(user.id))
+        .map_err(internal)?;
     let repo = repos.iter().chain(user_repos.iter()).find(|r| r.id == id);
     let repo = repo.ok_or(StatusCode::NOT_FOUND)?;
     let url = repo.url.clone();
@@ -630,7 +685,9 @@ pub(crate) async fn retry_knowledge_repo(
 }
 
 fn inject_git_token(url: &str, username: &str, token: &str) -> String {
-    if token.is_empty() { return url.to_string(); }
+    if token.is_empty() {
+        return url.to_string();
+    }
     for prefix in &["https://", "http://"] {
         if let Some(rest) = url.strip_prefix(prefix) {
             return format!("{}{}:{}@{}", prefix, username, token, rest);
@@ -639,13 +696,25 @@ fn inject_git_token(url: &str, username: &str, token: &str) -> String {
     url.to_string()
 }
 
-fn git_token_for_url(url: &str, settings: &std::collections::HashMap<String, String>) -> (String, String) {
+fn git_token_for_url(
+    url: &str,
+    settings: &std::collections::HashMap<String, String>,
+) -> (String, String) {
     if url.contains("github.com") {
-        ("x-access-token".into(), settings.get("github_token").cloned().unwrap_or_default())
+        (
+            "x-access-token".into(),
+            settings.get("github_token").cloned().unwrap_or_default(),
+        )
     } else if url.contains("gitlab.com") || url.contains("gitlab.") {
-        ("oauth2".into(), settings.get("gitlab_token").cloned().unwrap_or_default())
+        (
+            "oauth2".into(),
+            settings.get("gitlab_token").cloned().unwrap_or_default(),
+        )
     } else if url.contains("codeberg.org") {
-        ("oauth2".into(), settings.get("codeberg_token").cloned().unwrap_or_default())
+        (
+            "oauth2".into(),
+            settings.get("codeberg_token").cloned().unwrap_or_default(),
+        )
     } else {
         (String::new(), String::new())
     }
@@ -659,7 +728,8 @@ pub(crate) async fn clone_knowledge_repo(
     override_user_id: Option<i64>,
 ) {
     let repos = db.list_all_knowledge_repos().unwrap_or_default();
-    let token_user = override_user_id.or_else(|| repos.iter().find(|r| r.id == id).and_then(|r| r.user_id));
+    let token_user =
+        override_user_id.or_else(|| repos.iter().find(|r| r.id == id).and_then(|r| r.user_id));
     let effective_url = if let Some(uid) = token_user {
         let settings = db.get_all_user_settings(uid).unwrap_or_default();
         let (username, token) = git_token_for_url(url, &settings);
@@ -692,13 +762,13 @@ pub(crate) async fn clone_knowledge_repo(
     match result {
         Ok(out) if out.status.success() => {
             let _ = db.update_knowledge_repo_status(id, "ready", &dest, "");
-        }
+        },
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr).to_string();
             let _ = db.update_knowledge_repo_status(id, "error", "", &err);
-        }
+        },
         Err(e) => {
             let _ = db.update_knowledge_repo_status(id, "error", "", &e.to_string());
-        }
+        },
     }
 }

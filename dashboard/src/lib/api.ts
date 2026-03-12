@@ -1899,3 +1899,27 @@ export async function fetchPublicProjectTasks(token: string): Promise<ProjectTas
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }
+
+export async function fetchPublicProjectDocuments(token: string): Promise<ProjectDocument[]> {
+  const res = await fetch(`${apiBase()}/api/public/projects/${token}/documents`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export interface SharedProject {
+  id: number;
+  workspace_id: number;
+  name: string;
+  mode: string;
+  jurisdiction: string;
+  created_at: string;
+  share_role: string;
+  workspace_name: string;
+}
+
+export function useSharedProjects() {
+  return useQuery<SharedProject[]>({
+    queryKey: ["shared-projects"],
+    queryFn: () => fetchJson("/api/shared-projects"),
+  });
+}

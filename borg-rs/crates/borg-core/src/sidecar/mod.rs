@@ -93,7 +93,7 @@ impl Sidecar {
                         message: e.to_string(),
                     });
                     None
-                }
+                },
             }
         } else {
             None
@@ -117,7 +117,7 @@ impl Sidecar {
                         message: e.to_string(),
                     });
                     None
-                }
+                },
             }
         } else {
             None
@@ -142,7 +142,7 @@ impl Sidecar {
                         message: e.to_string(),
                     });
                     None
-                }
+                },
             }
         } else {
             None
@@ -166,7 +166,8 @@ impl Sidecar {
             let text = text.to_string();
             let reply_to = reply_to.map(|s| s.to_string());
             tokio::spawn(async move {
-                mgr.send(&channel_id, &text, reply_to.as_deref(), None).await;
+                mgr.send(&channel_id, &text, reply_to.as_deref(), None)
+                    .await;
             });
         }
     }

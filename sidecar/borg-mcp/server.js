@@ -11,11 +11,13 @@ const API_TOKEN = process.env.API_TOKEN || "";
 const PROJECT_ID = process.env.PROJECT_ID || "";
 const PROJECT_MODE = process.env.PROJECT_MODE || "";
 const CHAT_THREAD = process.env.CHAT_THREAD || "";
+const WORKSPACE_ID = process.env.WORKSPACE_ID || "";
 
 async function apiFetch(path, opts = {}) {
   const url = path.startsWith("http") ? path : `${API_URL}${path}`;
   const headers = { ...opts.headers };
   if (API_TOKEN) headers["Authorization"] = `Bearer ${API_TOKEN}`;
+  if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
   if (opts.json) {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.json);

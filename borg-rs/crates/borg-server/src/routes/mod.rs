@@ -1,6 +1,5 @@
 use axum::http::StatusCode;
-use borg_core::db::ProjectRow;
-use borg_core::types::Task;
+use borg_core::{db::ProjectRow, types::Task};
 
 pub(crate) mod admin;
 pub(crate) use admin::*;
@@ -109,4 +108,3 @@ pub(crate) fn require_task_access(
         .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)
 }
-

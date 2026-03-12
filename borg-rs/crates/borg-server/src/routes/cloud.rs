@@ -219,7 +219,8 @@ pub(crate) async fn cloud_auth_callback(
     }
     let code = q.code.ok_or(StatusCode::BAD_REQUEST)?;
     let state_raw = q.state.ok_or(StatusCode::BAD_REQUEST)?;
-    let state_bytes = super::utils::base64_decode(&state_raw).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let state_bytes =
+        super::utils::base64_decode(&state_raw).map_err(|_| StatusCode::BAD_REQUEST)?;
     let state_val: serde_json::Value =
         serde_json::from_slice(&state_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
     let project_id = state_val["project_id"]
@@ -791,7 +792,9 @@ pub(crate) async fn import_cloud_files(
             let source_path2 = source_path.clone();
             let privileged = body.privileged;
             tokio::spawn(async move {
-                if let Ok(text) = crate::ingestion::extract_text_from_bytes(&fname, &mime2, &bytes2).await {
+                if let Ok(text) =
+                    crate::ingestion::extract_text_from_bytes(&fname, &mime2, &bytes2).await
+                {
                     if !text.is_empty() {
                         let _ = db2.update_project_file_text(file_id, &text);
                         let _ = db2.fts_index_document(proj_id, 0, &source_path2, &fname, &text);

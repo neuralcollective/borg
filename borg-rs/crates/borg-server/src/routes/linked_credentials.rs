@@ -537,12 +537,7 @@ async fn claude_pkce_exchange(
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap();
-    let resp = match client
-        .post(CLAUDE_TOKEN_ENDPOINT)
-        .json(&body)
-        .send()
-        .await
-    {
+    let resp = match client.post(CLAUDE_TOKEN_ENDPOINT).json(&body).send().await {
         Ok(r) => r,
         Err(err) => {
             patch_connect_session(state, session_id, |s| {
@@ -639,8 +634,11 @@ async fn claude_pkce_exchange(
     }
 
     let creds_path = creds_dir.join(".credentials.json");
-    if let Err(err) =
-        tokio::fs::write(&creds_path, serde_json::to_string_pretty(&credentials).unwrap()).await
+    if let Err(err) = tokio::fs::write(
+        &creds_path,
+        serde_json::to_string_pretty(&credentials).unwrap(),
+    )
+    .await
     {
         patch_connect_session(state, session_id, |s| {
             s.status = "failed".to_string();
@@ -653,7 +651,15 @@ async fn claude_pkce_exchange(
     let temp_home_str = temp_home.to_string_lossy().to_string();
     match validate_home(PROVIDER_CLAUDE, &temp_home).await {
         Ok(validation) if validation.ok => {
-            match persist_validated_credential(state, user_id, PROVIDER_CLAUDE, &temp_home_str, &validation).await {
+            match persist_validated_credential(
+                state,
+                user_id,
+                PROVIDER_CLAUDE,
+                &temp_home_str,
+                &validation,
+            )
+            .await
+            {
                 Ok(()) => {
                     patch_connect_session(state, session_id, |s| {
                         s.status = "connected".to_string();
@@ -673,7 +679,10 @@ async fn claude_pkce_exchange(
         },
         Ok(validation) => {
             // Validation failed but token exchange worked — still persist with what we have
-            tracing::warn!("Claude PKCE: token exchange ok but validation failed: {}", validation.last_error);
+            tracing::warn!(
+                "Claude PKCE: token exchange ok but validation failed: {}",
+                validation.last_error
+            );
             // Try persisting anyway since we have valid tokens
             let fallback_validation = LinkedCredentialValidation {
                 ok: true,
@@ -685,7 +694,15 @@ async fn claude_pkce_exchange(
                     .unwrap_or_default(),
                 last_error: String::new(),
             };
-            match persist_validated_credential(state, user_id, PROVIDER_CLAUDE, &temp_home_str, &fallback_validation).await {
+            match persist_validated_credential(
+                state,
+                user_id,
+                PROVIDER_CLAUDE,
+                &temp_home_str,
+                &fallback_validation,
+            )
+            .await
+            {
                 Ok(()) => {
                     patch_connect_session(state, session_id, |s| {
                         s.status = "connected".to_string();
@@ -716,7 +733,15 @@ async fn claude_pkce_exchange(
                     .unwrap_or_default(),
                 last_error: String::new(),
             };
-            match persist_validated_credential(state, user_id, PROVIDER_CLAUDE, &temp_home_str, &fallback_validation).await {
+            match persist_validated_credential(
+                state,
+                user_id,
+                PROVIDER_CLAUDE,
+                &temp_home_str,
+                &fallback_validation,
+            )
+            .await
+            {
                 Ok(()) => {
                     patch_connect_session(state, session_id, |s| {
                         s.status = "connected".to_string();
@@ -1029,7 +1054,10 @@ mod tests {
     fn extracts_code_and_state_from_hash_format() {
         assert_eq!(
             extract_oauth_code("i3wyjs56jkt#2996ef2f4b976e99ef31"),
-            Some(("i3wyjs56jkt".to_string(), Some("2996ef2f4b976e99ef31".to_string())))
+            Some((
+                "i3wyjs56jkt".to_string(),
+                Some("2996ef2f4b976e99ef31".to_string())
+            ))
         );
         assert_eq!(
             extract_oauth_code("plaincode"),

@@ -133,12 +133,22 @@ impl UserBotManager {
 
             for (user_id, token) in &desired_tg {
                 let th = hash_token(token);
-                if bots.get(user_id).map(|b| b.token_hash == th).unwrap_or(false) {
+                if bots
+                    .get(user_id)
+                    .map(|b| b.token_hash == th)
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 let handle = self.spawn_telegram_bot(*user_id, token.clone()).await;
                 if let Some(handle) = handle {
-                    bots.insert(*user_id, RunningBot { token_hash: th, handle });
+                    bots.insert(
+                        *user_id,
+                        RunningBot {
+                            token_hash: th,
+                            handle,
+                        },
+                    );
                 }
             }
         }
@@ -171,7 +181,11 @@ impl UserBotManager {
 
             for (user_id, token) in &desired_dc {
                 let th = hash_token(token);
-                if dc_bots.get(user_id).map(|b| b.token_hash == th).unwrap_or(false) {
+                if dc_bots
+                    .get(user_id)
+                    .map(|b| b.token_hash == th)
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 info!(user_id, "starting user discord bot");
@@ -330,8 +344,7 @@ async fn poll_loop(
                                         } else {
                                             dl_name
                                         };
-                                        let save_path =
-                                            format!("{}/{}", att_dir, save_name);
+                                        let save_path = format!("{}/{}", att_dir, save_name);
                                         if std::fs::write(&save_path, &bytes).is_ok() {
                                             let size_kb = bytes.len() / 1024;
                                             agent_messages.push(format!(
@@ -379,9 +392,8 @@ async fn poll_loop(
                             {
                                 Ok(reply) if !reply.is_empty() => {
                                     progress.stop().await;
-                                    let _ = tg2
-                                        .send_message(chat_id, &reply, Some(message_id))
-                                        .await;
+                                    let _ =
+                                        tg2.send_message(chat_id, &reply, Some(message_id)).await;
                                 },
                                 Ok(_) => {
                                     progress.stop().await;
@@ -418,7 +430,10 @@ async fn handle_task_message(
     use chrono::Utc;
     let title_part = text[5..].trim().to_string();
     let (title, desc) = if let Some(nl) = title_part.find('\n') {
-        (title_part[..nl].to_string(), title_part[nl + 1..].to_string())
+        (
+            title_part[..nl].to_string(),
+            title_part[nl + 1..].to_string(),
+        )
     } else {
         (title_part.clone(), title_part.clone())
     };
@@ -465,7 +480,9 @@ async fn handle_task_message(
     match db.insert_task(&task) {
         Ok(id) => {
             let reply = format!("Task #{id} created: {task_title}");
-            let _ = tg.send_message(msg.chat_id, &reply, Some(msg.message_id)).await;
+            let _ = tg
+                .send_message(msg.chat_id, &reply, Some(msg.message_id))
+                .await;
         },
         Err(e) => tracing::error!("insert_task from user telegram bot: {e}"),
     }

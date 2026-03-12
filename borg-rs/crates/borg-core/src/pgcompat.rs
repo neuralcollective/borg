@@ -279,7 +279,7 @@ impl Connection {
                     Ok(client) => client,
                     Err(err) => return ConnectionGuard::failed(err.to_string()),
                 }
-            }
+            },
         };
         ConnectionGuard::ready(client)
     }

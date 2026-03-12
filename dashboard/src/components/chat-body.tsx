@@ -51,6 +51,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastTsRef = useRef<number>(0);
+  const sendingRef = useRef(false);
   const sendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchMessages = useCallback(() => {
@@ -78,6 +79,8 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
         .catch(() => {});
     });
   }, [thread]);
+
+  useEffect(() => { sendingRef.current = sending; }, [sending]);
 
   const forceScrollRef = useRef(true);
 
@@ -146,35 +149,15 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
     };
   }, []);
 
-  // Poll fallback — only sync when no active stream to avoid wiping in-progress events
+  // Poll only when sending — recover from missed SSE completion events
   useEffect(() => {
+    if (!sending) return;
     const interval = setInterval(() => {
-      fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`, { headers: authHeaders() })
+      fetch(`/api/chat/status?thread=${encodeURIComponent(thread)}`, { headers: authHeaders() })
         .then((r) => r.json())
-        .then((msgs: ChatMessage[]) => {
-          if (msgs.length === 0) return;
-          const newTs = Math.max(...msgs.map((m) => Number(m.ts) || 0));
-          if (newTs <= lastTsRef.current) return;
-
-          // Check if poll found a new assistant message we don't have yet
-          const lastMsg = msgs[msgs.length - 1];
-          const hasNewAssistant = lastMsg?.role === "assistant" && Number(lastMsg.ts || 0) > lastTsRef.current;
-
-          setMessages(msgs);
-          lastTsRef.current = newTs;
-
-          // Restore completed streams from persisted raw_stream
-          const restored = new Map<number, StreamEvent[]>();
-          msgs.forEach((m, i) => {
-            if (m.role === "assistant" && m.raw_stream) {
-              const events = rawStreamToEvents(m.raw_stream);
-              if (events.length > 0) restored.set(i, events);
-            }
-          });
-          if (restored.size > 0) setCompletedStreams(restored);
-
-          // Only clear active stream state when a new assistant message has been persisted
-          if (hasNewAssistant) {
+        .then((data: { running: boolean }) => {
+          if (!data.running) {
+            fetchMessages();
             setSending(false);
             setStreamEvents([]);
             if (sendingTimeoutRef.current) {
@@ -186,7 +169,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
         .catch(() => {});
     }, 3000);
     return () => clearInterval(interval);
-  }, [thread]);
+  }, [thread, sending, fetchMessages]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isScrolledUp, setIsScrolledUp] = useState(false);
@@ -240,19 +223,32 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
     setMessages((prev) => [...prev, userMsg]);
     lastTsRef.current = Number(userMsg.ts);
 
-    try {
+    const postBody = JSON.stringify({ text, sender: "web-user", thread, ...(selectedModel ? { model: selectedModel } : {}) });
+    const doPost = async () => {
       await tokenReady;
-      await fetch("/api/chat", {
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ text, sender: "web-user", thread, ...(selectedModel ? { model: selectedModel } : {}) }),
+        body: postBody,
       });
-    } catch {
-      setSending(false);
-      setStreamEvents([]);
-      if (sendingTimeoutRef.current) {
-        clearTimeout(sendingTimeoutRef.current);
-        sendingTimeoutRef.current = null;
+      if (!res.ok) throw new Error(`${res.status}`);
+    };
+    try {
+      await doPost();
+    } catch (err) {
+      // Retry once after a short delay
+      console.warn("chat POST failed, retrying:", err);
+      try {
+        await new Promise((r) => setTimeout(r, 1000));
+        await doPost();
+      } catch (retryErr) {
+        console.error("chat POST retry failed:", retryErr);
+        setSending(false);
+        setStreamEvents([]);
+        if (sendingTimeoutRef.current) {
+          clearTimeout(sendingTimeoutRef.current);
+          sendingTimeoutRef.current = null;
+        }
       }
     }
   }

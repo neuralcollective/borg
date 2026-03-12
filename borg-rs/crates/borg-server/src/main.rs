@@ -1478,6 +1478,7 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
             "/api/projects/:id/share-links/:link_id",
             delete(routes::revoke_project_share_link),
         )
+        .route("/api/shared-projects", get(routes::list_shared_projects))
         // Public share link views (no auth required)
         .route(
             "/api/public/projects/:token",
@@ -1852,7 +1853,17 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::clone(&config),
         ai_request_count,
         api_token,
-        jwt_secret: auth::generate_token(),
+        jwt_secret: {
+            let key = "jwt_secret";
+            match db.get_config(key) {
+                Ok(Some(s)) if !s.is_empty() => s,
+                _ => {
+                    let s = auth::generate_token();
+                    let _ = db.set_config(key, &s);
+                    s
+                }
+            }
+        },
         start_time: Instant::now(),
         log_tx,
         log_ring,

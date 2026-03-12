@@ -329,9 +329,7 @@ fn is_exempt(path: &str) -> bool {
 
 // Sync admin workspace memberships at most once per 60s per user.
 fn sync_admin_memberships_if_stale(state: &AppState, user_id: i64) {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use std::time::Instant;
+    use std::{collections::HashMap, sync::Mutex, time::Instant};
     static LAST_SYNC: Mutex<Option<HashMap<i64, Instant>>> = Mutex::new(None);
     let mut guard = LAST_SYNC.lock().unwrap_or_else(|e| e.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);

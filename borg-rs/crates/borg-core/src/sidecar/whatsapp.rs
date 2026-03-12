@@ -4,8 +4,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
-use wacore::proto_helpers::MessageExt;
-use wacore::types::events::Event;
+use wacore::{proto_helpers::MessageExt, types::events::Event};
 use whatsapp_rust::bot::Bot;
 
 use super::{attachment, SidecarEvent, SidecarMessage, Source};
@@ -24,8 +23,7 @@ impl WhatsAppManager {
         cancel: CancellationToken,
     ) -> Result<Arc<Self>> {
         let db_path = format!("{}/whatsapp.db", auth_dir);
-        let backend =
-            Arc::new(whatsapp_rust_sqlite_storage::SqliteStore::new(&db_path).await?);
+        let backend = Arc::new(whatsapp_rust_sqlite_storage::SqliteStore::new(&db_path).await?);
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
 
@@ -46,8 +44,15 @@ impl WhatsAppManager {
                 let data_dir = data_dir2.clone();
                 let client_slot = Arc::clone(&client_slot2);
                 async move {
-                    handle_event(event, client, &event_tx, &assistant_name, &data_dir, &client_slot)
-                        .await;
+                    handle_event(
+                        event,
+                        client,
+                        &event_tx,
+                        &assistant_name,
+                        &data_dir,
+                        &client_slot,
+                    )
+                    .await;
                 }
             })
             .build()
@@ -93,7 +98,7 @@ impl WhatsAppManager {
             Err(e) => {
                 warn!("Invalid WhatsApp JID '{jid_str}': {e}");
                 return;
-            }
+            },
         };
         let message = waproto::whatsapp::Message {
             conversation: Some(text.to_string()),
@@ -112,7 +117,7 @@ impl WhatsAppManager {
             Err(e) => {
                 warn!("Invalid WhatsApp JID '{jid_str}': {e}");
                 return;
-            }
+            },
         };
         let _ = client.chatstate().send_composing(&jid).await;
     }
@@ -149,27 +154,27 @@ async fn handle_event(
             info!("WhatsApp connected as {jid}");
             *client_slot.lock().await = Some(Arc::clone(&client));
             let _ = event_tx.send(SidecarEvent::WaConnected { jid });
-        }
+        },
         Event::PairingQrCode { code, .. } => {
             info!("WhatsApp QR code generated");
             let _ = event_tx.send(SidecarEvent::WaQr { data: code });
-        }
+        },
         Event::LoggedOut(logout_info) => {
             let _ = event_tx.send(SidecarEvent::Disconnected {
                 source: Source::WhatsApp,
                 reason: format!("logged out: {:?}", logout_info.reason),
             });
-        }
+        },
         Event::Disconnected(_) => {
             let _ = event_tx.send(SidecarEvent::Disconnected {
                 source: Source::WhatsApp,
                 reason: "disconnected".to_string(),
             });
-        }
+        },
         Event::Message(msg, msg_info) => {
             handle_message(*msg, msg_info, &client, event_tx, assistant_name, data_dir).await;
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -195,10 +200,7 @@ async fn handle_message(
         info.push_name.clone()
     };
 
-    let text = msg
-        .text_content()
-        .unwrap_or_default()
-        .to_string();
+    let text = msg.text_content().unwrap_or_default().to_string();
 
     let mut attachments = Vec::new();
 
@@ -216,12 +218,11 @@ async fn handle_message(
 
     if let Some(ref doc) = msg.document_message {
         if let Ok(bytes) = client.download(doc.as_ref()).await {
-            let mimetype = doc.mimetype.as_deref().unwrap_or("application/octet-stream");
-            let filename = doc
-                .file_name
+            let mimetype = doc
+                .mimetype
                 .as_deref()
-                .unwrap_or("document")
-                .to_string();
+                .unwrap_or("application/octet-stream");
+            let filename = doc.file_name.as_deref().unwrap_or("document").to_string();
             if let Ok(sa) =
                 attachment::save_bytes(&bytes, "whatsapp", &filename, mimetype, data_dir).await
             {
@@ -270,9 +271,9 @@ async fn handle_message(
     let mentions_by_name = text.to_lowercase().contains(&format!("@{assistant_name}"));
     let mentions_by_jid = if let Some(ref ext) = msg.extended_text_message {
         if let Some(ref ctx) = ext.context_info {
-            ctx.mentioned_jid.iter().any(|j| {
-                !self_jid.is_empty() && j.split('@').next() == self_jid.split('@').next()
-            })
+            ctx.mentioned_jid
+                .iter()
+                .any(|j| !self_jid.is_empty() && j.split('@').next() == self_jid.split('@').next())
         } else {
             false
         }

@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Child;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Child,
+    sync::mpsc::UnboundedSender,
+};
 use tracing::{debug, warn};
 
 pub struct DrainConfig<'a> {

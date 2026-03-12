@@ -141,11 +141,7 @@ impl CodexBackend {
                     "mcp_servers.borg.env.PROJECT_ID",
                     json!(task.project_id.to_string()),
                 );
-                Self::push_config_arg(
-                    args,
-                    "mcp_servers.borg.env.PROJECT_MODE",
-                    json!(&task.mode),
-                );
+                Self::push_config_arg(args, "mcp_servers.borg.env.PROJECT_MODE", json!(&task.mode));
             }
         } else {
             warn!(task_id = task.id, "failed to resolve borg-mcp server path");
@@ -170,7 +166,10 @@ impl CodexBackend {
                     }
                 }
             } else {
-                warn!(task_id = task.id, "failed to resolve lawborg-mcp server path");
+                warn!(
+                    task_id = task.id,
+                    "failed to resolve lawborg-mcp server path"
+                );
             }
         }
 

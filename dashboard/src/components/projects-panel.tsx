@@ -4,6 +4,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronRight,
   FileText,
   Folder,
   GitBranch,
@@ -49,6 +50,7 @@ import {
   useProjectDocumentVersions,
   useProjects,
   useSettings,
+  useSharedProjects,
   useUserKnowledgeFiles,
 } from "@/lib/api";
 import { useDashboardMode } from "@/lib/dashboard-mode";
@@ -171,12 +173,14 @@ type WorkflowOption = {
 
 export function ProjectsPanel() {
   const { data: projects = [], refetch: refetchProjects } = useProjects();
+  const { data: sharedProjects = [] } = useSharedProjects();
   const { data: modes = [] } = useModes();
   const { data: customModes = [] } = useCustomModes();
   const { data: settings } = useSettings();
   const vocab = useVocabulary();
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [showMemory, setShowMemory] = useState<false | "org" | "my">(false);
+  const [sharedExpanded, setSharedExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [ftsQuery, setFtsQuery] = useState("");
   const [ftsResults, setFtsResults] = useState<FtsSearchResult[]>([]);
@@ -795,6 +799,46 @@ export function ProjectsPanel() {
                 </div>
               )}
             </div>
+
+            {sharedProjects.length > 0 && (
+              <div className="mt-3 border-t border-[#2a2520] pt-3">
+                <button
+                  onClick={() => setSharedExpanded((v) => !v)}
+                  className="flex w-full items-center gap-1.5 px-1 py-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[#6b6459] hover:text-[#9c9486] transition-colors"
+                >
+                  <ChevronRight className={cn("h-3 w-3 transition-transform", sharedExpanded && "rotate-90")} />
+                  Shared with you
+                  <span className="ml-auto rounded-full bg-[#1c1a17] px-1.5 py-0.5 text-[10px] tabular-nums normal-case tracking-normal">
+                    {sharedProjects.length}
+                  </span>
+                </button>
+                {sharedExpanded && (
+                  <div className="mt-1.5 space-y-1">
+                    {sharedProjects.map((sp) => (
+                      <button
+                        key={sp.id}
+                        onClick={() => {
+                          setSelectedProjectId(sp.id);
+                          setShowMemory(false);
+                        }}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[13px] transition-colors",
+                          sp.id === activeProjectId && !showMemory
+                            ? "bg-blue-500/[0.08] text-[#e8e0d4] font-medium"
+                            : "text-[#9c9486] hover:bg-[#1c1a17]",
+                        )}
+                      >
+                        <span className="shrink-0 text-[11px] text-[#6b6459] tabular-nums">#{sp.id}</span>
+                        <span className="min-w-0 flex-1 truncate">{sp.name}</span>
+                        <span className="shrink-0 rounded bg-[#1c1a17] px-1.5 py-0.5 text-[10px] text-[#6b6459]">
+                          {sp.share_role}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {projectActionError && (
               <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/[0.06] px-3 py-2 text-[11px] text-red-300">
                 {projectActionError}

@@ -284,6 +284,7 @@ impl AgentBackend for ClaudeBackend {
                 &ctx.borg_api_token,
                 &task.mode,
                 task.project_id,
+                task.workspace_id,
                 None,
                 &api_keys_vec,
             );

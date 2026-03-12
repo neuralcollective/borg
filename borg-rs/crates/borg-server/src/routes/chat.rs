@@ -180,14 +180,8 @@ pub(crate) async fn run_chat_agent(
             .list_knowledge_repos(project.workspace_id, user_id)
             .unwrap_or_default();
         Some(
-            super::projects::colocate_project_workspace(
-                project,
-                &session_dir,
-                db,
-                storage,
-                &repos,
-            )
-            .await,
+            super::projects::colocate_project_workspace(project, &session_dir, db, storage, &repos)
+                .await,
         )
     } else {
         None
@@ -328,11 +322,16 @@ pub(crate) async fn run_chat_agent(
 
     let project_mode = project_mode.as_deref().unwrap_or("swe");
     let project_id = project_for_chat.as_ref().map(|p| p.id).unwrap_or(0);
+    let workspace_id = project_for_chat
+        .as_ref()
+        .map(|p| p.workspace_id)
+        .unwrap_or(0);
     let mcp_servers = borg_agent::mcp::build_mcp_servers_json(
         &api_url,
         &api_token,
         project_mode,
         project_id,
+        workspace_id,
         Some(chat_key),
         &legal_linked_creds,
     );
@@ -413,9 +412,7 @@ pub(crate) async fn run_chat_agent(
                 ));
             }
             if c.has_project_repo {
-                lines.push(
-                    "- `repo/` — project's connected source code repository.".to_string(),
-                );
+                lines.push("- `repo/` — project's connected source code repository.".to_string());
             }
             if lines.is_empty() {
                 String::new()
@@ -689,6 +686,25 @@ pub(crate) async fn get_chat_messages(
     Ok(Json(json!(v)))
 }
 
+pub(crate) async fn get_chat_thread_status(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Query(q): Query<ChatMessagesQuery>,
+) -> Result<Json<Value>, StatusCode> {
+    let actual_thread = if parse_project_chat_key(&q.thread).is_some() {
+        let project_id = parse_project_chat_key(&q.thread).ok_or(StatusCode::BAD_REQUEST)?;
+        require_project_access(state.as_ref(), &workspace, project_id)?;
+        q.thread.clone()
+    } else {
+        scoped_workspace_chat_thread(workspace.id, &q.thread)
+    };
+    let running = state
+        .db
+        .has_running_chat_agent(&actual_thread)
+        .unwrap_or(false);
+    Ok(Json(json!({ "running": running })))
+}
+
 pub(crate) async fn get_project_chat_messages(
     State(state): State<Arc<AppState>>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
@@ -748,6 +764,11 @@ pub(crate) async fn post_project_chat(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    let run_db_id = state
+        .db
+        .create_chat_agent_run(&thread, "web", "", "", "")
+        .unwrap_or(-1);
+
     let state2 = Arc::clone(&state);
     let thread2 = thread.clone();
     let sender2 = sender.clone();
@@ -777,8 +798,17 @@ pub(crate) async fn post_project_chat(
         )
         .await
         {
-            Ok(_) => {},
-            Err(e) => tracing::warn!("project chat agent error: {e}"),
+            Ok(_) => {
+                if run_db_id > 0 {
+                    let _ = state2.db.complete_chat_agent_run(run_db_id, "", "", "");
+                }
+            },
+            Err(e) => {
+                tracing::warn!("project chat agent error: {e}");
+                if run_db_id > 0 {
+                    let _ = state2.db.fail_chat_agent_run(run_db_id);
+                }
+            },
         }
     });
 
@@ -836,6 +866,11 @@ pub(crate) async fn post_chat(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    let run_db_id = state
+        .db
+        .create_chat_agent_run(&thread, "web", "", "", "")
+        .unwrap_or(-1);
+
     let state2 = Arc::clone(&state);
     let thread2 = thread.clone();
     let sender2 = sender.clone();
@@ -865,8 +900,17 @@ pub(crate) async fn post_chat(
         )
         .await
         {
-            Ok(_) => {},
-            Err(e) => tracing::warn!("web chat agent error: {e}"),
+            Ok(_) => {
+                if run_db_id > 0 {
+                    let _ = state2.db.complete_chat_agent_run(run_db_id, "", "", "");
+                }
+            },
+            Err(e) => {
+                tracing::warn!("web chat agent error: {e}");
+                if run_db_id > 0 {
+                    let _ = state2.db.fail_chat_agent_run(run_db_id);
+                }
+            },
         }
     });
 

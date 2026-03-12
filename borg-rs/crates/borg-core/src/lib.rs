@@ -1,8 +1,8 @@
 pub mod agent;
 pub mod chat;
-pub mod email;
 pub mod config;
 pub mod db;
+pub mod email;
 pub mod git;
 pub mod ipc;
 pub mod knowledge;

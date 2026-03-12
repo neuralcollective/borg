@@ -12,7 +12,11 @@ pub const LEGAL_PROVIDERS: &[(&str, &str, &str)] = &[
     ("congress", "CONGRESS_API_KEY", "Congress.gov"),
     ("openstates", "OPENSTATES_API_KEY", "OpenStates"),
     ("canlii", "CANLII_API_KEY", "CanLII"),
-    ("regulations_gov", "REGULATIONS_GOV_API_KEY", "Regulations.gov"),
+    (
+        "regulations_gov",
+        "REGULATIONS_GOV_API_KEY",
+        "Regulations.gov",
+    ),
 ];
 
 /// Resolves an MCP server path via env var override or CWD-relative fallback.
@@ -58,15 +62,15 @@ pub fn build_mcp_servers_json(
     api_token: &str,
     mode: &str,
     project_id: i64,
+    workspace_id: i64,
     chat_thread: Option<&str>,
     linked_creds: &[(String, String)],
 ) -> Map<String, Value> {
     let mut mcp_servers = Map::new();
 
-    if let Some(borg_server) = resolve_mcp_server_path(
-        "BORG_MCP_SERVER",
-        "../../../sidecar/borg-mcp/server.js",
-    ) {
+    if let Some(borg_server) =
+        resolve_mcp_server_path("BORG_MCP_SERVER", "../../../sidecar/borg-mcp/server.js")
+    {
         let mut env_vars = Map::new();
         env_vars.insert("API_BASE_URL".into(), json!(api_url));
         env_vars.insert("API_TOKEN".into(), json!(api_token));
@@ -76,6 +80,9 @@ pub fn build_mcp_servers_json(
         if project_id > 0 {
             env_vars.insert("PROJECT_ID".into(), json!(project_id.to_string()));
             env_vars.insert("PROJECT_MODE".into(), json!(mode));
+        }
+        if workspace_id > 0 {
+            env_vars.insert("WORKSPACE_ID".into(), json!(workspace_id.to_string()));
         }
         mcp_servers.insert(
             "borg".into(),
@@ -119,8 +126,11 @@ mod tests {
 
     #[test]
     fn resolves_borg_sidecar_relative_to_manifest_dir() {
-        let path = resolve_mcp_server_path("BORG_MCP_SERVER_DOES_NOT_EXIST", "../../../sidecar/borg-mcp/server.js")
-            .expect("expected borg MCP server path to resolve");
+        let path = resolve_mcp_server_path(
+            "BORG_MCP_SERVER_DOES_NOT_EXIST",
+            "../../../sidecar/borg-mcp/server.js",
+        )
+        .expect("expected borg MCP server path to resolve");
         assert!(path.ends_with("sidecar/borg-mcp/server.js"));
     }
 }

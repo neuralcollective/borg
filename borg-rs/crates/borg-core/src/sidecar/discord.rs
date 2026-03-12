@@ -1,23 +1,15 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use serenity::{
-    all::{
-        ChannelId, Context, CreateMessage, EventHandler, GatewayIntents, Message, Ready,
-    },
+    all::{ChannelId, Context, CreateMessage, EventHandler, GatewayIntents, Message, Ready},
     async_trait, Client,
 };
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::{
-    attachment, SidecarEvent, SidecarMessage, Source,
-};
+use super::{attachment, SidecarEvent, SidecarMessage, Source};
 
 pub(crate) struct DiscordManager {
     http: Arc<serenity::http::Http>,
@@ -79,7 +71,7 @@ impl EventHandler for BorgEventHandler {
                         Ok(sa) => attachments.push(sa),
                         Err(e) => warn!("Failed to save Discord attachment: {e}"),
                     }
-                }
+                },
                 Err(e) => warn!("Failed to download Discord attachment: {e}"),
             }
         }
@@ -199,7 +191,9 @@ impl DiscordManager {
 
     pub(crate) async fn send_typing(&self, channel_id: &str, http: Option<&serenity::http::Http>) {
         let http = http.unwrap_or(&self.http);
-        let Ok(cid) = channel_id.parse::<u64>() else { return };
+        let Ok(cid) = channel_id.parse::<u64>() else {
+            return;
+        };
         let _ = ChannelId::new(cid).broadcast_typing(http).await;
     }
 
@@ -218,9 +212,7 @@ impl DiscordManager {
             user_id: Some(user_id),
         };
 
-        let client_result = Client::builder(token, intents)
-            .event_handler(handler)
-            .await;
+        let client_result = Client::builder(token, intents).event_handler(handler).await;
 
         let mut client = match client_result {
             Ok(c) => c,
@@ -231,7 +223,7 @@ impl DiscordManager {
                     message: e.to_string(),
                 });
                 return;
-            }
+            },
         };
 
         let http = client.http.clone();

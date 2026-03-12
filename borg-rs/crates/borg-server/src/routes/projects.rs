@@ -1040,7 +1040,11 @@ pub(crate) async fn build_project_context(
             format!("Staged working set: {} file(s)\n", staged_files.len())
         }
     } else {
-        format!("Staged working set: {} file(s) in {}/\n", staged_files.len(), files_dir)
+        format!(
+            "Staged working set: {} file(s) in {}/\n",
+            staged_files.len(),
+            files_dir
+        )
     };
     let mut context = format!(
         "Project context:\nProject: {} (mode: {})\nCorpus: {} files, {} extracted-text files, {} privileged files, {} total\nSession privileged: {}\n{coloc_line}",
@@ -1078,7 +1082,10 @@ pub(crate) async fn build_project_context(
     if !raw_query.is_empty() {
         context.push_str(&format!("Retrieval query: {}\n", raw_query));
     }
-    if colocation.map(|c| c.linked + c.written > 0).unwrap_or(false) {
+    if colocation
+        .map(|c| c.linked + c.written > 0)
+        .unwrap_or(false)
+    {
         context.push_str("All project files are available in the documents/ directory. The staged working set below contains the most relevant files for your query — browse documents/ directly for the full corpus.\n");
     } else {
         context.push_str("Selection policy: only the staged working set was materialized for this request. Do not assume unstaged corpus documents were reviewed.\n");
@@ -1136,7 +1143,10 @@ pub(crate) async fn build_project_context(
             .list_recent_project_files(project.id, 50, false)
             .unwrap_or_default();
         if !all_files.is_empty() {
-            let heading = if colocation.map(|c| c.linked + c.written > 0).unwrap_or(false) {
+            let heading = if colocation
+                .map(|c| c.linked + c.written > 0)
+                .unwrap_or(false)
+            {
                 "\nProject file inventory (browse documents/ directory or use search_documents MCP tool for semantic search):\n"
             } else {
                 "\nProject file inventory (use `read_document` or `list_documents` MCP tools to access any file):\n"
@@ -1840,10 +1850,12 @@ pub(crate) async fn create_project(
 
 pub(crate) async fn get_project(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let project = require_project_access(state.as_ref(), &workspace, id)?;
+    let (project, _role) =
+        super::require_project_access_with_shares(state.as_ref(), &user, &workspace, id)?;
     let counts = state.db.project_task_status_counts(id).ok();
     Ok(Json(json!(ProjectJson::from_row(project, counts))))
 }
@@ -1925,21 +1937,25 @@ pub(crate) async fn delete_project(
 
 pub(crate) async fn list_project_tasks(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let _project = require_project_access(state.as_ref(), &workspace, id)?;
+    let (_project, _role) =
+        super::require_project_access_with_shares(state.as_ref(), &user, &workspace, id)?;
     let tasks = state.db.list_project_tasks(id).map_err(internal)?;
     Ok(Json(json!(tasks)))
 }
 
 pub(crate) async fn list_project_audit(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
     Query(q): Query<AuditQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let _project = require_project_access(state.as_ref(), &workspace, id)?;
+    let (_project, _role) =
+        super::require_project_access_with_shares(state.as_ref(), &user, &workspace, id)?;
     let events = state
         .db
         .list_project_events(id, q.limit)
@@ -2084,10 +2100,12 @@ pub(crate) async fn summarize_workspace_themes(
 
 pub(crate) async fn list_project_documents(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, StatusCode> {
-    let _project = require_project_access(state.as_ref(), &workspace, id)?;
+    let (_project, _role) =
+        super::require_project_access_with_shares(state.as_ref(), &user, &workspace, id)?;
     let tasks = state.db.list_project_tasks(id).map_err(internal)?;
     let mut documents: Vec<Value> = Vec::new();
 
@@ -2807,11 +2825,13 @@ pub(crate) async fn delete_project_document(
 
 pub(crate) async fn list_project_files(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Path(id): Path<i64>,
     Query(q): Query<ListProjectFilesQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let _project = require_project_access(state.as_ref(), &workspace, id)?;
+    let (_project, _role) =
+        super::require_project_access_with_shares(state.as_ref(), &user, &workspace, id)?;
     let cursor = decode_project_file_cursor(q.cursor.as_deref());
     let (files, total) = state
         .db

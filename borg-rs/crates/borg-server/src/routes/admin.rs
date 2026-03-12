@@ -666,11 +666,11 @@ pub(crate) async fn get_status(
             .any(|c| c.provider == "openai" && c.status == "connected");
     let mut available_models = vec![];
     if has_claude {
-        available_models
-            .push(json!({"model": "claude-opus-4-6", "backend": "claude", "label": "Opus 4.6"}));
         available_models.push(
             json!({"model": "claude-sonnet-4-6", "backend": "claude", "label": "Sonnet 4.6"}),
         );
+        available_models
+            .push(json!({"model": "claude-opus-4-6", "backend": "claude", "label": "Opus 4.6"}));
     }
     if has_codex {
         available_models.push(json!({"model": "gpt-5.4", "backend": "codex", "label": "GPT 5.4"}));
@@ -1297,6 +1297,17 @@ pub(crate) async fn get_user_settings(
 
     let model_override = state.db.get_config("model_override").map_err(internal)?;
     let has_override = model_override.as_ref().map_or(false, |v| !v.is_empty());
+    // Users with their own linked credential can freely choose models
+    let user_has_own_credential = state
+        .db
+        .list_user_linked_credentials(user.id)
+        .unwrap_or_default()
+        .iter()
+        .any(|c| {
+            (c.provider == PROVIDER_CLAUDE || c.provider == PROVIDER_OPENAI)
+                && c.status == "connected"
+        });
+    let has_override = has_override && !user_has_own_credential;
 
     let mut obj = serde_json::Map::new();
     for key in USER_SETTINGS_KEYS {
@@ -2217,4 +2228,15 @@ pub(crate) async fn rebuild_and_exec(repo_path: &str, build_cmd: &str) -> bool {
             false
         },
     }
+}
+
+pub(crate) async fn list_shared_projects(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+) -> Result<Json<Value>, StatusCode> {
+    let rows = state
+        .db
+        .list_projects_shared_with_user(user.id)
+        .map_err(internal)?;
+    Ok(Json(json!(rows)))
 }

@@ -171,7 +171,13 @@ impl Sandbox {
         working_dir: &str,
         command: &[String],
     ) -> Command {
-        let args = Self::bwrap_args(writable_dirs, hide_dirs, ro_restore_dirs, working_dir, command);
+        let args = Self::bwrap_args(
+            writable_dirs,
+            hide_dirs,
+            ro_restore_dirs,
+            working_dir,
+            command,
+        );
         let mut cmd = Command::new("bwrap");
         cmd.args(args);
         cmd

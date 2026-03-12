@@ -209,6 +209,28 @@ pub struct ProjectShareRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SharedProjectRow {
+    pub id: i64,
+    pub workspace_id: i64,
+    pub name: String,
+    pub mode: String,
+    pub repo_path: String,
+    pub client_name: String,
+    pub case_number: String,
+    pub jurisdiction: String,
+    pub matter_type: String,
+    pub opposing_counsel: String,
+    pub deadline: Option<String>,
+    pub privilege_level: String,
+    pub status: String,
+    pub session_privileged: bool,
+    pub default_template_id: Option<i64>,
+    pub created_at: String,
+    pub share_role: String,
+    pub workspace_name: String,
+}
+
 #[derive(Debug, serde::Serialize, Clone)]
 pub struct ProjectShareLinkRow {
     pub id: i64,
@@ -1784,13 +1806,14 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let created_at = now_str();
-        let id = conn.execute_returning_id(
-            "INSERT INTO project_shares (project_id, user_id, role, granted_by, created_at) \
+        let id = conn
+            .execute_returning_id(
+                "INSERT INTO project_shares (project_id, user_id, role, granted_by, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role",
-            params![project_id, user_id, role, granted_by, created_at],
-        )
-        .context("add_project_share")?;
+                params![project_id, user_id, role, granted_by, created_at],
+            )
+            .context("add_project_share")?;
         Ok(id)
     }
 
@@ -1893,6 +1916,54 @@ impl Db {
             })?
             .collect::<pg::Result<Vec<_>>>()
             .context("list_user_shared_projects")?;
+        Ok(rows)
+    }
+
+    pub fn list_projects_shared_with_user(
+        &self,
+        user_id: i64,
+    ) -> Result<Vec<SharedProjectRow>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let sql = "SELECT p.id, p.workspace_id, p.name, p.mode, p.repo_path, p.client_name, \
+             p.case_number, p.jurisdiction, p.matter_type, p.opposing_counsel, p.deadline, \
+             p.privilege_level, p.status, p.default_template_id, p.created_at, p.session_privileged, \
+             ps.role, w.name \
+             FROM project_shares ps \
+             JOIN projects p ON p.id = ps.project_id \
+             JOIN workspaces w ON w.id = p.workspace_id \
+             WHERE ps.user_id = ?1 \
+             ORDER BY ps.created_at DESC";
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt
+            .query_map(params![user_id], |row| {
+                let created_at_str: String = row.get(14)?;
+                let session_privileged_int: i64 = row.get(15)?;
+                Ok(SharedProjectRow {
+                    id: row.get(0)?,
+                    workspace_id: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    name: row.get(2)?,
+                    mode: row.get(3)?,
+                    repo_path: row.get(4)?,
+                    client_name: row.get(5)?,
+                    case_number: row.get(6)?,
+                    jurisdiction: row.get(7)?,
+                    matter_type: row.get(8)?,
+                    opposing_counsel: row.get(9)?,
+                    deadline: row.get(10)?,
+                    privilege_level: row.get(11)?,
+                    status: row.get(12)?,
+                    default_template_id: row.get(13)?,
+                    created_at: created_at_str,
+                    session_privileged: session_privileged_int != 0,
+                    share_role: row.get(16)?,
+                    workspace_name: row.get(17)?,
+                })
+            })?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_projects_shared_with_user")?;
         Ok(rows)
     }
 
@@ -3093,7 +3164,10 @@ impl Db {
             .conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let mut where_clauses = vec!["workspace_id = ?".to_string(), "user_id IS NULL".to_string()];
+        let mut where_clauses = vec![
+            "workspace_id = ?".to_string(),
+            "user_id IS NULL".to_string(),
+        ];
         let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = vec![Box::new(workspace_id)];
 
         if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
@@ -3177,15 +3251,16 @@ impl Db {
         let lim = limit.clamp(1, 200);
         params_vec.push(Box::new(lim));
         let where_sql = where_clauses.join(" AND ");
-        let page_refs: Vec<&dyn pg::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
+        let page_refs: Vec<&dyn pg::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
         let sql = format!(
             "SELECT id, workspace_id, file_name, description, size_bytes, \"inline\", created_at, \
                     tags, category, jurisdiction, project_id, user_id \
              FROM knowledge_files WHERE {where_sql} \
              ORDER BY created_at DESC, id DESC LIMIT ?"
         );
-        let mut stmt = conn.prepare(&sql).context("list_all_knowledge_in_workspace")?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .context("list_all_knowledge_in_workspace")?;
         let items = stmt
             .query_map(page_refs.as_slice(), row_to_knowledge)?
             .collect::<pg::Result<Vec<_>>>()
@@ -3316,7 +3391,14 @@ impl Db {
         size_bytes: i64,
         inline: bool,
     ) -> Result<i64> {
-        self.insert_knowledge_file_for_user(workspace_id, None, file_name, description, size_bytes, inline)
+        self.insert_knowledge_file_for_user(
+            workspace_id,
+            None,
+            file_name,
+            description,
+            size_bytes,
+            inline,
+        )
     }
 
     pub fn insert_knowledge_file_for_user(
@@ -3401,7 +3483,8 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut where_clauses = vec!["workspace_id = ?".to_string(), "user_id = ?".to_string()];
-        let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = vec![Box::new(workspace_id), Box::new(user_id)];
+        let mut params_vec: Vec<Box<dyn pg::types::ToSql>> =
+            vec![Box::new(workspace_id), Box::new(user_id)];
         if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
             where_clauses.push(
                 "(lower(file_name) LIKE ? OR lower(description) LIKE ? OR lower(tags) LIKE ?)"
@@ -3485,7 +3568,12 @@ impl Db {
         .context("get_user_knowledge_file")
     }
 
-    pub fn delete_user_knowledge_file(&self, workspace_id: i64, user_id: i64, id: i64) -> Result<()> {
+    pub fn delete_user_knowledge_file(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        id: i64,
+    ) -> Result<()> {
         let conn = self
             .conn
             .lock()
@@ -4219,8 +4307,15 @@ impl Db {
         })
     }
 
-    pub fn list_knowledge_repos(&self, workspace_id: i64, user_id: Option<i64>) -> Result<Vec<KnowledgeRepo>> {
-        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+    pub fn list_knowledge_repos(
+        &self,
+        workspace_id: i64,
+        user_id: Option<i64>,
+    ) -> Result<Vec<KnowledgeRepo>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = if user_id.is_some() {
             conn.prepare(
                 "SELECT id, workspace_id, user_id, url, name, local_path, status, error_msg, created_at \
@@ -4238,32 +4333,57 @@ impl Db {
             stmt.query_map(params![workspace_id], Self::row_to_knowledge_repo)?
         };
         let mut out = Vec::new();
-        for r in rows { out.push(r?); }
+        for r in rows {
+            out.push(r?);
+        }
         Ok(out)
     }
 
     pub fn list_all_knowledge_repos(&self) -> Result<Vec<KnowledgeRepo>> {
-        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, user_id, url, name, local_path, status, error_msg, created_at \
              FROM knowledge_repos ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], Self::row_to_knowledge_repo)?;
         let mut out = Vec::new();
-        for r in rows { out.push(r?); }
+        for r in rows {
+            out.push(r?);
+        }
         Ok(out)
     }
 
-    pub fn insert_knowledge_repo(&self, workspace_id: i64, user_id: Option<i64>, url: &str, name: &str) -> Result<i64> {
-        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+    pub fn insert_knowledge_repo(
+        &self,
+        workspace_id: i64,
+        user_id: Option<i64>,
+        url: &str,
+        name: &str,
+    ) -> Result<i64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         Ok(conn.execute_returning_id(
             "INSERT INTO knowledge_repos (workspace_id, user_id, url, name, status) VALUES (?1, ?2, ?3, ?4, 'pending')",
             params![workspace_id, user_id, url, name],
         )?)
     }
 
-    pub fn update_knowledge_repo_status(&self, id: i64, status: &str, local_path: &str, error_msg: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+    pub fn update_knowledge_repo_status(
+        &self,
+        id: i64,
+        status: &str,
+        local_path: &str,
+        error_msg: &str,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         conn.execute(
             "UPDATE knowledge_repos SET status = ?1, local_path = ?2, error_msg = ?3 WHERE id = ?4",
             params![status, local_path, error_msg, id],
@@ -4272,12 +4392,17 @@ impl Db {
     }
 
     pub fn delete_knowledge_repo(&self, id: i64, workspace_id: i64) -> Result<String> {
-        let conn = self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
-        let local_path: Option<String> = conn.query_row(
-            "SELECT local_path FROM knowledge_repos WHERE id = ?1 AND workspace_id = ?2",
-            params![id, workspace_id],
-            |r| r.get(0),
-        ).optional()?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let local_path: Option<String> = conn
+            .query_row(
+                "SELECT local_path FROM knowledge_repos WHERE id = ?1 AND workspace_id = ?2",
+                params![id, workspace_id],
+                |r| r.get(0),
+            )
+            .optional()?;
         conn.execute(
             "DELETE FROM knowledge_repos WHERE id = ?1 AND workspace_id = ?2",
             params![id, workspace_id],
@@ -4775,7 +4900,11 @@ impl Db {
             .lock()
             .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM users WHERE is_admin = true", params![], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM users WHERE is_admin = true",
+                params![],
+                |row| row.get(0),
+            )
             .context("count_admin_users")?;
         Ok(count)
     }
@@ -4854,8 +4983,10 @@ impl Db {
         {
             return Ok(Some((id, username, display_name, is_admin)));
         }
-        let conn =
-            self.conn.lock().map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
         let result = conn
             .query_row(
                 "SELECT u.id, u.username, u.display_name, u.is_admin \
@@ -5657,6 +5788,34 @@ impl Db {
             .collect::<pg::Result<Vec<_>>>()
             .context("get_undelivered_runs")?;
         Ok(runs)
+    }
+
+    pub fn fail_chat_agent_run(&self, id: i64) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE chat_agent_runs SET status='failed', completed_at=?1 WHERE id=?2",
+            params![now_str(), id],
+        )
+        .context("fail_chat_agent_run")?;
+        Ok(())
+    }
+
+    pub fn has_running_chat_agent(&self, jid: &str) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_agent_runs WHERE jid=?1 AND status='running'",
+                params![jid],
+                |row| row.get(0),
+            )
+            .context("has_running_chat_agent")?;
+        Ok(count > 0)
     }
 
     pub fn abandon_running_agents(&self) -> Result<usize> {

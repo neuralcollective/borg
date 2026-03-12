@@ -28,7 +28,10 @@ pub struct EmailAttachment {
 pub fn parse_raw(raw: &[u8]) -> Result<ParsedEmail> {
     let parsed = mailparse::parse_mail(raw).context("mailparse")?;
 
-    let subject = parsed.headers.get_first_value("Subject").unwrap_or_default();
+    let subject = parsed
+        .headers
+        .get_first_value("Subject")
+        .unwrap_or_default();
     let from_header = parsed.headers.get_first_value("From").unwrap_or_default();
     let message_id = parsed
         .headers
@@ -42,7 +45,15 @@ pub fn parse_raw(raw: &[u8]) -> Result<ParsedEmail> {
     let (from, from_name) = parse_address(&from_header);
     let (body, attachments) = extract_body_and_attachments(&parsed);
 
-    Ok(ParsedEmail { from, from_name, subject, body, attachments, message_id, in_reply_to })
+    Ok(ParsedEmail {
+        from,
+        from_name,
+        subject,
+        body,
+        attachments,
+        message_id,
+        in_reply_to,
+    })
 }
 
 /// Parse a Postmark-style inbound webhook JSON body.
@@ -67,14 +78,18 @@ pub fn parse_postmark_json(raw: &[u8]) -> Result<ParsedEmail> {
     if let Some(atts) = v["Attachments"].as_array() {
         for att in atts {
             let name = att["Name"].as_str().unwrap_or("attachment").to_string();
-            let ct =
-                att["ContentType"].as_str().unwrap_or("application/octet-stream").to_string();
+            let ct = att["ContentType"]
+                .as_str()
+                .unwrap_or("application/octet-stream")
+                .to_string();
             if let Some(content) = att["Content"].as_str() {
                 use base64::Engine;
-                if let Ok(data) =
-                    base64::engine::general_purpose::STANDARD.decode(content.trim())
-                {
-                    attachments.push(EmailAttachment { filename: name, content_type: ct, data });
+                if let Ok(data) = base64::engine::general_purpose::STANDARD.decode(content.trim()) {
+                    attachments.push(EmailAttachment {
+                        filename: name,
+                        content_type: ct,
+                        data,
+                    });
                 }
             }
         }
@@ -112,9 +127,7 @@ fn parse_address(addr: &str) -> (String, String) {
     (addr.to_lowercase(), String::new())
 }
 
-fn extract_body_and_attachments(
-    mail: &mailparse::ParsedMail,
-) -> (String, Vec<EmailAttachment>) {
+fn extract_body_and_attachments(mail: &mailparse::ParsedMail) -> (String, Vec<EmailAttachment>) {
     let mut body = String::new();
     let mut attachments = Vec::new();
     extract_recursive(mail, &mut body, &mut attachments);
@@ -146,7 +159,11 @@ fn extract_recursive(
             .cloned()
             .unwrap_or_else(|| "attachment".to_string());
         if let Ok(data) = mail.get_body_raw() {
-            attachments.push(EmailAttachment { filename, content_type: mime, data });
+            attachments.push(EmailAttachment {
+                filename,
+                content_type: mime,
+                data,
+            });
         }
     } else if mime == "text/plain" && body.is_empty() {
         body.push_str(&mail.get_body().unwrap_or_default());
@@ -170,7 +187,11 @@ pub fn save_attachments(atts: &[EmailAttachment], dir: &Path) -> Result<Vec<Path
                 }
             })
             .collect::<String>();
-        let safe = if safe.is_empty() { "attachment".to_string() } else { safe };
+        let safe = if safe.is_empty() {
+            "attachment".to_string()
+        } else {
+            safe
+        };
         let path = dir.join(&safe);
         std::fs::write(&path, &att.data)?;
         paths.push(path);
@@ -193,8 +214,8 @@ pub async fn send_smtp_reply(
         return Ok(());
     }
     use lettre::{
-        AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-        transport::smtp::authentication::Credentials,
+        transport::smtp::authentication::Credentials, AsyncSmtpTransport, AsyncTransport, Message,
+        Tokio1Executor,
     };
 
     let email = Message::builder()
@@ -287,4 +308,3 @@ where
         }
     }
 }
-
