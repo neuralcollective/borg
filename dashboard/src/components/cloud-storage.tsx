@@ -75,7 +75,7 @@ export function CloudStoragePanel({ projectId, settings, onImported }: CloudStor
   const {
     data: cloudConnections = [],
     refetch: refetchCloudConnections,
-    isFetching: cloudConnectionsLoading,
+    isLoading: cloudConnectionsLoading,
   } = useProjectCloudConnections(projectId);
 
   const [cloudMessage, setCloudMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
