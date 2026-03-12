@@ -186,8 +186,11 @@ function OnboardingModal() {
   }, [pending, queryClient.invalidateQueries]);
 
   if (isLoading || dismissed) return null;
-  const hasConnected = (data?.credentials ?? []).some((c) => c.status === "connected");
+  const creds = data?.credentials ?? [];
+  const hasConnected = creds.some((c) => c.status === "connected");
   if (hasConnected) return null;
+  const hasExpired = creds.some((c) => c.status === "expired" || c.last_error);
+  const isReconnect = hasExpired && creds.length > 0;
 
   async function handleConnect(provider: "claude" | "openai") {
     setBusyProvider(provider);
@@ -232,10 +235,19 @@ function OnboardingModal() {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
       <div className="mx-4 w-full max-w-md rounded-2xl border border-[#2a2520] bg-[#151412] p-6 shadow-2xl space-y-5">
         <div>
-          <div className="text-[18px] font-semibold text-[#e8e0d4]">Connect your AI subscription</div>
+          <div className="text-[18px] font-semibold text-[#e8e0d4]">
+            {isReconnect ? "Reconnect your AI subscription" : "Connect your AI subscription"}
+          </div>
           <p className="mt-1 text-[13px] text-[#6b6459]">
-            Borg uses your Claude or ChatGPT subscription to run agents. Connect one to get started.
+            {isReconnect
+              ? "Your session has expired. Please reconnect to continue using Borg agents."
+              : "Borg uses your Claude or ChatGPT subscription to run agents. Connect one to get started."}
           </p>
+          {isReconnect && creds.filter((c) => c.last_error).map((c) => (
+            <div key={c.provider} className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-400">
+              {c.provider === "claude" ? "Claude" : "OpenAI"}: {c.last_error}
+            </div>
+          ))}
         </div>
         <div className="space-y-3">
           {providers.map(({ provider, label, hint }) => {
