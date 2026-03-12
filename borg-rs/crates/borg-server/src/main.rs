@@ -375,6 +375,7 @@ fn spawn_telegram_poller(
                                     &chat_tx2,
                                     &ai_request_count2,
                                     None,
+                                    None,
                                 )
                                 .await
                                 {
@@ -572,6 +573,7 @@ async fn spawn_sidecar_manager(
                                     &chat_tx2,
                                     &ai_request_count2,
                                     None,
+                                    None,
                                 )
                                 .await
                                 {
@@ -738,6 +740,7 @@ async fn spawn_sidecar_manager(
                                     &storage2,
                                     &chat_tx2,
                                     &ai_request_count2,
+                                    None,
                                     None,
                                 )
                                 .await
@@ -939,6 +942,7 @@ fn spawn_imap_poller(
                         &storage,
                         &chat_tx,
                         &ai_count,
+                        None,
                         None,
                     )
                     .await

@@ -12,6 +12,7 @@ import {
   useFullModes,
   useProjects,
   useProjectTasks,
+  useStatus,
 } from "@/lib/api";
 import { useDictation } from "@/lib/dictation";
 import { parseStreamEvents, rawStreamToEvents, type TermLine } from "@/lib/stream-utils";
@@ -38,6 +39,9 @@ interface ChatBodyProps {
 
 export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
   const { data: projects = [] } = useProjects();
+  const { data: status } = useStatus();
+  const availableModels = status?.available_models ?? [];
+  const [selectedModel, setSelectedModel] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -229,7 +233,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
       await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ text, sender: "web-user", thread }),
+        body: JSON.stringify({ text, sender: "web-user", thread, ...(selectedModel ? { model: selectedModel } : {}) }),
       });
     } catch {
       setSending(false);
@@ -322,6 +326,24 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
 
       {/* Input */}
       <div className="shrink-0 border-t border-[#2a2520] bg-[#0f0e0c]/90 px-3 py-2.5">
+        {availableModels.length > 1 && (
+          <div className="mb-1.5 flex items-center gap-1">
+            {availableModels.map((m) => (
+              <button
+                key={m.model}
+                onClick={() => setSelectedModel(m.model === selectedModel ? "" : m.model)}
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors",
+                  (m.model === selectedModel || (!selectedModel && m.model === availableModels[0]?.model))
+                    ? "bg-amber-500/15 text-amber-400"
+                    : "text-[#6b6459] hover:text-[#9c9486] hover:bg-[#1c1a17]",
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="relative flex items-end gap-1.5 rounded-xl border border-[#2a2520] bg-[#1c1a17] px-3 py-2 transition-colors focus-within:border-amber-500/20 focus-within:bg-[#232019]">
           <textarea
             ref={inputRef}

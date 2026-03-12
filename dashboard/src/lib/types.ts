@@ -70,6 +70,7 @@ export interface Status {
   guardrail_rebase_count?: number;
   guardrail_queued_count?: number;
   guardrail_no_merge_mins?: number;
+  available_models?: { model: string; backend: string; label: string }[];
 }
 
 export function repoName(path: string): string {

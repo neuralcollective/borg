@@ -373,6 +373,7 @@ async fn poll_loop(
                                 &chat_tx2,
                                 &ai_count2,
                                 None,
+                                None,
                             )
                             .await
                             {

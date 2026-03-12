@@ -50,6 +50,7 @@ pub(crate) struct ChatPostBody {
     pub text: String,
     pub sender: Option<String>,
     pub thread: Option<String>,
+    pub model: Option<String>,
 }
 
 pub(crate) fn sanitize_chat_key(key: &str) -> String {
@@ -129,6 +130,7 @@ pub(crate) async fn run_chat_agent(
     chat_event_tx: &broadcast::Sender<String>,
     ai_request_count: &Arc<AtomicU64>,
     user_id: Option<i64>,
+    model_override: Option<String>,
 ) -> anyhow::Result<String> {
     let session_dir = format!(
         "{}/sessions/chat-{}",
@@ -251,9 +253,10 @@ pub(crate) async fn run_chat_agent(
         }
     }
 
+    let effective_model = model_override.unwrap_or_else(|| config.model.clone());
     let mut args = vec![
         "--model".to_string(),
-        config.model.clone(),
+        effective_model,
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
@@ -681,6 +684,7 @@ pub(crate) async fn post_project_chat(
     let thread2 = thread.clone();
     let sender2 = sender.clone();
     let text2 = body.text.clone();
+    let model2 = body.model.clone();
     let uid = user.id;
     state.active_chat_agents.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     tokio::spawn(async move {
@@ -699,6 +703,7 @@ pub(crate) async fn post_project_chat(
             &state2.chat_event_tx,
             &state2.ai_request_count,
             Some(uid),
+            model2,
         )
         .await
         {
@@ -765,6 +770,7 @@ pub(crate) async fn post_chat(
     let thread2 = thread.clone();
     let sender2 = sender.clone();
     let text2 = body.text.clone();
+    let model2 = body.model.clone();
     let uid = user.id;
     state.active_chat_agents.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     tokio::spawn(async move {
@@ -783,6 +789,7 @@ pub(crate) async fn post_chat(
             &state2.chat_event_tx,
             &state2.ai_request_count,
             Some(uid),
+            model2,
         )
         .await
         {

@@ -611,6 +611,17 @@ pub(crate) async fn get_status(
     state.db.set_ts("ai_request_count", ai_requests as i64);
     let backup = crate::backup::backup_status_snapshot(&state.db, &state.config).await;
 
+    let mut available_models = vec![];
+    if !state.config.oauth_token.is_empty()
+        || !std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().is_empty()
+    {
+        available_models.push(json!({"model": "claude-opus-4-6", "backend": "claude", "label": "Opus 4.6"}));
+        available_models.push(json!({"model": "claude-sonnet-4-6", "backend": "claude", "label": "Sonnet 4.6"}));
+    }
+    if !state.config.codex_api_key.is_empty() {
+        available_models.push(json!({"model": "gpt-5.4", "backend": "codex", "label": "GPT 5.4"}));
+    }
+
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_s": uptime_s,
@@ -638,6 +649,7 @@ pub(crate) async fn get_status(
             "target": state.search.as_ref().map(|s| s.target()).unwrap_or_default(),
         },
         "backup": backup,
+        "available_models": available_models,
     })))
 }
 
@@ -2075,6 +2087,7 @@ pub(crate) async fn email_inbound(
             &storage,
             &chat_tx,
             &ai_count,
+            None,
             None,
         )
         .await
