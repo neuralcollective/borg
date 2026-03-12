@@ -1,4 +1,8 @@
-use std::{collections::HashSet, path::Path, process::Stdio};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -89,6 +93,53 @@ fn container_reachable_url(base_url: &str, host_ip: &str) -> String {
         return format!("http://{host_ip}:{port}");
     }
     base_url.to_string()
+}
+
+fn latest_jsonl_file(root: &Path) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file()
+                || path.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let Ok(modified_at) = metadata.modified() else {
+                continue;
+            };
+
+            let replace = newest
+                .as_ref()
+                .map(|(current, _)| modified_at >= *current)
+                .unwrap_or(true);
+            if replace {
+                newest = Some((modified_at, path));
+            }
+        }
+    }
+
+    newest.map(|(_, path)| path)
+}
+
+fn load_latest_session_transcript(session_dir: &str) -> Option<String> {
+    let transcript_root = Path::new(session_dir).join(".claude/projects");
+    let transcript_path = latest_jsonl_file(&transcript_root)?;
+    std::fs::read_to_string(&transcript_path).ok()
 }
 
 /// Runs Claude Code as a subprocess, with configurable sandbox isolation.
@@ -223,8 +274,11 @@ impl AgentBackend for ClaudeBackend {
 
         // Wire MCP servers for pipeline tasks
         if !ctx.borg_api_token.is_empty() && !ctx.borg_api_url.is_empty() {
-            let api_keys_vec: Vec<(String, String)> =
-                ctx.api_keys.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let api_keys_vec: Vec<(String, String)> = ctx
+                .api_keys
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             let mcp_servers = crate::mcp::build_mcp_servers_json(
                 &reachable_borg_api_url,
                 &ctx.borg_api_token,
@@ -381,9 +435,8 @@ impl AgentBackend for ClaudeBackend {
                 // then restore only the tool paths the agent actually needs.
                 let hide: Vec<&str> = vec![&real_home, "/root"];
                 let ro_restore: Vec<&str> = vec![&rustup_home, &cargo_home];
-                let mut cmd = Sandbox::bwrap_command(
-                    &writable, &hide, &ro_restore, &ctx.work_dir, &full_cmd,
-                );
+                let mut cmd =
+                    Sandbox::bwrap_command(&writable, &hide, &ro_restore, &ctx.work_dir, &full_cmd);
                 cmd.kill_on_drop(true)
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
@@ -628,7 +681,7 @@ impl AgentBackend for ClaudeBackend {
             )
         };
 
-        let (raw_stream, signal_json, container_test_results, success) = if timeout_s > 0 {
+        let (stdout_stream, signal_json, container_test_results, success) = if timeout_s > 0 {
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), io_future).await {
                 Ok(res) => res,
                 Err(_) => {
@@ -639,6 +692,16 @@ impl AgentBackend for ClaudeBackend {
         } else {
             io_future.await
         };
+
+        let raw_stream = load_latest_session_transcript(&ctx.session_dir).unwrap_or_else(|| {
+            warn!(
+                task_id = task.id,
+                phase = %phase.name,
+                session_dir = %ctx.session_dir,
+                "claude transcript not found; falling back to printed stdout for raw_stream"
+            );
+            stdout_stream.clone()
+        });
 
         if let Some(cid_path) = cidfile_path {
             if let Ok(cid) = std::fs::read_to_string(&cid_path) {
@@ -656,7 +719,7 @@ impl AgentBackend for ClaudeBackend {
         }
 
         Ok(PhaseOutput {
-            output: raw_stream.clone(),
+            output: stdout_stream,
             new_session_id: None,
             raw_stream,
             success,
@@ -669,10 +732,26 @@ impl AgentBackend for ClaudeBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        container_reachable_url, isolated_proxy_base_url, merge_allowed_tools,
-        BORG_MCP_READ_ONLY_TOOLS,
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
+
+    use super::{
+        container_reachable_url, isolated_proxy_base_url, latest_jsonl_file,
+        load_latest_session_transcript, merge_allowed_tools, BORG_MCP_READ_ONLY_TOOLS,
+    };
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("borg-claude-tests-{label}-{nonce}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn merge_allowed_tools_appends_borg_tools_without_duplicates() {
@@ -710,5 +789,42 @@ mod tests {
             container_reachable_url("http://localhost:4231", "172.30.0.1"),
             "http://172.30.0.1:4231"
         );
+    }
+
+    #[test]
+    fn latest_jsonl_file_prefers_newest_transcript() {
+        let root = temp_dir("latest-jsonl");
+        let older_dir = root.join("older");
+        let newer_dir = root.join("nested/newer");
+        fs::create_dir_all(&older_dir).unwrap();
+        fs::create_dir_all(&newer_dir).unwrap();
+
+        let older = older_dir.join("older.jsonl");
+        let newer = newer_dir.join("newer.jsonl");
+        fs::write(&older, "older").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&newer, "newer").unwrap();
+
+        let found = latest_jsonl_file(&root).unwrap();
+
+        assert_eq!(found, newer);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn load_latest_session_transcript_reads_newest_jsonl_contents() {
+        let session_dir = temp_dir("load-transcript");
+        let transcript_root = session_dir.join(".claude/projects/demo");
+        fs::create_dir_all(&transcript_root).unwrap();
+        fs::write(
+            transcript_root.join("run.jsonl"),
+            "{\"type\":\"assistant\"}\n",
+        )
+        .unwrap();
+
+        let transcript = load_latest_session_transcript(session_dir.to_str().unwrap()).unwrap();
+
+        assert_eq!(transcript, "{\"type\":\"assistant\"}\n");
+        fs::remove_dir_all(session_dir).unwrap();
     }
 }

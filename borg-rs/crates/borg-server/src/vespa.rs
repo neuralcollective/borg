@@ -90,6 +90,64 @@ pub struct VespaClient {
     document_type: String,
 }
 
+fn build_document_search_yql(project_id: Option<i64>) -> String {
+    let mut yql = "select * from sources * where userQuery()".to_string();
+    if let Some(pid) = project_id {
+        yql.push_str(&format!(" and project_id = {pid}"));
+    }
+    yql.push(';');
+    yql
+}
+
+fn build_chunk_search_yql(
+    use_query_embedding: bool,
+    project_id: Option<i64>,
+    filters: &ChunkFilters,
+) -> String {
+    let mut yql = "select * from project_chunk where ".to_string();
+    if use_query_embedding {
+        yql.push_str("(({targetHits:100}nearestNeighbor(embedding, q_embedding)) or userQuery())");
+    } else {
+        yql.push_str("userQuery()");
+    }
+    if let Some(pid) = project_id {
+        yql.push_str(&format!(" and project_id = {pid}"));
+    }
+    if let Some(ref dt) = filters.doc_type {
+        yql.push_str(&format!(" and doc_type contains '{}'", escape_yql(dt)));
+    }
+    if let Some(ref j) = filters.jurisdiction {
+        yql.push_str(&format!(" and jurisdiction contains '{}'", escape_yql(j)));
+    }
+    if filters.privileged_only {
+        yql.push_str(" and privileged = true");
+    }
+    for term in &filters.exclude_terms {
+        let escaped = escape_yql(term);
+        yql.push_str(&format!(" and !(content contains '{escaped}')"));
+    }
+    yql.push(';');
+    yql
+}
+
+fn retain_search_hits_for_project(hits: &mut Vec<SearchHit>, project_id: Option<i64>) -> usize {
+    let Some(pid) = project_id else {
+        return 0;
+    };
+    let before = hits.len();
+    hits.retain(|hit| hit.project_id == pid);
+    before - hits.len()
+}
+
+fn retain_chunk_hits_for_project(hits: &mut Vec<ChunkSearchHit>, project_id: Option<i64>) -> usize {
+    let Some(pid) = project_id else {
+        return 0;
+    };
+    let before = hits.len();
+    hits.retain(|hit| hit.project_id == pid);
+    before - hits.len()
+}
+
 impl VespaClient {
     pub fn from_config(config: &Config) -> Option<Self> {
         if !config.search_backend.eq_ignore_ascii_case("vespa") {
@@ -215,11 +273,7 @@ impl VespaClient {
         project_id: Option<i64>,
         limit: i64,
     ) -> Result<Vec<SearchHit>> {
-        let mut yql = "select * from sources * where userQuery()".to_string();
-        if let Some(pid) = project_id {
-            yql.push_str(&format!(" and project_id = {pid}"));
-        }
-        yql.push(';');
+        let yql = build_document_search_yql(project_id);
         let resp = self
             .http
             .post(format!("{}/search/", self.base_url))
@@ -257,6 +311,14 @@ impl VespaClient {
                 content_snippet: excerpt_for_query(content, query),
                 score: hit["relevance"].as_f64().unwrap_or(0.0),
             });
+        }
+        let removed = retain_search_hits_for_project(&mut out, project_id);
+        if removed > 0 {
+            tracing::warn!(
+                requested_project_id = project_id.unwrap_or_default(),
+                removed = removed,
+                "vespa document search returned cross-project hits; filtering them server-side"
+            );
         }
         Ok(out)
     }
@@ -430,31 +492,7 @@ impl VespaClient {
         filters: &ChunkFilters,
         limit: i64,
     ) -> Result<Vec<ChunkSearchHit>> {
-        let mut yql = "select * from project_chunk where ".to_string();
-        if query_embedding.is_some() {
-            yql.push_str(
-                "({targetHits:100}nearestNeighbor(embedding, q_embedding)) or userQuery()",
-            );
-        } else {
-            yql.push_str("userQuery()");
-        }
-        if let Some(pid) = project_id {
-            yql.push_str(&format!(" and project_id = {pid}"));
-        }
-        if let Some(ref dt) = filters.doc_type {
-            yql.push_str(&format!(" and doc_type contains '{}'", escape_yql(dt)));
-        }
-        if let Some(ref j) = filters.jurisdiction {
-            yql.push_str(&format!(" and jurisdiction contains '{}'", escape_yql(j)));
-        }
-        if filters.privileged_only {
-            yql.push_str(" and privileged = true");
-        }
-        for term in &filters.exclude_terms {
-            let escaped = escape_yql(term);
-            yql.push_str(&format!(" and !(content contains '{escaped}')"));
-        }
-        yql.push(';');
+        let yql = build_chunk_search_yql(query_embedding.is_some(), project_id, filters);
 
         let ranking = if query_embedding.is_some() {
             "hybrid"
@@ -509,6 +547,14 @@ impl VespaClient {
                 score: hit["relevance"].as_f64().unwrap_or(0.0),
             });
         }
+        let removed = retain_chunk_hits_for_project(&mut out, project_id);
+        if removed > 0 {
+            tracing::warn!(
+                requested_project_id = project_id.unwrap_or_default(),
+                removed = removed,
+                "vespa chunk search returned cross-project hits; filtering them server-side"
+            );
+        }
         Ok(out)
     }
 }
@@ -543,4 +589,77 @@ fn excerpt_for_query(content: &str, query: &str) -> String {
         .take(360)
         .collect::<String>()
         .replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_search_yql_applies_project_filter() {
+        assert_eq!(
+            build_document_search_yql(Some(7)),
+            "select * from sources * where userQuery() and project_id = 7;"
+        );
+    }
+
+    #[test]
+    fn chunk_search_yql_groups_hybrid_clause_before_project_filter() {
+        assert_eq!(
+            build_chunk_search_yql(true, Some(7), &ChunkFilters::default()),
+            "select * from project_chunk where (({targetHits:100}nearestNeighbor(embedding, q_embedding)) or userQuery()) and project_id = 7;"
+        );
+    }
+
+    #[test]
+    fn chunk_search_yql_includes_all_filters() {
+        let yql = build_chunk_search_yql(
+            true,
+            Some(9),
+            &ChunkFilters {
+                doc_type: Some("contract".to_string()),
+                jurisdiction: Some("England & Wales".to_string()),
+                privileged_only: true,
+                exclude_terms: vec!["board's".to_string()],
+            },
+        );
+
+        assert!(yql.contains("and project_id = 9"));
+        assert!(yql.contains("and doc_type contains 'contract'"));
+        assert!(yql.contains("and jurisdiction contains 'England  Wales'"));
+        assert!(yql.contains("and privileged = true"));
+        assert!(yql.contains("and !(content contains 'boards')"));
+    }
+
+    #[test]
+    fn retain_chunk_hits_for_project_drops_cross_project_hits() {
+        let mut hits = vec![
+            ChunkSearchHit {
+                project_id: 1,
+                file_id: 10,
+                chunk_index: 0,
+                file_path: "DOC-001.md".to_string(),
+                title: "DOC-001.md".to_string(),
+                content: "one".to_string(),
+                doc_type: "contract".to_string(),
+                score: 1.0,
+            },
+            ChunkSearchHit {
+                project_id: 2,
+                file_id: 11,
+                chunk_index: 0,
+                file_path: "DOC-002.md".to_string(),
+                title: "DOC-002.md".to_string(),
+                content: "two".to_string(),
+                doc_type: "memo".to_string(),
+                score: 0.5,
+            },
+        ];
+
+        let removed = retain_chunk_hits_for_project(&mut hits, Some(1));
+
+        assert_eq!(removed, 1);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].project_id, 1);
+    }
 }
