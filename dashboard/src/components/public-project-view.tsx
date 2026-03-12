@@ -13,9 +13,7 @@ function TaskRow({ task }: { task: ProjectTask }) {
           <span className="text-[11px] tabular-nums text-zinc-600">#{task.id}</span>
           <span className="truncate text-[13px] text-zinc-200">{task.title}</span>
         </div>
-        {task.description && (
-          <p className="mt-0.5 truncate text-[12px] text-zinc-500">{task.description}</p>
-        )}
+        {task.description && <p className="mt-0.5 truncate text-[12px] text-zinc-500">{task.description}</p>}
       </div>
       <StatusBadge status={task.status} />
     </div>
@@ -32,10 +30,7 @@ export function PublicProjectView({ token }: { token: string }) {
     let cancelled = false;
     async function load() {
       try {
-        const [p, t] = await Promise.all([
-          fetchPublicProject(token),
-          fetchPublicProjectTasks(token),
-        ]);
+        const [p, t] = await Promise.all([fetchPublicProject(token), fetchPublicProjectTasks(token)]);
         if (cancelled) return;
         setProject(p);
         setTasks(t);
@@ -53,7 +48,9 @@ export function PublicProjectView({ token }: { token: string }) {
       }
     }
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   if (loading) {
@@ -70,10 +67,7 @@ export function PublicProjectView({ token }: { token: string }) {
         <div className="text-center">
           <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-amber-500" />
           <p className="text-[14px] text-zinc-300">{error}</p>
-          <a
-            href="/"
-            className="mt-4 inline-block text-[12px] text-blue-400 hover:text-blue-300"
-          >
+          <a href="/" className="mt-4 inline-block text-[12px] text-blue-400 hover:text-blue-300">
             Go to dashboard
           </a>
         </div>
@@ -109,9 +103,7 @@ export function PublicProjectView({ token }: { token: string }) {
         {project.task_counts && (
           <div className="mt-2 flex gap-4 text-[12px] text-zinc-500">
             {project.task_counts.total > 0 && <span>{project.task_counts.total} tasks</span>}
-            {project.task_counts.done > 0 && (
-              <span className="text-green-500">{project.task_counts.done} done</span>
-            )}
+            {project.task_counts.done > 0 && <span className="text-green-500">{project.task_counts.done} done</span>}
             {project.task_counts.active > 0 && (
               <span className="text-amber-500">{project.task_counts.active} active</span>
             )}

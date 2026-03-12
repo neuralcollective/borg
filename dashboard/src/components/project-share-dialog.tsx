@@ -13,7 +13,7 @@ import {
 import type { Project } from "@/lib/types";
 
 function timeUntil(dateStr: string): string {
-  const expires = new Date(dateStr + "Z");
+  const expires = new Date(`${dateStr}Z`);
   const now = new Date();
   const diff = expires.getTime() - now.getTime();
   if (diff <= 0) return "expired";
@@ -107,18 +107,13 @@ function PeopleTab({ project }: { project: Project }) {
       ) : (
         <div className="space-y-1">
           {shares.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-white/[0.03]"
-            >
+            <div key={s.id} className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-white/[0.03]">
               <div className="min-w-0">
                 <span className="text-[13px] text-zinc-200">{s.display_name || s.username}</span>
                 {s.display_name && s.display_name !== s.username && (
                   <span className="ml-1.5 text-[11px] text-zinc-500">{s.username}</span>
                 )}
-                <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
-                  {s.role}
-                </span>
+                <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">{s.role}</span>
               </div>
               <button
                 onClick={() => handleRemove(s.user_id)}
@@ -212,16 +207,11 @@ function LinksTab({ project }: { project: Project }) {
       ) : (
         <div className="space-y-1">
           {activeLinks.map((l) => (
-            <div
-              key={l.id}
-              className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-white/[0.03]"
-            >
+            <div key={l.id} className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-white/[0.03]">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <Link size={12} className="shrink-0 text-zinc-500" />
-                  <span className="truncate text-[13px] text-zinc-300">
-                    {l.label || "Untitled link"}
-                  </span>
+                  <span className="truncate text-[13px] text-zinc-300">{l.label || "Untitled link"}</span>
                   <span className="shrink-0 text-[10px] text-zinc-500">{timeUntil(l.expires_at)}</span>
                 </div>
                 <div className="mt-0.5 flex items-center gap-1">
@@ -246,13 +236,7 @@ function LinksTab({ project }: { project: Project }) {
 
 // ── Main dialog ───────────────────────────────────────────────────────────
 
-export function ProjectShareDialog({
-  project,
-  onClose,
-}: {
-  project: Project;
-  onClose: () => void;
-}) {
+export function ProjectShareDialog({ project, onClose }: { project: Project; onClose: () => void }) {
   const [tab, setTab] = useState<"people" | "links">("people");
 
   useEffect(() => {
@@ -271,13 +255,8 @@ export function ProjectShareDialog({
       <div className="flex max-h-[70vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0e0e10] shadow-2xl mx-4">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/[0.07] px-5 py-4">
-          <h3 className="text-[14px] font-semibold text-zinc-100">
-            Share "{project.name}"
-          </h3>
-          <button
-            onClick={onClose}
-            className="shrink-0 rounded-lg p-2 text-zinc-500 hover:bg-white/[0.06]"
-          >
+          <h3 className="text-[14px] font-semibold text-zinc-100">Share "{project.name}"</h3>
+          <button onClick={onClose} className="shrink-0 rounded-lg p-2 text-zinc-500 hover:bg-white/[0.06]">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -289,9 +268,7 @@ export function ProjectShareDialog({
               key={t}
               onClick={() => setTab(t)}
               className={`px-3 py-2.5 text-[12px] font-medium transition-colors ${
-                tab === t
-                  ? "border-b-2 border-blue-400 text-blue-400"
-                  : "text-zinc-500 hover:text-zinc-300"
+                tab === t ? "border-b-2 border-blue-400 text-blue-400" : "text-zinc-500 hover:text-zinc-300"
               }`}
             >
               {t === "people" ? "People" : "Share Links"}

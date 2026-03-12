@@ -1769,10 +1769,9 @@ export async function deleteKnowledgeRepo(
 }
 
 export async function retryKnowledgeRepo(isOrg: boolean, id: number): Promise<void> {
-  const res = await apiFetch(
-    isOrg ? `/api/knowledge/repos/${id}/retry` : `/api/knowledge/my/repos/${id}/retry`,
-    { method: "POST" },
-  );
+  const res = await apiFetch(isOrg ? `/api/knowledge/repos/${id}/retry` : `/api/knowledge/my/repos/${id}/retry`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
@@ -1843,11 +1842,7 @@ export function useProjectShares(projectId: number | null) {
   });
 }
 
-export async function addProjectShare(
-  projectId: number,
-  username: string,
-  role = "viewer",
-): Promise<{ id: number }> {
+export async function addProjectShare(projectId: number, username: string, role = "viewer"): Promise<{ id: number }> {
   const res = await apiFetch(`/api/projects/${projectId}/shares`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1884,10 +1879,7 @@ export async function createProjectShareLink(
   return res.json();
 }
 
-export async function revokeProjectShareLink(
-  projectId: number,
-  linkId: number,
-): Promise<void> {
+export async function revokeProjectShareLink(projectId: number, linkId: number): Promise<void> {
   const res = await apiFetch(`/api/projects/${projectId}/share-links/${linkId}`, {
     method: "DELETE",
   });

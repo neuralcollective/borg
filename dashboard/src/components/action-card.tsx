@@ -189,11 +189,15 @@ export function groupActions(lines: TermLine[], streaming: boolean): ActionGroup
       const callCount = toolLines.filter((l) => l.type === "tool").length;
       // For single Bash calls with a description, use the description as the label
       const singleLabel = callCount === 1 ? line.label : undefined;
-      const label = callCount > 1 ? `${getToolLabel(tool, singleLabel)} (${callCount})` : getToolLabel(tool, singleLabel);
+      const label =
+        callCount > 1 ? `${getToolLabel(tool, singleLabel)} (${callCount})` : getToolLabel(tool, singleLabel);
       // For Bash with description, show command as detail; otherwise show the label/content
-      const detail = callCount === 1
-        ? (tool === "Bash" && line.label ? line.content : line.label || line.content || undefined)
-        : undefined;
+      const detail =
+        callCount === 1
+          ? tool === "Bash" && line.label
+            ? line.content
+            : line.label || line.content || undefined
+          : undefined;
       const autoExpand = true;
 
       groups.push({ type: "tool", tool, lines: toolLines, label, detail, autoExpand });

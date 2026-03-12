@@ -17,7 +17,6 @@ import {
   type StreamEvent,
   tokenReady,
   useDeleteProject,
-  useUpdateProject,
   useFullModes,
   useProjectAudit,
   useProjectDetail,
@@ -26,6 +25,7 @@ import {
   useSettings,
   useTaskStream,
   useTemplates,
+  useUpdateProject,
   verifyTaskCitations,
 } from "@/lib/api";
 import { useDashboardMode } from "@/lib/dashboard-mode";
@@ -195,14 +195,20 @@ function ProjectHeader({ project, onDelete }: { project: Project; onDelete?: () 
                   onBlur={commitRename}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") commitRename();
-                    if (e.key === "Escape") { setEditName(project.name); setEditing(false); }
+                    if (e.key === "Escape") {
+                      setEditName(project.name);
+                      setEditing(false);
+                    }
                   }}
                   className="bg-transparent border-b border-amber-500/40 outline-none text-zinc-100 text-[15px] font-semibold px-0 py-0 min-w-[120px]"
                 />
               ) : (
                 <span
                   className="cursor-pointer hover:text-amber-400 transition-colors"
-                  onDoubleClick={() => { setEditName(project.name); setEditing(true); }}
+                  onDoubleClick={() => {
+                    setEditName(project.name);
+                    setEditing(true);
+                  }}
                   title="Double-click to rename"
                 >
                   {project.name}
@@ -237,9 +243,7 @@ function ProjectHeader({ project, onDelete }: { project: Project; onDelete?: () 
             <Share2 size={13} />
             Share
           </button>
-          {shareOpen && (
-            <ProjectShareDialog project={project} onClose={() => setShareOpen(false)} />
-          )}
+          {shareOpen && <ProjectShareDialog project={project} onClose={() => setShareOpen(false)} />}
           <div className="relative">
             <button
               onClick={() => setExportMenu((v) => !v)}

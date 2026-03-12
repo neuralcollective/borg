@@ -355,9 +355,7 @@ function WhatsAppCard() {
         <div className="space-y-3 pt-1">
           <div className="rounded-xl border border-[#2a2520] bg-[#1c1a17]/60 px-4 py-3 text-[12px] text-[#9c9486] space-y-2">
             <p className="font-medium text-[#e8e0d4]">Connecting...</p>
-            <p>
-              The WhatsApp bridge is starting up. A QR code will appear here shortly for you to scan.
-            </p>
+            <p>The WhatsApp bridge is starting up. A QR code will appear here shortly for you to scan.</p>
           </div>
           <div className="flex items-center gap-3 rounded-xl border border-dashed border-[#2a2520] px-4 py-4">
             <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-[#4a4540] border-t-amber-400" />

@@ -271,83 +271,85 @@ export function CloudStoragePanel({ projectId, settings, onImported }: CloudStor
           </span>
           <ChevronDown className={cn("h-3.5 w-3.5 text-[#6b6459] transition-transform", expanded && "rotate-180")} />
         </button>
-        {expanded && <div className="px-4 pb-4">
-        {!publicUrlValid && (
-          <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
-            Configure a valid Public URL in Settings before connecting cloud accounts.
-          </div>
-        )}
-        {cloudMessage && (
-          <div
-            className={cn(
-              "mb-3 flex items-start justify-between gap-2 rounded-lg border px-3 py-2 text-[11px]",
-              cloudMessage.type === "success"
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                : "border-red-500/30 bg-red-500/10 text-red-400",
-            )}
-          >
-            <span>{cloudMessage.text}</span>
-            <button onClick={() => setCloudMessage(null)} className="shrink-0 text-[#6b6459] hover:text-[#e8e0d4]">
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        )}
-        <div className="mb-3 flex flex-wrap gap-1.5">
-          {CLOUD_PROVIDERS.map((provider) => {
-            const configured = hasCloudCredentials(provider);
-            return (
-              <button
-                key={provider.id}
-                onClick={() => connectCloudProvider(provider.id)}
-                disabled={!configured || !projectId || !publicUrlValid}
-                title={
-                  !publicUrlValid
-                    ? "Set a valid Public URL in Settings > Cloud Storage"
-                    : configured
-                      ? `Connect ${provider.label}`
-                      : `Configure ${provider.label} credentials in Settings > Cloud Storage`
-                }
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#e8e0d4] transition-colors hover:bg-[#232019] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <CloudProviderIcon provider={provider.id} />
-                {provider.label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="space-y-1.5 max-h-36 overflow-y-auto">
-          {cloudConnections.map((conn) => (
-            <div
-              key={conn.id}
-              className="flex items-center justify-between rounded-lg border border-[#2a2520] px-3 py-2 text-[12px]"
-            >
-              <div className="min-w-0 flex items-center gap-1.5 text-[#e8e0d4]">
-                <CloudProviderIcon provider={conn.provider} />
-                <span className="truncate">{conn.account_email || cloudProviderLabel(conn.provider)}</span>
+        {expanded && (
+          <div className="px-4 pb-4">
+            {!publicUrlValid && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+                Configure a valid Public URL in Settings before connecting cloud accounts.
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <button
-                  onClick={() => openCloudBrowser(conn)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a2520] px-2.5 py-1 text-[12px] text-[#e8e0d4] transition-colors hover:bg-[#232019]"
-                >
-                  <Folder className="h-3 w-3" />
-                  Browse
-                </button>
-                <button
-                  onClick={() => disconnectCloudConnection(conn)}
-                  className="rounded-lg p-1.5 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
-                  title="Disconnect"
-                >
+            )}
+            {cloudMessage && (
+              <div
+                className={cn(
+                  "mb-3 flex items-start justify-between gap-2 rounded-lg border px-3 py-2 text-[11px]",
+                  cloudMessage.type === "success"
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                    : "border-red-500/30 bg-red-500/10 text-red-400",
+                )}
+              >
+                <span>{cloudMessage.text}</span>
+                <button onClick={() => setCloudMessage(null)} className="shrink-0 text-[#6b6459] hover:text-[#e8e0d4]">
                   <X className="h-3 w-3" />
                 </button>
               </div>
+            )}
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {CLOUD_PROVIDERS.map((provider) => {
+                const configured = hasCloudCredentials(provider);
+                return (
+                  <button
+                    key={provider.id}
+                    onClick={() => connectCloudProvider(provider.id)}
+                    disabled={!configured || !projectId || !publicUrlValid}
+                    title={
+                      !publicUrlValid
+                        ? "Set a valid Public URL in Settings > Cloud Storage"
+                        : configured
+                          ? `Connect ${provider.label}`
+                          : `Configure ${provider.label} credentials in Settings > Cloud Storage`
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a2520] px-3 py-1.5 text-[12px] text-[#e8e0d4] transition-colors hover:bg-[#232019] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <CloudProviderIcon provider={provider.id} />
+                    {provider.label}
+                  </button>
+                );
+              })}
             </div>
-          ))}
-          {!cloudConnectionsLoading && cloudConnections.length === 0 && (
-            <div className="text-[12px] text-[#6b6459]">No connected cloud accounts.</div>
-          )}
-        </div>
-        </div>}
+            <div className="space-y-1.5 max-h-36 overflow-y-auto">
+              {cloudConnections.map((conn) => (
+                <div
+                  key={conn.id}
+                  className="flex items-center justify-between rounded-lg border border-[#2a2520] px-3 py-2 text-[12px]"
+                >
+                  <div className="min-w-0 flex items-center gap-1.5 text-[#e8e0d4]">
+                    <CloudProviderIcon provider={conn.provider} />
+                    <span className="truncate">{conn.account_email || cloudProviderLabel(conn.provider)}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      onClick={() => openCloudBrowser(conn)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#2a2520] px-2.5 py-1 text-[12px] text-[#e8e0d4] transition-colors hover:bg-[#232019]"
+                    >
+                      <Folder className="h-3 w-3" />
+                      Browse
+                    </button>
+                    <button
+                      onClick={() => disconnectCloudConnection(conn)}
+                      className="rounded-lg p-1.5 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
+                      title="Disconnect"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {!cloudConnectionsLoading && cloudConnections.length === 0 && (
+                <div className="text-[12px] text-[#6b6459]">No connected cloud accounts.</div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Cloud browser modal */}
