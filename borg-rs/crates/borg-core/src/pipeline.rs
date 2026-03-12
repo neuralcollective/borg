@@ -1639,6 +1639,9 @@ impl Pipeline {
 
         // Handle blocked signal: pause task, don't retry.
         if signal.is_blocked() {
+            // Persist any completed retrieval pass before returning blocked so
+            // clarification resumes can inherit it as execution context.
+            let _ = self.enforce_legal_retrieval_protocol(task, phase, &result.raw_stream);
             let reason = if signal.reason.is_empty() {
                 "agent blocked (no reason given)".to_string()
             } else {
