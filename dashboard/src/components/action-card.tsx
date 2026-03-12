@@ -33,6 +33,15 @@ const TOOL_LABELS: Record<string, string> = {
   web_fetch: "Fetched page",
   Task: "Created task",
   Agent: "Sub-agent",
+  LS: "Listed files",
+  ls: "Listed files",
+  NotebookEdit: "Edited notebook",
+  TodoRead: "Read todos",
+  TodoWrite: "Updated todos",
+  AskFollowupQuestion: "Asked question",
+  AttemptCompletion: "Completed task",
+  ListCodeDefinitionNames: "Listed definitions",
+  SearchReplace: "Search & replace",
   mcp__borg__search_documents: "BorgSearch",
   mcp__borg__list_documents: "BorgSearch · List",
   mcp__borg__read_document: "BorgSearch · Read",
@@ -84,8 +93,10 @@ function formatMcpToolName(tool: string): string {
   return `${serverLabel} · ${actionLabel}`;
 }
 
-function getToolLabel(tool?: string): string {
+function getToolLabel(tool?: string, detail?: string): string {
   if (!tool) return "Action";
+  // For Bash, prefer the description (label) over generic "Ran command"
+  if (tool === "Bash" && detail) return detail;
   if (TOOL_LABELS[tool]) return TOOL_LABELS[tool];
   if (tool.startsWith("mcp__")) return formatMcpToolName(tool);
   return tool;
@@ -176,12 +187,14 @@ export function groupActions(lines: TermLine[], streaming: boolean): ActionGroup
       }
 
       const callCount = toolLines.filter((l) => l.type === "tool").length;
-      const label = callCount > 1 ? `${getToolLabel(tool)} (${callCount})` : getToolLabel(tool);
-      const detail = callCount === 1 ? line.label || line.content || undefined : undefined;
-      // Expanded by default while consecutive (nothing different after it yet).
-      // Collapses once a different tool/text follows.
-      const isLastGroup = j >= lines.length;
-      const autoExpand = callCount > 1 && isLastGroup;
+      // For single Bash calls with a description, use the description as the label
+      const singleLabel = callCount === 1 ? line.label : undefined;
+      const label = callCount > 1 ? `${getToolLabel(tool, singleLabel)} (${callCount})` : getToolLabel(tool, singleLabel);
+      // For Bash with description, show command as detail; otherwise show the label/content
+      const detail = callCount === 1
+        ? (tool === "Bash" && line.label ? line.content : line.label || line.content || undefined)
+        : undefined;
+      const autoExpand = true;
 
       groups.push({ type: "tool", tool, lines: toolLines, label, detail, autoExpand });
       i = j;
@@ -299,7 +312,6 @@ function ToolActionCard({
   group,
   isLatest,
   compact,
-  defaultExpanded,
 }: {
   group: ActionGroup;
   isLatest?: boolean;
@@ -307,9 +319,8 @@ function ToolActionCard({
   defaultExpanded?: boolean;
 }) {
   const [manualToggle, setManualToggle] = useState<boolean | null>(null);
-  const autoExpanded = group.autoExpand ?? false;
-  const bashDefault = group.tool === "Bash";
-  const expanded = manualToggle ?? defaultExpanded ?? bashDefault ?? autoExpanded;
+  const autoExpanded = group.autoExpand ?? true;
+  const expanded = manualToggle ?? autoExpanded;
   const icon = getToolIcon(group.tool);
 
   const toolCalls = group.lines.filter((l) => l.type === "tool");
