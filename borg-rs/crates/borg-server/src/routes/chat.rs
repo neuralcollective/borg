@@ -62,15 +62,15 @@ pub(crate) fn project_chat_key(project_id: i64) -> String {
 }
 
 pub(crate) fn parse_project_chat_key(chat_key: &str) -> Option<i64> {
-    // Direct project key: "project:3"
-    if let Some(id) = chat_key.strip_prefix("project:").and_then(|s| s.parse::<i64>().ok()) {
+    chat_key.strip_prefix("project:")?.parse::<i64>().ok()
+}
+
+fn extract_project_id_from_chat_key(chat_key: &str) -> Option<i64> {
+    if let Some(id) = parse_project_chat_key(chat_key) {
         return Some(id);
     }
     // Web workspace-scoped: "web:workspace:1:web:project-3"
-    if let Some(rest) = chat_key.rsplit_once("web:project-") {
-        return rest.1.parse::<i64>().ok();
-    }
-    None
+    chat_key.rsplit_once("web:project-").and_then(|(_, id)| id.parse::<i64>().ok())
 }
 
 pub(crate) fn workspace_chat_prefix(workspace_id: i64) -> String {
@@ -156,7 +156,7 @@ pub(crate) async fn run_chat_agent(
 
     let retrieval_query = messages.join("\n");
     let project_for_chat =
-        parse_project_chat_key(chat_key).and_then(|pid| db.get_project(pid).ok().flatten());
+        extract_project_id_from_chat_key(chat_key).and_then(|pid| db.get_project(pid).ok().flatten());
     let prompt = if messages.len() == 1 {
         format!("{} says: {}", sender_name, messages[0])
     } else {
