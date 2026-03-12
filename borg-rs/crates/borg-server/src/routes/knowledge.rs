@@ -520,6 +520,7 @@ async fn inner_add_knowledge_repo(
     workspace_id: i64,
     user_id: Option<i64>,
     body: AddKnowledgeRepoBody,
+    clone_user_id: Option<i64>,
 ) -> Result<Json<Value>, StatusCode> {
     let url = body.url.trim().to_string();
     if url.is_empty() {
@@ -534,8 +535,9 @@ async fn inner_add_knowledge_repo(
     let id = state.db.insert_knowledge_repo(workspace_id, user_id, &url, &name).map_err(internal)?;
     let data_dir = state.config.data_dir.clone();
     let db = Arc::clone(&state.db);
+    let cuid = clone_user_id.or(user_id);
     tokio::spawn(async move {
-        clone_knowledge_repo(id, &url, &data_dir, &db).await;
+        clone_knowledge_repo(id, &url, &data_dir, &db, cuid).await;
     });
     let repos = state.db.list_knowledge_repos(workspace_id, user_id).map_err(internal)?;
     Ok(Json(json!({ "repos": repos })))
@@ -550,10 +552,11 @@ pub(crate) async fn list_knowledge_repos(
 
 pub(crate) async fn add_knowledge_repo(
     State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Json(body): Json<AddKnowledgeRepoBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    inner_add_knowledge_repo(state, workspace.id, None, body).await
+    inner_add_knowledge_repo(state, workspace.id, None, body, Some(user.id)).await
 }
 
 pub(crate) async fn delete_knowledge_repo_handler(
@@ -582,7 +585,7 @@ pub(crate) async fn add_user_knowledge_repo(
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
     Json(body): Json<AddKnowledgeRepoBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    inner_add_knowledge_repo(state, workspace.id, Some(user.id), body).await
+    inner_add_knowledge_repo(state, workspace.id, Some(user.id), body, Some(user.id)).await
 }
 
 pub(crate) async fn delete_user_knowledge_repo_handler(
@@ -600,6 +603,30 @@ pub(crate) async fn delete_user_knowledge_repo_handler(
         let _ = tokio::fs::remove_dir_all(&local_path).await;
     }
     inner_list_knowledge_repos(&state, workspace.id, Some(user.id)).await
+}
+
+pub(crate) async fn retry_knowledge_repo(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(user): axum::Extension<crate::auth::AuthUser>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, StatusCode> {
+    let repos = state.db.list_knowledge_repos(workspace.id, None).map_err(internal)?;
+    let user_repos = state.db.list_knowledge_repos(workspace.id, Some(user.id)).map_err(internal)?;
+    let repo = repos.iter().chain(user_repos.iter()).find(|r| r.id == id);
+    let repo = repo.ok_or(StatusCode::NOT_FOUND)?;
+    let url = repo.url.clone();
+    // Clear previous failed clone
+    let dest = format!("{}/knowledge-repos/{}", state.config.data_dir, id);
+    let _ = tokio::fs::remove_dir_all(&dest).await;
+    let _ = state.db.update_knowledge_repo_status(id, "pending", "", "");
+    let data_dir = state.config.data_dir.clone();
+    let db = Arc::clone(&state.db);
+    let uid = user.id;
+    tokio::spawn(async move {
+        clone_knowledge_repo(id, &url, &data_dir, &db, Some(uid)).await;
+    });
+    Ok(Json(json!({ "ok": true })))
 }
 
 fn inject_git_token(url: &str, username: &str, token: &str) -> String {
@@ -624,16 +651,19 @@ fn git_token_for_url(url: &str, settings: &std::collections::HashMap<String, Str
     }
 }
 
-pub(crate) async fn clone_knowledge_repo(id: i64, url: &str, data_dir: &str, db: &Arc<borg_core::db::Db>) {
+pub(crate) async fn clone_knowledge_repo(
+    id: i64,
+    url: &str,
+    data_dir: &str,
+    db: &Arc<borg_core::db::Db>,
+    override_user_id: Option<i64>,
+) {
     let repos = db.list_all_knowledge_repos().unwrap_or_default();
-    let effective_url = if let Some(repo) = repos.iter().find(|r| r.id == id) {
-        if let Some(uid) = repo.user_id {
-            let settings = db.get_all_user_settings(uid).unwrap_or_default();
-            let (username, token) = git_token_for_url(url, &settings);
-            inject_git_token(url, &username, &token)
-        } else {
-            url.to_string()
-        }
+    let token_user = override_user_id.or_else(|| repos.iter().find(|r| r.id == id).and_then(|r| r.user_id));
+    let effective_url = if let Some(uid) = token_user {
+        let settings = db.get_all_user_settings(uid).unwrap_or_default();
+        let (username, token) = git_token_for_url(url, &settings);
+        inject_git_token(url, &username, &token)
     } else {
         url.to_string()
     };

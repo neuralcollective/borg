@@ -30,7 +30,7 @@ export function ConnectionsPanel() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
-        <div className="mx-auto max-w-xl space-y-4">
+        <div className="mx-auto grid max-w-3xl grid-cols-1 gap-4 md:grid-cols-2">
           <DiscordCard />
           <TelegramCard />
           <WhatsAppCard />

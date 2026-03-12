@@ -35,6 +35,7 @@ import {
   getProjectUploadSessionStatus,
   listProjectUploadSessions,
   reextractProjectFile,
+  retryKnowledgeRepo,
   retryProjectUploadSession,
   searchDocuments,
   uploadKnowledgeFile,
@@ -1426,6 +1427,25 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
     }
   }
 
+  async function handleRetryRepo(repo: KnowledgeRepo) {
+    try {
+      await retryKnowledgeRepo(isOrg, repo.id);
+      refetchRepos();
+    } catch {
+      // ignore
+    }
+  }
+
+  function repoErrorHint(errorMsg: string): string | null {
+    if (errorMsg.includes("terminal prompts disabled") || errorMsg.includes("could not read Username")) {
+      return "Add your GitHub token in Connections to clone private repos";
+    }
+    if (errorMsg.includes("not found") || errorMsg.includes("404")) {
+      return "Repository not found — check the URL";
+    }
+    return null;
+  }
+
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: [queryKey] });
   }
@@ -1686,16 +1706,30 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
               </div>
               <div className="truncate text-[11px] text-[#4a443d]">{repo.url}</div>
               {repo.status === "error" && repo.error_msg && (
-                <div className="mt-1 truncate text-[11px] text-red-400">{repo.error_msg}</div>
+                <div className="mt-1 text-[11px] text-red-400/80">
+                  {repoErrorHint(repo.error_msg) ?? repo.error_msg}
+                </div>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => handleDeleteRepo(repo)}
-              className="shrink-0 rounded-lg p-1.5 text-[#4a443d] transition-colors hover:bg-red-500/10 hover:text-red-400"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {repo.status === "error" && (
+                <button
+                  type="button"
+                  onClick={() => handleRetryRepo(repo)}
+                  className="rounded-lg p-1.5 text-[#4a443d] transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+                  title="Retry clone"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleDeleteRepo(repo)}
+                className="rounded-lg p-1.5 text-[#4a443d] transition-colors hover:bg-red-500/10 hover:text-red-400"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         ))}
       </div>

@@ -1702,6 +1702,14 @@ export async function deleteKnowledgeRepo(
   return res.json();
 }
 
+export async function retryKnowledgeRepo(isOrg: boolean, id: number): Promise<void> {
+  const res = await apiFetch(
+    isOrg ? `/api/knowledge/repos/${id}/retry` : `/api/knowledge/my/repos/${id}/retry`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 // ── Container & cache ───────────────────────────────────────────────────────
 
 export interface ContainerInfo {

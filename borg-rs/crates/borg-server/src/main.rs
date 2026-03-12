@@ -926,7 +926,7 @@ fn spawn_knowledge_repo_sync(db: Arc<Db>, data_dir: String) {
             let url = repo.url.clone();
             let dd = data_dir.clone();
             tokio::spawn(async move {
-                routes::clone_knowledge_repo(repo.id, &url, &dd, &db2).await;
+                routes::clone_knowledge_repo(repo.id, &url, &dd, &db2, repo.user_id).await;
             });
         }
     });
@@ -1484,12 +1484,20 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
             delete(routes::delete_knowledge_repo_handler),
         )
         .route(
+            "/api/knowledge/repos/:id/retry",
+            post(routes::retry_knowledge_repo),
+        )
+        .route(
             "/api/knowledge/my/repos",
             get(routes::list_user_knowledge_repos).post(routes::add_user_knowledge_repo),
         )
         .route(
             "/api/knowledge/my/repos/:id",
             delete(routes::delete_user_knowledge_repo_handler),
+        )
+        .route(
+            "/api/knowledge/my/repos/:id/retry",
+            post(routes::retry_knowledge_repo),
         )
         // BorgSearch
         .route("/api/borgsearch/facets", get(routes::borgsearch_facets))
