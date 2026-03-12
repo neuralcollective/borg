@@ -83,6 +83,11 @@ rsync -az --delete \
   --exclude '.worktrees' \
   "${ROOT_DIR}/" "${HOST}:${REMOTE_DIR}/"
 
+# Invalidate cargo cache so changed sources are always recompiled.
+# rsync preserves mtime from the local machine which can be older than
+# the remote target/ artifacts, causing cargo to skip recompilation.
+ssh "${HOST}" "find ${REMOTE_DIR}/borg-rs/crates -name '*.rs' -exec touch {} +"
+
 echo "==> [3/6] Ensure .env exists on remote host"
 ssh "${HOST}" "if [ ! -f ${REMOTE_DIR}/.env ]; then cp ${REMOTE_DIR}/.env.example ${REMOTE_DIR}/.env || true; fi"
 
