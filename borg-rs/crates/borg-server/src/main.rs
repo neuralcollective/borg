@@ -64,7 +64,11 @@ fn systemd_listen_fds() -> Option<Vec<std::os::unix::io::RawFd>> {
     // Unset env so child processes don't inherit stale values
     std::env::remove_var("LISTEN_PID");
     std::env::remove_var("LISTEN_FDS");
-    Some((0..nfds).map(|i| 3 + i as std::os::unix::io::RawFd).collect())
+    Some(
+        (0..nfds)
+            .map(|i| 3 + i as std::os::unix::io::RawFd)
+            .collect(),
+    )
 }
 
 /// Convert a raw FD from systemd into a tokio TcpListener.
@@ -88,7 +92,12 @@ pub struct WaStatus {
 
 impl Default for WaStatus {
     fn default() -> Self {
-        Self { connected: false, jid: None, qr: None, disabled: false }
+        Self {
+            connected: false,
+            jid: None,
+            qr: None,
+            disabled: false,
+        }
     }
 }
 
@@ -102,7 +111,11 @@ pub struct SlackStatus {
 
 impl Default for SlackStatus {
     fn default() -> Self {
-        Self { connected: false, bot_id: None, bot_name: None }
+        Self {
+            connected: false,
+            bot_id: None,
+            bot_name: None,
+        }
     }
 }
 
@@ -151,7 +164,11 @@ impl AppState {
 // ── Sidecar helpers ───────────────────────────────────────────────────────
 
 fn sidecar_source_prefix(chat_key: &str) -> String {
-    chat_key.splitn(2, ':').next().unwrap_or("discord").to_string()
+    chat_key
+        .splitn(2, ':')
+        .next()
+        .unwrap_or("discord")
+        .to_string()
 }
 
 /// Parse a chat_key like "discord:u42:channel_id" into (user_id, channel_id).
@@ -175,13 +192,21 @@ fn make_progress_sink(
     reply_to: Option<String>,
 ) -> messaging_progress::MessagingProgressSink {
     match source {
-        "slack" => messaging_progress::MessagingProgressSink::Slack { sidecar, chat_id, reply_to },
+        "slack" => messaging_progress::MessagingProgressSink::Slack {
+            sidecar,
+            chat_id,
+            reply_to,
+        },
         "whatsapp" => messaging_progress::MessagingProgressSink::WhatsApp {
             sidecar,
             chat_id,
             quote_id: reply_to,
         },
-        _ => messaging_progress::MessagingProgressSink::Discord { sidecar, chat_id, reply_to },
+        _ => messaging_progress::MessagingProgressSink::Discord {
+            sidecar,
+            chat_id,
+            reply_to,
+        },
     }
 }
 
@@ -228,9 +253,7 @@ fn spawn_pipeline_ticker(pipeline: Arc<borg_core::pipeline::Pipeline>, tick_secs
                 },
                 Err(join_err) => {
                     consecutive_panics += 1;
-                    tracing::error!(
-                        "Pipeline tick panicked ({consecutive_panics}/5): {join_err}"
-                    );
+                    tracing::error!("Pipeline tick panicked ({consecutive_panics}/5): {join_err}");
                     if consecutive_panics >= 5 {
                         tracing::error!("5 consecutive tick panics — exiting for restart");
                         std::process::exit(1);
@@ -477,9 +500,7 @@ fn spawn_self_repo_watcher(
             if routes::rebuild_and_exec(&self_repo.path, &build_cmd).await {
                 last_head = remote_head;
             } else {
-                tracing::warn!(
-                    "Self-update rebuild failed; keeping previous last_head for retry"
-                );
+                tracing::warn!("Self-update rebuild failed; keeping previous last_head for retry");
             }
         }
     });
@@ -639,7 +660,10 @@ async fn spawn_sidecar_manager(
                                     s.connected = false;
                                 }
                             },
-                            SidecarEvent::Disconnected { source: Source::WhatsApp, .. } => {
+                            SidecarEvent::Disconnected {
+                                source: Source::WhatsApp,
+                                ..
+                            } => {
                                 if let Ok(mut s) = wa_status_events.lock() {
                                     s.connected = false;
                                     s.jid = None;
@@ -652,7 +676,10 @@ async fn spawn_sidecar_manager(
                                     s.bot_name = Some(bot_name.clone());
                                 }
                             },
-                            SidecarEvent::Disconnected { source: Source::Slack, .. } => {
+                            SidecarEvent::Disconnected {
+                                source: Source::Slack,
+                                ..
+                            } => {
                                 if let Ok(mut s) = slack_status_events.lock() {
                                     s.connected = false;
                                 }
@@ -709,7 +736,9 @@ async fn spawn_sidecar_manager(
                             let msg_id = msg.id.clone();
                             let sender_name = msg.sender_name.clone();
                             match (&msg.source, msg_user_id) {
-                                (Source::Discord, Some(uid)) => sidecar.send_user_discord_typing(uid, &chat_id),
+                                (Source::Discord, Some(uid)) => {
+                                    sidecar.send_user_discord_typing(uid, &chat_id)
+                                },
                                 (Source::Discord, None) => sidecar.send_discord_typing(&chat_id),
                                 (Source::WhatsApp, _) => sidecar.send_whatsapp_typing(&chat_id),
                                 (Source::Slack, _) => sidecar.send_slack_typing(&chat_id),
@@ -859,11 +888,7 @@ fn spawn_ingestion_workers(
     }
 }
 
-fn spawn_backup_loop(
-    db: Arc<Db>,
-    config: Arc<Config>,
-    file_storage: Arc<storage::FileStorage>,
-) {
+fn spawn_backup_loop(db: Arc<Db>, config: Arc<Config>, file_storage: Arc<storage::FileStorage>) {
     tokio::spawn(async move {
         backup::run_backup_loop(db, config, file_storage).await;
     });
@@ -916,8 +941,7 @@ fn spawn_imap_poller(
                         sender_name, email.from, email.subject, email.body
                     )];
                     for p in &att_paths {
-                        let size_kb =
-                            std::fs::metadata(p).map(|m| m.len() / 1024).unwrap_or(0);
+                        let size_kb = std::fs::metadata(p).map(|m| m.len() / 1024).unwrap_or(0);
                         let fname = p.file_name().unwrap_or_default().to_string_lossy();
                         msgs.push(format!(
                             "[Attached file: {} ({}KB)] Path: {}",
@@ -997,7 +1021,10 @@ fn init_tracing(
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(logging::BroadcastLayer { tx: log_tx, ring: log_ring })
+        .with(logging::BroadcastLayer {
+            tx: log_tx,
+            ring: log_ring,
+        })
         .init();
 }
 
@@ -1017,7 +1044,9 @@ fn init_db(env_config: &Config) -> anyhow::Result<(Db, Config)> {
     let mut db = Db::open(&env_config.database_url)?;
     db.migrate()?;
     env_config.seed_db(&db)?;
-    let config = env_config.load_from_db(&db);
+    let config = env_config
+        .load_from_db(&db)
+        .apply_explicit_env_overrides(env_config);
     let builtin_modes = borg_domains::modes_for_focus(config.experimental_domains);
     borg_core::modes::register_modes(builtin_modes);
 
@@ -1073,7 +1102,6 @@ fn init_db(env_config: &Config) -> anyhow::Result<(Db, Config)> {
 
     Ok((db, config))
 }
-
 
 fn build_backends(
     config: &Config,
@@ -1164,7 +1192,11 @@ fn spawn_post_state_tasks(state: &Arc<AppState>, config: &Arc<Config>, db: &Arc<
         worker_loops,
     );
 
-    spawn_backup_loop(Arc::clone(db), Arc::clone(config), Arc::clone(&state.file_storage));
+    spawn_backup_loop(
+        Arc::clone(db),
+        Arc::clone(config),
+        Arc::clone(&state.file_storage),
+    );
 
     if !config.imap_host.is_empty() {
         let imap_cfg = borg_core::email::ImapConfig {
@@ -1219,8 +1251,9 @@ fn build_cors_layer(config: &Config) -> CorsLayer {
 }
 
 fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
-    let serve_dir = ServeDir::new(dashboard_dir)
-        .fallback(tower_http::services::ServeFile::new(format!("{dashboard_dir}/index.html")));
+    let serve_dir = ServeDir::new(dashboard_dir).fallback(tower_http::services::ServeFile::new(
+        format!("{dashboard_dir}/index.html"),
+    ));
     let cors = build_cors_layer(&state.config);
 
     Router::new()
@@ -1479,6 +1512,7 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
         .route("/api/chat/events", get(routes::sse_chat_events))
         .route("/api/chat/threads", get(routes::get_chat_threads))
         .route("/api/chat/messages", get(routes::get_chat_messages))
+        .route("/api/chat/status", get(routes::get_chat_thread_status))
         .route("/api/chat", post(routes::post_chat))
         // Release / restart
         .route("/api/release", post(routes::post_release))
@@ -1540,7 +1574,10 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
             "/api/knowledge/my/upload",
             post(routes::upload_user_knowledge).layer(DefaultBodyLimit::max(55 * 1024 * 1024)),
         )
-        .route("/api/knowledge/my/:id", delete(routes::delete_user_knowledge))
+        .route(
+            "/api/knowledge/my/:id",
+            delete(routes::delete_user_knowledge),
+        )
         .route(
             "/api/knowledge/my/:id/content",
             get(routes::get_user_knowledge_content),
@@ -1729,9 +1766,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let sidecar_slot: Arc<TokioMutex<Option<Arc<Sidecar>>>> = Arc::new(TokioMutex::new(None));
-    let wa_status: Arc<std::sync::Mutex<WaStatus>> = Arc::new(std::sync::Mutex::new(
-        WaStatus { disabled: config.wa_disabled, ..Default::default() },
-    ));
+    let wa_status: Arc<std::sync::Mutex<WaStatus>> = Arc::new(std::sync::Mutex::new(WaStatus {
+        disabled: config.wa_disabled,
+        ..Default::default()
+    }));
     let slack_status: Arc<std::sync::Mutex<SlackStatus>> =
         Arc::new(std::sync::Mutex::new(SlackStatus::default()));
     spawn_user_bot_manager(
@@ -1881,8 +1919,10 @@ async fn main() -> anyhow::Result<()> {
     };
     info!("Proxy listening on {proxy_addr}");
 
-    let server =
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>());
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
     let proxy_server = axum::serve(
         proxy_listener,
         proxy_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -1903,7 +1943,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Signal all subsystems to stop accepting new work
     shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
-    drain_pipeline.draining.store(true, std::sync::atomic::Ordering::Release);
+    drain_pipeline
+        .draining
+        .store(true, std::sync::atomic::Ordering::Release);
     info!("draining in-flight agents before exit...");
 
     // Wait for running agents to finish (pipeline + chat), up to 5 minutes
@@ -1916,10 +1958,16 @@ async fn main() -> anyhow::Result<()> {
             break;
         }
         if tokio::time::Instant::now() >= drain_deadline {
-            warn!(pipeline_agents, chat_agents, "drain timeout reached (5m), forcing shutdown");
+            warn!(
+                pipeline_agents,
+                chat_agents, "drain timeout reached (5m), forcing shutdown"
+            );
             break;
         }
-        info!(pipeline_agents, chat_agents, "waiting for agents to finish...");
+        info!(
+            pipeline_agents,
+            chat_agents, "waiting for agents to finish..."
+        );
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     }
 

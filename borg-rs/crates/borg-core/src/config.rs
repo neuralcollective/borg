@@ -185,6 +185,36 @@ impl Config {
             format!("http://localhost:{}", self.web_port)
         }
     }
+
+    pub fn apply_explicit_env_overrides(&self, env_config: &Config) -> Self {
+        let mut c = self.clone();
+        if env_or_dotenv_has("DATA_DIR") {
+            c.data_dir = env_config.data_dir.clone();
+        }
+        if env_or_dotenv_has("PUBLIC_URL") {
+            c.public_url = env_config.public_url.clone();
+        }
+        if env_or_dotenv_has("SEARCH_BACKEND") {
+            c.search_backend = env_config.search_backend.clone();
+        }
+        if env_or_dotenv_has("VESPA_URL") {
+            c.vespa_url = env_config.vespa_url.clone();
+        }
+        if env_or_dotenv_has("VESPA_NAMESPACE") {
+            c.vespa_namespace = env_config.vespa_namespace.clone();
+        }
+        if env_or_dotenv_has("VESPA_DOCUMENT_TYPE") {
+            c.vespa_document_type = env_config.vespa_document_type.clone();
+        }
+        c
+    }
+}
+
+fn env_or_dotenv_has(key: &str) -> bool {
+    if std::env::var_os(key).is_some() {
+        return true;
+    }
+    parse_dotenv().contains_key(key)
 }
 
 fn parse_dotenv_str(content: &str) -> HashMap<String, String> {
@@ -803,6 +833,13 @@ impl Config {
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| cur.to_string())
         };
+        let get_str_env_wins = |key: &str, env_key: &str, cur: &str| {
+            if env_or_dotenv_has(env_key) {
+                cur.to_string()
+            } else {
+                get_str(key, cur)
+            }
+        };
         let get_bool =
             |key: &str, cur: bool| get(key).map(|v| v == "true" || v == "1").unwrap_or(cur);
         macro_rules! load_i64 {
@@ -828,7 +865,7 @@ impl Config {
         }
         c.assistant_name = get_str("assistant_name", &c.assistant_name);
         c.trigger_pattern = get_str("trigger_pattern", &c.trigger_pattern);
-        c.data_dir = get_str("data_dir", &c.data_dir);
+        c.data_dir = get_str_env_wins("data_dir", "DATA_DIR", &c.data_dir);
         c.container_image = get_str("container_image", &c.container_image);
         c.model = get_str("model", &c.model);
         c.backend = get_str("backend", &c.backend);
@@ -845,7 +882,7 @@ impl Config {
         c.git_committer_email = get_str("git_committer_email", &c.git_committer_email);
         c.git_user_coauthor = get_str("git_user_coauthor", &c.git_user_coauthor);
         c.observer_config = get_str("observer_config", &c.observer_config);
-        c.public_url = get_str("public_url", &c.public_url);
+        c.public_url = get_str_env_wins("public_url", "PUBLIC_URL", &c.public_url);
         c.storage_backend = get_str("storage_backend", &c.storage_backend);
         c.s3_bucket = get_str("s3_bucket", &c.s3_bucket);
         c.s3_region = get_str("s3_region", &c.s3_region);
@@ -867,10 +904,15 @@ impl Config {
         c.ingestion_queue_backend = get_str("ingestion_queue_backend", &c.ingestion_queue_backend);
         c.sqs_queue_url = get_str("sqs_queue_url", &c.sqs_queue_url);
         c.sqs_region = get_str("sqs_region", &c.sqs_region);
-        c.search_backend = get_str("search_backend", &c.search_backend);
-        c.vespa_url = get_str("vespa_url", &c.vespa_url);
-        c.vespa_namespace = get_str("vespa_namespace", &c.vespa_namespace);
-        c.vespa_document_type = get_str("vespa_document_type", &c.vespa_document_type);
+        c.search_backend = get_str_env_wins("search_backend", "SEARCH_BACKEND", &c.search_backend);
+        c.vespa_url = get_str_env_wins("vespa_url", "VESPA_URL", &c.vespa_url);
+        c.vespa_namespace =
+            get_str_env_wins("vespa_namespace", "VESPA_NAMESPACE", &c.vespa_namespace);
+        c.vespa_document_type = get_str_env_wins(
+            "vespa_document_type",
+            "VESPA_DOCUMENT_TYPE",
+            &c.vespa_document_type,
+        );
         c.experimental_domains = get_bool("experimental_domains", c.experimental_domains);
         c.build_cmd = get_str("build_cmd", &c.build_cmd);
         c.self_update_enabled = get_bool("self_update_enabled", c.self_update_enabled);
@@ -1237,5 +1279,13 @@ mod resolve_tilde_tests {
         assert_eq!(map["A"], "1");
         assert_eq!(map["B"], "2");
         assert_eq!(map["C"], "3");
+    }
+
+    #[test]
+    fn env_or_dotenv_has_detects_process_env() {
+        let key = "BORG_CONFIG_TEST_ENV_PRESENT";
+        unsafe { std::env::set_var(key, "1") };
+        assert!(env_or_dotenv_has(key));
+        unsafe { std::env::remove_var(key) };
     }
 }
