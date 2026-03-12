@@ -4,15 +4,8 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
-  "scripts": {
-    "test": "bun test"
-  },
   "dependencies": {
-    "@slack/bolt": "^4.4.0",
-    "@whiskeysockets/baileys": "^6.17.16",
-    "discord.js": "^14.25.1",
     "docxtemplater": "^3.68.3",
-    "pino": "^9.14.0",
     "pizzip": "^3.2.0"
   }
 }

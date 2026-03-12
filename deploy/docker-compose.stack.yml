@@ -72,15 +72,15 @@ services:
   vespa-init:
     image: curlimages/curl:latest
     depends_on:
-      borg-vespa:
+      vespa:
         condition: service_healthy
     volumes:
       - ./vespa/application:/app/vespa:ro
       - ./vespa/init-vespa.sh:/init-vespa.sh:ro
     entrypoint: ["/bin/sh", "/init-vespa.sh"]
     environment:
-      - VESPA_CONFIG_URL=http://borg-vespa:19071
-      - VESPA_QUERY_URL=http://borg-vespa:8080
+      - VESPA_CONFIG_URL=http://vespa:19071
+      - VESPA_QUERY_URL=http://vespa:8080
     restart: "no"
 
 volumes:

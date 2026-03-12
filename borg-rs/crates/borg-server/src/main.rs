@@ -502,6 +502,7 @@ async fn spawn_sidecar_manager(
         config.wa_disabled,
         &config.slack_bot_token,
         &config.slack_app_token,
+        &config.data_dir,
     )
     .await
     {
@@ -673,32 +674,14 @@ async fn spawn_sidecar_manager(
                             format!("{}:{}", source_prefix, msg.chat_id)
                         };
                         let mut msg_text = msg.text.clone();
-                        if !msg.attachments.is_empty() {
-                            let att_base =
-                                format!("{}/attachments", config.data_dir);
-                            for att in &msg.attachments {
-                                let att_dir =
-                                    format!("{}/discord-{}", att_base, &att.filename);
-                                std::fs::create_dir_all(&att_dir).ok();
-                                let path = format!("{}/{}", att_dir, att.filename);
-                                match reqwest::get(&att.url).await {
-                                    Ok(resp) => {
-                                        if let Ok(bytes) = resp.bytes().await {
-                                            std::fs::write(&path, &bytes).ok();
-                                            let size_kb = bytes.len() / 1024;
-                                            msg_text.push_str(&format!(
-                                                "\n[Attached file: {} ({}KB)] Path: {}",
-                                                att.filename, size_kb, path
-                                            ));
-                                        }
-                                    },
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "discord attachment download failed: {e}"
-                                        )
-                                    },
-                                }
-                            }
+                        for att in &msg.attachments {
+                            let size_kb = std::fs::metadata(&att.url)
+                                .map(|m| m.len() / 1024)
+                                .unwrap_or(0);
+                            msg_text.push_str(&format!(
+                                "\n[Attached file: {} ({}KB)] Path: {}",
+                                att.filename, size_kb, att.url
+                            ));
                         }
 
                         let incoming = borg_core::chat::IncomingMessage {
