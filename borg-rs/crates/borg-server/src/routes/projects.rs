@@ -424,6 +424,30 @@ fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
     (clipped, true)
 }
 
+fn project_context_search_query(raw_query: &str) -> String {
+    const MAX_QUERY_CHARS: usize = 1_200;
+
+    let mut in_code_fence = false;
+    let mut cleaned_lines = Vec::new();
+
+    for line in raw_query.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence || trimmed.is_empty() || trimmed.starts_with("===") {
+            continue;
+        }
+        cleaned_lines.push(trimmed);
+    }
+
+    let normalized = cleaned_lines.join(" ");
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (truncated, _) = truncate_chars(&normalized, MAX_QUERY_CHARS);
+    truncated
+}
+
 fn encode_project_file_cursor(file: &ProjectFileMetaRow) -> String {
     format!(
         "{}|{}",
@@ -789,7 +813,8 @@ pub(crate) async fn build_project_context(
     const MAX_CONTEXT_BYTES: usize = 120_000;
     let mut remaining = MAX_CONTEXT_BYTES;
     let files_dir = format!("{session_dir}/project_files");
-    let raw_query = retrieval_query.trim();
+    let raw_query = project_context_search_query(retrieval_query);
+    let raw_query = raw_query.trim();
     let hits = if raw_query.is_empty() {
         Vec::new()
     } else {
