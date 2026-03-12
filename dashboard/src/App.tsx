@@ -30,7 +30,7 @@ import { SettingsPanel } from "@/components/settings-panel";
 import { StatusPanel } from "@/components/status-panel";
 import { TaskDetail } from "@/components/task-detail";
 import { TaskList } from "@/components/task-list";
-import type { LinkedCredentialConnectSession } from "@/lib/api";
+import type { LinkedCredential, LinkedCredentialConnectSession } from "@/lib/api";
 import {
   fetchLinkedCredentialConnectSession,
   startLinkedCredentialConnect,
@@ -187,9 +187,14 @@ function OnboardingModal() {
 
   if (isLoading || dismissed) return null;
   const creds = data?.credentials ?? [];
-  const hasConnected = creds.some((c) => c.status === "connected");
-  if (hasConnected) return null;
-  const hasExpired = creds.some((c) => c.status === "expired" || c.last_error);
+  const now = new Date();
+  const isTokenValid = (c: LinkedCredential) =>
+    c.status === "connected" && (!c.expires_at || new Date(c.expires_at) > now);
+  const hasValid = creds.some(isTokenValid);
+  if (hasValid) return null;
+  const hasExpired = creds.some(
+    (c) => c.status === "expired" || c.last_error || (c.expires_at && new Date(c.expires_at) <= now),
+  );
   const isReconnect = hasExpired && creds.length > 0;
 
   async function handleConnect(provider: "claude" | "openai") {
