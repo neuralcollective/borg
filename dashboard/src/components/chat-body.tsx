@@ -300,9 +300,7 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
 
           {sending && streamLines.length > 0 && (
             <div className="flex gap-2">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 ring-1 ring-white/[0.06]">
-                <span className="text-[13px]">🤖</span>
-              </div>
+              <PulsingBotAvatar />
               <div className="min-w-0 flex-1 pt-0.5">
                 <AgentTimeline lines={streamLines} streaming hideFinalOutput />
               </div>
@@ -311,14 +309,8 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
 
           {sending && streamLines.length === 0 && (
             <div className="flex gap-2">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 ring-1 ring-white/[0.06]">
-                <span className="text-[13px]">🤖</span>
-              </div>
-              <div className="flex items-center gap-2 pt-2">
-                <span className="relative flex h-1.5 w-1.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-400" />
-                </span>
+              <PulsingBotAvatar />
+              <div className="flex items-center pt-2">
                 <span className="animate-shimmer-text text-[12px] font-medium text-amber-400">{workingLabel}</span>
               </div>
             </div>
@@ -379,6 +371,17 @@ function threadLabel(id: string, projects: { id: number; name: string }[]): stri
     return proj?.name ?? `Project #${match[1]}`;
   }
   return id.replace("web:", "");
+}
+
+function PulsingBotAvatar() {
+  return (
+    <div className="relative flex h-7 w-7 shrink-0 items-center justify-center">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400/30" />
+      <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 ring-1 ring-amber-400/30">
+        <span className="text-[13px]">🤖</span>
+      </div>
+    </div>
+  );
 }
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
