@@ -150,26 +150,53 @@ export function ChatBody({ thread, className, hideEmptyState }: ChatBodyProps) {
   }, []);
 
   // Poll only when sending — recover from missed SSE completion events
+  const pollRecoveringRef = useRef(false);
   useEffect(() => {
     if (!sending) return;
     const interval = setInterval(() => {
+      if (pollRecoveringRef.current) return;
       fetch(`/api/chat/status?thread=${encodeURIComponent(thread)}`, { headers: authHeaders() })
         .then((r) => r.json())
-        .then((data: { running: boolean }) => {
-          if (!data.running) {
-            fetchMessages();
-            setSending(false);
-            setStreamEvents([]);
-            if (sendingTimeoutRef.current) {
-              clearTimeout(sendingTimeoutRef.current);
-              sendingTimeoutRef.current = null;
+        .then(async (data: { running: boolean }) => {
+          if (!data.running && !pollRecoveringRef.current) {
+            pollRecoveringRef.current = true;
+            try {
+              await tokenReady;
+              const r = await fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`, { headers: authHeaders() });
+              if (!r.ok) throw new Error(`${r.status}`);
+              const msgs: ChatMessage[] = await r.json();
+              // Batch all state updates so the transition from live
+              // timeline to completed messages is atomic (no flash)
+              const restored = new Map<number, StreamEvent[]>();
+              msgs.forEach((m, i) => {
+                if (m.role === "assistant" && m.raw_stream) {
+                  const events = rawStreamToEvents(m.raw_stream);
+                  if (events.length > 0) restored.set(i, events);
+                }
+              });
+              setMessages(msgs);
+              if (restored.size > 0) setCompletedStreams(restored);
+              if (msgs.length > 0) {
+                lastTsRef.current = Math.max(...msgs.map((m) => Number(m.ts) || 0));
+              }
+              setSending(false);
+              setStreamEvents([]);
+              if (sendingTimeoutRef.current) {
+                clearTimeout(sendingTimeoutRef.current);
+                sendingTimeoutRef.current = null;
+              }
+            } catch {
+              setSending(false);
+              setStreamEvents([]);
+            } finally {
+              pollRecoveringRef.current = false;
             }
           }
         })
         .catch(() => {});
     }, 3000);
     return () => clearInterval(interval);
-  }, [thread, sending, fetchMessages]);
+  }, [thread, sending]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isScrolledUp, setIsScrolledUp] = useState(false);

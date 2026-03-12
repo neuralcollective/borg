@@ -90,37 +90,26 @@ export function ChatPanel() {
     };
   }, []);
 
-  // Poll fallback
+  // Poll only when sending — recover from missed SSE completion events
   useEffect(() => {
-    let pollAbort: AbortController | null = null;
+    if (!sending) return;
     const interval = setInterval(() => {
-      pollAbort?.abort();
-      const ctrl = new AbortController();
-      pollAbort = ctrl;
-      fetch(`/api/chat/messages?thread=${encodeURIComponent(thread)}`, { signal: ctrl.signal, headers: authHeaders() })
+      fetch(`/api/chat/status?thread=${encodeURIComponent(thread)}`, { headers: authHeaders() })
         .then((r) => r.json())
-        .then((msgs: ChatMessage[]) => {
-          if (ctrl.signal.aborted || msgs.length === 0) return;
-          const newTs = Math.max(...msgs.map((m) => Number(m.ts) || 0));
-          if (newTs > lastTsRef.current) {
-            setMessages(msgs);
-            lastTsRef.current = newTs;
-            if (msgs[msgs.length - 1]?.role === "assistant") {
-              setSending(false);
-              if (sendingTimeoutRef.current) {
-                clearTimeout(sendingTimeoutRef.current);
-                sendingTimeoutRef.current = null;
-              }
+        .then((data: { running: boolean }) => {
+          if (!data.running) {
+            fetchMessages();
+            setSending(false);
+            if (sendingTimeoutRef.current) {
+              clearTimeout(sendingTimeoutRef.current);
+              sendingTimeoutRef.current = null;
             }
           }
         })
         .catch(() => {});
     }, 3000);
-    return () => {
-      clearInterval(interval);
-      pollAbort?.abort();
-    };
-  }, [thread]);
+    return () => clearInterval(interval);
+  }, [thread, sending, fetchMessages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
