@@ -1617,6 +1617,10 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let (log_tx, _log_rx) = broadcast::channel::<String>(1024);
     let log_ring: Arc<std::sync::Mutex<VecDeque<String>>> =
         Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(500)));
