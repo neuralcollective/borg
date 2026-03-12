@@ -17,15 +17,15 @@ use axum::{
 use borg_core::{
     config::{refresh_oauth_token, Config},
     db::Db,
-    linked_credentials::{
-        claude_oauth_token_from_home, restore_bundle, PROVIDER_CLAUDE,
-    },
+    linked_credentials::{claude_oauth_token_from_home, restore_bundle, PROVIDER_CLAUDE},
 };
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::AsyncBufReadExt;
-use tokio::sync::{broadcast, Mutex as TokioMutex};
+use tokio::{
+    io::AsyncBufReadExt,
+    sync::{broadcast, Mutex as TokioMutex},
+};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 use super::{internal, require_project_access};
@@ -79,7 +79,9 @@ fn extract_project_id_from_chat_key(chat_key: &str) -> Option<i64> {
         return Some(id);
     }
     // Web workspace-scoped: "web:workspace:1:web:project-3"
-    chat_key.rsplit_once("web:project-").and_then(|(_, id)| id.parse::<i64>().ok())
+    chat_key
+        .rsplit_once("web:project-")
+        .and_then(|(_, id)| id.parse::<i64>().ok())
 }
 
 pub(crate) fn workspace_chat_prefix(workspace_id: i64) -> String {
@@ -165,14 +167,32 @@ pub(crate) async fn run_chat_agent(
     }
 
     let retrieval_query = messages.join("\n");
-    let project_for_chat =
-        extract_project_id_from_chat_key(chat_key).and_then(|pid| db.get_project(pid).ok().flatten());
+    let project_for_chat = extract_project_id_from_chat_key(chat_key)
+        .and_then(|pid| db.get_project(pid).ok().flatten());
     let prompt = if messages.len() == 1 {
         format!("{} says: {}", sender_name, messages[0])
     } else {
         let joined: Vec<String> = messages.iter().map(|m| format!("- {m}")).collect();
         format!("{} says:\n{}", sender_name, joined.join("\n"))
     };
+    let colocation = if let Some(project) = project_for_chat.as_ref() {
+        let repos = db
+            .list_knowledge_repos(project.workspace_id, user_id)
+            .unwrap_or_default();
+        Some(
+            super::projects::colocate_project_workspace(
+                project,
+                &session_dir,
+                db,
+                storage,
+                &repos,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
     let prompt = if let Some(project) = project_for_chat.as_ref() {
         let ctx = super::projects::build_project_context(
             project,
@@ -181,6 +201,7 @@ pub(crate) async fn run_chat_agent(
             db,
             search.as_deref(),
             storage,
+            colocation.as_ref(),
         )
         .await;
         if ctx.is_empty() {
@@ -239,16 +260,27 @@ pub(crate) async fn run_chat_agent(
 
     // Include cloned knowledge repos (org + user) in system prompt
     if let Some(project) = project_for_chat.as_ref() {
-        let mut all_repos = db.list_knowledge_repos(project.workspace_id, None).unwrap_or_default();
+        let mut all_repos = db
+            .list_knowledge_repos(project.workspace_id, None)
+            .unwrap_or_default();
         if let Some(uid) = user_id {
-            all_repos.extend(db.list_knowledge_repos(project.workspace_id, Some(uid)).unwrap_or_default());
+            all_repos.extend(
+                db.list_knowledge_repos(project.workspace_id, Some(uid))
+                    .unwrap_or_default(),
+            );
         }
-        let ready_repos: Vec<_> = all_repos.iter().filter(|r| r.status == "ready" && !r.local_path.is_empty()).collect();
+        let ready_repos: Vec<_> = all_repos
+            .iter()
+            .filter(|r| r.status == "ready" && !r.local_path.is_empty())
+            .collect();
         if !ready_repos.is_empty() {
             system_prompt.push_str("\n\n## Available Git Repositories\n\n");
             system_prompt.push_str("The following repos have been cloned and are available for you to read using your Read, Grep, and Glob tools:\n\n");
             for repo in &ready_repos {
-                system_prompt.push_str(&format!("- **{}** ({}): `{}`\n", repo.name, repo.url, repo.local_path));
+                system_prompt.push_str(&format!(
+                    "- **{}** ({}): `{}`\n",
+                    repo.name, repo.url, repo.local_path
+                ));
             }
         }
     }
@@ -336,7 +368,9 @@ pub(crate) async fn run_chat_agent(
                     let session_path = std::path::Path::new(&session_dir);
                     if restore_bundle(&secret.bundle, session_path).is_ok() {
                         if let Some(t) = claude_oauth_token_from_home(session_path) {
-                            tracing::info!("chat agent using linked credential token for user {uid}");
+                            tracing::info!(
+                                "chat agent using linked credential token for user {uid}"
+                            );
                             token = t;
                         } else {
                             tracing::warn!("linked credential restored but no OAuth token found for user {uid}");
@@ -357,29 +391,60 @@ pub(crate) async fn run_chat_agent(
             .as_ref()
             .map(|p| {
                 format!(
-                    "Current project_id: {}\nCurrent project mode: {}\n",
+                    "Current project_id: {}\nCurrent project mode: {}\n\n",
                     p.id, p.mode
                 )
             })
             .unwrap_or_default();
+
+        let workspace_layout = if let Some(c) = colocation.as_ref() {
+            let colocated = c.linked + c.written;
+            let mut lines = Vec::new();
+            if colocated > 0 {
+                lines.push(format!(
+                    "- `documents/` — all {} project files, preserving their original paths. Browse with Glob/Read/Grep.",
+                    colocated,
+                ));
+            }
+            if !c.repo_names.is_empty() {
+                lines.push(format!(
+                    "- `repos/` — knowledge repositories: {}. Browse directly.",
+                    c.repo_names.join(", "),
+                ));
+            }
+            if c.has_project_repo {
+                lines.push(
+                    "- `repo/` — project's connected source code repository.".to_string(),
+                );
+            }
+            if lines.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "## Workspace Layout\n\nYour working directory contains:\n{}\n\n",
+                    lines.join("\n"),
+                )
+            }
+        } else {
+            String::new()
+        };
+
         let agent_claude_md = format!(
             "# Borg Chat Agent\n\n\
              {project_id_hint}\
-             ## Tools\n\n\
-             You have MCP tools for document search and pipeline task management:\n\
-             - `search_documents` — hybrid semantic search across project documents. ALWAYS use this when the user asks about document content, especially with large document sets. Search iteratively with different queries rather than trying to read files one by one.\n\
-             - `list_documents` — browse available documents by name\n\
-             - `read_document` — read full text of a specific document by ID\n\
-             - `create_task` — create a pipeline task for long-running async work (code changes, document generation, multi-step research). Ask clarifying questions first.\n\
-             - `get_task_status` — check progress on a pipeline task\n\
-             - `list_project_tasks` — see all tasks for the current project\n\n\
-             ## When to search vs create a task\n\n\
-             If BorgSearch returns `no_project_corpus`, ask the user to select or attach the relevant matter/project before continuing.\n\
-             If a task needs exhaustive review of the attached matter corpus, set `requires_exhaustive_corpus_review=true` when creating it.\n\
-             \n\
-             - User asks a question about their documents → search_documents (may need multiple searches)\n\
-             - User wants a document drafted, code changed, or complex multi-step work → create_task\n\
-             - User asks about task status or project progress → get_task_status / list_project_tasks\n\
+             {workspace_layout}\
+             ## Strategy\n\n\
+             1. **Start by exploring**: list files in documents/ and repos/ to see what's available.\n\
+             2. **Read files directly**: Use Read/Glob/Grep on documents/ and repos/ — faster than MCP tools.\n\
+             3. **Semantic search**: Use `search_documents` MCP tool when you need to find content across a large corpus by meaning.\n\
+             4. **Pipeline tasks**: Use `create_task` for long-running async work (code changes, doc generation).\n\
+             5. **Task tracking**: `get_task_status` / `list_project_tasks` for progress.\n\n\
+             When searching documents, try multiple queries. \
+             If BorgSearch returns `no_project_corpus`, ask the user to attach the relevant project.\n\
+             If a task needs exhaustive review, set `requires_exhaustive_corpus_review=true`.\n\n\
+             - User asks about their documents → explore documents/ or search_documents\n\
+             - User wants complex multi-step work → create_task\n\
+             - User asks about task progress → get_task_status / list_project_tasks\n\
              - Quick factual question → answer directly\n",
         );
         let claude_md_path = format!("{session_dir}/CLAUDE.md");
@@ -388,7 +453,10 @@ pub(crate) async fn run_chat_agent(
 
     let timeout = std::time::Duration::from_secs(config.agent_timeout_s.max(300) as u64);
     ai_request_count.fetch_add(1, Ordering::Relaxed);
-    tracing::info!("spawning chat agent for {chat_key} dir={session_dir} token_len={}", token.len());
+    tracing::info!(
+        "spawning chat agent for {chat_key} dir={session_dir} token_len={}",
+        token.len()
+    );
     let mut child = tokio::process::Command::new("claude")
         .args(&args)
         .current_dir(&session_dir)
@@ -504,7 +572,10 @@ pub(crate) async fn sse_chat_events(
     State(state): State<Arc<AppState>>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
-    tracing::info!(workspace_id = workspace.id, "SSE chat/events client connected");
+    tracing::info!(
+        workspace_id = workspace.id,
+        "SSE chat/events client connected"
+    );
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let mut live_rx = state.chat_event_tx.subscribe();
     let db = Arc::clone(&state.db);
@@ -518,11 +589,8 @@ pub(crate) async fn sse_chat_events(
                             .ok()
                             .and_then(|mut payload| {
                                 let thread = payload.get("thread")?.as_str()?;
-                                let visible = visible_chat_thread_for_workspace(
-                                    db.as_ref(),
-                                    ws_id,
-                                    thread,
-                                )?;
+                                let visible =
+                                    visible_chat_thread_for_workspace(db.as_ref(), ws_id, thread)?;
                                 tracing::info!(
                                     ws_id,
                                     internal_thread = thread,
@@ -686,7 +754,9 @@ pub(crate) async fn post_project_chat(
     let text2 = body.text.clone();
     let model2 = body.model.clone();
     let uid = user.id;
-    state.active_chat_agents.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    state
+        .active_chat_agents
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     tokio::spawn(async move {
         let _guard = ChatAgentGuard(Arc::clone(&state2.active_chat_agents));
         let run_id = crate::messaging_progress::new_chat_run_id();
@@ -772,7 +842,9 @@ pub(crate) async fn post_chat(
     let text2 = body.text.clone();
     let model2 = body.model.clone();
     let uid = user.id;
-    state.active_chat_agents.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    state
+        .active_chat_agents
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     tokio::spawn(async move {
         let _guard = ChatAgentGuard(Arc::clone(&state2.active_chat_agents));
         let run_id = crate::messaging_progress::new_chat_run_id();

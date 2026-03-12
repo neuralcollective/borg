@@ -729,6 +729,181 @@ async fn search_project_context_hits(
     hits
 }
 
+// ── Workspace colocation ──────────────────────────────────────────────────
+
+pub(crate) struct ColocationResult {
+    pub documents_dir: String,
+    pub total_files: usize,
+    pub linked: usize,
+    pub written: usize,
+    pub skipped: usize,
+    pub repo_names: Vec<String>,
+    pub has_project_repo: bool,
+}
+
+const MAX_COLOCATE_FILES: usize = 5000;
+const MAX_COLOCATE_FILE_SIZE: i64 = 100 * 1024 * 1024;
+
+fn safe_dest_path(base: &str, rel: &str) -> Option<String> {
+    let p = FsPath::new(rel);
+    for component in p.components() {
+        if matches!(component, Component::ParentDir) {
+            return None;
+        }
+    }
+    Some(format!("{base}/{rel}"))
+}
+
+pub(crate) async fn colocate_project_workspace(
+    project: &ProjectRow,
+    session_dir: &str,
+    db: &Db,
+    storage: &FileStorage,
+    knowledge_repos: &[borg_core::db::KnowledgeRepo],
+) -> ColocationResult {
+    let documents_dir = format!("{session_dir}/documents");
+    let repos_dir = format!("{session_dir}/repos");
+    let repo_link = format!("{session_dir}/repo");
+
+    let all_files = db.list_project_files(project.id).unwrap_or_default();
+    let total_files = all_files.len();
+    let mut linked = 0usize;
+    let mut written = 0usize;
+    let mut skipped = 0usize;
+
+    if total_files > MAX_COLOCATE_FILES {
+        tracing::warn!(
+            project_id = project.id,
+            total_files,
+            "skipping colocation: too many files"
+        );
+        return ColocationResult {
+            documents_dir,
+            total_files,
+            linked: 0,
+            written: 0,
+            skipped: total_files,
+            repo_names: Vec::new(),
+            has_project_repo: false,
+        };
+    }
+
+    // Clean sweep for idempotency
+    let _ = std::fs::remove_dir_all(&documents_dir);
+    let _ = std::fs::create_dir_all(&documents_dir);
+
+    let is_local = storage.is_local();
+    let mut seen_paths = HashSet::new();
+
+    for file in &all_files {
+        if file.size_bytes > MAX_COLOCATE_FILE_SIZE {
+            skipped += 1;
+            continue;
+        }
+
+        let rel = if file.source_path.is_empty() {
+            file.file_name.clone()
+        } else {
+            file.source_path.clone()
+        };
+
+        if !seen_paths.insert(rel.clone()) {
+            skipped += 1;
+            continue;
+        }
+
+        let Some(dest) = safe_dest_path(&documents_dir, &rel) else {
+            skipped += 1;
+            continue;
+        };
+
+        // Create parent directories
+        if let Some(parent) = FsPath::new(&dest).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        if is_local && FsPath::new(&file.stored_path).exists() {
+            // Symlink the original file
+            if std::os::unix::fs::symlink(&file.stored_path, &dest).is_ok() {
+                linked += 1;
+            } else {
+                skipped += 1;
+                continue;
+            }
+            // For binary files with extracted text, write a companion .txt
+            if is_binary_mime(&file.mime_type) && !file.extracted_text.trim().is_empty() {
+                let txt_dest = format!("{dest}.txt");
+                let _ = std::fs::write(&txt_dest, &file.extracted_text);
+            }
+        } else if !file.extracted_text.trim().is_empty() {
+            // S3 or missing local file: write extracted text
+            let txt_dest = if is_binary_mime(&file.mime_type) {
+                format!("{dest}.txt")
+            } else {
+                dest.clone()
+            };
+            if std::fs::write(&txt_dest, &file.extracted_text).is_ok() {
+                written += 1;
+            } else {
+                skipped += 1;
+            }
+        } else {
+            skipped += 1;
+        }
+    }
+
+    // Symlink knowledge repos
+    let _ = std::fs::remove_dir_all(&repos_dir);
+    let mut repo_names = Vec::new();
+    let ready_repos: Vec<_> = knowledge_repos
+        .iter()
+        .filter(|r| r.status == "ready" && !r.local_path.is_empty())
+        .collect();
+    if !ready_repos.is_empty() {
+        let _ = std::fs::create_dir_all(&repos_dir);
+        for repo in &ready_repos {
+            let name = if repo.name.is_empty() {
+                format!("repo-{}", repo.id)
+            } else {
+                repo.name.replace('/', "-")
+            };
+            let link = format!("{repos_dir}/{name}");
+            if FsPath::new(&repo.local_path).exists() {
+                let _ = std::os::unix::fs::symlink(&repo.local_path, &link);
+                repo_names.push(name);
+            }
+        }
+    }
+
+    // Symlink project repo
+    let _ = std::fs::remove_file(&repo_link);
+    let has_project_repo =
+        !project.repo_path.is_empty() && FsPath::new(&project.repo_path).exists();
+    if has_project_repo {
+        let _ = std::os::unix::fs::symlink(&project.repo_path, &repo_link);
+    }
+
+    tracing::info!(
+        project_id = project.id,
+        total_files,
+        linked,
+        written,
+        skipped,
+        repos = repo_names.len(),
+        "colocated project workspace"
+    );
+
+    ColocationResult {
+        documents_dir,
+        total_files,
+        linked,
+        written,
+        skipped,
+        repo_names,
+        has_project_repo,
+    }
+}
+
 async fn stage_project_files(
     session_dir: &str,
     files: &[(ProjectFileRow, ProjectContextHit)],
@@ -800,6 +975,7 @@ pub(crate) async fn build_project_context(
     db: &Db,
     search: Option<&crate::search::SearchClient>,
     storage: &FileStorage,
+    colocation: Option<&ColocationResult>,
 ) -> String {
     let stats = db.get_project_file_stats(project.id).unwrap_or_default();
     let completed_tasks = db
@@ -852,8 +1028,22 @@ pub(crate) async fn build_project_context(
     }
     let staged_files = stage_project_files(session_dir, &selected, storage).await;
 
+    let coloc_line = if let Some(c) = colocation {
+        let colocated = c.linked + c.written;
+        if colocated > 0 {
+            format!(
+                "Workspace: {} files colocated in documents/, {} search-matched files pre-loaded below\n",
+                colocated,
+                staged_files.len(),
+            )
+        } else {
+            format!("Staged working set: {} file(s)\n", staged_files.len())
+        }
+    } else {
+        format!("Staged working set: {} file(s) in {}/\n", staged_files.len(), files_dir)
+    };
     let mut context = format!(
-        "Project context:\nProject: {} (mode: {})\nCorpus: {} files, {} extracted-text files, {} privileged files, {} total\nSession privileged: {}\nStaged working set: {} file(s) in {}/\n",
+        "Project context:\nProject: {} (mode: {})\nCorpus: {} files, {} extracted-text files, {} privileged files, {} total\nSession privileged: {}\n{coloc_line}",
         project.name,
         project.mode,
         stats.total_files,
@@ -861,8 +1051,6 @@ pub(crate) async fn build_project_context(
         stats.privileged_files,
         format_compact_bytes(stats.total_bytes),
         if project.session_privileged { "yes" } else { "no" },
-        staged_files.len(),
-        files_dir,
     );
     if !project.client_name.trim().is_empty()
         || !project.jurisdiction.trim().is_empty()
@@ -890,7 +1078,11 @@ pub(crate) async fn build_project_context(
     if !raw_query.is_empty() {
         context.push_str(&format!("Retrieval query: {}\n", raw_query));
     }
-    context.push_str("Selection policy: only the staged working set was materialized for this request. Do not assume unstaged corpus documents were reviewed.\n");
+    if colocation.map(|c| c.linked + c.written > 0).unwrap_or(false) {
+        context.push_str("All project files are available in the documents/ directory. The staged working set below contains the most relevant files for your query — browse documents/ directly for the full corpus.\n");
+    } else {
+        context.push_str("Selection policy: only the staged working set was materialized for this request. Do not assume unstaged corpus documents were reviewed.\n");
+    }
     if project.session_privileged {
         context.push_str("Legal handling: this matter is privileged. Prefer staged matter files and existing internal knowledge only. If the staged set is insufficient, say which documents are missing instead of guessing.\n");
     }
@@ -944,7 +1136,11 @@ pub(crate) async fn build_project_context(
             .list_recent_project_files(project.id, 50, false)
             .unwrap_or_default();
         if !all_files.is_empty() {
-            let heading = "\nProject file inventory (use `read_document` or `list_documents` MCP tools to access any file):\n";
+            let heading = if colocation.map(|c| c.linked + c.written > 0).unwrap_or(false) {
+                "\nProject file inventory (browse documents/ directory or use search_documents MCP tool for semantic search):\n"
+            } else {
+                "\nProject file inventory (use `read_document` or `list_documents` MCP tools to access any file):\n"
+            };
             if heading.len() < remaining {
                 context.push_str(heading);
                 remaining -= heading.len();
@@ -1536,8 +1732,12 @@ pub(crate) async fn search_projects(
 ) -> Result<Json<Value>, StatusCode> {
     let q = params.q.unwrap_or_default();
     if q.is_empty() {
-        return list_projects(State(state), axum::Extension(user), axum::Extension(workspace))
-            .await;
+        return list_projects(
+            State(state),
+            axum::Extension(user),
+            axum::Extension(workspace),
+        )
+        .await;
     }
     let projects = state
         .db
@@ -3420,9 +3620,8 @@ fn resolve_public_share(
         if link.revoked {
             return Err(StatusCode::NOT_FOUND);
         }
-        let expires =
-            chrono::NaiveDateTime::parse_from_str(&link.expires_at, "%Y-%m-%d %H:%M:%S")
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let expires = chrono::NaiveDateTime::parse_from_str(&link.expires_at, "%Y-%m-%d %H:%M:%S")
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         if Utc::now().naive_utc() > expires {
             return Err(StatusCode::GONE);
         }
@@ -3449,10 +3648,7 @@ pub(crate) async fn get_public_project_tasks(
     Path(token): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     let (_link, project) = resolve_public_share(state.as_ref())(&token)?;
-    let tasks = state
-        .db
-        .list_project_tasks(project.id)
-        .map_err(internal)?;
+    let tasks = state.db.list_project_tasks(project.id).map_err(internal)?;
     Ok(Json(json!(tasks)))
 }
 
@@ -3461,10 +3657,7 @@ pub(crate) async fn get_public_project_documents(
     Path(token): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     let (_link, project) = resolve_public_share(state.as_ref())(&token)?;
-    let files = state
-        .db
-        .list_project_files(project.id)
-        .map_err(internal)?;
+    let files = state.db.list_project_files(project.id).map_err(internal)?;
     let public_files: Vec<_> = files.into_iter().filter(|f| !f.privileged).collect();
     Ok(Json(json!(public_files)))
 }

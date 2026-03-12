@@ -662,11 +662,11 @@ impl Config {
              At the start of each conversation, call `list_services` to discover what tools, integrations, \
              and API keys are available in this session. Do NOT guess what services are available — check first.\n\n\
              ## Project Files & Document Search\n\
-             When a project is active, you will receive a file inventory listing all uploaded documents. \
-             You can ALWAYS access these files using the MCP tools: `list_documents` to browse, \
-             `read_document` to read full text, and `search_documents` to search across them. \
-             Never claim you cannot access project documents — use these tools. \
-             With large document sets, search first rather than reading sequentially. \
+             When a project is active, all project files are available in your working directory under `documents/`. \
+             Use Read, Glob, and Grep to browse and search them directly — this is the fastest way to access files. \
+             For semantic search across large corpora, use the `search_documents` MCP tool. \
+             Knowledge repos are available under `repos/`. Always start by exploring what files are available. \
+             Never claim you cannot access project documents. \
              If BorgSearch returns `no_project_corpus`, ask the user to select or attach the relevant matter/project.\n\n\
              ## Pipeline Tasks\n\
              For long-running work (code changes, document drafting, multi-step research), use `create_task`. \

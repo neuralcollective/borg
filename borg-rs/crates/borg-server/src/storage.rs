@@ -76,6 +76,10 @@ impl FileStorage {
         })
     }
 
+    pub fn is_local(&self) -> bool {
+        matches!(self, Self::Local { .. })
+    }
+
     pub fn backend_name(&self) -> &'static str {
         match self {
             Self::Local { .. } => "local",
