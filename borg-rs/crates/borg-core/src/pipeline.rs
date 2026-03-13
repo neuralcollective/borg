@@ -5012,12 +5012,42 @@ Make only the minimal changes the linter requires. Do not refactor or change log
     }
 }
 
+fn is_negative_sign_recommendation(normalized: &str) -> bool {
+    contains_any(
+        normalized,
+        &[
+            "do not sign",
+            "cannot sign",
+            "should not sign",
+            "must not sign",
+            "not ready to sign",
+            "not supportable",
+            "signing is not supportable",
+            "sign is not supportable",
+            "not recommend signing",
+            "recommend against signing",
+            "do not close",
+            "cannot close",
+            "should not close",
+            "must not close",
+            "not ready to close",
+            "closing is not supportable",
+            "close is not supportable",
+            "not recommend closing",
+            "recommend against closing",
+        ],
+    )
+}
+
 fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
     let normalized = text.to_ascii_lowercase();
     if is_enforcement_status_warranty_safe_harbor(&normalized) {
         return None;
     }
     if is_non_dispositive_tail_diligence_safe_harbor(&normalized) {
+        return None;
+    }
+    if is_negative_sign_recommendation(&normalized) {
         return None;
     }
     let has_sign_or_close_position = contains_any(
@@ -7008,6 +7038,83 @@ mod legal_benchmark_clarification_guard_tests {
         assert_eq!(
             failure_repeat_block_threshold("ordinary transient error"),
             3
+        );
+    }
+
+    #[test]
+    fn does_not_flag_do_not_sign_recommendation_with_pre_sign_remediation() {
+        let text = "Recommended sign-off position: Do not sign in the current confirmed state. \
+            Two material breaches of the NorthCounty call-off are active. \
+            Pre-sign action required: LedgerLoop must immediately disable GenAssist on \
+            the BoroughCare queue profile and disclose the confirmed state to NorthCounty \
+            before signing can be revisited.";
+
+        assert!(
+            detect_benchmark_clarification_escape(text).is_none(),
+            "a definitive 'do not sign' recommendation with remediation steps should not trip the guard"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_signing_not_supportable_with_pre_sign_conditions() {
+        let text = "Sign position: signing is not supportable unless pre-sign conditions \
+            are met. Seller confirmation of GenAssist state is required before sign can be revisited.";
+
+        assert!(
+            detect_benchmark_clarification_escape(text).is_none(),
+            "a 'not supportable' recommendation should not trip the guard"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_cannot_sign_with_open_questions() {
+        let text = "Recommended sign-off position: cannot sign. There are open questions \
+            that must be resolved as pre-sign conditions. Clarification on the TitanBank \
+            approval notice status is pending.";
+
+        assert!(
+            detect_benchmark_clarification_escape(text).is_none(),
+            "a 'cannot sign' recommendation should not trip the guard"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_negative_recommendation_in_deliverable_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("advice_memo.md"),
+            "## Recommended sign-off position\n\n\
+             **Do not sign in the current confirmed state.** Pre-sign action required: \
+             disable GenAssist and confirm NorthCounty disclosure before signing can be revisited.",
+        )
+        .expect("write advice memo");
+
+        let task = sample_task();
+        let phase = PhaseConfig {
+            name: "implement".into(),
+            ..Default::default()
+        };
+
+        assert!(
+            Pipeline::enforce_legal_benchmark_clarification_guard(
+                &task,
+                &phase,
+                dir.path().to_str().expect("path"),
+                ""
+            )
+            .is_none(),
+            "deliverable with 'do not sign' recommendation should not trip the guard"
+        );
+    }
+
+    #[test]
+    fn still_detects_supportable_escape_despite_pre_sign_language() {
+        let text = "Sign position: Sign on 13 March is supportable with two pre-sign \
+            seller confirmations on GenAssist and TitanBank.";
+
+        assert!(
+            detect_benchmark_clarification_escape(text).is_some(),
+            "a 'supportable with pre-sign confirmations' escape should still be caught"
         );
     }
 
