@@ -162,6 +162,7 @@ pub struct ClaudeBackend {
     pub git_author_name: String,
     pub git_author_email: String,
     pub base_url: String,
+    pub reasoning_effort: String,
 }
 
 impl ClaudeBackend {
@@ -182,6 +183,7 @@ impl ClaudeBackend {
             git_author_name: "Borg".into(),
             git_author_email: "borg@localhost".into(),
             base_url: String::new(),
+            reasoning_effort: String::new(),
         }
     }
 
@@ -205,6 +207,23 @@ impl ClaudeBackend {
         self.git_author_name = name.to_string();
         self.git_author_email = email.to_string();
         self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = effort.into();
+        self
+    }
+
+    fn normalized_reasoning_effort(&self) -> Option<String> {
+        let effort = self.reasoning_effort.trim().to_ascii_lowercase();
+        match effort.as_str() {
+            "" => None,
+            "low" | "medium" | "high" | "max" => Some(effort),
+            _ => {
+                warn!(effort = %self.reasoning_effort, "ignoring unsupported Claude reasoning effort");
+                None
+            },
+        }
     }
 
     fn resolve_gh_token() -> String {
@@ -254,6 +273,10 @@ impl AgentBackend for ClaudeBackend {
             "--print".to_string(),
             "--dangerously-skip-permissions".to_string(),
         ];
+        if let Some(effort) = self.normalized_reasoning_effort() {
+            claude_args.push("--effort".to_string());
+            claude_args.push(effort);
+        }
 
         // Disallowed tools (combine phase-specific and global context)
         let mut disallowed = phase.disallowed_tools.clone();
@@ -739,9 +762,12 @@ mod tests {
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
+    use borg_core::sandbox::SandboxMode;
+
     use super::{
         container_reachable_url, isolated_proxy_base_url, latest_jsonl_file,
-        load_latest_session_transcript, merge_allowed_tools, BORG_MCP_READ_ONLY_TOOLS,
+        load_latest_session_transcript, merge_allowed_tools, ClaudeBackend,
+        BORG_MCP_READ_ONLY_TOOLS,
     };
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -827,5 +853,22 @@ mod tests {
 
         assert_eq!(transcript, "{\"type\":\"assistant\"}\n");
         fs::remove_dir_all(session_dir).unwrap();
+    }
+
+    #[test]
+    fn normalized_reasoning_effort_accepts_supported_values() {
+        let backend = ClaudeBackend::new("claude", SandboxMode::Direct, "ignored")
+            .with_reasoning_effort("HIGH");
+        assert_eq!(
+            backend.normalized_reasoning_effort().as_deref(),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn normalized_reasoning_effort_rejects_unknown_values() {
+        let backend = ClaudeBackend::new("claude", SandboxMode::Direct, "ignored")
+            .with_reasoning_effort("xhigh");
+        assert!(backend.normalized_reasoning_effort().is_none());
     }
 }

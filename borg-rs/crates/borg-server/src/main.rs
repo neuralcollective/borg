@@ -1115,6 +1115,12 @@ fn build_backends(
         "claude".into(),
         Arc::new(
             ClaudeBackend::new("claude", sandbox_mode.clone(), &config.container_image)
+                .with_reasoning_effort(
+                    std::env::var("CLAUDE_REASONING_EFFORT")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_default(),
+                )
                 .with_timeout(config.agent_timeout_s as u64)
                 .with_resource_limits(config.container_memory_mb, config.container_cpus)
                 .with_git_author(&config.git_author_name, &config.git_author_email)
@@ -1125,17 +1131,25 @@ fn build_backends(
     if !config.codex_api_key.is_empty()
         || borg_core::config::codex_has_credentials(&config.codex_credentials_path)
     {
-        let codex_model = db
-            .get_config("codex_model")
+        let codex_model = std::env::var("CODEX_MODEL")
             .ok()
-            .flatten()
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                db.get_config("codex_model")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or_else(|| "gpt-5.3-codex".to_string());
-        let codex_reasoning_effort = db
-            .get_config("codex_reasoning_effort")
+        let codex_reasoning_effort = std::env::var("CODEX_REASONING_EFFORT")
             .ok()
-            .flatten()
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                db.get_config("codex_reasoning_effort")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or_else(|| "medium".to_string());
         backends.insert(
             "codex".into(),
