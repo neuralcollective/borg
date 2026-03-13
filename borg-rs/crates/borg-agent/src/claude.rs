@@ -462,6 +462,7 @@ impl AgentBackend for ClaudeBackend {
                 let mut cmd =
                     Sandbox::bwrap_command(&writable, &hide, &ro_restore, &ctx.work_dir, &full_cmd);
                 cmd.kill_on_drop(true)
+                    .env_remove("CLAUDECODE")
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
                     .env("CARGO_HOME", &cargo_home)
@@ -579,6 +580,7 @@ impl AgentBackend for ClaudeBackend {
                 cmd.args(&full_cmd[1..])
                     .kill_on_drop(true)
                     .current_dir(&ctx.work_dir)
+                    .env_remove("CLAUDECODE")
                     .env("HOME", &ctx.session_dir)
                     .env("RUSTUP_HOME", &rustup_home)
                     .env("CARGO_HOME", &cargo_home)

@@ -260,6 +260,7 @@ impl AgentBackend for CodexBackend {
         let has_linked_auth = Path::new(&codex_home).join("auth.json").exists();
         cmd.args(&codex_args)
             .current_dir(&ctx.work_dir)
+            .env_remove("CLAUDECODE")
             .env("HOME", &ctx.session_dir)
             .env("CODEX_HOME", &codex_home)
             .stdout(Stdio::piped())
