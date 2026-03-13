@@ -1568,6 +1568,12 @@ impl Pipeline {
         });
 
         info!("running {} phase for task #{}", phase.name, task.id);
+        self.log_pipeline_event(task, "phase.started", &serde_json::json!({
+            "phase": phase.name,
+            "attempt": task.attempt,
+            "revision_count": task.revision_count,
+            "has_pending_messages": had_pending,
+        }));
 
         let backend = match self.resolve_backend(task) {
             Some(b) => b,
@@ -1609,6 +1615,13 @@ impl Pipeline {
             warn!("task #{}: insert_task_output: {e}", task.id);
         }
 
+        self.log_pipeline_event(task, "phase.agent_finished", &serde_json::json!({
+            "phase": phase.name,
+            "success": result.success,
+            "exit_code": exit_code,
+            "output_len": result.output.len(),
+            "raw_stream_len": result.raw_stream.len(),
+        }));
         self.emit(PipelineEvent::Output {
             task_id: Some(task.id),
             message: format!(
@@ -1624,6 +1637,12 @@ impl Pipeline {
                 "task #{} signal: status={} reason={}",
                 task.id, signal.status, signal.reason
             );
+            self.log_pipeline_event(task, "agent.signal", &serde_json::json!({
+                "phase": phase.name,
+                "status": signal.status,
+                "reason": signal.reason,
+                "question": signal.question,
+            }));
         }
 
         // Handle abandon signal: mark failed immediately, don't burn retry budget.
@@ -1633,6 +1652,10 @@ impl Pipeline {
             } else {
                 format!("agent abandoned: {}", signal.reason)
             };
+            self.log_pipeline_event(task, "agent.abandoned", &serde_json::json!({
+                "phase": phase.name,
+                "reason": &reason,
+            }));
             self.db
                 .update_task_status(task.id, "failed", Some(&reason))?;
             return Ok(());
@@ -1644,6 +1667,10 @@ impl Pipeline {
             let state = match Self::read_benchmark_phase_state(&work_dir) {
                 Some(state) => state,
                 None => {
+                    self.log_pipeline_event(task, "guard.benchmark_state_missing", &serde_json::json!({
+                        "phase": phase.name,
+                        "attempt": task.attempt,
+                    }));
                     self.fail_or_retry(
                         task,
                         &phase.name,
@@ -1683,6 +1710,12 @@ impl Pipeline {
             } else {
                 format!("{}\n\nQuestion: {}", reason, signal.question)
             };
+            self.log_pipeline_event(task, "agent.blocked", &serde_json::json!({
+                "phase": phase.name,
+                "reason": &reason,
+                "question": signal.question,
+                "attempt": task.attempt,
+            }));
             self.db
                 .update_task_status(task.id, "blocked", Some(&block_detail))?;
             self.emit(PipelineEvent::Phase {
@@ -1767,12 +1800,22 @@ impl Pipeline {
         if let Some(protocol_error) =
             self.enforce_legal_retrieval_protocol(task, phase, &result.raw_stream)
         {
+            self.log_pipeline_event(task, "guard.retrieval_protocol_rejected", &serde_json::json!({
+                "phase": phase.name,
+                "attempt": task.attempt,
+                "error": protocol_error.chars().take(1000).collect::<String>(),
+            }));
             self.fail_or_retry(task, &phase.name, &protocol_error)?;
             return Ok(());
         }
         if let Some(ref state) = benchmark_state {
             if let Some(state_error) = Self::enforce_legal_benchmark_state_guard(task, phase, state)
             {
+                self.log_pipeline_event(task, "guard.state_guard_rejected", &serde_json::json!({
+                    "phase": phase.name,
+                    "attempt": task.attempt,
+                    "error": state_error.chars().take(1000).collect::<String>(),
+                }));
                 self.fail_or_retry(task, &phase.name, &state_error)?;
                 return Ok(());
             }
@@ -1783,6 +1826,11 @@ impl Pipeline {
             &work_dir,
             &result.output,
         ) {
+            self.log_pipeline_event(task, "guard.clarification_guard_rejected", &serde_json::json!({
+                "phase": phase.name,
+                "attempt": task.attempt,
+                "error": clarification_error.chars().take(1000).collect::<String>(),
+            }));
             self.fail_or_retry(task, &phase.name, &clarification_error)?;
             return Ok(());
         }
@@ -1849,6 +1897,11 @@ impl Pipeline {
             return Ok(());
         }
 
+        self.log_pipeline_event(task, "phase.advanced", &serde_json::json!({
+            "phase": phase.name,
+            "attempt": task.attempt,
+            "verdict_rationale": verdict.rationale.chars().take(500).collect::<String>(),
+        }));
         self.advance_phase(task, phase, mode)?;
         if had_pending {
             if let Err(e) = self.db.mark_messages_delivered(task.id, &phase.name) {
@@ -2513,6 +2566,22 @@ impl Pipeline {
     fn is_legal_benchmark_task(task: &Task) -> bool {
         matches!(task.mode.as_str(), "lawborg" | "legal")
             && task.task_type.trim() == "benchmark_analysis"
+    }
+
+    fn log_pipeline_event(&self, task: &Task, kind: &str, payload: &serde_json::Value) {
+        let pid = if task.project_id > 0 {
+            Some(task.project_id)
+        } else {
+            None
+        };
+        let _ = self.db.log_event_full(
+            Some(task.id),
+            None,
+            pid,
+            "pipeline",
+            kind,
+            payload,
+        );
     }
 
     fn requires_legal_benchmark_state(task: &Task, phase: &PhaseConfig) -> bool {
