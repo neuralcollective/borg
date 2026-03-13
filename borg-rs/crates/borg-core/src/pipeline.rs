@@ -5198,11 +5198,10 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
         return None;
     }
 
-    if has_pre_sign_timing {
-        return Some(first_sentence_like_excerpt(text, 220));
-    }
-
-    let has_non_dispositive_override = contains_any(
+    // Independence signals: the model explicitly states the recommendation
+    // does not depend on any unresolved fact. Pre-sign timing vocabulary
+    // in this context describes deal mechanics, not a hidden caveat.
+    let has_independence_signal = contains_any(
         &normalized,
         &[
             "recommendation is stable",
@@ -5222,6 +5221,29 @@ fn detect_benchmark_clarification_escape(text: &str) -> Option<String> {
             "whichever way each resolves",
             "whichever way that fact resolves",
             "whichever way this resolves",
+            "whichever way",
+            "regardless of",
+            "irrespective of",
+            "unconditional on",
+            "does not block signing",
+            "does not block sign",
+            "do not block signing",
+            "not a sign blocker",
+            "not a sign-blocker",
+        ],
+    );
+
+    if has_independence_signal {
+        return None;
+    }
+
+    if has_pre_sign_timing {
+        return Some(first_sentence_like_excerpt(text, 220));
+    }
+
+    let has_non_dispositive_override = contains_any(
+        &normalized,
+        &[
             "not a pre-sign condition",
             "not a pre sign condition",
             "not a pre-sign prerequisite",
@@ -6883,15 +6905,12 @@ mod legal_benchmark_clarification_guard_tests {
     }
 
     #[test]
-    fn detects_open_questions_declared_non_dispositive_to_sign_recommendation() {
+    fn does_not_flag_recommendation_with_explicit_independence_signal() {
         let text = "The sign recommendation is stable whichever way each open question resolves. TitanBank Procurement/Legal confirmation and BoroughCare configuration do not depend on first receiving an answer before signing.";
 
-        let excerpt = detect_benchmark_clarification_escape(text)
-            .expect("guard should detect non-dispositive override language");
-
         assert!(
-            excerpt.contains("stable whichever way each open question resolves"),
-            "unexpected excerpt: {excerpt}"
+            detect_benchmark_clarification_escape(text).is_none(),
+            "recommendation explicitly declared independent of unresolved facts should not trigger guard"
         );
     }
 
@@ -6948,31 +6967,22 @@ mod legal_benchmark_clarification_guard_tests {
     }
 
     #[test]
-    fn detects_same_in_all_scenarios_escape_hatch() {
+    fn does_not_flag_same_in_all_scenarios_with_independence_signal() {
         let text = "The sign recommendation is the same in all scenarios. It does not depend on resolving the open factual questions before execution because the SPA architecture is calibrated for the worst case.";
 
-        let excerpt = detect_benchmark_clarification_escape(text)
-            .expect("guard should detect same-in-all-scenarios language");
-
         assert!(
-            excerpt.contains("same in all scenarios")
-                || excerpt.contains("does not depend on resolving"),
-            "unexpected excerpt: {excerpt}"
+            detect_benchmark_clarification_escape(text).is_none(),
+            "independence signals ('same in all scenarios', 'does not depend on') should prevent guard from firing"
         );
     }
 
     #[test]
-    fn detects_same_recommendation_without_explicit_pre_sign_timing() {
+    fn does_not_flag_same_recommendation_with_whichever_way_signal() {
         let text = "The sign recommendation is the same whichever way the unresolved BoroughCare configuration question resolves. It is not a blocker and does not change the recommendation.";
 
-        let excerpt = detect_benchmark_clarification_escape(text).expect(
-            "guard should detect unresolved-fact override without explicit pre-sign timing",
-        );
-
         assert!(
-            excerpt.contains("same whichever way")
-                || excerpt.contains("does not change the recommendation"),
-            "unexpected excerpt: {excerpt}"
+            detect_benchmark_clarification_escape(text).is_none(),
+            "independence signal ('whichever way') should prevent guard from firing"
         );
     }
 
