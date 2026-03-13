@@ -5737,8 +5737,12 @@ fn should_offer_retrieval_reuse_guidance(task: &Task, prior_passed: bool) -> boo
     if !prior_passed || task.attempt <= 0 {
         return false;
     }
-    let last_error = latest_retry_error(&task.last_error);
-    is_clarification_resume_error(last_error)
+    // Reuse prior retrieval pass on any retry — the most common cause is a
+    // clarification block/unblock cycle where the retrieval was satisfied before
+    // blocking, but the post-unblock retry starts a fresh session without
+    // document tool calls.  Restricting reuse to clarification-resume errors
+    // caused cascading retrieval failures that exhausted max_attempts.
+    true
 }
 
 fn latest_retry_error(last_error: &str) -> &str {
@@ -6490,7 +6494,7 @@ mod legal_retrieval_protocol_tests {
     }
 
     #[test]
-    fn ordinary_retry_cannot_reuse_prior_passed_retrieval() {
+    fn ordinary_retry_reuses_prior_passed_retrieval() {
         let mut task = sample_task("benchmark_analysis", "legal-ew-003", "Ordinary retry");
         task.mode = "legal".into();
         task.requires_exhaustive_corpus_review = true;
@@ -6498,8 +6502,8 @@ mod legal_retrieval_protocol_tests {
         task.last_error = "Compile fix failed".into();
 
         assert!(
-            !should_reuse_prior_retrieval_pass(&task, true, false),
-            "non-clarification retries must still satisfy the retrieval protocol themselves"
+            should_reuse_prior_retrieval_pass(&task, true, false),
+            "retries should reuse prior retrieval pass since corpus is unchanged"
         );
     }
 
