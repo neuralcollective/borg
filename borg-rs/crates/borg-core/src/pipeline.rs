@@ -2431,6 +2431,8 @@ impl Pipeline {
         // Cross-consistency: if a definitive sign/close recommendation coexists with
         // multiple weak-support uncertainties yet none of them admit changes_sign or
         // changes_close_only, the model is suppressing the flag to bypass the guard.
+        // Skip in revision stages — the model may have exhausted its clarification
+        // budget and is legitimately structuring around residual uncertainties.
         let has_definitive_signclose = state.claims.iter().any(|c| {
             matches!(
                 c.claim_type.trim(),
@@ -2438,7 +2440,7 @@ impl Pipeline {
             ) && c.safe_to_state_definitively
                 && !c.depends_on_unresolved_fact
         });
-        if has_definitive_signclose {
+        if has_definitive_signclose && task.revision_count == 0 {
             let weak: Vec<_> = state
                 .uncertainties
                 .iter()
