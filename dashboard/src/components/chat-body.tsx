@@ -17,6 +17,7 @@ import {
 import { useDictation } from "@/lib/dictation";
 import { parseStreamEvents, rawStreamToEvents, type TermLine } from "@/lib/stream-utils";
 import { useChatEvents } from "@/lib/use-chat-events";
+import { useChatStream } from "@/lib/use-chat-stream";
 import { cn } from "@/lib/utils";
 import { ActionActivity } from "./action-card";
 import { pickWorkingLabel } from "./borging";
