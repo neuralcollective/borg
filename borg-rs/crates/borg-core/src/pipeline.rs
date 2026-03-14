@@ -2482,8 +2482,10 @@ impl Pipeline {
         }
 
         // Per-uncertainty check: any uncertainty with hard-unavailable support must
-        // either be routed to blocked_clarification or carry a materiality justification
-        // explaining why the fact cannot change the recommendation.
+        // be routed to blocked_clarification. In the initial review stage, materiality
+        // justifications are NOT accepted — if a fact is truly immaterial, don't list
+        // it as an uncertainty. This forces the model to actually use the clarification
+        // channel for threshold facts rather than writing hollow justifications.
         // Collect ALL failing uncertainties so the model can fix them in one pass.
         // Skip in revision stages where clarification budget may be exhausted.
         if task.revision_count == 0 {
@@ -2499,18 +2501,6 @@ impl Pipeline {
                 if uncertainty.recommended_treatment.trim() == "blocked_clarification" {
                     continue;
                 }
-                let j = uncertainty.justification.to_lowercase();
-                let has_materiality_justification = j.contains("immaterial")
-                    || j.contains("does not affect")
-                    || j.contains("would not change")
-                    || j.contains("regardless of")
-                    || j.contains("does not alter")
-                    || j.contains("whichever way")
-                    || j.contains("not disposition-changing")
-                    || j.contains("non-material");
-                if has_materiality_justification {
-                    continue;
-                }
                 failing_issues.push(format!(
                     "  - Issue: {} | Missing fact: {} | Support: {} | Treatment: {}",
                     uncertainty.issue.trim(),
@@ -2523,12 +2513,13 @@ impl Pipeline {
                 return Some(format!(
                     "Benchmark structured-state guard failed.\n\
                      {} uncertainties have hard-unavailable support but were not routed to \
-                     blocked clarification and lack materiality justifications.\n\
+                     blocked_clarification.\n\
                      Failing uncertainties:\n{}\n\
-                     For EACH of these: either use the clarification channel to resolve \
-                     the fact (one question at a time via signal.json), or explain in the \
-                     justification field why an adverse answer would not change your \
-                     sign/close recommendation. You must address ALL of them, not just one.",
+                     In the initial review stage, every uncertainty with unavailable/conflicting/stale \
+                     support MUST use the clarification channel. If a fact is truly immaterial to your \
+                     recommendation, do not list it as an uncertainty. For each listed uncertainty \
+                     with hard-unavailable support, set recommended_treatment to \"blocked_clarification\" \
+                     and write .borg/signal.json to ask about it. Ask one question at a time.",
                     failing_issues.len(),
                     failing_issues.join("\n")
                 ));
