@@ -637,6 +637,100 @@ pub(crate) async fn sse_chat_events(
     )
 }
 
+/// Per-thread SSE stream. Replays full history on connect, then streams live events.
+/// On reconnect the client gets the full history again — no gaps ever possible.
+pub(crate) async fn sse_chat_thread_stream(
+    State(state): State<Arc<AppState>>,
+    Path(thread): Path<String>,
+    axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let ws_id = workspace.id;
+    let internal_thread = resolve_internal_thread(&state.db, ws_id, &thread);
+    tracing::info!(ws_id, thread = %internal_thread, "SSE thread stream client connected");
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let csm = Arc::clone(&state.chat_stream_manager);
+    let db = Arc::clone(&state.db);
+
+    tokio::spawn(async move {
+        let (history, live_rx) = csm.subscribe(&internal_thread).await;
+
+        // Replay history
+        for line in &history {
+            let wrapped = serde_json::json!({
+                "type": "chat_stream",
+                "thread": &thread,
+                "data": line,
+            }).to_string();
+            if tx.send(wrapped).is_err() {
+                return;
+            }
+        }
+
+        // If stream already ended (or never existed), try to send raw_stream from DB
+        let Some(mut live_rx) = live_rx else {
+            if history.is_empty() {
+                // No active stream — try DB fallback for completed conversations
+                if let Ok(messages) = db.get_chat_messages(&internal_thread, 100) {
+                    for msg in &messages {
+                        if let Some(ref raw) = msg.raw_stream {
+                            for line in raw.lines() {
+                                if line.is_empty() { continue; }
+                                let wrapped = serde_json::json!({
+                                    "type": "chat_stream",
+                                    "thread": &thread,
+                                    "data": line,
+                                }).to_string();
+                                if tx.send(wrapped).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        };
+
+        // Stream live events
+        loop {
+            match live_rx.recv().await {
+                Ok(line) => {
+                    let wrapped = serde_json::json!({
+                        "type": "chat_stream",
+                        "thread": &thread,
+                        "data": line,
+                    }).to_string();
+                    if tx.send(wrapped).is_err() {
+                        return;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // On lag, close the connection. Client auto-reconnects
+                    // via EventSource and gets full history replay.
+                    return;
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let stream = UnboundedReceiverStream::new(rx)
+        .map(|data| Ok::<_, std::convert::Infallible>(Event::default().data(data)));
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    )
+}
+
+/// Resolve a client-facing thread name (e.g. "web:project-5") to an internal
+/// thread key (e.g. "web:workspace:3:web:project-5").
+fn resolve_internal_thread(db: &Db, ws_id: i64, thread: &str) -> String {
+    // The client sends the short thread name. We need the full internal key.
+    format!("web:workspace:{}:{}", ws_id, thread)
+}
+
 pub(crate) async fn get_chat_threads(
     State(state): State<Arc<AppState>>,
     axum::Extension(workspace): axum::Extension<crate::auth::WorkspaceContext>,

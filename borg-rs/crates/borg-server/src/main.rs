@@ -1551,6 +1551,7 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
         .route("/api/events", get(routes::get_events))
         // Chat
         .route("/api/chat/events", get(routes::sse_chat_events))
+        .route("/api/chat/threads/:thread/stream", get(routes::sse_chat_thread_stream))
         .route("/api/chat/threads", get(routes::get_chat_threads))
         .route("/api/chat/messages", get(routes::get_chat_messages))
         .route("/api/chat/status", get(routes::get_chat_thread_status))
