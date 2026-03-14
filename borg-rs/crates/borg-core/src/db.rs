@@ -177,6 +177,15 @@ pub struct ChatAgentRun {
     pub completed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct UsageSummary {
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cost_usd: f64,
+    pub message_count: i64,
+    pub task_count: i64,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProjectRow {
     pub id: i64,
@@ -6729,5 +6738,124 @@ impl Db {
             .collect::<pg::Result<Vec<_>>>()
             .context("list_cron_runs")?;
         Ok(rows)
+    }
+
+    // ── Cost Tracking ────────────────────────────────────────────────────
+
+    pub fn update_message_usage(
+        &self,
+        message_id: &str,
+        chat_jid: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cost_usd: f64,
+        model: &str,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE messages SET input_tokens = ?1, output_tokens = ?2, \
+             cost_usd = ?3, model = ?4 WHERE chat_jid = ?5 AND id = ?6",
+            params![input_tokens, output_tokens, cost_usd, model, chat_jid, message_id],
+        )
+        .context("update_message_usage")?;
+        Ok(())
+    }
+
+    pub fn accumulate_task_usage(
+        &self,
+        task_id: i64,
+        input_tokens: i64,
+        output_tokens: i64,
+        cost_usd: f64,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE pipeline_tasks SET \
+             total_input_tokens = COALESCE(total_input_tokens, 0) + ?1, \
+             total_output_tokens = COALESCE(total_output_tokens, 0) + ?2, \
+             total_cost_usd = COALESCE(total_cost_usd, 0) + ?3, \
+             updated_at = ?4 WHERE id = ?5",
+            params![input_tokens, output_tokens, cost_usd, now_str(), task_id],
+        )
+        .context("accumulate_task_usage")?;
+        Ok(())
+    }
+
+    pub fn get_usage_summary(
+        &self,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<UsageSummary> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+
+        let mut where_clauses = Vec::new();
+        let mut params_vec: Vec<Box<dyn pg::types::ToSql>> = Vec::new();
+
+        if let Some(from) = from {
+            where_clauses.push("timestamp >= ?".to_string());
+            params_vec.push(Box::new(from.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        if let Some(to) = to {
+            where_clauses.push("timestamp <= ?".to_string());
+            params_vec.push(Box::new(to.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        where_clauses.push("input_tokens IS NOT NULL".to_string());
+
+        let where_sql = format!(" WHERE {}", where_clauses.join(" AND "));
+        let param_refs: Vec<&dyn pg::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+
+        let msg_sql = format!(
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), \
+             COALESCE(SUM(cost_usd), 0), COUNT(*) FROM messages{where_sql}"
+        );
+        let (msg_input, msg_output, msg_cost, msg_count): (i64, i64, f64, i64) = conn
+            .query_row(&msg_sql, param_refs.as_slice(), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .context("get_usage_summary messages")?;
+
+        let mut task_where = Vec::new();
+        let mut task_params: Vec<Box<dyn pg::types::ToSql>> = Vec::new();
+        if let Some(from) = from {
+            task_where.push("created_at >= ?".to_string());
+            task_params.push(Box::new(from.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        if let Some(to) = to {
+            task_where.push("created_at <= ?".to_string());
+            task_params.push(Box::new(to.format("%Y-%m-%d %H:%M:%S").to_string()));
+        }
+        task_where.push("total_input_tokens > 0".to_string());
+
+        let task_where_sql = format!(" WHERE {}", task_where.join(" AND "));
+        let task_param_refs: Vec<&dyn pg::types::ToSql> =
+            task_params.iter().map(|p| p.as_ref()).collect();
+
+        let task_sql = format!(
+            "SELECT COALESCE(SUM(total_input_tokens), 0), COALESCE(SUM(total_output_tokens), 0), \
+             COALESCE(SUM(total_cost_usd), 0), COUNT(*) FROM pipeline_tasks{task_where_sql}"
+        );
+        let (task_input, task_output, task_cost, task_count): (i64, i64, f64, i64) = conn
+            .query_row(&task_sql, task_param_refs.as_slice(), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .context("get_usage_summary tasks")?;
+
+        Ok(UsageSummary {
+            total_input_tokens: msg_input + task_input,
+            total_output_tokens: msg_output + task_output,
+            total_cost_usd: msg_cost + task_cost,
+            message_count: msg_count,
+            task_count,
+        })
     }
 }

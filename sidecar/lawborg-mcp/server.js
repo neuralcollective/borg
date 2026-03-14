@@ -4,6 +4,67 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { writeFileSync } from "fs";
+
+const SESSION_DIR = process.env.SESSION_DIR || "";
+
+// ── Instrumentation ─────────────────────────────────────────────────────
+
+const callCounts = new Map();
+const callMetrics = new Map();
+
+function instrumentHandler(name, handler, timeoutMs = 30000) {
+  return async (args) => {
+    const count = (callCounts.get(name) || 0) + 1;
+    callCounts.set(name, count);
+    if (count === 101) {
+      console.error(JSON.stringify({ warning: `tool ${name} exceeded 100 calls this session`, tool: name, count, timestamp: new Date().toISOString() }));
+    }
+
+    const start = performance.now();
+    let success = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const result = await Promise.race([
+        handler(args),
+        new Promise((_, reject) => {
+          controller.signal.addEventListener("abort", () => reject(new Error(`${name} timed out after ${timeoutMs}ms`)));
+        }),
+      ]);
+      return result;
+    } catch (err) {
+      success = false;
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      const duration_ms = Math.round((performance.now() - start) * 100) / 100;
+      console.error(JSON.stringify({ tool: name, duration_ms, success, timestamp: new Date().toISOString() }));
+
+      const prev = callMetrics.get(name) || { calls: 0, total_ms: 0, errors: 0 };
+      prev.calls += 1;
+      prev.total_ms += duration_ms;
+      if (!success) prev.errors += 1;
+      callMetrics.set(name, prev);
+    }
+  };
+}
+
+function writeMetricsSummary() {
+  if (!SESSION_DIR || callMetrics.size === 0) return;
+  const summary = {};
+  for (const [tool, m] of callMetrics) {
+    summary[tool] = { calls: m.calls, total_ms: Math.round(m.total_ms * 100) / 100, errors: m.errors, avg_ms: Math.round((m.total_ms / m.calls) * 100) / 100 };
+  }
+  try {
+    writeFileSync(`${SESSION_DIR}/.mcp-metrics.json`, JSON.stringify(summary, null, 2) + "\n");
+  } catch (_) {}
+}
+
+process.on("exit", writeMetricsSummary);
+process.on("SIGTERM", () => { writeMetricsSummary(); process.exit(0); });
+process.on("SIGINT", () => { writeMetricsSummary(); process.exit(0); });
 
 // ── BYOK keys (optional) ──────────────────────────────────────────────
 const LEXIS_KEY = process.env.LEXISNEXIS_API_KEY || "";
@@ -2571,10 +2632,40 @@ server.setRequestHandler({ method: "tools/list" }, async () => ({
   tools: getAvailableTools(),
 }));
 
+const SEARCH_TOOLS = new Set([
+  "courtlistener_search_opinions", "courtlistener_search_dockets",
+  "courtlistener_search_judges", "courtlistener_search_oral_arguments",
+  "courtlistener_search_recap_documents", "courtlistener_citation_lookup",
+  "edgar_fulltext_search", "federal_register_search",
+  "regulations_search_documents", "regulations_search_dockets",
+  "congress_search_bills", "congress_search_members",
+  "uk_legislation_search", "eurlex_search",
+  "openstates_search_bills", "canlii_search",
+  "uspto_search_patents", "lexis_search", "lexmachina_case_search",
+  "intelligize_search_filings", "intelligize_search_clauses",
+  "westlaw_search", "westlaw_dockets",
+  "clio_search_matters", "clio_search_contacts", "clio_search_documents",
+  "imanage_search", "netdocuments_search",
+  "alb_search_matters", "alb_list_clients", "alb_search_documents",
+  "kldiscovery_search_review_set",
+]);
+
+const instrumentedToolCache = new Map();
+
+function getInstrumentedHandler(name) {
+  let wrapped = instrumentedToolCache.get(name);
+  if (wrapped) return wrapped;
+  const timeoutMs = SEARCH_TOOLS.has(name) ? 60000 : 30000;
+  wrapped = instrumentHandler(name, (args) => handleTool(name, args), timeoutMs);
+  instrumentedToolCache.set(name, wrapped);
+  return wrapped;
+}
+
 server.setRequestHandler({ method: "tools/call" }, async (request) => {
   const { name, arguments: args } = request.params;
   try {
-    const result = await handleTool(name, args || {});
+    const handler = getInstrumentedHandler(name);
+    const result = await handler(args || {});
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };

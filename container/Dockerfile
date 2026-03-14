@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI and make it accessible to the bun user via group permissions
-RUN bun install -g @anthropic-ai/claude-code@latest \
+# Install Claude Code CLI and Agent SDK, make accessible to the bun user via group permissions
+RUN bun install -g @anthropic-ai/claude-code@latest @anthropic-ai/claude-agent-sdk \
     && chgrp bun /root && chmod g+x /root \
     && chgrp -R bun /root/.bun && chmod -R g+rx /root/.bun
 

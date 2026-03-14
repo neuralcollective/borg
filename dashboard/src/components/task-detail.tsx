@@ -23,6 +23,9 @@ import { LiveTerminal } from "./live-terminal";
 import { PhaseTracker } from "./phase-tracker";
 import { StatusBadge } from "./status-badge";
 import { TaskChat } from "./task-chat";
+import { ToolCallTimeline } from "./tool-call-timeline";
+
+type TaskDetailTab = "output" | "tool-calls";
 
 interface TaskDetailProps {
   taskId: number;
@@ -66,6 +69,7 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
   const [revisionFeedback, setRevisionFeedback] = useState("");
   const [revHistory, setRevHistory] = useState<RevisionHistory | null>(null);
   const [showRevHistory, setShowRevHistory] = useState(false);
+  const [activeTab, setActiveTab] = useState<TaskDetailTab>("output");
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const { data: diagnostics, isFetching: diagnosticsLoading } = useQuery<TaskDiagnostics>({
     queryKey: ["task_diagnostics", taskId],
@@ -437,21 +441,52 @@ export function TaskDetail({ taskId, onBack }: TaskDetailProps) {
         </div>
       )}
 
-      {/* Main content area: terminal / outputs + chat */}
+      {/* Tab bar */}
+      <div className="shrink-0 flex gap-0 border-b border-[#2a2520] px-5">
+        {([
+          { key: "output" as const, label: "Output" },
+          { key: "tool-calls" as const, label: "Tool Calls" },
+        ]).map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={cn(
+              "border-b-2 px-4 py-2.5 text-[12px] font-medium transition-colors",
+              activeTab === tab.key
+                ? "border-amber-500 text-[#e8e0d4]"
+                : "border-transparent text-[#6b6459] hover:text-[#e8e0d4]",
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Main content area */}
       <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-        {/* Live terminal for active tasks */}
-        {(isActive || streaming) && (
-          <div className="mx-4 mt-3 flex-1 min-h-0">
-            <LiveTerminal events={events} streaming={streaming} />
-          </div>
+        {activeTab === "output" && (
+          <>
+            {/* Live terminal for active tasks */}
+            {(isActive || streaming) && (
+              <div className="mx-4 mt-3 flex-1 min-h-0">
+                <LiveTerminal events={events} streaming={streaming} />
+              </div>
+            )}
+
+            {/* Completed phase outputs */}
+            {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
+              <OutputSelector outputs={task.outputs} />
+            ) : !isActive && !streaming ? (
+              <div className="flex flex-1 items-center justify-center text-xs text-[#6b6459]">No agent outputs yet</div>
+            ) : null}
+          </>
         )}
 
-        {/* Completed phase outputs */}
-        {!isActive && !streaming && task.outputs && task.outputs.length > 0 ? (
-          <OutputSelector outputs={task.outputs} />
-        ) : !isActive && !streaming ? (
-          <div className="flex flex-1 items-center justify-center text-xs text-[#6b6459]">No agent outputs yet</div>
-        ) : null}
+        {activeTab === "tool-calls" && (
+          <div className="flex-1 min-h-0">
+            <ToolCallTimeline taskId={task.id} taskStatus={task.status} />
+          </div>
+        )}
 
         <TaskChat taskId={task.id} />
       </div>

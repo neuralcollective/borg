@@ -29,6 +29,7 @@ import type {
   TaskDetail,
   TaskMessage,
   TaskOutput,
+  ToolCallEvent,
 } from "./types";
 
 // Runtime base URL: set window.__API_BASE_URL__ = "https://api.example.com" in a <script> before the app loads.
@@ -618,6 +619,22 @@ export interface TaskDiagnostics {
 
 export async function getTaskDiagnostics(id: number): Promise<TaskDiagnostics> {
   return fetchJson(`/api/tasks/${id}/diagnostics`);
+}
+
+export async function getToolCalls(params: {
+  taskId?: number;
+  chatKey?: string;
+  runId?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ToolCallEvent[]> {
+  const searchParams = new URLSearchParams();
+  if (params.taskId) searchParams.set("task_id", String(params.taskId));
+  if (params.chatKey) searchParams.set("chat_key", params.chatKey);
+  if (params.runId) searchParams.set("run_id", params.runId);
+  if (params.limit) searchParams.set("limit", String(params.limit));
+  if (params.offset) searchParams.set("offset", String(params.offset));
+  return fetchJson(`/api/tool-calls?${searchParams}`);
 }
 
 export function useQueue() {

@@ -363,6 +363,20 @@ export function getPhaseLabel(phase: string, mode?: string, taskType?: string): 
   return SWE_PHASE_LABELS[phase] ?? phase;
 }
 
+export interface ToolCallEvent {
+  id: number;
+  task_id?: number;
+  chat_key?: string;
+  run_id: string;
+  tool_name: string;
+  input_summary?: string;
+  output_summary?: string;
+  started_at: string;
+  duration_ms?: number;
+  success?: boolean;
+  error?: string;
+}
+
 export function isActiveStatus(status: string) {
   return !["done", "merged", "failed", "blocked"].includes(status);
 }

@@ -40,8 +40,12 @@ local-loadtest *ARGS='':
 sidecar:
     cd sidecar && bun install
 
+# Install agent-bridge dependencies
+agent-bridge:
+    cd sidecar/agent-bridge && bun install
+
 # Full setup: build everything
-setup: image sidecar dash b
+setup: image sidecar agent-bridge dash b
 
 # Restart/start the service and verify API comes up.
 start: restart
@@ -98,7 +102,7 @@ ensure-stack:
     fi
 
 # Build release and restart service
-deploy: ensure-stack b restart
+deploy: ensure-stack b agent-bridge restart
 
 # Test, build, and restart service
 s: t b install-service restart

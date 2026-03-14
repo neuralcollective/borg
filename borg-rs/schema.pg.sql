@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS messages (
   is_from_me BIGINT DEFAULT 0,
   is_bot_message BIGINT DEFAULT 0,
   raw_stream TEXT,
+  input_tokens BIGINT,
+  output_tokens BIGINT,
+  cost_usd DOUBLE PRECISION,
+  model TEXT,
   PRIMARY KEY (chat_jid, id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(chat_jid, timestamp);
@@ -122,6 +126,9 @@ CREATE TABLE IF NOT EXISTS pipeline_tasks (
   started_at TEXT,
   completed_at TEXT,
   duration_secs BIGINT,
+  total_input_tokens BIGINT DEFAULT 0,
+  total_output_tokens BIGINT DEFAULT 0,
+  total_cost_usd DOUBLE PRECISION DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS')),
   updated_at TEXT NOT NULL DEFAULT (to_char(timezone('UTC', now()), 'YYYY-MM-DD HH24:MI:SS'))
 );
@@ -598,3 +605,39 @@ CREATE TABLE IF NOT EXISTS cron_runs (
   task_id BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at DESC);
+
+-- ── Cost tracking migrations ────────────────────────────────────────────
+DO $$ BEGIN
+  ALTER TABLE messages ADD COLUMN input_tokens BIGINT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE messages ADD COLUMN output_tokens BIGINT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE messages ADD COLUMN cost_usd DOUBLE PRECISION;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE messages ADD COLUMN model TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE pipeline_tasks ADD COLUMN total_input_tokens BIGINT DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE pipeline_tasks ADD COLUMN total_output_tokens BIGINT DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE pipeline_tasks ADD COLUMN total_cost_usd DOUBLE PRECISION DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;

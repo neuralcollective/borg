@@ -99,6 +99,7 @@ cd ${REMOTE_DIR}
 
 cd borg-rs && cargo build --release && cd ..
 cd dashboard && bun install --frozen-lockfile && bun run build && cd ..
+cd sidecar/agent-bridge && bun install && cd ../..
 docker build -t borg-agent -f container/Dockerfile container/
 
 # Ensure borg user owns the entire working directory

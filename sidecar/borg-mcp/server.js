@@ -5,7 +5,9 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { writeFileSync } from "fs";
 
+const SESSION_DIR = process.env.SESSION_DIR || "";
 const API_URL = process.env.API_BASE_URL || "http://127.0.0.1:3131";
 const API_TOKEN = process.env.API_TOKEN || "";
 const PROJECT_ID = process.env.PROJECT_ID || "";
@@ -31,6 +33,64 @@ async function apiFetch(path, opts = {}) {
   const ct = res.headers.get("content-type") || "";
   return ct.includes("application/json") ? res.json() : res.text();
 }
+
+// ── Instrumentation ─────────────────────────────────────────────────────
+
+const callCounts = new Map();
+const callMetrics = new Map();
+
+function instrumentHandler(name, handler, timeoutMs = 30000) {
+  return async (args) => {
+    const count = (callCounts.get(name) || 0) + 1;
+    callCounts.set(name, count);
+    if (count === 101) {
+      console.error(JSON.stringify({ warning: `tool ${name} exceeded 100 calls this session`, tool: name, count, timestamp: new Date().toISOString() }));
+    }
+
+    const start = performance.now();
+    let success = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const result = await Promise.race([
+        handler(args),
+        new Promise((_, reject) => {
+          controller.signal.addEventListener("abort", () => reject(new Error(`${name} timed out after ${timeoutMs}ms`)));
+        }),
+      ]);
+      return result;
+    } catch (err) {
+      success = false;
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      const duration_ms = Math.round((performance.now() - start) * 100) / 100;
+      console.error(JSON.stringify({ tool: name, duration_ms, success, timestamp: new Date().toISOString() }));
+
+      const prev = callMetrics.get(name) || { calls: 0, total_ms: 0, errors: 0 };
+      prev.calls += 1;
+      prev.total_ms += duration_ms;
+      if (!success) prev.errors += 1;
+      callMetrics.set(name, prev);
+    }
+  };
+}
+
+function writeMetricsSummary() {
+  if (!SESSION_DIR || callMetrics.size === 0) return;
+  const summary = {};
+  for (const [tool, m] of callMetrics) {
+    summary[tool] = { calls: m.calls, total_ms: Math.round(m.total_ms * 100) / 100, errors: m.errors, avg_ms: Math.round((m.total_ms / m.calls) * 100) / 100 };
+  }
+  try {
+    writeFileSync(`${SESSION_DIR}/.mcp-metrics.json`, JSON.stringify(summary, null, 2) + "\n");
+  } catch (_) {}
+}
+
+process.on("exit", writeMetricsSummary);
+process.on("SIGTERM", () => { writeMetricsSummary(); process.exit(0); });
+process.on("SIGINT", () => { writeMetricsSummary(); process.exit(0); });
 
 // ── Tool definitions ────────────────────────────────────────────────────
 
@@ -618,18 +678,18 @@ async function handleListProjects() {
 }
 
 const HANDLERS = {
-  search_documents: handleSearchDocuments,
-  list_documents: handleListDocuments,
-  read_document: handleReadDocument,
-  check_coverage: handleCheckCoverage,
-  get_document_categories: handleGetDocumentCategories,
-  create_task: handleCreateTask,
-  get_task_status: handleGetTaskStatus,
-  list_project_tasks: handleListProjectTasks,
-  list_services: handleListServices,
-  upload_to_knowledge: handleUploadToKnowledge,
-  list_knowledge_files: handleListKnowledgeFiles,
-  list_projects: handleListProjects,
+  search_documents: instrumentHandler("search_documents", handleSearchDocuments, 60000),
+  list_documents: instrumentHandler("list_documents", handleListDocuments),
+  read_document: instrumentHandler("read_document", handleReadDocument),
+  check_coverage: instrumentHandler("check_coverage", handleCheckCoverage, 60000),
+  get_document_categories: instrumentHandler("get_document_categories", handleGetDocumentCategories),
+  create_task: instrumentHandler("create_task", handleCreateTask),
+  get_task_status: instrumentHandler("get_task_status", handleGetTaskStatus),
+  list_project_tasks: instrumentHandler("list_project_tasks", handleListProjectTasks),
+  list_services: instrumentHandler("list_services", handleListServices),
+  upload_to_knowledge: instrumentHandler("upload_to_knowledge", handleUploadToKnowledge),
+  list_knowledge_files: instrumentHandler("list_knowledge_files", handleListKnowledgeFiles),
+  list_projects: instrumentHandler("list_projects", handleListProjects),
 };
 
 // ── MCP server setup ────────────────────────────────────────────────────
