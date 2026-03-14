@@ -9,6 +9,7 @@ pub mod knowledge;
 pub mod linked_credentials;
 pub mod modes;
 pub mod observer;
+pub mod parser;
 pub mod pgcompat;
 pub mod pipeline;
 mod pipeline_maintenance;
@@ -17,6 +18,7 @@ pub mod secrets;
 pub mod sidecar;
 pub mod stream;
 pub mod telegram;
+pub mod tool_calls;
 pub mod traits;
 pub mod types;
 
