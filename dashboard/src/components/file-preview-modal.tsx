@@ -1,7 +1,5 @@
 import { FileText, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
-import { fetchProjectFileContent } from "@/lib/api";
-import type { ProjectFile } from "@/lib/types";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 
 const DocxViewer = lazy(() => import("./viewers/docx-viewer").then((m) => ({ default: m.DocxViewer })));
 const XlsxViewer = lazy(() => import("./viewers/xlsx-viewer").then((m) => ({ default: m.XlsxViewer })));
@@ -10,23 +8,24 @@ const PdfViewer = lazy(() => import("./viewers/pdf-viewer").then((m) => ({ defau
 
 type ViewerType = "docx" | "xlsx" | "pptx" | "pdf" | "image" | "text";
 
-function pickViewer(mime: string, name: string): ViewerType | null {
+function pickViewer(name: string, mime?: string): ViewerType | null {
   const lower = name.toLowerCase();
-  if (mime.includes("pdf") || lower.endsWith(".pdf")) return "pdf";
-  if (mime.includes("wordprocessingml") || lower.endsWith(".docx")) return "docx";
-  if (mime.includes("spreadsheetml") || lower.endsWith(".xlsx")) return "xlsx";
-  if (mime.includes("presentationml") || lower.endsWith(".pptx")) return "pptx";
-  if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(lower) || mime.startsWith("image/")) return "image";
+  if (mime?.includes("pdf") || lower.endsWith(".pdf")) return "pdf";
+  if (mime?.includes("wordprocessingml") || lower.endsWith(".docx")) return "docx";
+  if (mime?.includes("spreadsheetml") || lower.endsWith(".xlsx")) return "xlsx";
+  if (mime?.includes("presentationml") || lower.endsWith(".pptx")) return "pptx";
+  if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(lower) || mime?.startsWith("image/")) return "image";
   if (
     /\.(txt|md|csv|json|log|xml|yaml|yml|toml|ini|cfg|conf|sh|py|js|ts|rs|go|rb|html|css)$/i.test(lower) ||
-    mime.startsWith("text/")
+    mime?.startsWith("text/")
   )
     return "text";
   return null;
 }
 
-export function isPreviewable(file: { mime_type: string; file_name: string }): boolean {
-  return pickViewer(file.mime_type, file.file_name) !== null;
+/** Check if a file can be previewed, works with or without mime_type */
+export function isPreviewable(file: { file_name: string; mime_type?: string }): boolean {
+  return pickViewer(file.file_name, file.mime_type) !== null;
 }
 
 function Spinner() {
@@ -37,14 +36,20 @@ function Spinner() {
   );
 }
 
+export interface PreviewableFile {
+  id: number;
+  file_name: string;
+  mime_type?: string;
+}
+
 export function FilePreviewModal({
   file,
-  projectId,
+  fetchContent,
   onClose,
   isActive,
 }: {
-  file: ProjectFile;
-  projectId: number;
+  file: PreviewableFile;
+  fetchContent: (fileId: number) => Promise<ArrayBuffer>;
   onClose: () => void;
   isActive?: boolean;
 }) {
@@ -52,18 +57,21 @@ export function FilePreviewModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const viewerType = pickViewer(file.mime_type, file.file_name);
+  const viewerType = pickViewer(file.file_name, file.mime_type);
 
-  useEffect(() => {
+  const loadContent = useCallback(() => {
     setBuffer(null);
     setLoading(true);
     setError(null);
-
-    fetchProjectFileContent(projectId, file.id)
+    fetchContent(file.id)
       .then(setBuffer)
       .catch((e) => setError(e.message || "Failed to load file"))
       .finally(() => setLoading(false));
-  }, [projectId, file.id]);
+  }, [fetchContent, file.id]);
+
+  useEffect(() => {
+    loadContent();
+  }, [loadContent]);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -106,14 +114,7 @@ export function FilePreviewModal({
             <div className="flex h-48 flex-col items-center justify-center gap-3">
               <span className="text-[13px] text-red-400">{error}</span>
               <button
-                onClick={() => {
-                  setLoading(true);
-                  setError(null);
-                  fetchProjectFileContent(projectId, file.id)
-                    .then(setBuffer)
-                    .catch((e) => setError(e.message))
-                    .finally(() => setLoading(false));
-                }}
+                onClick={loadContent}
                 className="rounded-lg border border-white/[0.07] px-4 py-2 text-[12px] text-zinc-400 transition-colors hover:border-white/[0.12] hover:text-zinc-300"
               >
                 Retry

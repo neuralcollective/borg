@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Download,
   FileText,
   Folder,
   GitBranch,
@@ -16,7 +15,6 @@ import {
   Upload,
   User,
   Wrench,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FtsSearchResult, UploadSession } from "@/lib/api";
@@ -33,6 +31,7 @@ import {
   deleteKnowledgeRepo,
   deleteUserKnowledgeFile,
   fetchKnowledgeContent,
+  fetchProjectFileContent,
   fetchProjectFileText,
   fetchUserKnowledgeContent,
   getProjectUploadSessionStatus,
@@ -62,6 +61,7 @@ import { getVocabulary, useVocabulary } from "@/lib/vocabulary";
 import { ChatBody } from "./chat-body";
 import { CloudStoragePanel } from "./cloud-storage";
 import {
+  downloadFile,
   FileListItem,
   FileListPagination,
   FilePreviewWrapper,
@@ -1382,7 +1382,7 @@ export function ProjectsPanel() {
       )}
 
       {activeProjectId && (
-        <FilePreviewWrapper file={previewFile} projectId={activeProjectId} onClose={() => setPreviewFile(null)} />
+        <FilePreviewWrapper file={previewFile} fetchContent={(id) => fetchProjectFileContent(activeProjectId, id)} onClose={() => setPreviewFile(null)} />
       )}
       {textViewFile && (
         <div
@@ -1455,8 +1455,6 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
   const files = page?.files ?? [];
   const queryClient = useQueryClient();
   const [previewFile, setPreviewFile] = useState<KnowledgeFile | null>(null);
-  const [previewBuffer, setPreviewBuffer] = useState<ArrayBuffer | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
 
@@ -1535,7 +1533,6 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
       if (isOrg) await deleteAllKnowledgeFiles();
       else await deleteAllUserKnowledgeFiles();
       setPreviewFile(null);
-      setPreviewBuffer(null);
       setSearch("");
       setOffset(0);
       invalidate();
@@ -1552,22 +1549,6 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
     else await deleteUserKnowledgeFile(file.id);
     invalidate();
   }
-
-  async function handlePreview(file: KnowledgeFile) {
-    setPreviewFile(file);
-    setPreviewLoading(true);
-    try {
-      const buf = isOrg ? await fetchKnowledgeContent(file.id) : await fetchUserKnowledgeContent(file.id);
-      setPreviewBuffer(buf);
-    } catch {
-      setPreviewBuffer(null);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }
-
-  const isPreviewableKnowledge = (f: KnowledgeFile) =>
-    /\.(docx|pdf|png|jpg|jpeg|gif|svg|txt|md|csv)$/i.test(f.file_name);
 
   const hasFiles = (page?.total ?? 0) > 0;
 
@@ -1787,102 +1768,22 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
               key={file.id}
               file={file}
               index={offset + i + 1}
-              onClick={isPreviewableKnowledge(file) ? () => handlePreview(file) : undefined}
-              extraActions={
-                <>
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      const buf = isOrg
-                        ? await fetchKnowledgeContent(file.id)
-                        : await fetchUserKnowledgeContent(file.id);
-                      const url = URL.createObjectURL(new Blob([buf]));
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = file.file_name;
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-amber-500/10 hover:text-amber-400"
-                    title="Download"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      handleDeleteOne(file);
-                    }}
-                    className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
-                    title="Delete"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </>
-              }
+              onClick={isPreviewable(file) ? () => setPreviewFile(file) : undefined}
+              onDownload={() => downloadFile(
+                isOrg ? fetchKnowledgeContent : fetchUserKnowledgeContent,
+                file,
+              )}
+              onDelete={() => handleDeleteOne(file)}
             />
           ))}
         </div>
       </div>
 
-      {/* Knowledge preview modal */}
-      {previewFile && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onClick={() => {
-            setPreviewFile(null);
-            setPreviewBuffer(null);
-          }}
-        >
-          <div
-            className="mx-4 flex max-h-[85vh] w-full max-w-4xl flex-col rounded-2xl border border-[#2a2520] bg-[#151412] shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-[#2a2520] px-5 py-4">
-              <div className="flex items-center gap-3">
-                <FileText className="h-4 w-4 text-[#6b6459]" />
-                <span className="text-[14px] font-medium text-[#e8e0d4]">{previewFile.file_name}</span>
-              </div>
-              <button
-                onClick={() => {
-                  setPreviewFile(null);
-                  setPreviewBuffer(null);
-                }}
-                className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-[#232019] hover:text-[#e8e0d4]"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-auto p-5">
-              {previewLoading && (
-                <div className="flex items-center justify-center py-12">
-                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-400" />
-                </div>
-              )}
-              {!previewLoading && previewBuffer && /\.(png|jpg|jpeg|gif|svg)$/i.test(previewFile.file_name) && (
-                <img
-                  src={URL.createObjectURL(new Blob([previewBuffer]))}
-                  className="max-w-full max-h-[70vh] mx-auto rounded-lg"
-                  alt={previewFile.file_name}
-                />
-              )}
-              {!previewLoading && previewBuffer && /\.(txt|md|csv)$/i.test(previewFile.file_name) && (
-                <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-[#e8e0d4]">
-                  {new TextDecoder().decode(previewBuffer)}
-                </pre>
-              )}
-              {!previewLoading && !previewBuffer && (
-                <div className="flex flex-col items-center py-12 text-center">
-                  <p className="text-[14px] text-[#9c9486]">Failed to load preview</p>
-                  <p className="mt-1 text-[12px] text-[#6b6459]">
-                    The file may be too large or in an unsupported format
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <FilePreviewWrapper
+        file={previewFile}
+        fetchContent={isOrg ? fetchKnowledgeContent : fetchUserKnowledgeContent}
+        onClose={() => setPreviewFile(null)}
+      />
     </div>
   );
 }

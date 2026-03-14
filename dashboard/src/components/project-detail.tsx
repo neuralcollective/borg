@@ -8,6 +8,7 @@ import {
   authHeaders,
   downloadChatArtifact,
   deleteAllProjectFiles,
+  deleteProjectFile,
   fetchProjectFileContent,
   getRevisionHistory,
   getTaskCitations,
@@ -36,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { useVocabulary } from "@/lib/vocabulary";
 import { CloudStoragePanel } from "./cloud-storage";
 import {
+  downloadFile,
   FileListItem,
   FileListPagination,
   FilePreviewWrapper,
@@ -652,24 +654,12 @@ function DocumentsTab({
                   index={fl.currentFilePage.offset + i + 1}
                   isActive={isFileActive}
                   onClick={isPreviewable(f) ? () => setPreviewFile(f) : undefined}
-                  extraActions={
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        const buf = await fetchProjectFileContent(projectId, f.id);
-                        const url = URL.createObjectURL(new Blob([buf]));
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = f.file_name.split("/").pop() || f.file_name;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                      }}
-                      className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-amber-500/10 hover:text-amber-400"
-                      title="Download"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                    </button>
-                  }
+                  onDownload={() => downloadFile((id) => fetchProjectFileContent(projectId, id), f)}
+                  onDelete={async () => {
+                    if (!confirm(`Delete "${f.file_name}"?`)) return;
+                    await deleteProjectFile(projectId, f.id);
+                    fl.refetchFiles();
+                  }}
                   extraBadges={
                     f.privileged ? (
                       <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20">
@@ -701,7 +691,7 @@ function DocumentsTab({
 
       <FilePreviewWrapper
         file={previewFile}
-        projectId={projectId}
+        fetchContent={(fileId) => fetchProjectFileContent(projectId, fileId)}
         onClose={() => setPreviewFile(null)}
         isActive={
           previewFile ? activeFiles.has(previewFile.file_name.split("/").pop() || previewFile.file_name) : false

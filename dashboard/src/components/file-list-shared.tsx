@@ -1,9 +1,8 @@
-import { Eye, FileText, Search, Upload } from "lucide-react";
+import { Download, Eye, FileText, Search, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { uploadProjectFiles, useProjectFiles } from "@/lib/api";
-import type { ProjectFile } from "@/lib/types";
 import { cn, formatFileSize } from "@/lib/utils";
-import { FilePreviewModal, isPreviewable } from "./file-preview-modal";
+import { FilePreviewModal, isPreviewable, type PreviewableFile } from "./file-preview-modal";
 
 // ── Shared file shape for generic components ─────────────────────────────────
 
@@ -11,6 +10,21 @@ export interface GenericFile {
   id: number;
   file_name: string;
   size_bytes: number;
+}
+
+// ── Download helper ──────────────────────────────────────────────────────────
+
+export async function downloadFile(
+  fetchContent: (id: number) => Promise<ArrayBuffer>,
+  file: GenericFile,
+) {
+  const buf = await fetchContent(file.id);
+  const url = URL.createObjectURL(new Blob([buf]));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.file_name.split("/").pop() || file.file_name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── useFileList hook ─────────────────────────────────────────────────────────
@@ -253,6 +267,8 @@ export function FileListItem({
   index,
   isActive,
   onClick,
+  onDownload,
+  onDelete,
   extraActions,
   extraBadges,
 }: {
@@ -261,10 +277,12 @@ export function FileListItem({
   index?: number;
   isActive?: boolean;
   onClick?: () => void;
+  onDownload?: () => void;
+  onDelete?: () => void;
   extraActions?: React.ReactNode;
   extraBadges?: React.ReactNode;
 }) {
-  const canPreview = "mime_type" in file ? isPreviewable(file as unknown as ProjectFile) : false;
+  const canPreview = isPreviewable(file);
 
   return (
     <div
@@ -300,8 +318,28 @@ export function FileListItem({
       </div>
       <div className="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
         {extraBadges}
+        {onDownload && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDownload(); }}
+            className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+            title="Download"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
+            title="Delete"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
         {extraActions}
-        {canPreview && <Eye className="h-3.5 w-3.5 text-[#6b6459]" />}
+        {canPreview && !onDownload && !onDelete && !extraActions && (
+          <Eye className="h-3.5 w-3.5 text-[#6b6459]" />
+        )}
       </div>
     </div>
   );
@@ -310,23 +348,23 @@ export function FileListItem({
 // ── FilePreview wrapper ──────────────────────────────────────────────────────
 
 export function useFilePreview() {
-  const [previewFile, setPreviewFile] = useState<ProjectFile | null>(null);
+  const [previewFile, setPreviewFile] = useState<PreviewableFile | null>(null);
   return { previewFile, setPreviewFile };
 }
 
 export function FilePreviewWrapper({
   file,
-  projectId,
+  fetchContent,
   onClose,
   isActive,
 }: {
-  file: ProjectFile | null;
-  projectId: number;
+  file: PreviewableFile | null;
+  fetchContent: (fileId: number) => Promise<ArrayBuffer>;
   onClose: () => void;
   isActive?: boolean;
 }) {
   if (!file) return null;
-  return <FilePreviewModal file={file} projectId={projectId} onClose={onClose} isActive={isActive} />;
+  return <FilePreviewModal file={file} fetchContent={fetchContent} onClose={onClose} isActive={isActive} />;
 }
 
 export { isPreviewable, formatFileSize };
