@@ -1013,19 +1013,30 @@ pub async fn sso_callback(
     if email.is_empty() {
         return sso_error_redirect("missing_email");
     }
+    let allowed_emails = state
+        .db
+        .get_config("sso_allowed_emails")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let allowed_domains = state
         .db
         .get_config("sso_allowed_domains")
         .ok()
         .flatten()
         .unwrap_or_default();
-    if !allowed_domains.trim().is_empty() {
+    let has_restrictions =
+        !allowed_emails.trim().is_empty() || !allowed_domains.trim().is_empty();
+    if has_restrictions {
+        let email_ok = allowed_emails
+            .split(',')
+            .any(|e| e.trim().eq_ignore_ascii_case(&email));
         let domain = email.rsplit('@').next().unwrap_or("");
-        let allowed = allowed_domains
+        let domain_ok = allowed_domains
             .split(',')
             .any(|d| d.trim().eq_ignore_ascii_case(domain));
-        if !allowed {
-            return sso_error_redirect("email_domain_not_allowed");
+        if !email_ok && !domain_ok {
+            return sso_error_redirect("email_not_allowed");
         }
     }
     let user = match provision_external_user(state.as_ref(), &email) {
