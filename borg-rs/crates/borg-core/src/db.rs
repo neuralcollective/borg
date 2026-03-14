@@ -807,6 +807,22 @@ fn row_to_project_file_meta(row: &pg::Row<'_>) -> pg::Result<ProjectFileMetaRow>
     })
 }
 
+fn row_to_tool_call(row: &pg::Row<'_>) -> pg::Result<crate::tool_calls::ToolCallEvent> {
+    Ok(crate::tool_calls::ToolCallEvent {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        chat_key: row.get(2)?,
+        run_id: row.get(3)?,
+        tool_name: row.get(4)?,
+        input_summary: row.get(5)?,
+        output_summary: row.get(6)?,
+        started_at: row.get(7)?,
+        duration_ms: row.get(8)?,
+        success: row.get(9)?,
+        error: row.get(10)?,
+    })
+}
+
 // ── Db impl ───────────────────────────────────────────────────────────────
 
 impl Db {
@@ -6857,5 +6873,115 @@ impl Db {
             message_count: msg_count,
             task_count,
         })
+    }
+
+    // ── Tool Call Tracking ────────────────────────────────────────────────
+
+    pub fn insert_tool_call(
+        &self,
+        run_id: &str,
+        tool_name: &str,
+        task_id: Option<i64>,
+        chat_key: Option<&str>,
+        input_summary: Option<&str>,
+    ) -> Result<i64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let id = conn.execute_returning_id(
+            "INSERT INTO tool_calls (run_id, tool_name, task_id, chat_key, input_summary) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![run_id, tool_name, task_id, chat_key, input_summary],
+        )
+        .context("insert_tool_call")?;
+        Ok(id)
+    }
+
+    pub fn complete_tool_call(
+        &self,
+        id: i64,
+        output_summary: Option<&str>,
+        duration_ms: i64,
+        success: bool,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        conn.execute(
+            "UPDATE tool_calls SET output_summary = ?1, duration_ms = ?2, \
+             success = ?3, error = ?4 WHERE id = ?5",
+            params![output_summary, duration_ms, success, error, id],
+        )
+        .context("complete_tool_call")?;
+        Ok(())
+    }
+
+    pub fn list_tool_calls_by_task(
+        &self,
+        task_id: i64,
+        limit: i64,
+    ) -> Result<Vec<crate::tool_calls::ToolCallEvent>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, chat_key, run_id, tool_name, input_summary, \
+             output_summary, started_at, duration_ms, success, error \
+             FROM tool_calls WHERE task_id = ?1 \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![task_id, limit], row_to_tool_call)?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_tool_calls_by_task")?;
+        Ok(rows)
+    }
+
+    pub fn list_tool_calls_by_chat(
+        &self,
+        chat_key: &str,
+        limit: i64,
+    ) -> Result<Vec<crate::tool_calls::ToolCallEvent>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, chat_key, run_id, tool_name, input_summary, \
+             output_summary, started_at, duration_ms, success, error \
+             FROM tool_calls WHERE chat_key = ?1 \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_key, limit], row_to_tool_call)?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_tool_calls_by_chat")?;
+        Ok(rows)
+    }
+
+    pub fn list_tool_calls_by_run(
+        &self,
+        run_id: &str,
+        limit: i64,
+    ) -> Result<Vec<crate::tool_calls::ToolCallEvent>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db mutex poisoned"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, chat_key, run_id, tool_name, input_summary, \
+             output_summary, started_at, duration_ms, success, error \
+             FROM tool_calls WHERE run_id = ?1 \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![run_id, limit], row_to_tool_call)?
+            .collect::<pg::Result<Vec<_>>>()
+            .context("list_tool_calls_by_run")?;
+        Ok(rows)
     }
 }

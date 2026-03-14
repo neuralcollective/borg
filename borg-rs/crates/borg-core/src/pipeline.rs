@@ -27,6 +27,7 @@ use crate::{
         validate_home, PROVIDER_CLAUDE, PROVIDER_OPENAI,
     },
     modes::get_mode,
+    registry::PluginRegistry,
     sandbox::{Sandbox, SandboxMode},
     stream::TaskStreamManager,
     types::{
@@ -51,7 +52,7 @@ pub fn derive_compile_check(test_cmd: &str) -> Option<String> {
 
 pub struct Pipeline {
     pub db: Arc<Db>,
-    pub backends: HashMap<String, Arc<dyn AgentBackend>>,
+    pub registry: Arc<PluginRegistry>,
     pub config: Arc<Config>,
     pub ai_request_count: Arc<AtomicU64>,
     pub sandbox: Sandbox,
@@ -154,7 +155,7 @@ impl Pipeline {
 
     pub fn new(
         db: Arc<Db>,
-        backends: HashMap<String, Arc<dyn AgentBackend>>,
+        registry: Arc<PluginRegistry>,
         config: Arc<Config>,
         sandbox_mode: SandboxMode,
         force_restart: Arc<std::sync::atomic::AtomicBool>,
@@ -174,7 +175,7 @@ impl Pipeline {
         let seed_cooldowns = db.get_seed_cooldowns().unwrap_or_default();
         let p = Self {
             db,
-            backends,
+            registry,
             config,
             ai_request_count,
             sandbox: Sandbox,
@@ -207,7 +208,7 @@ impl Pipeline {
     /// Returns None if the resolved backend name isn't registered (missing API key, etc).
     fn resolve_backend(&self, task: &Task) -> Option<Arc<dyn AgentBackend>> {
         let name = self.selected_backend_name(task);
-        if let Some(b) = self.backends.get(&name) {
+        if let Some(b) = self.registry.get_backend(&name) {
             return Some(Arc::clone(b));
         }
         warn!(

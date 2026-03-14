@@ -459,13 +459,8 @@ pub(crate) async fn extract_text_from_bytes(
             || mime.contains("msword")
             || ext == "docx"
             || ext == "doc";
-        let is_text = mime.starts_with("text/")
-            || ext == "txt"
-            || ext == "md"
-            || ext == "csv"
-            || ext == "json"
-            || ext == "xml";
 
+        // PDF and DOCX require external tools (pdftotext, pandoc)
         if is_pdf {
             let tmp = tempfile::NamedTempFile::new()?;
             std::fs::write(tmp.path(), &bytes)?;
@@ -488,10 +483,11 @@ pub(crate) async fn extract_text_from_bytes(
                 ])
                 .output()?;
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
-        } else if is_text {
-            Ok(String::from_utf8_lossy(&bytes).to_string())
         } else {
-            Ok(String::new())
+            // Use DocumentParserRouter for text-based formats (markdown, HTML, plain text, etc.)
+            let router = borg_core::parser::DocumentParserRouter::new();
+            let parsed = router.parse(&bytes, &file_name, &mime)?;
+            Ok(parsed.text)
         }
     })
     .await

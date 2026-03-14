@@ -247,7 +247,7 @@ impl CronScheduler {
     }
 }
 
-async fn execute_job(db: &Db, job: &CronJob) -> Result<()> {
+pub async fn execute_job(db: &Db, job: &CronJob) -> Result<()> {
     let run_id = db.insert_cron_run(job.id)?;
 
     match job.job_type {

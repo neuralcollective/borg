@@ -22,8 +22,14 @@ pub(crate) use projects::*;
 pub(crate) mod search;
 pub(crate) use search::*;
 
+pub(crate) mod cron;
+pub(crate) use cron::*;
+
 pub(crate) mod tasks;
 pub(crate) use tasks::*;
+
+pub(crate) mod tool_calls;
+pub(crate) use tool_calls::*;
 
 pub(crate) mod utils;
 

@@ -33,10 +33,14 @@ use borg_core::{
     config::Config,
     db::Db,
     observer::Observer,
+    parser::DocumentParserRouter,
     pipeline::{Pipeline, PipelineEvent},
+    registry::PluginRegistry,
     sandbox::Sandbox,
+    secrets::{EncryptedStore, PlaintextStore, SecretKeyManager},
     sidecar::{Sidecar, SidecarEvent, Source},
     stream::{ChatStreamManager, TaskStreamManager},
+    traits::SecretStore,
     types::Task,
 };
 use chrono::Utc;
@@ -133,7 +137,7 @@ pub struct AppState {
     pub chat_stream_manager: Arc<ChatStreamManager>,
     pub chat_event_tx: broadcast::Sender<String>,
     pub web_sessions: Arc<TokioMutex<HashMap<String, String>>>,
-    pub backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>,
+    pub registry: Arc<PluginRegistry>,
     pub force_restart: Arc<std::sync::atomic::AtomicBool>,
     pub chat_rate: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
     pub triage_running: Arc<std::sync::atomic::AtomicBool>,
@@ -154,11 +158,13 @@ pub struct AppState {
     pub sidecar_slot: Arc<TokioMutex<Option<Arc<Sidecar>>>>,
     pub shutdown: Arc<std::sync::atomic::AtomicBool>,
     pub active_chat_agents: Arc<std::sync::atomic::AtomicUsize>,
+    pub secret_store: Arc<dyn SecretStore>,
+    pub document_parser: Arc<DocumentParserRouter>,
 }
 
 impl AppState {
     pub fn default_backend(&self, name: &str) -> Option<Arc<dyn borg_core::agent::AgentBackend>> {
-        self.backends.get(name).map(Arc::clone)
+        self.registry.get_backend(name).map(Arc::clone)
     }
 }
 
@@ -1119,11 +1125,11 @@ fn init_db(env_config: &Config) -> anyhow::Result<(Db, Config)> {
     Ok((db, config))
 }
 
-fn build_backends(
+fn build_registry(
     config: &Config,
     db: &Db,
     sandbox_mode: borg_core::sandbox::SandboxMode,
-) -> anyhow::Result<std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>>> {
+) -> anyhow::Result<Arc<PluginRegistry>> {
     let mut backends: std::collections::HashMap<String, Arc<dyn borg_core::agent::AgentBackend>> =
         std::collections::HashMap::new();
 
@@ -1234,7 +1240,11 @@ fn build_backends(
             })
             .collect();
 
-    Ok(reliable_backends)
+    let registry = borg_core::registry::RegistryBuilder::new()
+        .backends(reliable_backends)
+        .build();
+
+    Ok(Arc::new(registry))
 }
 
 fn spawn_post_state_tasks(state: &Arc<AppState>, config: &Arc<Config>, db: &Arc<Db>) {
@@ -1686,11 +1696,22 @@ fn build_app_router(state: Arc<AppState>, dashboard_dir: &str) -> Router {
         .route("/api/borgsearch/file/:id", get(routes::agent_get_file))
         .route("/api/borgsearch/files", get(routes::agent_list_files))
         .route("/api/borgsearch/coverage", get(routes::agent_coverage))
+        // Tool calls & usage
+        .route("/api/tool-calls", get(routes::list_tool_calls))
+        .route("/api/usage", get(routes::get_usage))
         // Admin / debugging
         .route(
             "/api/admin/conversation",
             get(routes::admin_conversation_dump),
         )
+        // Cron
+        .route("/api/cron", get(routes::list_cron_jobs).post(routes::create_cron_job))
+        .route(
+            "/api/cron/:id",
+            put(routes::update_cron_job).delete(routes::delete_cron_job),
+        )
+        .route("/api/cron/:id/run", post(routes::trigger_cron_job))
+        .route("/api/cron/:id/runs", get(routes::list_cron_runs))
         // Static dashboard
         .fallback_service(serve_dir)
         .layer(middleware::from_fn_with_state(
@@ -1805,12 +1826,12 @@ async fn main() -> anyhow::Result<()> {
         });
         (mode, false)
     };
-    let backends = build_backends(&config, &db, sandbox_mode.clone())?;
+    let registry = build_registry(&config, &db, sandbox_mode.clone())?;
     let force_restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let (mut pipeline, pipeline_rx) = Pipeline::new(
         Arc::clone(&db),
-        backends.clone(),
+        Arc::clone(&registry),
         Arc::clone(&config),
         sandbox_mode,
         Arc::clone(&force_restart),
@@ -1824,6 +1845,21 @@ async fn main() -> anyhow::Result<()> {
     // Pipeline tick loop — inner spawn catches panics so the loop never dies.
     // If tick panics repeatedly, exit and let systemd restart with a clean process.
     spawn_pipeline_ticker(Arc::clone(&pipeline), config.pipeline_tick_s);
+
+    // Cron scheduler
+    let cron_cancel = tokio_util::sync::CancellationToken::new();
+    {
+        let db = Arc::clone(&db);
+        let cancel = cron_cancel.clone();
+        tokio::spawn(async move {
+            let scheduler = borg_core::cron::CronScheduler::new(
+                db,
+                std::time::Duration::from_secs(60),
+            );
+            scheduler.run(cancel).await;
+        });
+        info!("cron scheduler started");
+    }
 
     if !config.telegram_token.is_empty() {
         spawn_telegram_poller(
@@ -1924,6 +1960,19 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Initialize secret store based on config
+    let secret_store: Arc<dyn SecretStore> = if config.secret_encryption {
+        let key = SecretKeyManager::load_or_generate(&config.data_dir)
+            .expect("failed to load or generate secret encryption key");
+        let store = EncryptedStore::new(&key);
+        info!("secret encryption enabled (ChaCha20-Poly1305)");
+        Arc::new(store)
+    } else {
+        Arc::new(PlaintextStore)
+    };
+
+    let document_parser = Arc::new(DocumentParserRouter::new());
+
     let state = Arc::new(AppState {
         db: Arc::clone(&db),
         config: Arc::clone(&config),
@@ -1948,7 +1997,7 @@ async fn main() -> anyhow::Result<()> {
         chat_stream_manager: Arc::clone(&chat_stream_manager),
         chat_event_tx,
         web_sessions: Arc::new(TokioMutex::new(HashMap::new())),
-        backends,
+        registry,
         force_restart,
         chat_rate: Arc::new(std::sync::Mutex::new(HashMap::new())),
         triage_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1967,6 +2016,8 @@ async fn main() -> anyhow::Result<()> {
         sidecar_slot,
         shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         active_chat_agents: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        secret_store,
+        document_parser,
     });
 
     spawn_post_state_tasks(&state, &config, &db);
@@ -2031,6 +2082,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Signal all subsystems to stop accepting new work
     shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
+    cron_cancel.cancel();
     drain_pipeline
         .draining
         .store(true, std::sync::atomic::Ordering::Release);

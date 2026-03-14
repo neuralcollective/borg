@@ -541,6 +541,58 @@ impl AgentBackend for AgentSdkBackend {
     }
 }
 
+// ── Persistence helpers ──────────────────────────────────────────────────
+// These are called by the pipeline / chat route layers that own the DB handle,
+// after run_phase / run_chat returns a BridgeResult / ChatResponse.
+
+/// Persist tool call records to the database.
+pub async fn persist_tool_calls(
+    db: &borg_core::db::Db,
+    tool_calls: &[ToolCallRecord],
+    task_id: Option<i64>,
+    chat_key: Option<&str>,
+    run_id: &str,
+) -> Result<()> {
+    for tc in tool_calls {
+        let id = db.insert_tool_call(
+            run_id,
+            &tc.tool_name,
+            task_id,
+            chat_key,
+            Some(&tc.input_summary),
+        )?;
+        db.complete_tool_call(
+            id,
+            Some(&tc.output_summary),
+            tc.duration_ms as i64,
+            tc.success,
+            tc.error.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Persist usage/cost data from an agent run.
+/// Calls update_message_usage for chat messages and/or accumulate_task_usage for pipeline tasks.
+pub async fn persist_usage(
+    db: &borg_core::db::Db,
+    task_id: Option<i64>,
+    message_id: Option<&str>,
+    chat_jid: Option<&str>,
+    input_tokens: i64,
+    output_tokens: i64,
+    cost_usd: f64,
+    model: &str,
+) -> Result<()> {
+    if let (Some(msg_id), Some(jid)) = (message_id, chat_jid) {
+        db.update_message_usage(msg_id, jid, input_tokens, output_tokens, cost_usd, model)?;
+    }
+    if let Some(tid) = task_id {
+        db.accumulate_task_usage(tid, input_tokens, output_tokens, cost_usd)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

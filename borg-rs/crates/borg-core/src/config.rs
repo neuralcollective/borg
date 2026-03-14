@@ -175,6 +175,10 @@ pub struct Config {
     /// When false, legal tasks still get the retrieval instructions but the
     /// pipeline won't force-retry if the agent skips coverage checks.
     pub enforce_retrieval_protocol: bool,
+
+    /// Enable at-rest encryption for secrets (API keys, credentials) via ChaCha20-Poly1305.
+    /// Set BORG_SECRET_ENCRYPTION=true to enable. Default: false for backwards compat.
+    pub secret_encryption: bool,
 }
 
 impl Config {
@@ -1145,6 +1149,7 @@ impl Config {
             smtp_user: get_str("SMTP_USER", &dotenv, ""),
             smtp_pass: get_str("SMTP_PASS", &dotenv, ""),
             enforce_retrieval_protocol: get_bool("ENFORCE_RETRIEVAL_PROTOCOL", &dotenv, true),
+            secret_encryption: get_bool("BORG_SECRET_ENCRYPTION", &dotenv, false),
         })
     }
 }

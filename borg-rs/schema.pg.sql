@@ -641,3 +641,22 @@ DO $$ BEGIN
   ALTER TABLE pipeline_tasks ADD COLUMN total_cost_usd DOUBLE PRECISION DEFAULT 0;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+
+-- ── Tool calls ────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT,
+    chat_key TEXT,
+    run_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    input_summary TEXT,
+    output_summary TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    duration_ms BIGINT,
+    success BOOLEAN,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_task ON tool_calls(task_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_chat ON tool_calls(chat_key);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id);
