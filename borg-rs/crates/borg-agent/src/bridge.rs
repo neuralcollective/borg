@@ -200,8 +200,9 @@ async fn run_bridge_query(
                                 }
                                 Ok(BridgeEvent::ToolUse { tool, input, .. }) => {
                                     let input_str = serde_json::to_string(&input).unwrap_or_default();
-                                    let summary = if input_str.len() > 200 {
-                                        format!("{}...", &input_str[..200])
+                                    let summary = if input_str.chars().count() > 200 {
+                                        let truncated: String = input_str.chars().take(200).collect();
+                                        format!("{truncated}...")
                                     } else {
                                         input_str
                                     };
@@ -212,8 +213,9 @@ async fn run_bridge_query(
                                         .take()
                                         .map(|(_, s)| s)
                                         .unwrap_or_default();
-                                    let out_summary = if output.len() > 200 {
-                                        format!("{}...", &output[..200])
+                                    let out_summary = if output.chars().count() > 200 {
+                                        let truncated: String = output.chars().take(200).collect();
+                                        format!("{truncated}...")
                                     } else {
                                         output
                                     };

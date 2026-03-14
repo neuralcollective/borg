@@ -731,6 +731,7 @@ async fn search_project_context_hits(
 
 // ── Workspace colocation ──────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub(crate) struct ColocationResult {
     pub documents_dir: String,
     pub total_files: usize,

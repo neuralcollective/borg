@@ -6083,10 +6083,10 @@ impl Db {
     }
 
     fn decrypt_secret(secret: &str) -> String {
-        if secret.starts_with("enc:v1:") {
+        if let Some(encoded) = secret.strip_prefix("enc:v1:") {
             if let Some(key_bytes) = Self::master_key_bytes() {
                 use base64::Engine;
-                if let Ok(combined) = base64::engine::general_purpose::STANDARD.decode(&secret[7..])
+                if let Ok(combined) = base64::engine::general_purpose::STANDARD.decode(encoded)
                 {
                     if combined.len() > 12 {
                         use aes_gcm::{
