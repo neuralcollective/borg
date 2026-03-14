@@ -2456,10 +2456,11 @@ impl Pipeline {
 
             let changes_recommendation =
                 uncertainty.changes_sign || uncertainty.changes_close_only;
-            let support_missing = matches!(
+            let support_confirmed = matches!(
                 uncertainty.support_status.trim(),
-                "unavailable" | "conflicting" | "stale"
+                "record_confirmed" | "confirmed_via_clarification" | "confirmed"
             );
+            let support_missing = !support_confirmed;
             let not_blocked = uncertainty.recommended_treatment.trim()
                 != "blocked_clarification";
             if changes_recommendation && support_missing && not_blocked {
@@ -2481,21 +2482,22 @@ impl Pipeline {
             }
         }
 
-        // Per-uncertainty check: any uncertainty with hard-unavailable support must
-        // be routed to blocked_clarification. In the initial review stage, materiality
-        // justifications are NOT accepted — if a fact is truly immaterial, don't list
-        // it as an uncertainty. This forces the model to actually use the clarification
-        // channel for threshold facts rather than writing hollow justifications.
+        // Per-uncertainty check: any uncertainty whose support is NOT fully confirmed
+        // must be routed to blocked_clarification. Only "record_confirmed" and
+        // "confirmed_via_clarification" pass — everything else (unavailable, partial_record,
+        // inferred, conflicting, stale, intended_only, etc.) must go through the
+        // clarification channel. If a fact is truly immaterial, don't list it as an
+        // uncertainty at all.
         // Collect ALL failing uncertainties so the model can fix them in one pass.
         // Skip in revision stages where clarification budget may be exhausted.
         if task.revision_count == 0 {
             let mut failing_issues: Vec<String> = Vec::new();
             for uncertainty in &state.uncertainties {
-                let hard_missing = matches!(
+                let confirmed = matches!(
                     uncertainty.support_status.trim(),
-                    "unavailable" | "conflicting" | "stale"
+                    "record_confirmed" | "confirmed_via_clarification" | "confirmed"
                 );
-                if !hard_missing {
+                if confirmed {
                     continue;
                 }
                 if uncertainty.recommended_treatment.trim() == "blocked_clarification" {
@@ -2512,14 +2514,15 @@ impl Pipeline {
             if !failing_issues.is_empty() {
                 return Some(format!(
                     "Benchmark structured-state guard failed.\n\
-                     {} uncertainties have hard-unavailable support but were not routed to \
+                     {} uncertainties have unconfirmed support but were not routed to \
                      blocked_clarification.\n\
                      Failing uncertainties:\n{}\n\
-                     In the initial review stage, every uncertainty with unavailable/conflicting/stale \
-                     support MUST use the clarification channel. If a fact is truly immaterial to your \
-                     recommendation, do not list it as an uncertainty. For each listed uncertainty \
-                     with hard-unavailable support, set recommended_treatment to \"blocked_clarification\" \
-                     and write .borg/signal.json to ask about it. Ask one question at a time.",
+                     In the initial review stage, every uncertainty whose support is not \
+                     \"record_confirmed\" or \"confirmed_via_clarification\" MUST use the \
+                     clarification channel. If a fact is truly immaterial to your recommendation, \
+                     do not list it as an uncertainty. For each listed uncertainty with unconfirmed \
+                     support, set recommended_treatment to \"blocked_clarification\" and write \
+                     .borg/signal.json to ask about it. Ask one question at a time, then re-evaluate.",
                     failing_issues.len(),
                     failing_issues.join("\n")
                 ));
