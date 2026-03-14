@@ -1987,7 +1987,7 @@ pub(crate) async fn admin_conversation_dump(
                                                     }
                                                     "thinking" => {
                                                         if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
-                                                            let preview = if text.len() > 200 { &text[..200] } else { text };
+                                                            let preview: String = text.chars().take(200).collect();
                                                             events.push(json!({"type": "thinking", "content": preview}));
                                                         }
                                                     }
@@ -2004,7 +2004,7 @@ pub(crate) async fn admin_conversation_dump(
                                     .or_else(|| parsed.get("result"));
                                 let text = match content {
                                     Some(Value::String(s)) => {
-                                        if s.len() > 500 { format!("{}...", &s[..500]) } else { s.clone() }
+                                        if s.chars().count() > 500 { let t: String = s.chars().take(500).collect(); format!("{t}...") } else { s.clone() }
                                     }
                                     Some(Value::Array(arr)) => {
                                         arr.iter()
@@ -2014,7 +2014,7 @@ pub(crate) async fn admin_conversation_dump(
                                     }
                                     Some(v) => {
                                         let s = v.to_string();
-                                        if s.len() > 500 { format!("{}...", &s[..500]) } else { s }
+                                        if s.chars().count() > 500 { let t: String = s.chars().take(500).collect(); format!("{t}...") } else { s }
                                     }
                                     None => String::new(),
                                 };

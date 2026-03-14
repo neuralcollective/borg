@@ -97,9 +97,9 @@ impl<K: Eq + Hash + Clone + Send + 'static> StreamManager<K> {
     ///
     /// The history snapshot and the ended check are taken atomically under the
     /// lock, so the two outcomes are mutually exclusive:
-    ///  - ended=true  → history contains the stream_end sentinel; no live rx.
-    ///  - ended=false → tx.subscribe() fires before end_stream() can set ended,
-    ///                  so the returned receiver will eventually deliver it.
+    /// - ended=true: history contains the stream_end sentinel; no live rx.
+    /// - ended=false: tx.subscribe() fires before end_stream() can set ended,
+    ///   so the returned receiver will eventually deliver it.
     pub async fn subscribe(&self, key: &K) -> (Vec<String>, Option<broadcast::Receiver<String>>) {
         let map = self.streams.lock().await;
         match map.get(key) {

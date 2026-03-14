@@ -315,6 +315,17 @@ pub(crate) async fn batch_embed_chunks(
     result
 }
 
+fn safe_prefix(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String {
     let name_lower = file_name.to_lowercase();
     let ext = name_lower.rsplit('.').next().unwrap_or("");
@@ -322,11 +333,7 @@ pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String
     // By extension/mime
     if mime.contains("pdf") || ext == "pdf" {
         let text_lower = text.to_lowercase();
-        let first_2k = if text_lower.len() > 2000 {
-            &text_lower[..2000]
-        } else {
-            &text_lower
-        };
+        let first_2k = safe_prefix(&text_lower, 2000);
         if first_2k.contains("agreement")
             || first_2k.contains("contract")
             || (first_2k.contains("between") && first_2k.contains("parties"))
@@ -352,11 +359,7 @@ pub(crate) fn detect_doc_type(file_name: &str, mime: &str, text: &str) -> String
     }
     if ext == "md" || ext == "txt" {
         let text_lower = text.to_lowercase();
-        let first_2k = if text_lower.len() > 2000 {
-            &text_lower[..2000]
-        } else {
-            &text_lower
-        };
+        let first_2k = safe_prefix(&text_lower, 2000);
         if first_2k.contains("agreement")
             || first_2k.contains("contract")
             || (first_2k.contains("between") && first_2k.contains("parties"))

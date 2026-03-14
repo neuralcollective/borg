@@ -1725,7 +1725,8 @@ pub(crate) async fn list_projects(
         .map(|p| {
             let pid = p.id;
             let counts = state.db.project_task_status_counts(pid).ok();
-            let mut j = serde_json::to_value(ProjectJson::from_row(p, counts)).unwrap();
+            let mut j = serde_json::to_value(ProjectJson::from_row(p, counts))
+                .unwrap_or_else(|_| json!({"id": pid, "error": "serialization failed"}));
             if let Some(role) = shared_roles.get(&pid) {
                 j["shared_role"] = json!(role);
             }
@@ -2456,7 +2457,7 @@ pub(crate) async fn export_project_document(
         .stdout(std::process::Stdio::null())
         .status()
         .await;
-    if pandoc_check.is_err() || !pandoc_check.unwrap().success() {
+    if !pandoc_check.as_ref().is_ok_and(|s| s.success()) {
         return Ok(axum::response::Response::builder()
             .status(StatusCode::NOT_IMPLEMENTED)
             .header("content-type", "text/plain")
@@ -3731,7 +3732,7 @@ pub(crate) async fn create_project_share_link(
     super::require_min_role(&role, "editor")?;
 
     let token = crate::auth::generate_token();
-    let hours = body.expires_in_hours.unwrap_or(72).max(1).min(720);
+    let hours = body.expires_in_hours.unwrap_or(72).clamp(1, 720);
     let expires_at = (Utc::now() + chrono::Duration::hours(hours))
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();

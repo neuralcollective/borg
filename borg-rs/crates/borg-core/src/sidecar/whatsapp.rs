@@ -142,7 +142,7 @@ async fn handle_event(
     client: Arc<whatsapp_rust::Client>,
     event_tx: &mpsc::UnboundedSender<SidecarEvent>,
     assistant_name: &str,
-    data_dir: &PathBuf,
+    data_dir: &Path,
     client_slot: &TokioMutex<Option<Arc<whatsapp_rust::Client>>>,
 ) {
     match event {

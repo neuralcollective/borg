@@ -96,15 +96,15 @@ impl Sandbox {
     /// 1. `--ro-bind / /`      — read-only root filesystem baseline
     /// 2. `--dev /dev`         — minimal device tree
     /// 3. `--tmpfs` per hide_dir — overlay sensitive dirs (e.g. user home) with empty tmpfs
-    /// 4. `--ro-bind` per ro_dir — restore specific read-only paths within hidden dirs
-    /// 5. `--bind X X`         — per writable_dir (worktree, session dir)
-    /// 6. `--tmpfs /tmp`       — per-sandbox /tmp
-    /// 7. `--unshare-all`      — isolate all namespaces (pid, user, uts, ipc, cgroup, net)
-    /// 7b. `--share-net`       — restore network (agents need API access)
-    /// 8. `--new-session`      — setsid
-    /// 9. `--die-with-parent`  — auto-cleanup
-    /// 10. `--proc /proc`      — fresh procfs for PID namespace
-    /// 11. `--chdir`           — working directory inside sandbox
+    /// 4. `--ro-bind` per ro_dir -- restore specific read-only paths within hidden dirs
+    /// 5. `--bind X X` -- per writable_dir (worktree, session dir)
+    /// 6. `--tmpfs /tmp` -- per-sandbox /tmp
+    /// 7. `--unshare-all` -- isolate all namespaces (pid, user, uts, ipc, cgroup, net)
+    ///    `--share-net` -- restore network (agents need API access)
+    /// 8. `--new-session` -- setsid
+    /// 9. `--die-with-parent` -- auto-cleanup
+    /// 10. `--proc /proc` -- fresh procfs for PID namespace
+    /// 11. `--chdir` -- working directory inside sandbox
     pub fn bwrap_args(
         writable_dirs: &[&str],
         hide_dirs: &[&str],
