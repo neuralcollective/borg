@@ -106,6 +106,8 @@ if id borg >/dev/null 2>&1; then
   chown -R borg:borg ${REMOTE_DIR}/borg-rs/target/release/borg-server
   chown -R borg:borg ${REMOTE_DIR}/dashboard/dist
   chown -R borg:borg ${REMOTE_DIR}/store 2>/dev/null || true
+  # Install global CLI tools the service needs at runtime
+  su - borg -c "bun install -g @openai/codex@latest" 2>/dev/null || true
 fi
 
 # Restart the borg user service (preferred) or fall back to system service

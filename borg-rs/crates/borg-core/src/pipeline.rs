@@ -2481,47 +2481,49 @@ impl Pipeline {
             }
         }
 
-        // Cross-consistency: if a definitive sign/close recommendation coexists with
-        // multiple weak-support uncertainties yet none of them admit changes_sign or
-        // changes_close_only, the model is suppressing the flag to bypass the guard.
-        // Skip in revision stages — the model may have exhausted its clarification
-        // budget and is legitimately structuring around residual uncertainties.
-        let has_definitive_signclose = state.claims.iter().any(|c| {
-            matches!(
-                c.claim_type.trim(),
-                "sign_recommendation" | "close_recommendation"
-            ) && c.safe_to_state_definitively
-                && !c.depends_on_unresolved_fact
-        });
-        if has_definitive_signclose && task.revision_count == 0 {
-            let weak: Vec<_> = state
-                .uncertainties
-                .iter()
-                .filter(|u| {
-                    matches!(
-                        u.support_status.trim(),
-                        "unavailable" | "partial_record" | "intended_only" | "conflicting" | "stale"
-                    )
-                })
-                .collect();
-            let any_admits_impact = weak
-                .iter()
-                .any(|u| u.changes_sign || u.changes_close_only);
-            if weak.len() >= 2 && !any_admits_impact {
-                let issues: Vec<&str> = weak
-                    .iter()
-                    .map(|u| u.issue.trim())
-                    .collect();
+        // Per-uncertainty check: any uncertainty with hard-unavailable support must
+        // either be routed to blocked_clarification or carry a materiality justification
+        // explaining why the fact cannot change the recommendation.
+        // Skip in revision stages where clarification budget may be exhausted.
+        if task.revision_count == 0 {
+            for uncertainty in &state.uncertainties {
+                let hard_missing = matches!(
+                    uncertainty.support_status.trim(),
+                    "unavailable" | "conflicting" | "stale"
+                );
+                if !hard_missing {
+                    continue;
+                }
+                if uncertainty.recommended_treatment.trim() == "blocked_clarification" {
+                    continue;
+                }
+                let j = uncertainty.justification.to_lowercase();
+                let has_materiality_justification = j.contains("immaterial")
+                    || j.contains("does not affect")
+                    || j.contains("would not change")
+                    || j.contains("regardless of")
+                    || j.contains("does not alter")
+                    || j.contains("whichever way")
+                    || j.contains("not disposition-changing")
+                    || j.contains("non-material");
+                if has_materiality_justification {
+                    continue;
+                }
                 return Some(format!(
                     "Benchmark structured-state guard failed.\n\
-                     The sign/close recommendation is stated definitively, but {} uncertainties \
-                     have weak support and none admit they could change the recommendation.\n\
-                     Weak-support issues: {}\n\
-                     If these facts are genuinely immaterial, explain why in your justification. \
-                     Otherwise, use the clarification channel before finalising a definitive \
+                     An uncertainty has hard-unavailable support but was not routed to \
+                     blocked clarification and lacks a materiality justification.\n\
+                     Issue: {}\n\
+                     Missing fact: {}\n\
+                     Support status: {}\n\
+                     Recommended treatment: {}\n\
+                     Either use the clarification channel to resolve this fact, or explain \
+                     in the justification field why an adverse answer would not change your \
                      sign/close recommendation.",
-                    weak.len(),
-                    issues.join("; ")
+                    uncertainty.issue.trim(),
+                    uncertainty.missing_fact.trim(),
+                    uncertainty.support_status.trim(),
+                    uncertainty.recommended_treatment.trim()
                 ));
             }
         }
