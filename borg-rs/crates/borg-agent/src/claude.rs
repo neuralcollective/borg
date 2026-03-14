@@ -754,6 +754,25 @@ impl AgentBackend for ClaudeBackend {
             container_test_results,
         })
     }
+
+    fn name(&self) -> &str {
+        "claude"
+    }
+
+    fn capabilities(&self) -> borg_core::BackendCapabilities {
+        borg_core::BackendCapabilities {
+            supports_mcp: true,
+            supports_sessions: true,
+            supports_tools: true,
+            supports_streaming: true,
+            supports_sandbox: true,
+            supported_models: vec![
+                "claude-opus-4-6".into(),
+                "claude-sonnet-4-6".into(),
+                "claude-haiku-4-5".into(),
+            ],
+        }
+    }
 }
 
 #[cfg(test)]

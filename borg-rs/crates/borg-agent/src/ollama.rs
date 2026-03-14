@@ -169,6 +169,21 @@ impl AgentBackend for OllamaBackend {
             container_test_results: Vec::new(),
         })
     }
+
+    fn name(&self) -> &str {
+        "ollama"
+    }
+
+    fn capabilities(&self) -> borg_core::BackendCapabilities {
+        borg_core::BackendCapabilities {
+            supports_mcp: false,
+            supports_sessions: false,
+            supports_tools: false,
+            supports_streaming: false,
+            supports_sandbox: false,
+            supported_models: vec![self.model.clone()],
+        }
+    }
 }
 
 #[cfg(test)]

@@ -313,6 +313,21 @@ impl AgentBackend for CodexBackend {
             container_test_results: Vec::new(),
         })
     }
+
+    fn name(&self) -> &str {
+        "codex"
+    }
+
+    fn capabilities(&self) -> borg_core::BackendCapabilities {
+        borg_core::BackendCapabilities {
+            supports_mcp: true,
+            supports_sessions: true,
+            supports_tools: true,
+            supports_streaming: true,
+            supports_sandbox: false,
+            supported_models: vec!["o3".into(), "o4-mini".into(), "gpt-4.1".into()],
+        }
+    }
 }
 
 #[cfg(test)]

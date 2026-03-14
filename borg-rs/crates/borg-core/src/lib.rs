@@ -13,9 +13,12 @@ pub mod pgcompat;
 pub mod pipeline;
 mod pipeline_maintenance;
 pub mod sandbox;
+pub mod secrets;
 pub mod sidecar;
 pub mod stream;
 pub mod telegram;
+pub mod traits;
 pub mod types;
 
+pub use traits::*;
 pub use types::*;

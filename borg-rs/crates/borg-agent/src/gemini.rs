@@ -130,4 +130,19 @@ impl AgentBackend for GeminiBackend {
             container_test_results: Vec::new(),
         })
     }
+
+    fn name(&self) -> &str {
+        "gemini"
+    }
+
+    fn capabilities(&self) -> borg_core::BackendCapabilities {
+        borg_core::BackendCapabilities {
+            supports_mcp: false,
+            supports_sessions: false,
+            supports_tools: true,
+            supports_streaming: true,
+            supports_sandbox: false,
+            supported_models: vec!["gemini-2.5-pro".into(), "gemini-2.5-flash".into()],
+        }
+    }
 }
