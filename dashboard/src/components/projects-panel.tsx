@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   FileText,
   Folder,
   GitBranch,
@@ -1788,16 +1789,36 @@ function KnowledgeView({ scope }: { scope: "org" | "my" }) {
               index={offset + i + 1}
               onClick={isPreviewableKnowledge(file) ? () => handlePreview(file) : undefined}
               extraActions={
-                <button
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    handleDeleteOne(file);
-                  }}
-                  className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
-                  title="Delete"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                <>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const buf = isOrg
+                        ? await fetchKnowledgeContent(file.id)
+                        : await fetchUserKnowledgeContent(file.id);
+                      const url = URL.createObjectURL(new Blob([buf]));
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = file.file_name;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+                    title="Download"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      handleDeleteOne(file);
+                    }}
+                    className="rounded-lg p-2 text-[#6b6459] transition-colors hover:bg-red-500/10 hover:text-red-400"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </>
               }
             />
           ))}
